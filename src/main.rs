@@ -13,16 +13,26 @@ use eval::*;
 use hir::*;
 pub use parse::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
     Integer(i32),
     Float(f64),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Type {
     Integer,
     Float,
+}
+
+impl std::fmt::Debug for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Integer => "i32",
+            Self::Float => "f64",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl Value {
@@ -45,8 +55,9 @@ fn main() {
     let code = "-42 + 3.1 * (5 + 1.1)";
     match parser().parse(code) {
         Ok(expr) => {
-            let hir = HIR::from_ast(dbg!(&expr));
-            dbg!(Evaluator::eval(dbg!(&hir)));
+            let mut hir = HIRContext::new();
+            hir.ast(dbg!(&expr));
+            dbg!(Evaluator::eval_hir(dbg!(&hir)));
         }
         Err(err) => {
             dbg!(&err);

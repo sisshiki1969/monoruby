@@ -1,27 +1,78 @@
 use super::*;
 
-pub struct Evaluator {}
-
-impl Evaluator {
-    pub fn eval(hir: &HIR) -> Value {
-        eval(hir)
-    }
+pub struct Evaluator {
+    register: Vec<Value>,
 }
 
-fn eval(hir: &HIR) -> Value {
-    match hir.kind() {
-        HIROp::Integer(i) => Value::Integer(*i),
-        HIROp::Float(f) => Value::Float(*f),
-        HIROp::IntAsFloat(box hir) => Value::Float(eval(hir).as_i() as f64),
-        HIROp::INeg(box lhs) => Value::Integer(-eval(lhs).as_i()),
-        HIROp::FNeg(box lhs) => Value::Float(-eval(lhs).as_f()),
-        HIROp::IAdd(box lhs, box rhs) => Value::Integer(eval(lhs).as_i() + eval(rhs).as_i()),
-        HIROp::FAdd(box lhs, box rhs) => Value::Float(eval(lhs).as_f() + eval(rhs).as_f()),
-        HIROp::ISub(box lhs, box rhs) => Value::Integer(eval(lhs).as_i() - eval(rhs).as_i()),
-        HIROp::FSub(box lhs, box rhs) => Value::Float(eval(lhs).as_f() - eval(rhs).as_f()),
-        HIROp::IMul(box lhs, box rhs) => Value::Integer(eval(lhs).as_i() * eval(rhs).as_i()),
-        HIROp::FMul(box lhs, box rhs) => Value::Float(eval(lhs).as_f() * eval(rhs).as_f()),
-        HIROp::IDiv(box lhs, box rhs) => Value::Integer(eval(lhs).as_i() / eval(rhs).as_i()),
-        HIROp::FDiv(box lhs, box rhs) => Value::Float(eval(lhs).as_f() / eval(rhs).as_f()),
+impl Evaluator {
+    pub fn eval_hir(hir_context: &HIRContext) -> Value {
+        let register_num = hir_context.register_num();
+        let mut eval = Self {
+            register: vec![Value::Integer(0); register_num],
+        };
+        for (idx, hir) in hir_context.hirs.iter().enumerate() {
+            let val = eval.eval(hir);
+            eval.register[idx] = val;
+        }
+        eval.register[register_num - 1]
+    }
+
+    fn eval(&self, hir: &HIR) -> Value {
+        match hir.kind() {
+            HIRKind::Integer(i) => Value::Integer(*i),
+            HIRKind::Float(f) => Value::Float(*f),
+            HIRKind::IntAsFloat(lhs) => {
+                let lhs = self.register[*lhs];
+                Value::Float(lhs.as_i() as f64)
+            }
+            HIRKind::INeg(lhs) => {
+                let lhs = self.register[*lhs];
+                Value::Integer(-lhs.as_i())
+            }
+            HIRKind::FNeg(lhs) => {
+                let lhs = self.register[*lhs];
+                Value::Float(-lhs.as_f())
+            }
+            HIRKind::IAdd(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Integer(lhs.as_i() + rhs.as_i())
+            }
+            HIRKind::FAdd(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Float(lhs.as_f() + rhs.as_f())
+            }
+            HIRKind::ISub(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Integer(lhs.as_i() - rhs.as_i())
+            }
+            HIRKind::FSub(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Float(lhs.as_f() - rhs.as_f())
+            }
+            HIRKind::IMul(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Integer(lhs.as_i() * rhs.as_i())
+            }
+            HIRKind::FMul(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Float(lhs.as_f() * rhs.as_f())
+            }
+            HIRKind::IDiv(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Integer(lhs.as_i() / rhs.as_i())
+            }
+            HIRKind::FDiv(lhs, rhs) => {
+                let lhs = self.register[*lhs];
+                let rhs = self.register[*rhs];
+                Value::Float(lhs.as_f() / rhs.as_f())
+            }
+        }
     }
 }
