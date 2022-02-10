@@ -5,10 +5,12 @@ extern crate chumsky;
 use chumsky::prelude::*;
 
 mod ast;
+mod codegen;
 mod eval;
 mod hir;
 mod parse;
 pub use ast::*;
+use codegen::*;
 use eval::*;
 use hir::*;
 pub use parse::*;
@@ -52,12 +54,14 @@ impl Value {
 }
 
 fn main() {
-    let code = "-42 + 3.1 * (5 + 1.1)";
+    let code = "4 + 5 * 2";
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
-            hir.ast(dbg!(&expr));
+            hir.from_ast(dbg!(&expr));
             dbg!(Evaluator::eval_hir(dbg!(&hir)));
+            let mut codegen = Codegen::new();
+            codegen.compile_and_run(&hir);
         }
         Err(err) => {
             dbg!(&err);

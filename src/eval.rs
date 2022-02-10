@@ -10,8 +10,9 @@ impl Evaluator {
         let mut eval = Self {
             register: vec![Value::Integer(0); register_num],
         };
-        for (idx, hir) in hir_context.hirs.iter().enumerate() {
-            let val = eval.eval(hir);
+        for op in &hir_context.hirs {
+            let val = eval.eval(op);
+            let idx = op.reg();
             eval.register[idx] = val;
         }
         eval.register[register_num - 1]
@@ -73,6 +74,7 @@ impl Evaluator {
                 let rhs = self.register[*rhs];
                 Value::Float(lhs.as_f() / rhs.as_f())
             }
+            HIRKind::Ret(lhs) => self.register[*lhs],
         }
     }
 }
