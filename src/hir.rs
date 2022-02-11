@@ -1,178 +1,180 @@
 use super::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct HIRContext {
     pub hirs: Vec<HIR>,
-    pub cur_reg: usize,
-    pub reg_types: Vec<Type>,
+    pub reginfo: Vec<SsaRegInfo>,
+}
+
+impl std::fmt::Debug for HIRContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for hir in &self.hirs {
+            let s = match hir {
+                HIR::Integer(ret, i) => format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i),
+                HIR::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
+                HIR::IntAsFloat(op) => {
+                    format!(
+                        "%{}: {:?} = i32_to_f64 %{}",
+                        op.ret, self[op.ret].ty, op.src
+                    )
+                }
+                HIR::INeg(op) => format!("%{}: {:?} = ineg %{}", op.ret, self[op.ret].ty, op.src),
+                HIR::FNeg(op) => format!("%{}: {:?} = fneg %{}", op.ret, self[op.ret].ty, op.src),
+                HIR::IAdd(op) => format!(
+                    "%{}: {:?} = iadd %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::FAdd(op) => format!(
+                    "%{}: {:?} = fadd %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::ISub(op) => format!(
+                    "%{}: {:?} = isub %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::FSub(op) => format!(
+                    "%{}: {:?} = fsub %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::IMul(op) => format!(
+                    "%{}: {:?} = imul %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::FMul(op) => format!(
+                    "%{}: {:?} = fmul %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::IDiv(op) => format!(
+                    "%{}: {:?} = idiv %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::FDiv(op) => format!(
+                    "%{}: {:?} = fdiv %{}, %{}",
+                    op.ret, self[op.ret].ty, op.lhs, op.rhs
+                ),
+                HIR::Ret(ret) => format!("ret %{}: {:?}", ret, self[*ret].ty),
+            };
+            writeln!(f, "{}", s)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Index<SsaReg> for HIRContext {
+    type Output = SsaRegInfo;
+
+    fn index(&self, i: SsaReg) -> &SsaRegInfo {
+        &self.reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<SsaReg> for HIRContext {
+    fn index_mut(&mut self, i: SsaReg) -> &mut SsaRegInfo {
+        &mut self.reginfo[i.to_usize()]
+    }
 }
 
 impl HIRContext {
     pub fn new() -> Self {
         HIRContext {
             hirs: vec![],
-            cur_reg: 0,
-            reg_types: vec![],
+            reginfo: vec![],
         }
     }
 
-    fn add_assign(&mut self, hir: HIR) -> usize {
-        let ret_reg = self.cur_reg;
-        self.reg_types.push(hir.ty);
+    fn add_assign(&mut self, hir: HIR, ty: Type) -> SsaReg {
+        let ret_reg = self.next_reg();
+        self.reginfo.push(SsaRegInfo::new(ty));
         self.hirs.push(hir);
-        self.cur_reg += 1;
         ret_reg
     }
 
     pub fn register_num(&self) -> usize {
-        self.cur_reg
+        self.reginfo.len()
     }
 
-    fn new_integer(&mut self, i: i32) -> usize {
-        self.add_assign(HIR::new_integer(self.cur_reg, i))
+    fn next_reg(&self) -> SsaReg {
+        SsaReg(self.reginfo.len())
     }
 
-    fn new_float(&mut self, f: f64) -> usize {
-        self.add_assign(HIR::new_float(self.cur_reg, f))
+    fn new_integer(&mut self, i: i32) -> SsaReg {
+        self.add_assign(HIR::Integer(self.next_reg(), i), Type::Integer)
     }
 
-    fn new_as_float(&mut self, lhs: usize) -> usize {
-        self.add_assign(HIR::new_as_float(self.cur_reg, lhs))
+    fn new_float(&mut self, f: f64) -> SsaReg {
+        self.add_assign(HIR::Float(self.next_reg(), f), Type::Float)
     }
 
-    fn new_ineg(&mut self, lhs: usize) -> usize {
-        self.add_assign(HIR::new_ineg(self.cur_reg, lhs))
+    fn new_as_float(&mut self, src: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::IntAsFloat(HIRUnop { ret, src }), Type::Float)
     }
 
-    fn new_fneg(&mut self, lhs: usize) -> usize {
-        self.add_assign(HIR::new_fneg(self.cur_reg, lhs))
+    fn new_ineg(&mut self, src: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::INeg(HIRUnop { ret, src }), Type::Integer)
     }
 
-    fn new_iadd(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_iadd(self.cur_reg, lhs, rhs))
+    fn new_fneg(&mut self, src: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::FNeg(HIRUnop { ret, src }), Type::Float)
     }
 
-    fn new_fadd(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_fadd(self.cur_reg, lhs, rhs))
+    fn new_iadd(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::IAdd(HIRBinop { ret, lhs, rhs }), Type::Integer)
     }
 
-    fn new_isub(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_isub(self.cur_reg, lhs, rhs))
+    fn new_fadd(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::FAdd(HIRBinop { ret, lhs, rhs }), Type::Float)
     }
 
-    fn new_fsub(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_fsub(self.cur_reg, lhs, rhs))
+    fn new_isub(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::ISub(HIRBinop { ret, lhs, rhs }), Type::Integer)
     }
 
-    fn new_imul(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_imul(self.cur_reg, lhs, rhs))
+    fn new_fsub(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::FSub(HIRBinop { ret, lhs, rhs }), Type::Float)
     }
 
-    fn new_fmul(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_fmul(self.cur_reg, lhs, rhs))
+    fn new_imul(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::IMul(HIRBinop { ret, lhs, rhs }), Type::Integer)
     }
 
-    fn new_idiv(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_idiv(self.cur_reg, lhs, rhs))
+    fn new_fmul(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::FMul(HIRBinop { ret, lhs, rhs }), Type::Float)
     }
 
-    fn new_fdiv(&mut self, lhs: usize, rhs: usize) -> usize {
-        self.add_assign(HIR::new_fdiv(self.cur_reg, lhs, rhs))
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub struct HIR {
-    ret_reg: usize,
-    ty: Type,
-    op: HIRKind,
-}
-
-impl std::fmt::Debug for HIR {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "%{}: {:?} = {:?}", self.ret_reg, self.ty, self.op)
-    }
-}
-
-impl HIR {
-    fn new(ret_reg: usize, ty: Type, op: HIRKind) -> Self {
-        HIR { ret_reg, ty, op }
+    fn new_idiv(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::IDiv(HIRBinop { ret, lhs, rhs }), Type::Integer)
     }
 
-    pub fn kind(&self) -> &HIRKind {
-        &self.op
+    fn new_fdiv(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(HIR::FDiv(HIRBinop { ret, lhs, rhs }), Type::Float)
     }
 
-    pub fn reg(&self) -> usize {
-        self.ret_reg
-    }
-
-    fn new_integer(ret_reg: usize, i: i32) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::Integer(i))
-    }
-
-    fn new_float(ret_reg: usize, f: f64) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::Float(f))
-    }
-
-    fn new_as_float(ret_reg: usize, hir: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::IntAsFloat(hir))
-    }
-
-    fn new_ineg(ret_reg: usize, lhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::INeg(lhs))
-    }
-
-    fn new_fneg(ret_reg: usize, lhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::FNeg(lhs))
-    }
-
-    fn new_iadd(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::IAdd(lhs, rhs))
-    }
-
-    fn new_fadd(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::FAdd(lhs, rhs))
-    }
-
-    fn new_isub(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::ISub(lhs, rhs))
-    }
-
-    fn new_fsub(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::FSub(lhs, rhs))
-    }
-
-    fn new_imul(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::IMul(lhs, rhs))
-    }
-
-    fn new_fmul(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::FMul(lhs, rhs))
-    }
-
-    fn new_idiv(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Integer, HIRKind::IDiv(lhs, rhs))
-    }
-
-    fn new_fdiv(ret_reg: usize, lhs: usize, rhs: usize) -> Self {
-        HIR::new(ret_reg, Type::Float, HIRKind::FDiv(lhs, rhs))
-    }
-
-    fn new_ret(lhs: usize, ty: Type) -> Self {
-        HIR::new(lhs, ty, HIRKind::Ret(lhs))
+    fn new_ret(&mut self, lhs: SsaReg) {
+        let hir = HIR::Ret(lhs);
+        self.hirs.push(hir);
     }
 }
 
 impl HIRContext {
-    pub fn from_ast(&mut self, ast: &Expr) -> (usize, Type) {
+    pub fn from_ast(&mut self, ast: &Expr) -> (SsaReg, Type) {
         let ret = self.gen(ast);
-        let ty = self.reg_types[ret];
-        self.hirs.push(HIR::new_ret(ret, ty));
+        let ty = self[ret].ty;
+        self.new_ret(ret);
         (ret, ty)
     }
 
-    fn gen(&mut self, ast: &Expr) -> usize {
+    fn gen(&mut self, ast: &Expr) -> SsaReg {
         match ast {
             Expr::Integer(i) => self.new_integer(*i),
             Expr::Float(f) => self.new_float(*f),
@@ -183,7 +185,7 @@ impl HIRContext {
                     _ => {}
                 };
                 let lhs_i = self.gen(lhs);
-                match self.hirs[lhs_i].ty {
+                match self[lhs_i].ty {
                     Type::Integer => self.new_ineg(lhs_i),
                     Type::Float => self.new_fneg(lhs_i),
                 }
@@ -191,8 +193,8 @@ impl HIRContext {
             Expr::Add(box lhs, box rhs) => {
                 let lhs = self.gen(lhs);
                 let rhs = self.gen(rhs);
-                let lhs_ty = self.hirs[lhs].ty;
-                let rhs_ty = self.hirs[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => self.new_iadd(lhs, rhs),
                     (Type::Integer, Type::Float) => {
@@ -209,8 +211,8 @@ impl HIRContext {
             Expr::Sub(box lhs, box rhs) => {
                 let lhs = self.gen(lhs);
                 let rhs = self.gen(rhs);
-                let lhs_ty = self.hirs[lhs].ty;
-                let rhs_ty = self.hirs[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => self.new_isub(lhs, rhs),
                     (Type::Integer, Type::Float) => {
@@ -227,8 +229,8 @@ impl HIRContext {
             Expr::Mul(box lhs, box rhs) => {
                 let lhs = self.gen(lhs);
                 let rhs = self.gen(rhs);
-                let lhs_ty = self.hirs[lhs].ty;
-                let rhs_ty = self.hirs[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => self.new_imul(lhs, rhs),
                     (Type::Integer, Type::Float) => {
@@ -245,8 +247,8 @@ impl HIRContext {
             Expr::Div(box lhs, box rhs) => {
                 let lhs = self.gen(lhs);
                 let rhs = self.gen(rhs);
-                let lhs_ty = self.hirs[lhs].ty;
-                let rhs_ty = self.hirs[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => self.new_idiv(lhs, rhs),
                     (Type::Integer, Type::Float) => {
@@ -265,41 +267,64 @@ impl HIRContext {
 }
 
 #[derive(Clone, PartialEq)]
-pub enum HIRKind {
-    Integer(i32),
-    IntAsFloat(usize),
-    Float(f64),
-    INeg(usize),
-    FNeg(usize),
-    IAdd(usize, usize),
-    FAdd(usize, usize),
-    ISub(usize, usize),
-    FSub(usize, usize),
-    IMul(usize, usize),
-    FMul(usize, usize),
-    IDiv(usize, usize),
-    FDiv(usize, usize),
-    Ret(usize),
+pub struct SsaRegInfo {
+    pub ty: Type,
 }
 
-impl std::fmt::Debug for HIRKind {
+impl std::fmt::Debug for SsaRegInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Integer(i) => format!("{}: i32", i),
-            Self::Float(f) => format!("{}: f64", f),
-            Self::IntAsFloat(lhs) => format!("i32_to_f64 %{}", lhs),
-            Self::INeg(lhs) => format!("ineg %{}", lhs),
-            Self::FNeg(lhs) => format!("fneg %{}", lhs),
-            Self::IAdd(lhs, rhs) => format!("iadd %{}, %{}", lhs, rhs),
-            Self::FAdd(lhs, rhs) => format!("fadd %{}, %{}", lhs, rhs),
-            Self::ISub(lhs, rhs) => format!("isub %{}, %{}", lhs, rhs),
-            Self::FSub(lhs, rhs) => format!("fsub %{}, %{}", lhs, rhs),
-            Self::IMul(lhs, rhs) => format!("imul %{}, %{}", lhs, rhs),
-            Self::FMul(lhs, rhs) => format!("fmul %{}, %{}", lhs, rhs),
-            Self::IDiv(lhs, rhs) => format!("idiv %{}, %{}", lhs, rhs),
-            Self::FDiv(lhs, rhs) => format!("fdiv %{}, %{}", lhs, rhs),
-            Self::Ret(lhs) => format!("ret %{}", lhs),
-        };
-        write!(f, "{}", s)
+        write!(f, "{:?}", self.ty)
     }
+}
+
+impl SsaRegInfo {
+    fn new(ty: Type) -> Self {
+        Self { ty }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SsaReg(usize);
+
+impl std::fmt::Display for SsaReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SsaReg {
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HIR {
+    Integer(SsaReg, i32),
+    Float(SsaReg, f64),
+    IntAsFloat(HIRUnop),
+    INeg(HIRUnop),
+    FNeg(HIRUnop),
+    IAdd(HIRBinop),
+    FAdd(HIRBinop),
+    ISub(HIRBinop),
+    FSub(HIRBinop),
+    IMul(HIRBinop),
+    FMul(HIRBinop),
+    IDiv(HIRBinop),
+    FDiv(HIRBinop),
+    Ret(SsaReg),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HIRBinop {
+    pub ret: SsaReg,
+    pub lhs: SsaReg,
+    pub rhs: SsaReg,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HIRUnop {
+    pub ret: SsaReg,
+    pub src: SsaReg,
 }

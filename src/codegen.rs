@@ -14,101 +14,90 @@ impl Codegen {
         }
     }
 
-    pub fn compile_and_run(&mut self, hir_context: &HIRContext) {
+    pub fn compile_and_run(&mut self, hir_context: &HIRContext) -> Value {
         let locals = hir_context.register_num();
         self.prologue(locals);
         let epilogue = self.jit.label();
         let mut ret_ty = None;
         for op in &hir_context.hirs {
-            match op.kind() {
-                HIRKind::Integer(i) => {
-                    let reg = op.reg();
+            match op {
+                HIR::Integer(reg, i) => {
                     monoasm!(self.jit,
-                      movq  [rbp-(Self::local_offset(reg))], (*i);
+                      movq  [rbp-(Self::local_offset(*reg))], (*i);
                     );
                 }
-                HIRKind::Float(f) => {
-                    let reg = op.reg();
+                HIR::Float(reg, f) => {
                     let label = self.jit.const_f64(*f);
                     monoasm!(self.jit,
                       movsd  xmm0, [rip + label];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      movsd  [rbp-(Self::local_offset(*reg))], xmm0;
                     );
                 }
-                HIRKind::IAdd(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::IAdd(op) => {
                     monoasm!(self.jit,
-                      movq  rax, [rbp-(Self::local_offset(*lhs))];
-                      addq  rax, [rbp-(Self::local_offset(*rhs))];
-                      movq  [rbp-(Self::local_offset(reg))], rax;
+                      movq  rax, [rbp-(Self::local_offset(op.lhs))];
+                      addq  rax, [rbp-(Self::local_offset(op.rhs))];
+                      movq  [rbp-(Self::local_offset(op.ret))], rax;
                     );
                 }
-                HIRKind::ISub(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::ISub(op) => {
                     monoasm!(self.jit,
-                      movq  rax, [rbp-(Self::local_offset(*lhs))];
-                      subq  rax, [rbp-(Self::local_offset(*rhs))];
-                      movq  [rbp-(Self::local_offset(reg))], rax;
+                      movq  rax, [rbp-(Self::local_offset(op.lhs))];
+                      subq  rax, [rbp-(Self::local_offset(op.rhs))];
+                      movq  [rbp-(Self::local_offset(op.ret))], rax;
                     );
                 }
-                HIRKind::IMul(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::IMul(op) => {
                     monoasm!(self.jit,
-                      movq  rax, [rbp-(Self::local_offset(*lhs))];
-                      imul  rax, [rbp-(Self::local_offset(*rhs))];
-                      movq  [rbp-(Self::local_offset(reg))], rax;
+                      movq  rax, [rbp-(Self::local_offset(op.lhs))];
+                      imul  rax, [rbp-(Self::local_offset(op.rhs))];
+                      movq  [rbp-(Self::local_offset(op.ret))], rax;
                     );
                 }
-                HIRKind::IDiv(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::IDiv(op) => {
                     monoasm!(self.jit,
-                      movq  rax, [rbp-(Self::local_offset(*lhs))];
+                      movq  rax, [rbp-(Self::local_offset(op.lhs))];
                       xorq  rdx, rdx;
-                      idiv  [rbp-(Self::local_offset(*rhs))];
-                      movq  [rbp-(Self::local_offset(reg))], rax;
+                      idiv  [rbp-(Self::local_offset(op.rhs))];
+                      movq  [rbp-(Self::local_offset(op.ret))], rax;
                     );
                 }
-                HIRKind::FAdd(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::FAdd(op) => {
                     monoasm!(self.jit,
-                      movsd  xmm0, [rbp-(Self::local_offset(*lhs))];
-                      addsd  xmm0, [rbp-(Self::local_offset(*rhs))];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      movsd  xmm0, [rbp-(Self::local_offset(op.lhs))];
+                      addsd  xmm0, [rbp-(Self::local_offset(op.rhs))];
+                      movsd  [rbp-(Self::local_offset(op.ret))], xmm0;
                     );
                 }
-                HIRKind::FSub(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::FSub(op) => {
                     monoasm!(self.jit,
-                      movsd  xmm0, [rbp-(Self::local_offset(*lhs))];
-                      subsd  xmm0, [rbp-(Self::local_offset(*rhs))];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      movsd  xmm0, [rbp-(Self::local_offset(op.lhs))];
+                      subsd  xmm0, [rbp-(Self::local_offset(op.rhs))];
+                      movsd  [rbp-(Self::local_offset(op.ret))], xmm0;
                     );
                 }
-                HIRKind::FMul(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::FMul(op) => {
                     monoasm!(self.jit,
-                      movsd  xmm0, [rbp-(Self::local_offset(*lhs))];
-                      mulsd  xmm0, [rbp-(Self::local_offset(*rhs))];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      movsd  xmm0, [rbp-(Self::local_offset(op.lhs))];
+                      mulsd  xmm0, [rbp-(Self::local_offset(op.rhs))];
+                      movsd  [rbp-(Self::local_offset(op.ret))], xmm0;
                     );
                 }
-                HIRKind::FDiv(lhs, rhs) => {
-                    let reg = op.reg();
+                HIR::FDiv(op) => {
                     monoasm!(self.jit,
-                      movsd  xmm0, [rbp-(Self::local_offset(*lhs))];
-                      divsd  xmm0, [rbp-(Self::local_offset(*rhs))];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      movsd  xmm0, [rbp-(Self::local_offset(op.lhs))];
+                      divsd  xmm0, [rbp-(Self::local_offset(op.rhs))];
+                      movsd  [rbp-(Self::local_offset(op.ret))], xmm0;
                     );
                 }
-                HIRKind::IntAsFloat(lhs) => {
-                    let reg = op.reg();
+                HIR::IntAsFloat(op) => {
                     monoasm!(self.jit,
-                      cvtsi2sdq xmm0, [rbp-(Self::local_offset(*lhs))];
-                      movsd  [rbp-(Self::local_offset(reg))], xmm0;
+                      cvtsi2sdq xmm0, [rbp-(Self::local_offset(op.src))];
+                      movsd  [rbp-(Self::local_offset(op.ret))], xmm0;
                     );
                 }
-                HIRKind::Ret(lhs) => {
-                    let ty = hir_context.reg_types[*lhs];
+                HIR::Ret(lhs) => {
+                    let ty = hir_context[*lhs].ty;
                     match ty {
                         Type::Float => {
                             monoasm!(self.jit,
@@ -147,17 +136,19 @@ impl Codegen {
             None => unreachable!(),
             Some(Type::Integer) => {
                 let func = self.jit.finalize::<f64, i64>();
-                dbg!(func(0.0));
+                let i = dbg!(func(0.0));
+                Value::Integer(i as i32)
             }
             Some(Type::Float) => {
                 let func = self.jit.finalize::<f64, f64>();
-                dbg!(func(0.0));
+                let f = dbg!(func(0.0));
+                Value::Float(f)
             }
         }
     }
 
-    fn local_offset(register: usize) -> i64 {
-        (register * 8) as i64 + 8
+    fn local_offset(register: SsaReg) -> i64 {
+        (register.to_usize() * 8) as i64 + 8
     }
 
     fn prologue(&mut self, locals: usize) {

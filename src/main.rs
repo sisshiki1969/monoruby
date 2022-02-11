@@ -54,14 +54,20 @@ impl Value {
 }
 
 fn main() {
-    let code = "4 + 5 * 2";
+    let code = "(4 - 5.0 / 2) * 2.5";
+    run(code);
+}
+
+fn run(code: &str) {
+    dbg!(code);
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
-            hir.from_ast(dbg!(&expr));
-            dbg!(Evaluator::eval_hir(dbg!(&hir)));
+            hir.from_ast(&expr);
+            let eval_res = dbg!(Evaluator::eval_hir(dbg!(&hir)));
             let mut codegen = Codegen::new();
-            codegen.compile_and_run(&hir);
+            let jit_res = codegen.compile_and_run(&hir);
+            assert_eq!(eval_res, jit_res);
         }
         Err(err) => {
             dbg!(&err);
@@ -77,4 +83,14 @@ fn main() {
             rep.finish().print(Source::from(code)).unwrap();
         }
     };
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test() {
+        run("4 * (2.9 + 7 / (1.15 - 6))");
+        run("-4 * (2.9 + 7 / (-1.15 - 6))");
+    }
 }
