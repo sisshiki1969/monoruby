@@ -8,11 +8,13 @@ mod ast;
 mod codegen;
 mod eval;
 mod hir;
+mod mcir;
 mod parse;
 pub use ast::*;
 use codegen::*;
 use eval::*;
 use hir::*;
+use mcir::*;
 pub use parse::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,8 +67,10 @@ fn run(code: &str) {
             let mut hir = HIRContext::new();
             hir.from_ast(&expr);
             let eval_res = dbg!(Evaluator::eval_hir(dbg!(&hir)));
+            let mut mcir_context = McIRContext::new();
+            mcir_context.from_hir(&hir);
             let mut codegen = Codegen::new();
-            let jit_res = codegen.compile_and_run(&hir);
+            let jit_res = codegen.compile_and_run(dbg!(&mcir_context));
             assert_eq!(eval_res, jit_res);
         }
         Err(err) => {
