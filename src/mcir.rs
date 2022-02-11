@@ -1,8 +1,8 @@
 use super::*;
 
 #[derive(Clone, PartialEq)]
-pub struct McIRContext {
-    pub mcirs: Vec<McIR>,
+pub struct MachineIRContext {
+    pub insts: Vec<McIR>,
     g_reginfo: Vec<GRegInfo>,
     f_reginfo: Vec<FRegInfo>,
     ssa_map: SsaMap,
@@ -25,7 +25,7 @@ impl std::ops::IndexMut<SsaReg> for SsaMap {
     }
 }
 
-impl std::ops::Index<GReg> for McIRContext {
+impl std::ops::Index<GReg> for MachineIRContext {
     type Output = GRegInfo;
 
     fn index(&self, i: GReg) -> &GRegInfo {
@@ -33,13 +33,13 @@ impl std::ops::Index<GReg> for McIRContext {
     }
 }
 
-impl std::ops::IndexMut<GReg> for McIRContext {
+impl std::ops::IndexMut<GReg> for MachineIRContext {
     fn index_mut(&mut self, i: GReg) -> &mut GRegInfo {
         &mut self.g_reginfo[i.to_usize()]
     }
 }
 
-impl std::ops::Index<FReg> for McIRContext {
+impl std::ops::Index<FReg> for MachineIRContext {
     type Output = FRegInfo;
 
     fn index(&self, i: FReg) -> &FRegInfo {
@@ -47,16 +47,16 @@ impl std::ops::Index<FReg> for McIRContext {
     }
 }
 
-impl std::ops::IndexMut<FReg> for McIRContext {
+impl std::ops::IndexMut<FReg> for MachineIRContext {
     fn index_mut(&mut self, i: FReg) -> &mut FRegInfo {
         &mut self.f_reginfo[i.to_usize()]
     }
 }
 
-impl std::fmt::Debug for McIRContext {
+impl std::fmt::Debug for MachineIRContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "McIRContext {{")?;
-        for hir in &self.mcirs {
+        for hir in &self.insts {
             let s = match hir {
                 McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
                 McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
@@ -105,10 +105,10 @@ impl McReg {
     }
 }
 
-impl McIRContext {
+impl MachineIRContext {
     pub fn new() -> Self {
         Self {
-            mcirs: vec![],
+            insts: vec![],
             g_reginfo: vec![],
             f_reginfo: vec![],
             ssa_map: SsaMap(vec![]),
@@ -125,89 +125,89 @@ impl McIRContext {
 
     pub fn from_hir(&mut self, hir_context: &HIRContext) {
         self.ssa_map = SsaMap(vec![None; hir_context.register_num()]);
-        for hir in &hir_context.hirs {
+        for hir in &hir_context.insts {
             match hir {
                 HIR::Integer(ssa, i) => {
                     let reg = self.new_greg(*ssa);
                     self.ssa_map[*ssa] = Some(McReg::GReg(reg));
-                    self.mcirs.push(McIR::Integer(reg, *i));
+                    self.insts.push(McIR::Integer(reg, *i));
                 }
                 HIR::Float(ssa, f) => {
                     let reg = self.get_freg(*ssa);
                     self.ssa_map[*ssa] = Some(McReg::FReg(reg));
-                    self.mcirs.push(McIR::Float(reg, *f));
+                    self.insts.push(McIR::Float(reg, *f));
                 }
                 HIR::IntAsFloat(op) => {
                     let dst = self.get_freg(op.ret);
                     self.ssa_map[op.ret] = Some(McReg::FReg(dst));
                     let src = self.ssa_map[op.src].unwrap().as_g();
                     self[src].invalidate();
-                    self.mcirs.push(McIR::IntAsFloat(dst, src));
+                    self.insts.push(McIR::IntAsFloat(dst, src));
                 }
                 HIR::IAdd(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::IAdd(lhs, rhs));
+                    self.insts.push(McIR::IAdd(lhs, rhs));
                 }
                 HIR::ISub(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::ISub(lhs, rhs));
+                    self.insts.push(McIR::ISub(lhs, rhs));
                 }
                 HIR::IMul(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::IMul(lhs, rhs));
+                    self.insts.push(McIR::IMul(lhs, rhs));
                 }
                 HIR::IDiv(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::IDiv(lhs, rhs));
+                    self.insts.push(McIR::IDiv(lhs, rhs));
                 }
                 HIR::FAdd(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_f();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_f();
                     self.ssa_map[op.ret] = Some(McReg::FReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::FAdd(lhs, rhs));
+                    self.insts.push(McIR::FAdd(lhs, rhs));
                 }
                 HIR::FSub(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_f();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_f();
                     self.ssa_map[op.ret] = Some(McReg::FReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::FSub(lhs, rhs));
+                    self.insts.push(McIR::FSub(lhs, rhs));
                 }
                 HIR::FMul(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_f();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_f();
                     self.ssa_map[op.ret] = Some(McReg::FReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::FMul(lhs, rhs));
+                    self.insts.push(McIR::FMul(lhs, rhs));
                 }
                 HIR::FDiv(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_f();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_f();
                     self.ssa_map[op.ret] = Some(McReg::FReg(lhs));
                     self[rhs].invalidate();
-                    self.mcirs.push(McIR::FDiv(lhs, rhs));
+                    self.insts.push(McIR::FDiv(lhs, rhs));
                 }
                 HIR::Ret(ssa) => match hir_context[*ssa].ty {
                     Type::Integer => {
                         let reg = self.ssa_map[*ssa].unwrap().as_g();
-                        self.mcirs.push(McIR::IRet(reg));
+                        self.insts.push(McIR::IRet(reg));
                     }
                     Type::Float => {
                         let reg = self.ssa_map[*ssa].unwrap().as_f();
-                        self.mcirs.push(McIR::FRet(reg));
+                        self.insts.push(McIR::FRet(reg));
                     }
                 },
                 _ => {}

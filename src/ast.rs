@@ -1,3 +1,6 @@
+///
+/// AST for expression.
+///
 #[derive(Debug, PartialEq)]
 pub enum Expr {
     Mul(Box<Expr>, Box<Expr>),

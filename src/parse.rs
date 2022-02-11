@@ -4,10 +4,14 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     expr().then_ignore(end())
 }
 
+///
+/// A parser of *Expr*
+///
 fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
     let digits = text::digits::<_, Simple<char>>(10);
     let int = text::int::<_, Simple<char>>(10);
 
+    // number := <integer> | <float>
     let number = int
         .then(just('.').ignore_then(digits).or_not())
         .map(|(int, frac)| match frac {
@@ -25,7 +29,11 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
 
     recursive(|expr| {
         let parenthesized = expr.delimited_by('(', ')');
+        // primary := <number>
+        //          | '(' <expr> ')'
         let primary = choice((number, parenthesized));
+        // unary := -a
+        //        | +a
         let unary = choice((op('-'), op('+')))
             .repeated()
             .then(primary)
@@ -36,6 +44,8 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
                     lhs
                 }
             });
+        // multiplicative := a * b
+        //                 | a / b
         let multiplicative = unary
             .clone()
             .then(
@@ -47,6 +57,8 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
                 .repeated(),
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
+        // additive := a + b
+        //           | a - b
         let additive = multiplicative
             .clone()
             .then(

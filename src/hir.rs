@@ -1,14 +1,104 @@
 use super::*;
 
+///
+/// Instructions of High-level IR.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub enum HIR {
+    Integer(SsaReg, i32),
+    Float(SsaReg, f64),
+    IntAsFloat(HIRUnop),
+    INeg(HIRUnop),
+    FNeg(HIRUnop),
+    IAdd(HIRBinop),
+    FAdd(HIRBinop),
+    ISub(HIRBinop),
+    FSub(HIRBinop),
+    IMul(HIRBinop),
+    FMul(HIRBinop),
+    IDiv(HIRBinop),
+    FDiv(HIRBinop),
+    Ret(SsaReg),
+}
+
+///
+/// Binary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HIRBinop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of left-hand side.
+    pub lhs: SsaReg,
+    /// Register ID of right-hand side.
+    pub rhs: SsaReg,
+}
+
+///
+/// Unary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HIRUnop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of source value.
+    pub src: SsaReg,
+}
+
+///
+/// ID of SSA registers.
+///
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SsaReg(usize);
+
+impl std::fmt::Display for SsaReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SsaReg {
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
+///
+/// A state of HIR.
+///
 #[derive(Clone, PartialEq)]
 pub struct HIRContext {
-    pub hirs: Vec<HIR>,
+    /// HIR instructions.
+    pub insts: Vec<HIR>,
+    /// SSA register information.
     pub reginfo: Vec<SsaRegInfo>,
+}
+
+///
+/// Information of SSA registers.
+///
+#[derive(Clone, PartialEq)]
+pub struct SsaRegInfo {
+    /// *Type* of the register.
+    pub ty: Type,
+}
+
+impl std::fmt::Debug for SsaRegInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.ty)
+    }
+}
+
+impl SsaRegInfo {
+    fn new(ty: Type) -> Self {
+        Self { ty }
+    }
 }
 
 impl std::fmt::Debug for HIRContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for hir in &self.hirs {
+        writeln!(f, "HIRContext {{")?;
+        for hir in &self.insts {
             let s = match hir {
                 HIR::Integer(ret, i) => format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i),
                 HIR::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
@@ -54,9 +144,9 @@ impl std::fmt::Debug for HIRContext {
                 ),
                 HIR::Ret(ret) => format!("ret %{}: {:?}", ret, self[*ret].ty),
             };
-            writeln!(f, "{}", s)?;
+            writeln!(f, "\t{}", s)?;
         }
-        Ok(())
+        writeln!(f, "}}")
     }
 }
 
@@ -77,7 +167,7 @@ impl std::ops::IndexMut<SsaReg> for HIRContext {
 impl HIRContext {
     pub fn new() -> Self {
         HIRContext {
-            hirs: vec![],
+            insts: vec![],
             reginfo: vec![],
         }
     }
@@ -85,7 +175,7 @@ impl HIRContext {
     fn add_assign(&mut self, hir: HIR, ty: Type) -> SsaReg {
         let ret_reg = self.next_reg();
         self.reginfo.push(SsaRegInfo::new(ty));
-        self.hirs.push(hir);
+        self.insts.push(hir);
         ret_reg
     }
 
@@ -162,11 +252,12 @@ impl HIRContext {
 
     fn new_ret(&mut self, lhs: SsaReg) {
         let hir = HIR::Ret(lhs);
-        self.hirs.push(hir);
+        self.insts.push(hir);
     }
 }
 
 impl HIRContext {
+    /// Generate HIR from AST.
     pub fn from_ast(&mut self, ast: &Expr) -> (SsaReg, Type) {
         let ret = self.gen(ast);
         let ty = self[ret].ty;
@@ -174,6 +265,7 @@ impl HIRContext {
         (ret, ty)
     }
 
+    /// Generate HIR from an *Expr*.
     fn gen(&mut self, ast: &Expr) -> SsaReg {
         match ast {
             Expr::Integer(i) => self.new_integer(*i),
@@ -264,67 +356,4 @@ impl HIRContext {
             }
         }
     }
-}
-
-#[derive(Clone, PartialEq)]
-pub struct SsaRegInfo {
-    pub ty: Type,
-}
-
-impl std::fmt::Debug for SsaRegInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.ty)
-    }
-}
-
-impl SsaRegInfo {
-    fn new(ty: Type) -> Self {
-        Self { ty }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SsaReg(usize);
-
-impl std::fmt::Display for SsaReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl SsaReg {
-    pub fn to_usize(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum HIR {
-    Integer(SsaReg, i32),
-    Float(SsaReg, f64),
-    IntAsFloat(HIRUnop),
-    INeg(HIRUnop),
-    FNeg(HIRUnop),
-    IAdd(HIRBinop),
-    FAdd(HIRBinop),
-    ISub(HIRBinop),
-    FSub(HIRBinop),
-    IMul(HIRBinop),
-    FMul(HIRBinop),
-    IDiv(HIRBinop),
-    FDiv(HIRBinop),
-    Ret(SsaReg),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HIRBinop {
-    pub ret: SsaReg,
-    pub lhs: SsaReg,
-    pub rhs: SsaReg,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HIRUnop {
-    pub ret: SsaReg,
-    pub src: SsaReg,
 }

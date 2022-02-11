@@ -26,7 +26,7 @@ impl Evaluator {
         };
         let mut pc = 0usize;
         loop {
-            let op = &hir_context.hirs[pc];
+            let op = &hir_context.insts[pc];
             pc += 1;
             if let Some(val) = eval.eval(op) {
                 return val;

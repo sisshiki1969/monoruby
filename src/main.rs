@@ -56,22 +56,31 @@ impl Value {
 }
 
 fn main() {
-    let code = "(4 - 5.0 / 2) * 2.5";
+    let code = "1+(1+(1+(1+(1+(1+(1+(1)))))))";
     run(code);
 }
 
 fn run(code: &str) {
+    use std::process::Command;
     dbg!(code);
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
             hir.from_ast(&expr);
             let eval_res = dbg!(Evaluator::eval_hir(dbg!(&hir)));
-            let mut mcir_context = McIRContext::new();
+            let mut mcir_context = MachineIRContext::new();
             mcir_context.from_hir(&hir);
             let mut codegen = Codegen::new();
             let jit_res = codegen.compile_and_run(dbg!(&mcir_context));
             assert_eq!(eval_res, jit_res);
+            let output = Command::new("ruby")
+                .args(&["-e", &format!("puts({})", code)])
+                .output();
+            let res = match &output {
+                Ok(output) => std::str::from_utf8(&output.stdout).unwrap().to_string(),
+                Err(err) => err.to_string(),
+            };
+            eprintln!("Ruby: {}", res);
         }
         Err(err) => {
             dbg!(&err);

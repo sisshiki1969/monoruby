@@ -3,19 +3,35 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+///
+/// Physical registers for general purpose.
+///
+enum GeneralPhysReg {
+    /// General purpose register (r8-r11)
+    Reg(u64),
+    /// On stack with offset from rbp.
+    Stack(i64),
+}
+
+///
+/// Physical registers for double-precision floating point numbers.
+///
+enum FloatPhysReg {
+    /// Xmm registers (xmm1-xmm15)
+    Xmm(u64),
+    /// On stack with offset from rbp.
+    Stack(i64),
+}
+
+///
+/// Code generator
+///
+/// This generates x86-64 machine code from McIR into heap memory .
+///
 pub struct Codegen {
     jit: JitMemory,
+    /// A number of general registers which is spilled to the stack..
     g_locals: usize,
-}
-
-enum GeneralPhysReg {
-    Reg(u64),
-    Stack(i64),
-}
-
-enum FloatPhysReg {
-    Xmm(u64),
-    Stack(i64),
 }
 
 macro_rules! integer_ops {
@@ -92,28 +108,38 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Allocate general register to physical register.
+    ///
+    /// Currently, first 4 registers are allocated to R8-R11 registers.
+    ///
     fn g_phys_reg(&self, reg: GReg) -> GeneralPhysReg {
         let reg = reg.to_usize();
-        if reg < 4 {
+        if reg < 5 {
             GeneralPhysReg::Reg(reg as u64 + 8)
         } else {
-            GeneralPhysReg::Stack((reg * 8) as i64 + 8)
+            GeneralPhysReg::Stack(((reg - 4) * 8) as i64 + 8)
         }
     }
 
+    ///
+    /// Allocate general register to physical register.
+    ///
+    /// Currently, first 14 registers are allocated to xmm1-xmm15 registers.
+    ///
     fn f_phys_reg(&self, reg: FReg) -> FloatPhysReg {
         let reg = reg.to_usize();
         if reg < 15 {
             FloatPhysReg::Xmm((reg + 1) as u64)
         } else {
-            FloatPhysReg::Stack(((reg + self.g_locals) * 8) as i64 + 8)
+            FloatPhysReg::Stack((((reg - 14) + self.g_locals) * 8) as i64 + 8)
         }
     }
 
-    pub fn compile_and_run(&mut self, mcir_context: &McIRContext) -> Value {
+    pub fn compile_and_run(&mut self, mcir_context: &MachineIRContext) -> Value {
         let g_locals = match mcir_context.g_reg_num() {
-            i if i < 4 => 0,
-            i => i - 3,
+            i if i < 5 => 0,
+            i => i - 4,
         };
         let f_locals = match mcir_context.f_reg_num() {
             i if i < 15 => 0,
@@ -124,7 +150,7 @@ impl Codegen {
         let epilogue = self.jit.label();
         let mut ret_ty = None;
 
-        for op in &mcir_context.mcirs {
+        for op in &mcir_context.insts {
             match op {
                 McIR::Integer(reg, i) => match self.g_phys_reg(*reg) {
                     GeneralPhysReg::Reg(reg) => {
