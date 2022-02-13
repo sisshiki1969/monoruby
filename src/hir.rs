@@ -18,7 +18,7 @@ pub enum HIR {
     FSub(HIRBinop2),
     FMul(HIRBinop2),
     FDiv(HIRBinop2),
-    Ret(SsaReg),
+    Ret(HIROperand),
 }
 
 ///
@@ -212,7 +212,7 @@ impl std::fmt::Debug for HIRContext {
                     "%{}: {:?} = fdiv {:?}, {:?}",
                     op.ret, self[op.ret].ty, op.lhs, op.rhs
                 ),
-                HIR::Ret(ret) => format!("ret %{}: {:?}", ret, self[*ret].ty),
+                HIR::Ret(ret) => format!("ret {:?}", ret),
             };
             writeln!(f, "\t{}", s)?;
         }
@@ -350,9 +350,95 @@ impl HIRContext {
     }
 
     fn new_ret(&mut self, lhs: SsaReg) {
-        let hir = HIR::Ret(lhs);
+        let hir = HIR::Ret(HIROperand::Reg(lhs));
         self.insts.push(hir);
     }
+}
+
+macro_rules! binary_ops {
+    ($self:ident, $lhs:ident, $rhs:ident, $i_op:ident, $f_op:ident) => {
+        match ($lhs, $rhs) {
+            (Expr::Integer(lhs_), Expr::Float(rhs_)) => {
+                let lhs = $self.new_as_float_imm(*lhs_);
+                $self.$f_op(HIROperand::reg(lhs), HIROperand::float(*rhs_))
+            }
+            (Expr::Integer(lhs_), Expr::Integer(rhs_)) => {
+                $self.$i_op(HIROperand::integer(*lhs_), HIROperand::integer(*rhs_))
+            }
+            (Expr::Integer(lhs_), _) => {
+                let rhs = $self.gen($rhs);
+                let rhs_ty = $self[rhs].ty;
+                match rhs_ty {
+                    Type::Integer => $self.$i_op(HIROperand::integer(*lhs_), HIROperand::reg(rhs)),
+                    Type::Float => {
+                        let lhs = $self.new_as_float_imm(*lhs_);
+                        $self.$f_op(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
+                    }
+                }
+            }
+            (Expr::Float(lhs_), Expr::Integer(rhs_)) => {
+                let rhs = $self.new_as_float_imm(*rhs_);
+                $self.$f_op(HIROperand::float(*lhs_), HIROperand::reg(rhs))
+            }
+            (Expr::Float(lhs_), Expr::Float(rhs_)) => {
+                $self.$f_op(HIROperand::float(*lhs_), HIROperand::float(*rhs_))
+            }
+            (Expr::Float(lhs_), _) => {
+                let rhs = $self.gen($rhs);
+                let rhs_ty = $self[rhs].ty;
+                match rhs_ty {
+                    Type::Integer => {
+                        let rhs = $self.new_as_float(rhs);
+                        $self.$f_op(HIROperand::float(*lhs_), HIROperand::reg(rhs))
+                    }
+                    Type::Float => $self.$f_op(HIROperand::float(*lhs_), HIROperand::reg(rhs)),
+                }
+            }
+            (_, Expr::Integer(rhs_)) => {
+                let lhs = $self.gen($lhs);
+                let lhs_ty = $self[lhs].ty;
+                match lhs_ty {
+                    Type::Integer => $self.$i_op(HIROperand::reg(lhs), HIROperand::integer(*rhs_)),
+                    Type::Float => {
+                        $self.$f_op(HIROperand::reg(lhs), HIROperand::float(*rhs_ as f64))
+                    }
+                }
+            }
+            (_, Expr::Float(rhs_)) => {
+                let lhs = $self.gen($lhs);
+                let lhs_ty = $self[lhs].ty;
+                match lhs_ty {
+                    Type::Integer => {
+                        let lhs = $self.new_as_float(lhs);
+                        $self.$f_op(HIROperand::reg(lhs), HIROperand::float(*rhs_))
+                    }
+                    Type::Float => $self.$f_op(HIROperand::reg(lhs), HIROperand::float(*rhs_)),
+                }
+            }
+            _ => {
+                let lhs = $self.gen($lhs);
+                let rhs = $self.gen($rhs);
+                let lhs_ty = $self[lhs].ty;
+                let rhs_ty = $self[rhs].ty;
+                match (lhs_ty, rhs_ty) {
+                    (Type::Integer, Type::Integer) => {
+                        $self.$i_op(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
+                    }
+                    (Type::Integer, Type::Float) => {
+                        let lhs = $self.new_as_float(lhs);
+                        $self.$f_op(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
+                    }
+                    (Type::Float, Type::Integer) => {
+                        let rhs = $self.new_as_float(rhs);
+                        $self.$f_op(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
+                    }
+                    (Type::Float, Type::Float) => {
+                        $self.$f_op(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
+                    }
+                }
+            }
+        }
+    };
 }
 
 impl HIRContext {
@@ -381,134 +467,8 @@ impl HIRContext {
                     Type::Float => self.new_fneg(lhs_i),
                 }
             }
-            Expr::Add(box lhs, box rhs) => match (lhs, rhs) {
-                (Expr::Integer(lhs_), Expr::Float(rhs_)) => {
-                    let lhs = self.new_as_float_imm(*lhs_);
-                    self.new_fadd(HIROperand::reg(lhs), HIROperand::float(*rhs_))
-                }
-                (Expr::Integer(lhs_), Expr::Integer(rhs_)) => {
-                    self.new_iadd(HIROperand::integer(*lhs_), HIROperand::integer(*rhs_))
-                }
-                (Expr::Integer(lhs_), _) => {
-                    let rhs = self.gen(rhs);
-                    let rhs_ty = self[rhs].ty;
-                    match rhs_ty {
-                        Type::Integer => {
-                            self.new_iadd(HIROperand::integer(*lhs_), HIROperand::reg(rhs))
-                        }
-                        Type::Float => {
-                            let lhs = self.new_as_float_imm(*lhs_);
-                            self.new_fadd(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                    }
-                }
-                (Expr::Float(lhs_), Expr::Integer(rhs_)) => {
-                    let rhs = self.new_as_float_imm(*rhs_);
-                    self.new_fadd(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                }
-                (Expr::Float(lhs_), Expr::Float(rhs_)) => {
-                    self.new_fadd(HIROperand::float(*lhs_), HIROperand::float(*rhs_))
-                }
-                (Expr::Float(lhs_), _) => {
-                    let rhs = self.gen(rhs);
-                    let rhs_ty = self[rhs].ty;
-                    match rhs_ty {
-                        Type::Integer => {
-                            let rhs = self.new_as_float(rhs);
-                            self.new_fadd(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                        }
-                        Type::Float => {
-                            self.new_fadd(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                        }
-                    }
-                }
-                _ => {
-                    let lhs = self.gen(lhs);
-                    let rhs = self.gen(rhs);
-                    let lhs_ty = self[lhs].ty;
-                    let rhs_ty = self[rhs].ty;
-                    match (lhs_ty, rhs_ty) {
-                        (Type::Integer, Type::Integer) => {
-                            self.new_iadd(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Integer, Type::Float) => {
-                            let lhs = self.new_as_float(lhs);
-                            self.new_fadd(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Float, Type::Integer) => {
-                            let rhs = self.new_as_float(rhs);
-                            self.new_fadd(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Float, Type::Float) => {
-                            self.new_fadd(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                    }
-                }
-            },
-            Expr::Sub(box lhs, box rhs) => match (lhs, rhs) {
-                (Expr::Integer(lhs_), Expr::Float(rhs_)) => {
-                    let lhs = self.new_as_float_imm(*lhs_);
-                    self.new_fsub(HIROperand::reg(lhs), HIROperand::float(*rhs_))
-                }
-                (Expr::Integer(lhs_), Expr::Integer(rhs_)) => {
-                    self.new_isub(HIROperand::integer(*lhs_), HIROperand::integer(*rhs_))
-                }
-                (Expr::Integer(lhs_), _) => {
-                    let rhs = self.gen(rhs);
-                    let rhs_ty = self[rhs].ty;
-                    match rhs_ty {
-                        Type::Integer => {
-                            self.new_isub(HIROperand::integer(*lhs_), HIROperand::reg(rhs))
-                        }
-                        Type::Float => {
-                            let lhs = self.new_as_float_imm(*lhs_);
-                            self.new_fsub(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                    }
-                }
-                (Expr::Float(lhs_), Expr::Integer(rhs_)) => {
-                    let rhs = self.new_as_float_imm(*rhs_);
-                    self.new_fsub(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                }
-                (Expr::Float(lhs_), Expr::Float(rhs_)) => {
-                    self.new_fsub(HIROperand::float(*lhs_), HIROperand::float(*rhs_))
-                }
-                (Expr::Float(lhs_), _) => {
-                    let rhs = self.gen(rhs);
-                    let rhs_ty = self[rhs].ty;
-                    match rhs_ty {
-                        Type::Integer => {
-                            let rhs = self.new_as_float(rhs);
-                            self.new_fsub(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                        }
-                        Type::Float => {
-                            self.new_fsub(HIROperand::float(*lhs_), HIROperand::reg(rhs))
-                        }
-                    }
-                }
-                _ => {
-                    let lhs = self.gen(lhs);
-                    let rhs = self.gen(rhs);
-                    let lhs_ty = self[lhs].ty;
-                    let rhs_ty = self[rhs].ty;
-                    match (lhs_ty, rhs_ty) {
-                        (Type::Integer, Type::Integer) => {
-                            self.new_isub(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Integer, Type::Float) => {
-                            let lhs = self.new_as_float(lhs);
-                            self.new_fsub(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Float, Type::Integer) => {
-                            let rhs = self.new_as_float(rhs);
-                            self.new_fsub(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                        (Type::Float, Type::Float) => {
-                            self.new_fsub(HIROperand::Reg(lhs), HIROperand::Reg(rhs))
-                        }
-                    }
-                }
-            },
+            Expr::Add(box lhs, box rhs) => binary_ops!(self, lhs, rhs, new_iadd, new_fadd),
+            Expr::Sub(box lhs, box rhs) => binary_ops!(self, lhs, rhs, new_isub, new_fsub),
             Expr::Mul(box lhs, box rhs) => {
                 let lhs = self.gen(lhs);
                 let rhs = self.gen(rhs);

@@ -117,7 +117,13 @@ impl Evaluator {
                 self[op.ret] = Value::Float(lhs.as_f() / rhs.as_f());
                 None
             }
-            HIR::Ret(lhs) => Some(self[*lhs]),
+            HIR::Ret(lhs) => match lhs {
+                HIROperand::Reg(lhs) => Some(self[*lhs]),
+                HIROperand::Const(c) => Some(match c {
+                    Const::Integer(n) => Value::Integer(*n),
+                    Const::Float(n) => Value::Float(*n),
+                }),
+            },
         }
     }
 }

@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 chumsky = "0.7.0"
 ariadne = "0.1.3"
+rustyline = "9.1.2"
 monoasm_macro = { path = "../monoasm/monoasm_macro" }
 monoasm = { path = "../monoasm/monoasm" }
