@@ -34,6 +34,16 @@ impl Evaluator {
         }
     }
 
+    fn eval_operand(&self, op: &HIROperand) -> Value {
+        match op {
+            HIROperand::Const(c) => match c {
+                Const::Integer(n) => Value::Integer(*n),
+                Const::Float(n) => Value::Float(*n),
+            },
+            HIROperand::Reg(r) => self[*r],
+        }
+    }
+
     fn eval(&mut self, hir: &HIR) -> Option<Value> {
         match hir {
             HIR::Integer(ret, i) => {
@@ -45,41 +55,41 @@ impl Evaluator {
                 None
             }
             HIR::IntAsFloat(op) => {
-                let src = self[op.src];
+                let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Float(src.as_i() as f64);
                 None
             }
             HIR::INeg(op) => {
-                let src = self[op.src];
+                let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Integer(-src.as_i());
                 None
             }
             HIR::FNeg(op) => {
-                let src = self[op.src];
+                let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Float(-src.as_f());
                 None
             }
             HIR::IAdd(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Integer(lhs.as_i() + rhs.as_i());
                 None
             }
             HIR::FAdd(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() + rhs.as_f());
                 None
             }
             HIR::ISub(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Integer(lhs.as_i() - rhs.as_i());
                 None
             }
             HIR::FSub(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() - rhs.as_f());
                 None
             }
@@ -90,8 +100,8 @@ impl Evaluator {
                 None
             }
             HIR::FMul(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() * rhs.as_f());
                 None
             }
@@ -102,8 +112,8 @@ impl Evaluator {
                 None
             }
             HIR::FDiv(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() / rhs.as_f());
                 None
             }

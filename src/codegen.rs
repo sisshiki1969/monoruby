@@ -37,67 +37,106 @@ pub struct Codegen {
 macro_rules! integer_ops {
     ($self: ident, $op: ident, $lhs:ident, $rhs:ident) => {{
         let lhs = $self.g_phys_reg(*$lhs);
-        let rhs = $self.g_phys_reg(*$rhs);
-        match (lhs, rhs) {
-            (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Reg(rhs)) => {
-                monoasm!($self.jit,
-                  $op  R(lhs), R(rhs);
-                );
+        match &$rhs {
+            McGeneralOperand::Reg(rhs) => {
+                let rhs = $self.g_phys_reg(*rhs);
+                match (lhs, rhs) {
+                    (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Reg(rhs)) => {
+                        monoasm!($self.jit,
+                          $op  R(lhs), R(rhs);
+                        );
+                    }
+                    (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Stack(rhs)) => {
+                        monoasm!($self.jit,
+                          $op  R(lhs), [rbp-(rhs)];
+                        );
+                    }
+                    (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Reg(rhs)) => {
+                        monoasm!($self.jit,
+                          $op  [rbp-(lhs)], R(rhs);
+                        );
+                    }
+                    (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Stack(rhs)) => {
+                        monoasm!($self.jit,
+                          movq  rax, [rbp-(rhs)];
+                          $op  [rbp-(lhs)], rax;
+                        );
+                    }
+                };
             }
-            (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Stack(rhs)) => {
-                monoasm!($self.jit,
-                  $op  R(lhs), [rbp-(rhs)];
-                );
+            McGeneralOperand::Integer(rhs) => {
+                let lhs = $self.g_phys_reg(*$lhs);
+                match lhs {
+                    GeneralPhysReg::Reg(lhs) => {
+                        monoasm!($self.jit,
+                          $op  R(lhs), (*rhs as i64);
+                        );
+                    }
+                    GeneralPhysReg::Stack(lhs) => {
+                        monoasm!($self.jit,
+                          $op  [rbp-(lhs)], (*rhs as i64);
+                        );
+                    }
+                };
             }
-            (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Reg(rhs)) => {
-                monoasm!($self.jit,
-                  $op  [rbp-(lhs)], R(rhs);
-                );
-            }
-            (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Stack(rhs)) => {
-                monoasm!($self.jit,
-                  movq  rax, [rbp-(rhs)];
-                  $op  [rbp-(lhs)], rax;
-                );
-            }
-        };
+        }
     }};
 }
 
 macro_rules! float_ops {
     ($self: ident, $op: ident, $lhs:ident, $rhs:ident) => {{
         let lhs = $self.f_phys_reg(*$lhs);
-        let rhs = $self.f_phys_reg(*$rhs);
-        match (lhs, rhs) {
-            (FloatPhysReg::Xmm(lhs), FloatPhysReg::Xmm(rhs)) => {
-                monoasm!($self.jit,
-                  $op    xmm(lhs), xmm(rhs);
-                );
+        match &$rhs {
+            McFloatOperand::Reg(rhs) => {
+                let rhs = $self.f_phys_reg(*rhs);
+                match (lhs, rhs) {
+                    (FloatPhysReg::Xmm(lhs), FloatPhysReg::Xmm(rhs)) => {
+                        monoasm!($self.jit,
+                          $op    xmm(lhs), xmm(rhs);
+                        );
+                    }
+                    (FloatPhysReg::Xmm(lhs), FloatPhysReg::Stack(rhs)) => {
+                        monoasm!($self.jit,
+                          movsd  xmm0, [rbp-(rhs)];
+                          $op    xmm(lhs), xmm0;
+                        );
+                    }
+                    (FloatPhysReg::Stack(lhs), FloatPhysReg::Xmm(rhs)) => {
+                        monoasm!($self.jit,
+                          movsd  xmm0, [rbp-(lhs)];
+                          $op    xmm0, xmm(rhs);
+                          movsd  [rbp-(lhs)], xmm0;
+                        );
+                    }
+                    (FloatPhysReg::Stack(lhs), FloatPhysReg::Stack(rhs)) => {
+                        monoasm!($self.jit,
+                          movsd  xmm0, [rbp-(lhs)];
+                          $op    xmm0, [rbp-(rhs)];
+                          movsd  [rbp-(lhs)], xmm0;
+                        );
+                    }
+                }
             }
-            (FloatPhysReg::Xmm(lhs), FloatPhysReg::Stack(rhs)) => {
-                monoasm!($self.jit,
-                  movsd  xmm0, [rbp-(rhs)];
-                  $op    xmm(lhs), xmm0;
-                );
+            McFloatOperand::Float(rhs) => {
+                let lhs = $self.f_phys_reg(*$lhs);
+                let label = $self.jit.const_f64(*rhs);
+                match lhs {
+                    FloatPhysReg::Xmm(lhs) => {
+                        monoasm!($self.jit,
+                          $op    xmm(lhs), [rip + label];
+                        );
+                    }
+                    FloatPhysReg::Stack(lhs) => {
+                        monoasm!($self.jit,
+                          movsd  xmm0, [rbp-(lhs)];
+                          $op    xmm0, [rip + label];
+                          movsd  [rbp-(lhs)], xmm0;
+                        );
+                    }
+                }
             }
-            (FloatPhysReg::Stack(lhs), FloatPhysReg::Xmm(rhs)) => {
-                monoasm!($self.jit,
-                  movsd  xmm0, [rbp-(lhs)];
-                  $op    xmm0, xmm(rhs);
-                  movsd  [rbp-(lhs)], xmm0;
-                );
-            }
-            (FloatPhysReg::Stack(lhs), FloatPhysReg::Stack(rhs)) => {
-                monoasm!($self.jit,
-                  movsd  xmm0, [rbp-(lhs)];
-                  $op    xmm0, [rbp-(rhs)];
-                  movsd  [rbp-(lhs)], xmm0;
-                );
-            }
-        }
-    }
-
-    };
+        };
+    }}
 }
 
 impl Codegen {
@@ -259,34 +298,54 @@ impl Codegen {
                 McIR::FMul(lhs, rhs) => float_ops!(self, mulsd, lhs, rhs),
                 McIR::FDiv(lhs, rhs) => float_ops!(self, divsd, lhs, rhs),
 
-                McIR::IntAsFloat(dst, src) => {
-                    let src = self.g_phys_reg(*src);
-                    let dst = self.f_phys_reg(*dst);
-                    match (src, dst) {
-                        (GeneralPhysReg::Reg(src), FloatPhysReg::Xmm(dst)) => {
-                            monoasm!(self.jit,
-                              cvtsi2sdq xmm(dst), R(src);
-                            );
-                        }
-                        (GeneralPhysReg::Reg(src), FloatPhysReg::Stack(dst)) => {
-                            monoasm!(self.jit,
-                              cvtsi2sdq xmm0, R(src);
-                              movsd  [rbp-(dst)], xmm0;
-                            );
-                        }
-                        (GeneralPhysReg::Stack(src), FloatPhysReg::Xmm(dst)) => {
-                            monoasm!(self.jit,
-                              cvtsi2sdq xmm(dst), [rbp-(src)];
-                            );
-                        }
-                        (GeneralPhysReg::Stack(src), FloatPhysReg::Stack(dst)) => {
-                            monoasm!(self.jit,
-                              cvtsi2sdq xmm0, [rbp-(src)];
-                              movsd  [rbp-(dst)], xmm0;
-                            );
+                McIR::IntAsFloat(dst, src) => match src {
+                    &McGeneralOperand::Reg(src) => {
+                        let src = self.g_phys_reg(src);
+                        let dst = self.f_phys_reg(*dst);
+                        match (src, dst) {
+                            (GeneralPhysReg::Reg(src), FloatPhysReg::Xmm(dst)) => {
+                                monoasm!(self.jit,
+                                  cvtsi2sdq xmm(dst), R(src);
+                                );
+                            }
+                            (GeneralPhysReg::Reg(src), FloatPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit,
+                                  cvtsi2sdq xmm0, R(src);
+                                  movsd  [rbp-(dst)], xmm0;
+                                );
+                            }
+                            (GeneralPhysReg::Stack(src), FloatPhysReg::Xmm(dst)) => {
+                                monoasm!(self.jit,
+                                  cvtsi2sdq xmm(dst), [rbp-(src)];
+                                );
+                            }
+                            (GeneralPhysReg::Stack(src), FloatPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit,
+                                  cvtsi2sdq xmm0, [rbp-(src)];
+                                  movsd  [rbp-(dst)], xmm0;
+                                );
+                            }
                         }
                     }
-                }
+                    &McGeneralOperand::Integer(n) => {
+                        let dst = self.f_phys_reg(*dst);
+                        match dst {
+                            FloatPhysReg::Xmm(dst) => {
+                                monoasm!(self.jit,
+                                  movq      rax, (n as i64);
+                                  cvtsi2sdq xmm(dst), rax;
+                                );
+                            }
+                            FloatPhysReg::Stack(dst) => {
+                                monoasm!(self.jit,
+                                  movq      rax, (n as i64);
+                                  cvtsi2sdq xmm0, rax;
+                                  movsd     [rbp-(dst)], xmm0;
+                                );
+                            }
+                        }
+                    }
+                },
                 McIR::FRet(lhs) => {
                     match self.f_phys_reg(*lhs) {
                         FloatPhysReg::Xmm(lhs) => {
