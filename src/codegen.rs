@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use monoasm::*;
 use monoasm_macro::monoasm;
 
@@ -449,7 +451,7 @@ impl Codegen {
         }
         self.jit.bind_label(epilogue);
         self.epilogue();
-        match ret_ty {
+        let res = match ret_ty {
             None => unreachable!(),
             Some(Type::Integer) => {
                 let func = self.jit.finalize::<f64, i64>();
@@ -461,7 +463,36 @@ impl Codegen {
                 let f = dbg!(func(0.0));
                 Value::Float(f)
             }
-        }
+        };
+        self.dump_code();
+
+        res
+    }
+
+    /// Dump generated code.
+    fn dump_code(&self) {
+        use std::fs::File;
+        use std::process::Command;
+        let asm = self.jit.to_vec();
+        let mut file = File::create("tmp.bin").unwrap();
+        file.write_all(&asm).unwrap();
+
+        let output = Command::new("objdump")
+            .args(&[
+                "-D",
+                "-Mintel,x86-64",
+                "-b",
+                "binary",
+                "-m",
+                "i386",
+                "tmp.bin",
+            ])
+            .output();
+        let asm = match &output {
+            Ok(output) => std::str::from_utf8(&output.stdout).unwrap().to_string(),
+            Err(err) => err.to_string(),
+        };
+        eprintln!("asm: {}", asm);
     }
 
     fn prologue(&mut self, locals: usize) {

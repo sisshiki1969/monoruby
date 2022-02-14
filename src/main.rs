@@ -81,12 +81,13 @@ fn main() {
 }
 
 fn run(code: &str) {
-    dbg!(code);
+    if code.len() == 0 {
+        return;
+    }
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
             hir.from_ast(&expr);
-            dbg!(&expr);
             let eval_res = Evaluator::eval_hir(dbg!(&hir));
             let mut mcir_context = MachineIRContext::new();
             mcir_context.from_hir(&hir);

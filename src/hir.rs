@@ -216,7 +216,7 @@ impl std::fmt::Debug for HIRContext {
             };
             writeln!(f, "\t{}", s)?;
         }
-        writeln!(f, "}}")
+        write!(f, "}}")
     }
 }
 

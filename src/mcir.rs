@@ -8,7 +8,7 @@ pub struct MachineIRContext {
     ssa_map: SsaMap,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct SsaMap(Vec<Option<McReg>>);
 
 impl std::ops::Index<SsaReg> for SsaMap {
@@ -22,6 +22,19 @@ impl std::ops::Index<SsaReg> for SsaMap {
 impl std::ops::IndexMut<SsaReg> for SsaMap {
     fn index_mut(&mut self, i: SsaReg) -> &mut Option<McReg> {
         &mut self.0[i.to_usize()]
+    }
+}
+
+impl std::fmt::Debug for SsaMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut v = vec![];
+        for (i, info) in self.0.iter().enumerate() {
+            match info {
+                Some(reg) => v.push(format!("{}:{:?}", i, reg)),
+                None => v.push(format!("{}:None", i)),
+            }
+        }
+        write!(f, "SSA_MAP: [{}]", v.join(", "))
     }
 }
 
@@ -78,8 +91,28 @@ impl std::fmt::Debug for MachineIRContext {
             };
             writeln!(f, "\t{}", s)?;
         }
-        writeln!(f, "}}")?;
-        Ok(())
+        write!(f, "\tG_REG_INFO ")?;
+        for (i, info) in self.g_reginfo.iter().enumerate() {
+            match info {
+                GRegInfo { ssareg } => match ssareg {
+                    Some(reg) => write!(f, "{}:[{:?}] ", i, reg)?,
+                    None => write!(f, "{}:[vacant] ", i)?,
+                },
+            }
+        }
+        writeln!(f)?;
+        write!(f, "\tF_REG_INFO ")?;
+        for (i, info) in self.f_reginfo.iter().enumerate() {
+            match info {
+                FRegInfo { ssareg } => match ssareg {
+                    Some(reg) => write!(f, "{}:[{:?}] ", i, reg)?,
+                    None => write!(f, "{}:[vacant] ", i)?,
+                },
+            }
+        }
+        writeln!(f)?;
+        writeln!(f, "\t{:?}", self.ssa_map)?;
+        write!(f, "}}")
     }
 }
 
@@ -266,10 +299,12 @@ impl MachineIRContext {
                     HIROperand::Reg(ssa) => match hir_context[*ssa].ty {
                         Type::Integer => {
                             let reg = self.ssa_map[*ssa].unwrap().as_g();
+                            self[reg].invalidate();
                             self.insts.push(McIR::IRet(McGeneralOperand::Reg(reg)));
                         }
                         Type::Float => {
                             let reg = self.ssa_map[*ssa].unwrap().as_f();
+                            self[reg].invalidate();
                             self.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
                         }
                     },
