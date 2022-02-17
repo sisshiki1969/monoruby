@@ -25,13 +25,17 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
             }
         });
 
+    let local = text::ident::<_, Simple<char>>().map(|s| Expr::LocalLoad(s));
+
+    let ident = text::ident::<_, Simple<char>>();
+
     let op = |ch: char| just(ch).padded();
 
     recursive(|expr| {
         let parenthesized = expr.delimited_by('(', ')');
         // primary := <number>
         //          | '(' <expr> ')'
-        let primary = choice((number, parenthesized));
+        let primary = choice((number, local, parenthesized));
         // unary := -a
         //        | +a
         let unary = choice((op('-'), op('+')))
@@ -70,6 +74,12 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
                 .repeated(),
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
-        additive.padded()
+        let assignment = ident
+            .then_ignore(op('='))
+            .then(additive.clone())
+            .map(|(lhs, rhs)| Expr::LocalStore(lhs, Box::new(rhs)));
+
+        let assign_expr = choice((assignment, additive));
+        assign_expr.padded()
     })
 }

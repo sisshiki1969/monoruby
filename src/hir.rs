@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 
 ///
@@ -19,6 +21,8 @@ pub enum HIR {
     FMul(HIRBinop2),
     FDiv(HIRBinop2),
     Ret(HIROperand),
+    LocalStore((usize, Type), SsaReg),
+    LocalLoad((usize, Type), SsaReg),
 }
 
 ///
@@ -58,7 +62,7 @@ pub struct HIRUnop {
 #[derive(Clone, PartialEq)]
 pub enum HIROperand {
     Reg(SsaReg),
-    Const(Const),
+    Const(Value),
 }
 
 impl std::fmt::Debug for HIROperand {
@@ -72,11 +76,11 @@ impl std::fmt::Debug for HIROperand {
 
 impl HIROperand {
     fn integer(n: i32) -> Self {
-        Self::Const(Const::Integer(n))
+        Self::Const(Value::Integer(n))
     }
 
     fn float(n: f64) -> Self {
-        Self::Const(Const::Float(n))
+        Self::Const(Value::Float(n))
     }
 
     fn reg(r: SsaReg) -> Self {
@@ -84,36 +88,20 @@ impl HIROperand {
     }
 }
 
-#[derive(Clone, PartialEq)]
+/*#[derive(Clone, PartialEq)]
 pub enum Const {
     Integer(i32),
     Float(f64),
-}
+}*/
 
-impl std::fmt::Debug for Const {
+/*impl std::fmt::Debug for Const {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Integer(n) => write!(f, "{}: i32", n),
             Self::Float(n) => write!(f, "{}: f64", n),
         }
     }
-}
-
-impl Const {
-    pub fn as_i(&self) -> i32 {
-        match self {
-            Const::Integer(n) => *n,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn as_f(&self) -> f64 {
-        match self {
-            Const::Float(n) => *n,
-            _ => unreachable!(),
-        }
-    }
-}
+}*/
 
 ///
 /// ID of SSA registers.
@@ -136,12 +124,13 @@ impl SsaReg {
 ///
 /// A state of HIR.
 ///
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 pub struct HIRContext {
     /// HIR instructions.
     pub insts: Vec<HIR>,
     /// SSA register information.
     pub reginfo: Vec<SsaRegInfo>,
+    //pub local_info: &'a mut HashMap<String, (usize, Type)>,
 }
 
 ///
@@ -213,6 +202,12 @@ impl std::fmt::Debug for HIRContext {
                     op.ret, self[op.ret].ty, op.lhs, op.rhs
                 ),
                 HIR::Ret(ret) => format!("ret {:?}", ret),
+                HIR::LocalStore(ident, rhs) => {
+                    format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
+                }
+                HIR::LocalLoad(ident, lhs) => {
+                    format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
+                }
             };
             writeln!(f, "\t{}", s)?;
         }
@@ -281,7 +276,7 @@ impl HIRContext {
         self.add_assign(
             HIR::IntAsFloat(HIRUnop {
                 ret,
-                src: HIROperand::Const(Const::Integer(src)),
+                src: HIROperand::Const(Value::Integer(src)),
             }),
             Type::Float,
         )
@@ -353,10 +348,45 @@ impl HIRContext {
         let hir = HIR::Ret(HIROperand::Reg(lhs));
         self.insts.push(hir);
     }
+
+    fn new_local_store(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ident: &String,
+        rhs: SsaReg,
+    ) -> SsaReg {
+        let ty = self[rhs].ty;
+        let len = local_map.len();
+        let info = match local_map.get(ident) {
+            Some(info) => info.clone(),
+            None => {
+                let info = (len, ty);
+                local_map.insert(ident.to_string(), info.clone());
+                info
+            }
+        };
+        let hir = HIR::LocalStore(info, rhs);
+        self.insts.push(hir);
+        rhs
+    }
+
+    fn new_local_load(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ident: &String,
+    ) -> SsaReg {
+        let info = match local_map.get(ident) {
+            Some(info) => info.clone(),
+            None => panic!("undefined local variable."),
+        };
+        let ty = info.1;
+        let hir = HIR::LocalLoad(info, self.next_reg());
+        self.add_assign(hir, ty)
+    }
 }
 
 macro_rules! binary_ops {
-    ($self:ident, $lhs:ident, $rhs:ident, $i_op:ident, $f_op:ident) => {
+    ($self:ident, $map:ident, $lhs:ident, $rhs:ident, $i_op:ident, $f_op:ident) => {
         match ($lhs, $rhs) {
             (Expr::Integer(lhs_), Expr::Float(rhs_)) => {
                 let lhs = $self.new_as_float_imm(*lhs_);
@@ -366,7 +396,7 @@ macro_rules! binary_ops {
                 $self.$i_op(HIROperand::integer(*lhs_), HIROperand::integer(*rhs_))
             }
             (Expr::Integer(lhs_), _) => {
-                let rhs = $self.gen($rhs);
+                let rhs = $self.gen($map, $rhs);
                 let rhs_ty = $self[rhs].ty;
                 match rhs_ty {
                     Type::Integer => $self.$i_op(HIROperand::integer(*lhs_), HIROperand::reg(rhs)),
@@ -384,7 +414,7 @@ macro_rules! binary_ops {
                 $self.$f_op(HIROperand::float(*lhs_), HIROperand::float(*rhs_))
             }
             (Expr::Float(lhs_), _) => {
-                let rhs = $self.gen($rhs);
+                let rhs = $self.gen($map, $rhs);
                 let rhs_ty = $self[rhs].ty;
                 match rhs_ty {
                     Type::Integer => {
@@ -395,7 +425,7 @@ macro_rules! binary_ops {
                 }
             }
             (_, Expr::Integer(rhs_)) => {
-                let lhs = $self.gen($lhs);
+                let lhs = $self.gen($map, $lhs);
                 let lhs_ty = $self[lhs].ty;
                 match lhs_ty {
                     Type::Integer => $self.$i_op(HIROperand::reg(lhs), HIROperand::integer(*rhs_)),
@@ -405,7 +435,7 @@ macro_rules! binary_ops {
                 }
             }
             (_, Expr::Float(rhs_)) => {
-                let lhs = $self.gen($lhs);
+                let lhs = $self.gen($map, $lhs);
                 let lhs_ty = $self[lhs].ty;
                 match lhs_ty {
                     Type::Integer => {
@@ -416,8 +446,8 @@ macro_rules! binary_ops {
                 }
             }
             _ => {
-                let lhs = $self.gen($lhs);
-                let rhs = $self.gen($rhs);
+                let lhs = $self.gen($map, $lhs);
+                let rhs = $self.gen($map, $rhs);
                 let lhs_ty = $self[lhs].ty;
                 let rhs_ty = $self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
@@ -443,15 +473,19 @@ macro_rules! binary_ops {
 
 impl HIRContext {
     /// Generate HIR from AST.
-    pub fn from_ast(&mut self, ast: &Expr) -> (SsaReg, Type) {
-        let ret = self.gen(ast);
+    pub fn from_ast(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ast: &Expr,
+    ) -> (SsaReg, Type) {
+        let ret = self.gen(local_map, ast);
         let ty = self[ret].ty;
         self.new_ret(ret);
         (ret, ty)
     }
 
     /// Generate HIR from an *Expr*.
-    fn gen(&mut self, ast: &Expr) -> SsaReg {
+    fn gen(&mut self, local_map: &mut HashMap<String, (usize, Type)>, ast: &Expr) -> SsaReg {
         match ast {
             Expr::Integer(i) => self.new_integer(*i),
             Expr::Float(f) => self.new_float(*f),
@@ -461,17 +495,21 @@ impl HIRContext {
                     Expr::Float(f) => return self.new_float(-f),
                     _ => {}
                 };
-                let lhs_i = self.gen(lhs);
+                let lhs_i = self.gen(local_map, lhs);
                 match self[lhs_i].ty {
                     Type::Integer => self.new_ineg(lhs_i),
                     Type::Float => self.new_fneg(lhs_i),
                 }
             }
-            Expr::Add(box lhs, box rhs) => binary_ops!(self, lhs, rhs, new_iadd, new_fadd),
-            Expr::Sub(box lhs, box rhs) => binary_ops!(self, lhs, rhs, new_isub, new_fsub),
+            Expr::Add(box lhs, box rhs) => {
+                binary_ops!(self, local_map, lhs, rhs, new_iadd, new_fadd)
+            }
+            Expr::Sub(box lhs, box rhs) => {
+                binary_ops!(self, local_map, lhs, rhs, new_isub, new_fsub)
+            }
             Expr::Mul(box lhs, box rhs) => {
-                let lhs = self.gen(lhs);
-                let rhs = self.gen(rhs);
+                let lhs = self.gen(local_map, lhs);
+                let rhs = self.gen(local_map, rhs);
                 let lhs_ty = self[lhs].ty;
                 let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
@@ -490,8 +528,8 @@ impl HIRContext {
                 }
             }
             Expr::Div(box lhs, box rhs) => {
-                let lhs = self.gen(lhs);
-                let rhs = self.gen(rhs);
+                let lhs = self.gen(local_map, lhs);
+                let rhs = self.gen(local_map, rhs);
                 let lhs_ty = self[lhs].ty;
                 let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
@@ -509,6 +547,11 @@ impl HIRContext {
                     }
                 }
             }
+            Expr::LocalStore(ident, box rhs) => {
+                let rhs = self.gen(local_map, rhs);
+                self.new_local_store(local_map, ident, rhs)
+            }
+            Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
         }
     }
 }

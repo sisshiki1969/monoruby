@@ -32,8 +32,8 @@ enum FloatPhysReg {
 ///
 pub struct Codegen {
     jit: JitMemory,
-    /// A number of general registers which is spilled to the stack..
-    g_locals: usize,
+    g_offset: usize,
+    f_offset: usize,
 }
 
 macro_rules! integer_ops {
@@ -121,14 +121,17 @@ macro_rules! float_ops {
             }
             McFloatOperand::Float(rhs) => {
                 let lhs = $self.f_phys_reg(*$lhs);
-                let label = $self.jit.const_f64(*rhs);
                 match lhs {
                     FloatPhysReg::Xmm(lhs) => {
+                        let f = u64::from_ne_bytes(rhs.to_ne_bytes()) as i64;
                         monoasm!($self.jit,
-                          $op    xmm(lhs), [rip + label];
+                            movq   rax, (f);
+                            movq   xmm0, rax;
+                            $op    xmm(lhs), xmm0;
                         );
                     }
                     FloatPhysReg::Stack(lhs) => {
+                        let label = $self.jit.const_f64(*rhs);
                         monoasm!($self.jit,
                           movsd  xmm0, [rbp-(lhs)];
                           $op    xmm0, [rip + label];
@@ -145,7 +148,8 @@ impl Codegen {
     pub fn new() -> Self {
         Self {
             jit: JitMemory::new(),
-            g_locals: 0,
+            g_offset: 0,
+            f_offset: 0,
         }
     }
 
@@ -159,7 +163,7 @@ impl Codegen {
         if reg < 5 {
             GeneralPhysReg::Reg(reg as u64 + 8)
         } else {
-            GeneralPhysReg::Stack(((reg - 4) * 8) as i64 + 8)
+            GeneralPhysReg::Stack(((reg - 4 + self.g_offset) * 8) as i64 + 8)
         }
     }
 
@@ -173,21 +177,28 @@ impl Codegen {
         if reg < 15 {
             FloatPhysReg::Xmm((reg + 1) as u64)
         } else {
-            FloatPhysReg::Stack((((reg - 14) + self.g_locals) * 8) as i64 + 8)
+            FloatPhysReg::Stack(((reg - 14 + self.f_offset) * 8) as i64 + 8)
         }
     }
 
-    pub fn compile_and_run(&mut self, mcir_context: &MachineIRContext) -> Value {
-        let g_locals = match mcir_context.g_reg_num() {
+    pub fn compile_and_run(
+        &mut self,
+        mcir_context: &MachineIRContext,
+        locals: &mut Vec<u64>,
+        local_map: &mut HashMap<String, (usize, Type)>,
+    ) -> Value {
+        let g_regs = match mcir_context.g_reg_num() {
             i if i < 5 => 0,
             i => i - 4,
         };
-        let f_locals = match mcir_context.f_reg_num() {
+        let f_regs = match mcir_context.f_reg_num() {
             i if i < 15 => 0,
             i => i - 14,
         };
-        self.g_locals = g_locals;
-        self.prologue(g_locals + f_locals);
+        let locals_num = local_map.len();
+        self.g_offset = locals_num;
+        self.f_offset = locals_num + g_regs;
+        self.prologue(locals_num + g_regs + f_regs);
         let epilogue = self.jit.label();
         let mut ret_ty = None;
 
@@ -206,17 +217,18 @@ impl Codegen {
                     }
                 },
                 McIR::Float(reg, f) => {
-                    let label = self.jit.const_f64(*f);
+                    //let label = self.jit.const_f64(*f);
+                    let f = u64::from_ne_bytes(f.to_ne_bytes()) as i64;
                     match self.f_phys_reg(*reg) {
                         FloatPhysReg::Xmm(reg) => {
                             monoasm!(self.jit,
-                              movsd  xmm(reg), [rip + label];
+                              movq   rax, (f);
+                              movq   xmm(reg), rax;
                             );
                         }
                         FloatPhysReg::Stack(ofs) => {
                             monoasm!(self.jit,
-                              movsd  xmm0, [rip + label];
-                              movsd  [rbp-(ofs)], xmm0;
+                              movq  [rbp-(ofs)], (f);
                             );
                         }
                     }
@@ -447,25 +459,144 @@ impl Codegen {
                         }
                     };
                 }
+                McIR::LocalStore(ofs, reg) => {
+                    let ofs = *ofs as i64;
+                    match reg {
+                        McReg::GReg(reg) => {
+                            match self.g_phys_reg(*reg) {
+                                GeneralPhysReg::Reg(reg) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq [rcx], R(reg);
+                                    );
+                                }
+                                GeneralPhysReg::Stack(lhs) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq rax, [rbp-(lhs)];
+                                      movq [rcx], rax;
+                                    );
+                                }
+                            };
+                        }
+                        McReg::FReg(reg) => {
+                            match self.f_phys_reg(*reg) {
+                                FloatPhysReg::Xmm(reg) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq [rcx], xmm(reg);
+                                    );
+                                }
+                                FloatPhysReg::Stack(lhs) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq rax, [rbp-(lhs)];
+                                      movq [rcx], rax;
+                                    );
+                                }
+                            };
+                        }
+                    };
+                }
+                McIR::LocalLoad(ofs, reg) => {
+                    let ofs = *ofs as i64;
+                    match reg {
+                        McReg::GReg(reg) => {
+                            match self.g_phys_reg(*reg) {
+                                GeneralPhysReg::Reg(reg) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq R(reg), [rcx];
+                                    );
+                                }
+                                GeneralPhysReg::Stack(lhs) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq rax, [rcx];
+                                      movq [rbp-(lhs)], rax;
+                                    );
+                                }
+                            };
+                        }
+                        McReg::FReg(reg) => {
+                            match self.f_phys_reg(*reg) {
+                                FloatPhysReg::Xmm(reg) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq xmm(reg), [rcx];
+                                    );
+                                }
+                                FloatPhysReg::Stack(lhs) => {
+                                    monoasm!(self.jit,
+                                      movq rax, (8);
+                                      movq rcx, (ofs);
+                                      imul rcx, rax;
+                                      addq rcx, rbx;
+                                      movq rax, [rcx];
+                                      movq [rbp-(lhs)], rax;
+                                    );
+                                }
+                            };
+                        }
+                    };
+                }
             }
         }
         self.jit.bind_label(epilogue);
         self.epilogue();
+        locals.resize(locals_num, 0);
         let res = match ret_ty {
             None => unreachable!(),
-            Some(Type::Integer) => {
-                let func = self.jit.finalize::<f64, i64>();
-                let i = dbg!(func(0.0));
-                Value::Integer(i as i32)
-            }
-            Some(Type::Float) => {
-                let func = self.jit.finalize::<f64, f64>();
-                let f = dbg!(func(0.0));
-                Value::Float(f)
-            }
+            Some(ty) => match ty {
+                Type::Integer => {
+                    let func = self.jit.finalize::<*mut u64, i64>();
+                    let i = dbg!(func(locals.as_mut_ptr()));
+                    Value::Integer(i as i32)
+                }
+                Type::Float => {
+                    let func = self.jit.finalize::<*mut u64, f64>();
+                    let f = dbg!(func(locals.as_mut_ptr()));
+                    Value::Float(f)
+                }
+            },
         };
+        for (name, (i, ty)) in local_map {
+            match ty {
+                Type::Integer => {
+                    eprintln!("{} [{}: i64]", name, locals[*i] as i64);
+                }
+                Type::Float => {
+                    eprintln!(
+                        "{} [{}: f64]",
+                        name,
+                        f64::from_ne_bytes(locals[*i].to_ne_bytes())
+                    );
+                }
+            }
+        }
+        #[cfg(debug_assertions)]
         self.dump_code();
-
         res
     }
 
@@ -492,11 +623,13 @@ impl Codegen {
             Ok(output) => std::str::from_utf8(&output.stdout).unwrap().to_string(),
             Err(err) => err.to_string(),
         };
-        eprintln!("asm: {}", asm);
+        eprintln!("{}", asm);
     }
 
     fn prologue(&mut self, locals: usize) {
         monoasm!(self.jit,
+            pushq rbx;
+            movq rbx, rdi;
             pushq rbp;
             movq rbp, rsp;
         );
@@ -511,6 +644,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rsp, rbp;
             popq rbp;
+            popq rbx;
             ret;
         );
     }

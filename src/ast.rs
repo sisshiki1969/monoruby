@@ -10,4 +10,6 @@ pub enum Expr {
     Neg(Box<Expr>),
     Integer(i32),
     Float(f64),
+    LocalStore(String, Box<Expr>),
+    LocalLoad(String),
 }

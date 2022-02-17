@@ -19,7 +19,13 @@ impl std::ops::IndexMut<SsaReg> for Evaluator {
 }
 
 impl Evaluator {
-    pub fn eval_hir(hir_context: &HIRContext) -> Value {
+    pub fn eval_hir(
+        hir_context: &HIRContext,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        locals: &mut Vec<Value>,
+    ) -> Value {
+        let locals_num = local_map.len();
+        locals.resize(locals_num, Value::Integer(0));
         let register_num = hir_context.register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
@@ -28,7 +34,7 @@ impl Evaluator {
         loop {
             let op = &hir_context.insts[pc];
             pc += 1;
-            if let Some(val) = eval.eval(op) {
+            if let Some(val) = eval.eval(op, locals) {
                 return val;
             }
         }
@@ -36,15 +42,12 @@ impl Evaluator {
 
     fn eval_operand(&self, op: &HIROperand) -> Value {
         match op {
-            HIROperand::Const(c) => match c {
-                Const::Integer(n) => Value::Integer(*n),
-                Const::Float(n) => Value::Float(*n),
-            },
-            HIROperand::Reg(r) => self[*r],
+            HIROperand::Const(c) => c.clone(),
+            HIROperand::Reg(r) => self[*r].clone(),
         }
     }
 
-    fn eval(&mut self, hir: &HIR) -> Option<Value> {
+    fn eval(&mut self, hir: &HIR, locals: &mut Vec<Value>) -> Option<Value> {
         match hir {
             HIR::Integer(ret, i) => {
                 self[*ret] = Value::Integer(*i);
@@ -94,8 +97,8 @@ impl Evaluator {
                 None
             }
             HIR::IMul(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self[op.lhs].clone();
+                let rhs = self[op.rhs].clone();
                 self[op.ret] = Value::Integer(lhs.as_i() * rhs.as_i());
                 None
             }
@@ -106,8 +109,8 @@ impl Evaluator {
                 None
             }
             HIR::IDiv(op) => {
-                let lhs = self[op.lhs];
-                let rhs = self[op.rhs];
+                let lhs = self[op.lhs].clone();
+                let rhs = self[op.rhs].clone();
                 self[op.ret] = Value::Integer(lhs.as_i() / rhs.as_i());
                 None
             }
@@ -118,12 +121,17 @@ impl Evaluator {
                 None
             }
             HIR::Ret(lhs) => match lhs {
-                HIROperand::Reg(lhs) => Some(self[*lhs]),
-                HIROperand::Const(c) => Some(match c {
-                    Const::Integer(n) => Value::Integer(*n),
-                    Const::Float(n) => Value::Float(*n),
-                }),
+                HIROperand::Reg(lhs) => Some(self[*lhs].clone()),
+                HIROperand::Const(c) => Some(c.clone()),
             },
+            HIR::LocalStore(ident, rhs) => {
+                locals[ident.0] = self[*rhs].clone();
+                None
+            }
+            HIR::LocalLoad(ident, lhs) => {
+                self[*lhs] = locals[ident.0].clone();
+                None
+            }
         }
     }
 }

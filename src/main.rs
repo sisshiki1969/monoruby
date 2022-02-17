@@ -1,4 +1,6 @@
 #![feature(box_patterns)]
+use std::collections::HashMap;
+
 //extern crate ariadne;
 use ariadne::*;
 //extern crate chumsky;
@@ -19,7 +21,7 @@ use hir::*;
 use mcir::*;
 pub use parse::*;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Integer(i32),
     Float(f64),
@@ -42,16 +44,16 @@ impl std::fmt::Debug for Type {
 }
 
 impl Value {
-    fn as_i(self) -> i32 {
+    fn as_i(&self) -> i32 {
         match self {
-            Value::Integer(i) => i,
+            Value::Integer(i) => *i,
             _ => unreachable!(),
         }
     }
 
-    fn as_f(self) -> f64 {
+    fn as_f(&self) -> f64 {
         match self {
-            Value::Float(f) => f,
+            Value::Float(f) => *f,
             _ => unreachable!(),
         }
     }
@@ -59,12 +61,15 @@ impl Value {
 
 fn main() {
     let mut rl = Editor::<()>::new();
+    let mut locals = vec![];
+    let mut eval_locals = vec![];
+    let mut local_map = HashMap::new();
     loop {
         let readline = rl.readline("monoruby> ");
         match readline {
             Ok(code) => {
                 rl.add_history_entry(code.as_str());
-                run(&code);
+                run_with_locals(&code, &mut locals, &mut local_map, &mut eval_locals);
             }
             Err(ReadlineError::Interrupted) => {
                 break;
@@ -80,19 +85,27 @@ fn main() {
     }
 }
 
-fn run(code: &str) {
+fn run_with_locals(
+    code: &str,
+    locals: &mut Vec<u64>,
+    local_map: &mut HashMap<String, (usize, Type)>,
+    eval_locals: &mut Vec<Value>,
+) {
     if code.len() == 0 {
         return;
     }
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
-            hir.from_ast(&expr);
-            let eval_res = Evaluator::eval_hir(dbg!(&hir));
-            let mut mcir_context = MachineIRContext::new();
-            mcir_context.from_hir(&hir);
+            hir.from_ast(local_map, &expr);
+            #[cfg(debug_assertions)]
+            dbg!(&hir);
+            let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
+            let mcir_context = MachineIRContext::from_hir(&mut hir);
             let mut codegen = Codegen::new();
-            let jit_res = codegen.compile_and_run(dbg!(&mcir_context));
+            #[cfg(debug_assertions)]
+            dbg!(&mcir_context);
+            let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map);
             eprintln!("Evaluator output: {:?}", eval_res);
             assert_eq!(eval_res, jit_res);
             run_ruby(code);
@@ -111,6 +124,13 @@ fn run(code: &str) {
             rep.finish().print(Source::from(code)).unwrap();
         }
     };
+}
+
+pub fn run(code: &str) {
+    let mut locals = vec![];
+    let mut eval_locals = vec![];
+    let mut local_map = HashMap::new();
+    run_with_locals(code, &mut locals, &mut local_map, &mut eval_locals);
 }
 
 fn run_ruby(code: &str) {
