@@ -460,27 +460,19 @@ impl Codegen {
                     };
                 }
                 McIR::LocalStore(ofs, reg) => {
-                    let ofs = *ofs as i64;
+                    let ofs = (ofs * 8) as i64;
                     match reg {
                         McReg::GReg(reg) => {
                             match self.g_phys_reg(*reg) {
                                 GeneralPhysReg::Reg(reg) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq [rcx], R(reg);
+                                      movq [rbx+(ofs)], R(reg);
                                     );
                                 }
                                 GeneralPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
                                       movq rax, [rbp-(lhs)];
-                                      movq [rcx], rax;
+                                      movq [rbx+(ofs)], rax;
                                     );
                                 }
                             };
@@ -489,21 +481,13 @@ impl Codegen {
                             match self.f_phys_reg(*reg) {
                                 FloatPhysReg::Xmm(reg) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq [rcx], xmm(reg);
+                                      movq [rbx+(ofs)], xmm(reg);
                                     );
                                 }
                                 FloatPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
                                       movq rax, [rbp-(lhs)];
-                                      movq [rcx], rax;
+                                      movq [rbx+(ofs)], rax;
                                     );
                                 }
                             };
@@ -511,26 +495,18 @@ impl Codegen {
                     };
                 }
                 McIR::LocalLoad(ofs, reg) => {
-                    let ofs = *ofs as i64;
+                    let ofs = (ofs * 8) as i64;
                     match reg {
                         McReg::GReg(reg) => {
                             match self.g_phys_reg(*reg) {
                                 GeneralPhysReg::Reg(reg) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq R(reg), [rcx];
+                                      movq R(reg), [rbx+(ofs)];
                                     );
                                 }
                                 GeneralPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq rax, [rcx];
+                                      movq rax, [rbx+(ofs)];
                                       movq [rbp-(lhs)], rax;
                                     );
                                 }
@@ -540,20 +516,12 @@ impl Codegen {
                             match self.f_phys_reg(*reg) {
                                 FloatPhysReg::Xmm(reg) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq xmm(reg), [rcx];
+                                      movq xmm(reg), [rbx+(ofs)];
                                     );
                                 }
                                 FloatPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, (8);
-                                      movq rcx, (ofs);
-                                      imul rcx, rax;
-                                      addq rcx, rbx;
-                                      movq rax, [rcx];
+                                      movq rax, [rbx+(ofs)];
                                       movq [rbp-(lhs)], rax;
                                     );
                                 }
