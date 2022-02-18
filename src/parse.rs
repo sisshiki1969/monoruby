@@ -32,7 +32,7 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
     let op = |ch: char| just(ch).padded();
 
     recursive(|expr| {
-        let parenthesized = expr.delimited_by('(', ')');
+        let parenthesized = expr.delimited_by(just('('), just(')'));
         // primary := <number>
         //          | '(' <expr> ')'
         let primary = choice((number, local, parenthesized));
