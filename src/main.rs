@@ -21,10 +21,19 @@ use hir::*;
 use mcir::*;
 pub use parse::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Value {
     Integer(i32),
     Float(f64),
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Integer(n) => write!(f, "{}i32", n),
+            Self::Float(n) => write!(f, "{}f64", n),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -97,7 +106,10 @@ fn run_with_locals(
     match parser().parse(code) {
         Ok(expr) => {
             let mut hir = HIRContext::new();
-            hir.from_ast(local_map, &expr);
+            if let Err(err) = hir.from_ast(local_map, &expr) {
+                eprintln!("{:?}", err);
+                return;
+            };
             #[cfg(debug_assertions)]
             dbg!(&hir);
             let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
