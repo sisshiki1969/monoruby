@@ -40,95 +40,95 @@ impl Evaluator {
         }
     }
 
-    fn eval_operand(&self, op: &HIROperand) -> Value {
+    fn eval_operand(&self, op: &HirOperand) -> Value {
         match op {
-            HIROperand::Const(c) => c.clone(),
-            HIROperand::Reg(r) => self[*r].clone(),
+            HirOperand::Const(c) => c.clone(),
+            HirOperand::Reg(r) => self[*r].clone(),
         }
     }
 
-    fn eval(&mut self, hir: &HIR, locals: &mut Vec<Value>) -> Option<Value> {
+    fn eval(&mut self, hir: &Hir, locals: &mut Vec<Value>) -> Option<Value> {
         match hir {
-            HIR::Integer(ret, i) => {
+            Hir::Integer(ret, i) => {
                 self[*ret] = Value::Integer(*i);
                 None
             }
-            HIR::Float(ret, f) => {
+            Hir::Float(ret, f) => {
                 self[*ret] = Value::Float(*f);
                 None
             }
-            HIR::IntAsFloat(op) => {
+            Hir::IntAsFloat(op) => {
                 let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Float(src.as_i() as f64);
                 None
             }
-            HIR::INeg(op) => {
+            Hir::INeg(op) => {
                 let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Integer(-src.as_i());
                 None
             }
-            HIR::FNeg(op) => {
+            Hir::FNeg(op) => {
                 let src = self.eval_operand(&op.src);
                 self[op.ret] = Value::Float(-src.as_f());
                 None
             }
-            HIR::IAdd(op) => {
+            Hir::IAdd(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Integer(lhs.as_i() + rhs.as_i());
                 None
             }
-            HIR::FAdd(op) => {
+            Hir::FAdd(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() + rhs.as_f());
                 None
             }
-            HIR::ISub(op) => {
+            Hir::ISub(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Integer(lhs.as_i() - rhs.as_i());
                 None
             }
-            HIR::FSub(op) => {
+            Hir::FSub(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() - rhs.as_f());
                 None
             }
-            HIR::IMul(op) => {
+            Hir::IMul(op) => {
                 let lhs = self[op.lhs].clone();
                 let rhs = self[op.rhs].clone();
                 self[op.ret] = Value::Integer(lhs.as_i() * rhs.as_i());
                 None
             }
-            HIR::FMul(op) => {
+            Hir::FMul(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() * rhs.as_f());
                 None
             }
-            HIR::IDiv(op) => {
+            Hir::IDiv(op) => {
                 let lhs = self[op.lhs].clone();
                 let rhs = self[op.rhs].clone();
                 self[op.ret] = Value::Integer(lhs.as_i() / rhs.as_i());
                 None
             }
-            HIR::FDiv(op) => {
+            Hir::FDiv(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Float(lhs.as_f() / rhs.as_f());
                 None
             }
-            HIR::Ret(lhs) => match lhs {
-                HIROperand::Reg(lhs) => Some(self[*lhs].clone()),
-                HIROperand::Const(c) => Some(c.clone()),
+            Hir::Ret(lhs) => match lhs {
+                HirOperand::Reg(lhs) => Some(self[*lhs].clone()),
+                HirOperand::Const(c) => Some(c.clone()),
             },
-            HIR::LocalStore(ident, rhs) => {
+            Hir::LocalStore(ident, rhs) => {
                 locals[ident.0] = self[*rhs].clone();
                 None
             }
-            HIR::LocalLoad(ident, lhs) => {
+            Hir::LocalLoad(ident, lhs) => {
                 self[*lhs] = locals[ident.0].clone();
                 None
             }

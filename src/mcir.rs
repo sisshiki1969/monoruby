@@ -88,8 +88,8 @@ impl std::fmt::Debug for MachineIRContext {
                 McIR::FDiv(dst, src) => format!("%{:?} = fdiv %{:?}, {:?}", dst, dst, src),
                 McIR::IRet(ret) => format!("ret {:?}: i32", ret),
                 McIR::FRet(ret) => format!("ret {:?}: f64", ret),
-                McIR::LocalStore(ofs, reg) => format!("store ${}, %{:?}", ofs, reg),
-                McIR::LocalLoad(ofs, reg) => format!("load ${}, %{:?}", ofs, reg),
+                McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
+                McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
             };
             writeln!(f, "\t{}", s)?;
         }
@@ -118,10 +118,19 @@ impl std::fmt::Debug for MachineIRContext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum McReg {
     GReg(GReg),
     FReg(FReg),
+}
+
+impl std::fmt::Debug for McReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GReg(r) => write!(f, "%G{}", r.0),
+            Self::FReg(r) => write!(f, "%F{}", r.0),
+        }
+    }
 }
 
 impl McReg {
@@ -143,21 +152,21 @@ impl McReg {
 macro_rules! float_ops {
     ($self:ident, $op:ident, $v:ident) => {
         match (&$op.lhs, &$op.rhs) {
-            (HIROperand::Reg(lhs), HIROperand::Reg(rhs)) => {
+            (HirOperand::Reg(lhs), HirOperand::Reg(rhs)) => {
                 let lhs = $self.ssa_map[*lhs].unwrap().as_f();
                 let rhs = $self.ssa_map[*rhs].unwrap().as_f();
                 $self.ssa_map[$op.ret] = Some(McReg::FReg(lhs));
                 $self[rhs].invalidate();
                 $self.insts.push(McIR::$v(lhs, McFloatOperand::Reg(rhs)));
             }
-            (HIROperand::Reg(lhs), HIROperand::Const(rhs)) => {
+            (HirOperand::Reg(lhs), HirOperand::Const(rhs)) => {
                 let lhs = $self.ssa_map[*lhs].unwrap().as_f();
                 $self.ssa_map[$op.ret] = Some(McReg::FReg(lhs));
                 $self
                     .insts
                     .push(McIR::$v(lhs, McFloatOperand::Float(rhs.as_f())));
             }
-            (HIROperand::Const(lhs), HIROperand::Reg(rhs)) => {
+            (HirOperand::Const(lhs), HirOperand::Reg(rhs)) => {
                 let n = lhs.as_f();
                 let lhs = $self.alloc_freg($op.ret);
                 $self.insts.push(McIR::Float(lhs, n));
@@ -165,7 +174,7 @@ macro_rules! float_ops {
                 $self[rhs].invalidate();
                 $self.insts.push(McIR::$v(lhs, McFloatOperand::Reg(rhs)));
             }
-            (HIROperand::Const(lhs), HIROperand::Const(rhs)) => {
+            (HirOperand::Const(lhs), HirOperand::Const(rhs)) => {
                 let n = lhs.as_f();
                 let lhs = $self.alloc_freg($op.ret);
                 $self.insts.push(McIR::Float(lhs, n));
@@ -199,19 +208,19 @@ impl MachineIRContext {
         let mut ctx = Self::new(SsaMap(vec![None; hir_context.register_num()]));
         for hir in &hir_context.insts {
             match hir {
-                HIR::Integer(ssa, i) => {
+                Hir::Integer(ssa, i) => {
                     let reg = ctx.alloc_greg(*ssa);
                     ctx.insts.push(McIR::Integer(reg, *i));
                 }
-                HIR::Float(ssa, f) => {
+                Hir::Float(ssa, f) => {
                     let reg = ctx.alloc_freg(*ssa);
                     ctx.insts.push(McIR::Float(reg, *f));
                 }
-                HIR::IntAsFloat(op) => {
+                Hir::IntAsFloat(op) => {
                     let dst = ctx.alloc_freg(op.ret);
                     let src = match &op.src {
-                        HIROperand::Const(c) => McGeneralOperand::Integer(c.as_i()),
-                        HIROperand::Reg(r) => {
+                        HirOperand::Const(c) => McGeneralOperand::Integer(c.as_i()),
+                        HirOperand::Reg(r) => {
                             let src = ctx.ssa_map[*r].unwrap().as_g();
                             ctx[src].invalidate();
                             McGeneralOperand::Reg(src)
@@ -219,21 +228,21 @@ impl MachineIRContext {
                     };
                     ctx.insts.push(McIR::IntAsFloat(dst, src));
                 }
-                HIR::IAdd(op) => match (&op.lhs, &op.rhs) {
-                    (HIROperand::Reg(lhs), HIROperand::Reg(rhs)) => {
+                Hir::IAdd(op) => match (&op.lhs, &op.rhs) {
+                    (HirOperand::Reg(lhs), HirOperand::Reg(rhs)) => {
                         let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
                         let rhs = ctx.ssa_map[*rhs].unwrap().as_g();
                         ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                         ctx[rhs].invalidate();
                         ctx.insts.push(McIR::IAdd(lhs, McGeneralOperand::Reg(rhs)));
                     }
-                    (HIROperand::Reg(lhs), HIROperand::Const(rhs)) => {
+                    (HirOperand::Reg(lhs), HirOperand::Const(rhs)) => {
                         let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
                         ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                         ctx.insts
                             .push(McIR::IAdd(lhs, McGeneralOperand::Integer(rhs.as_i())));
                     }
-                    (HIROperand::Const(lhs), HIROperand::Reg(rhs)) => {
+                    (HirOperand::Const(lhs), HirOperand::Reg(rhs)) => {
                         let n = lhs.as_i();
                         let lhs = ctx.alloc_greg(op.ret);
                         ctx.insts.push(McIR::Integer(lhs, n));
@@ -241,7 +250,7 @@ impl MachineIRContext {
                         ctx[rhs].invalidate();
                         ctx.insts.push(McIR::IAdd(lhs, McGeneralOperand::Reg(rhs)));
                     }
-                    (HIROperand::Const(lhs), HIROperand::Const(rhs)) => {
+                    (HirOperand::Const(lhs), HirOperand::Const(rhs)) => {
                         let n = lhs.as_i();
                         let lhs = ctx.alloc_greg(op.ret);
                         ctx.insts.push(McIR::Integer(lhs, n));
@@ -249,21 +258,21 @@ impl MachineIRContext {
                             .push(McIR::IAdd(lhs, McGeneralOperand::Integer(rhs.as_i())));
                     }
                 },
-                HIR::ISub(op) => match (&op.lhs, &op.rhs) {
-                    (HIROperand::Reg(lhs), HIROperand::Reg(rhs)) => {
+                Hir::ISub(op) => match (&op.lhs, &op.rhs) {
+                    (HirOperand::Reg(lhs), HirOperand::Reg(rhs)) => {
                         let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
                         let rhs = ctx.ssa_map[*rhs].unwrap().as_g();
                         ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                         ctx[rhs].invalidate();
                         ctx.insts.push(McIR::ISub(lhs, McGeneralOperand::Reg(rhs)));
                     }
-                    (HIROperand::Reg(lhs), HIROperand::Const(rhs)) => {
+                    (HirOperand::Reg(lhs), HirOperand::Const(rhs)) => {
                         let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
                         ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                         ctx.insts
                             .push(McIR::ISub(lhs, McGeneralOperand::Integer(rhs.as_i())));
                     }
-                    (HIROperand::Const(lhs), HIROperand::Reg(rhs)) => {
+                    (HirOperand::Const(lhs), HirOperand::Reg(rhs)) => {
                         let n = lhs.as_i();
                         let lhs = ctx.alloc_greg(op.ret);
                         ctx.insts.push(McIR::Integer(lhs, n));
@@ -271,7 +280,7 @@ impl MachineIRContext {
                         ctx[rhs].invalidate();
                         ctx.insts.push(McIR::ISub(lhs, McGeneralOperand::Reg(rhs)));
                     }
-                    (HIROperand::Const(lhs), HIROperand::Const(rhs)) => {
+                    (HirOperand::Const(lhs), HirOperand::Const(rhs)) => {
                         let n = lhs.as_i();
                         let lhs = ctx.alloc_greg(op.ret);
                         ctx.insts.push(McIR::Integer(lhs, n));
@@ -279,26 +288,26 @@ impl MachineIRContext {
                             .push(McIR::ISub(lhs, McGeneralOperand::Integer(rhs.as_i())));
                     }
                 },
-                HIR::IMul(op) => {
+                Hir::IMul(op) => {
                     let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
                     ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     ctx[rhs].invalidate();
                     ctx.insts.push(McIR::IMul(lhs, rhs));
                 }
-                HIR::IDiv(op) => {
+                Hir::IDiv(op) => {
                     let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
                     ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     ctx[rhs].invalidate();
                     ctx.insts.push(McIR::IDiv(lhs, rhs));
                 }
-                HIR::FAdd(op) => float_ops!(ctx, op, FAdd),
-                HIR::FSub(op) => float_ops!(ctx, op, FSub),
-                HIR::FMul(op) => float_ops!(ctx, op, FMul),
-                HIR::FDiv(op) => float_ops!(ctx, op, FDiv),
-                HIR::Ret(op) => match op {
-                    HIROperand::Reg(ssa) => match hir_context[*ssa].ty {
+                Hir::FAdd(op) => float_ops!(ctx, op, FAdd),
+                Hir::FSub(op) => float_ops!(ctx, op, FSub),
+                Hir::FMul(op) => float_ops!(ctx, op, FMul),
+                Hir::FDiv(op) => float_ops!(ctx, op, FDiv),
+                Hir::Ret(op) => match op {
+                    HirOperand::Reg(ssa) => match hir_context[*ssa].ty {
                         Type::Integer => {
                             let reg = ctx.ssa_map[*ssa].unwrap().as_g();
                             ctx[reg].invalidate();
@@ -310,44 +319,44 @@ impl MachineIRContext {
                             ctx.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
                         }
                     },
-                    HIROperand::Const(c) => match c {
+                    HirOperand::Const(c) => match c {
                         Value::Integer(i) => {
                             ctx.insts.push(McIR::IRet(McGeneralOperand::Integer(*i)))
                         }
                         Value::Float(f) => ctx.insts.push(McIR::FRet(McFloatOperand::Float(*f))),
                     },
                 },
-                HIR::INeg(op) => match &op.src {
-                    HIROperand::Const(c) => {
+                Hir::INeg(op) => match &op.src {
+                    HirOperand::Const(c) => {
                         let n = c.as_i();
                         let reg = ctx.alloc_greg(op.ret);
                         ctx.insts.push(McIR::Integer(reg, -n));
                     }
-                    HIROperand::Reg(src) => {
+                    HirOperand::Reg(src) => {
                         let reg = ctx.ssa_map[*src].unwrap().as_g();
                         ctx.ssa_map[op.ret] = Some(McReg::GReg(reg));
                         ctx.insts.push(McIR::INeg(reg));
                     }
                 },
-                HIR::FNeg(op) => match &op.src {
-                    HIROperand::Const(c) => {
+                Hir::FNeg(op) => match &op.src {
+                    HirOperand::Const(c) => {
                         let n = c.as_f();
                         let reg = ctx.alloc_freg(op.ret);
                         ctx.insts.push(McIR::Float(reg, -n));
                     }
-                    HIROperand::Reg(src) => {
+                    HirOperand::Reg(src) => {
                         let reg = ctx.ssa_map[*src].unwrap().as_f();
                         ctx.ssa_map[op.ret] = Some(McReg::FReg(reg));
                         ctx.insts.push(McIR::FNeg(reg));
                     }
                 },
-                HIR::LocalStore(info, reg) => {
+                Hir::LocalStore(info, reg) => {
                     let ty = info.1;
                     assert_eq!(ty, hir_context[*reg].ty);
                     let reg = ctx.ssa_map[*reg].unwrap();
                     ctx.insts.push(McIR::LocalStore(info.0, reg));
                 }
-                HIR::LocalLoad(info, reg) => {
+                Hir::LocalLoad(info, reg) => {
                     let ty = info.1;
                     assert_eq!(ty, hir_context[*reg].ty);
                     let reg = match ty {
