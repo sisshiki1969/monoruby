@@ -1,7 +1,11 @@
 use super::*;
 
-pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
-    expr().then_ignore(end())
+pub fn parser() -> impl Parser<char, Vec<Expr>, Error = Simple<char>> {
+    expr()
+        .separated_by(just(';').repeated().at_least(1))
+        .allow_trailing()
+        .allow_leading()
+        .then_ignore(end())
 }
 
 ///

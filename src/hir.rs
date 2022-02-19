@@ -472,9 +472,17 @@ impl HIRContext {
     pub fn from_ast(
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &Expr,
+        ast: &[Expr],
     ) -> Result<(SsaReg, Type)> {
-        let ret = self.gen(local_map, ast)?;
+        let len = ast.len();
+        let ret = if len == 0 {
+            self.new_integer(0)
+        } else {
+            for node in &ast[..len - 1] {
+                self.gen(local_map, node)?;
+            }
+            self.gen(local_map, &ast[len - 1])?
+        };
         let ty = self[ret].ty;
         self.new_ret(ret);
         Ok((ret, ty))

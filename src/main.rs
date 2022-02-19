@@ -123,7 +123,6 @@ fn run_with_locals(
             run_ruby(code);
         }
         Err(err) => {
-            dbg!(&err);
             let mut rep = Report::build(ReportKind::Error, (), 0);
             for e in err {
                 let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
