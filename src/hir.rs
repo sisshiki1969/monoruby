@@ -2,208 +2,110 @@ use std::collections::HashMap;
 
 use super::*;
 
-#[derive(Debug, Clone)]
-pub enum HirErr {
-    UndefinedLocal(String),
-}
-
-type Result<T> = std::result::Result<T, HirErr>;
-
-///
-/// Instructions of High-level IR.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub enum Hir {
-    Integer(SsaReg, i32),
-    Float(SsaReg, f64),
-    IntAsFloat(HirUnop),
-    INeg(HirUnop),
-    FNeg(HirUnop),
-    IAdd(HirBinop2),
-    ISub(HirBinop2),
-    IMul(HIRBinop),
-    IDiv(HIRBinop),
-    FAdd(HirBinop2),
-    FSub(HirBinop2),
-    FMul(HirBinop2),
-    FDiv(HirBinop2),
-    Ret(HirOperand),
-    LocalStore((usize, Type), SsaReg),
-    LocalLoad((usize, Type), SsaReg),
-}
-
-///
-/// Binary operations.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub struct HIRBinop {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of left-hand side.
-    pub lhs: SsaReg,
-    /// Register ID of right-hand side.
-    pub rhs: SsaReg,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HirBinop2 {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of left-hand side.
-    pub lhs: HirOperand,
-    /// Register ID of right-hand side.
-    pub rhs: HirOperand,
-}
-
-///
-/// Unary operations.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub struct HirUnop {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of source value.
-    pub src: HirOperand,
-}
-
-#[derive(Clone, PartialEq)]
-pub enum HirOperand {
-    Reg(SsaReg),
-    Const(Value),
-}
-
-impl std::fmt::Debug for HirOperand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reg(r) => write!(f, "%{}", r.to_usize()),
-            Self::Const(c) => write!(f, "{:?}", c),
-        }
-    }
-}
-
-impl HirOperand {
-    fn integer(n: i32) -> Self {
-        Self::Const(Value::Integer(n))
-    }
-
-    fn float(n: f64) -> Self {
-        Self::Const(Value::Float(n))
-    }
-
-    fn reg(r: SsaReg) -> Self {
-        Self::Reg(r)
-    }
-}
-
-///
-/// ID of SSA registers.
-///
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SsaReg(usize);
-
-impl std::fmt::Display for SsaReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl SsaReg {
-    pub fn to_usize(self) -> usize {
-        self.0
-    }
-}
-
 ///
 /// A state of HIR.
 ///
-#[derive(PartialEq)]
-pub struct HIRContext {
-    /// HIR instructions.
-    pub insts: Vec<Hir>,
-    /// SSA register information.
-    pub reginfo: Vec<SsaRegInfo>,
-    //pub local_info: &'a mut HashMap<String, (usize, Type)>,
-}
-
-///
-/// Information of SSA registers.
-///
 #[derive(Clone, PartialEq)]
-pub struct SsaRegInfo {
-    /// *Type* of the register.
-    pub ty: Type,
-}
-
-impl std::fmt::Debug for SsaRegInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.ty)
-    }
-}
-
-impl SsaRegInfo {
-    fn new(ty: Type) -> Self {
-        Self { ty }
-    }
+pub struct HIRContext {
+    /// SSA register information.
+    reginfo: Vec<SsaRegInfo>,
+    /// Basic blocks.
+    pub basic_block: Vec<HirBasicBlock>,
+    cur_bb: usize,
 }
 
 impl std::fmt::Debug for HIRContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "HIRContext {{")?;
-        for hir in &self.insts {
-            let s = match hir {
-                Hir::Integer(ret, i) => format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i),
-                Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
-                Hir::IntAsFloat(op) => {
-                    format!(
-                        "%{}: {:?} = i32_to_f64 {:?}",
-                        op.ret, self[op.ret].ty, op.src
-                    )
-                }
-                Hir::INeg(op) => format!("%{}: {:?} = ineg {:?}", op.ret, self[op.ret].ty, op.src),
-                Hir::FNeg(op) => format!("%{}: {:?} = fneg {:?}", op.ret, self[op.ret].ty, op.src),
-                Hir::IAdd(op) => format!(
-                    "%{}: {:?} = iadd {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::FAdd(op) => format!(
-                    "%{}: {:?} = fadd {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::ISub(op) => format!(
-                    "%{}: {:?} = isub {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::FSub(op) => format!(
-                    "%{}: {:?} = fsub {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::IMul(op) => format!(
-                    "%{}: {:?} = imul %{}, %{}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::FMul(op) => format!(
-                    "%{}: {:?} = fmul {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::IDiv(op) => format!(
-                    "%{}: {:?} = idiv %{}, %{}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::FDiv(op) => format!(
-                    "%{}: {:?} = fdiv {:?}, {:?}",
-                    op.ret, self[op.ret].ty, op.lhs, op.rhs
-                ),
-                Hir::Ret(ret) => format!("ret {:?}", ret),
-                Hir::LocalStore(ident, rhs) => {
-                    format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
-                }
-                Hir::LocalLoad(ident, lhs) => {
-                    format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
-                }
-            };
-            writeln!(f, "\t{}", s)?;
+        writeln!(f, "HIRContxt {{")?;
+        for (i, bb) in self.basic_block.iter().enumerate() {
+            writeln!(f, "\tBasicBlock {} {{", i)?;
+            for hir in &bb.insts {
+                let s = match hir {
+                    Hir::Integer(ret, i) => format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i),
+                    Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
+                    Hir::IntAsFloat(op) => {
+                        format!(
+                            "%{}: {:?} = i32_to_f64 {:?}",
+                            op.ret, self[op.ret].ty, op.src
+                        )
+                    }
+                    Hir::INeg(op) => {
+                        format!("%{}: {:?} = ineg {:?}", op.ret, self[op.ret].ty, op.src)
+                    }
+                    Hir::FNeg(op) => {
+                        format!("%{}: {:?} = fneg {:?}", op.ret, self[op.ret].ty, op.src)
+                    }
+                    Hir::IAdd(op) => format!(
+                        "%{}: {:?} = iadd {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::FAdd(op) => format!(
+                        "%{}: {:?} = fadd {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::ISub(op) => format!(
+                        "%{}: {:?} = isub {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::FSub(op) => format!(
+                        "%{}: {:?} = fsub {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::IMul(op) => format!(
+                        "%{}: {:?} = imul %{}, %{}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::FMul(op) => format!(
+                        "%{}: {:?} = fmul {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::IDiv(op) => format!(
+                        "%{}: {:?} = idiv %{}, %{}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::FDiv(op) => format!(
+                        "%{}: {:?} = fdiv {:?}, {:?}",
+                        op.ret, self[op.ret].ty, op.lhs, op.rhs
+                    ),
+                    Hir::Ret(ret) => format!("ret {:?}", ret),
+                    Hir::LocalStore(ident, rhs) => {
+                        format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
+                    }
+                    Hir::LocalLoad(ident, lhs) => {
+                        format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
+                    }
+                    Hir::Br(dest) => format!("br {}", dest),
+                    Hir::CondBr(cond, then_, else_) => {
+                        format!("condbr %{} then {} else {}", cond, then_, else_)
+                    }
+                    Hir::Phi(ret, phi) => {
+                        let phi_s = phi
+                            .iter()
+                            .map(|(bb, r)| format!("({},%{})", bb, r))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        format!("%{} = phi {}", ret, phi_s)
+                    }
+                };
+                writeln!(f, "\t\t{}", s)?;
+            }
+            writeln!(f, "\t}}")?;
         }
-        write!(f, "}}")
+        writeln!(f, "}}")
+    }
+}
+
+impl std::ops::Deref for HIRContext {
+    type Target = HirBasicBlock;
+
+    fn deref(&self) -> &Self::Target {
+        &self.basic_block[self.cur_bb]
+    }
+}
+
+impl std::ops::DerefMut for HIRContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.basic_block[self.cur_bb]
     }
 }
 
@@ -221,12 +123,35 @@ impl std::ops::IndexMut<SsaReg> for HIRContext {
     }
 }
 
+impl std::ops::Index<usize> for HIRContext {
+    type Output = HirBasicBlock;
+
+    fn index(&self, i: usize) -> &HirBasicBlock {
+        &self.basic_block[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for HIRContext {
+    fn index_mut(&mut self, i: usize) -> &mut HirBasicBlock {
+        &mut self.basic_block[i]
+    }
+}
+
 impl HIRContext {
     pub fn new() -> Self {
+        let basic_block = HirBasicBlock::new();
         HIRContext {
-            insts: vec![],
             reginfo: vec![],
+            basic_block: vec![basic_block],
+            cur_bb: 0,
         }
+    }
+
+    fn new_bb(&mut self) -> usize {
+        let bb = HirBasicBlock::new();
+        let next = self.basic_block.len();
+        self.basic_block.push(bb);
+        next
     }
 
     fn add_assign(&mut self, hir: Hir, ty: Type) -> SsaReg {
@@ -346,7 +271,7 @@ impl HIRContext {
         local_map: &mut HashMap<String, (usize, Type)>,
         ident: &String,
         rhs: SsaReg,
-    ) -> SsaReg {
+    ) -> Result<SsaReg> {
         let ty = self[rhs].ty;
         let len = local_map.len();
         let info = match local_map.get(ident) {
@@ -357,9 +282,12 @@ impl HIRContext {
                 info
             }
         };
+        if info.1 != ty {
+            return Err(HirErr::TypeMismatch(info.1, ty));
+        }
         let hir = Hir::LocalStore(info, rhs);
         self.insts.push(hir);
-        rhs
+        Ok(rhs)
     }
 
     fn new_local_load(
@@ -374,6 +302,161 @@ impl HIRContext {
         let ty = info.1;
         let hir = Hir::LocalLoad(info, self.next_reg());
         Ok(self.add_assign(hir, ty))
+    }
+
+    fn new_phi(&mut self, phi: Vec<(usize, SsaReg)>) -> SsaReg {
+        let ty = self[phi[0].1].ty;
+        assert!(phi.iter().all(|(_, r)| self[*r].ty == ty));
+        let ret = self.next_reg();
+        self.add_assign(Hir::Phi(ret, phi), ty)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct HirBasicBlock {
+    /// HIR instructions.
+    pub insts: Vec<Hir>,
+}
+
+impl HirBasicBlock {
+    fn new() -> Self {
+        Self { insts: vec![] }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum HirErr {
+    UndefinedLocal(String),
+    TypeMismatch(Type, Type),
+}
+
+type Result<T> = std::result::Result<T, HirErr>;
+
+///
+/// Instructions of High-level IR.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hir {
+    Br(usize),
+    CondBr(SsaReg, usize, usize),
+    Phi(SsaReg, Vec<(usize, SsaReg)>),
+    Integer(SsaReg, i32),
+    Float(SsaReg, f64),
+    IntAsFloat(HirUnop),
+    INeg(HirUnop),
+    FNeg(HirUnop),
+    IAdd(HirBinop2),
+    ISub(HirBinop2),
+    IMul(HIRBinop),
+    IDiv(HIRBinop),
+    FAdd(HirBinop2),
+    FSub(HirBinop2),
+    FMul(HirBinop2),
+    FDiv(HirBinop2),
+    Ret(HirOperand),
+    LocalStore((usize, Type), SsaReg),
+    LocalLoad((usize, Type), SsaReg),
+}
+
+///
+/// Binary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HIRBinop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of left-hand side.
+    pub lhs: SsaReg,
+    /// Register ID of right-hand side.
+    pub rhs: SsaReg,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HirBinop2 {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of left-hand side.
+    pub lhs: HirOperand,
+    /// Register ID of right-hand side.
+    pub rhs: HirOperand,
+}
+
+///
+/// Unary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HirUnop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of source value.
+    pub src: HirOperand,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum HirOperand {
+    Reg(SsaReg),
+    Const(Value),
+}
+
+impl std::fmt::Debug for HirOperand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reg(r) => write!(f, "%{}", r.to_usize()),
+            Self::Const(c) => write!(f, "{:?}", c),
+        }
+    }
+}
+
+impl HirOperand {
+    fn integer(n: i32) -> Self {
+        Self::Const(Value::Integer(n))
+    }
+
+    fn float(n: f64) -> Self {
+        Self::Const(Value::Float(n))
+    }
+
+    fn reg(r: SsaReg) -> Self {
+        Self::Reg(r)
+    }
+}
+
+///
+/// ID of SSA registers.
+///
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SsaReg(usize);
+
+impl std::fmt::Display for SsaReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SsaReg {
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
+///
+/// Information of SSA registers.
+///
+#[derive(Clone, PartialEq)]
+pub struct SsaRegInfo {
+    /// *Type* of the register.
+    pub ty: Type,
+}
+
+impl std::fmt::Debug for SsaRegInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.ty)
+    }
+}
+
+impl SsaRegInfo {
+    fn new(ty: Type) -> Self {
+        Self { ty }
     }
 }
 
@@ -558,9 +641,28 @@ impl HIRContext {
             }
             Expr::LocalStore(ident, box rhs) => {
                 let rhs = self.gen(local_map, rhs)?;
-                Ok(self.new_local_store(local_map, ident, rhs))
+                self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
+            Expr::If(box cond_, box then_, box else_) => {
+                let cond_ = self.gen(local_map, cond_)?;
+                let then_bb = self.new_bb();
+                let else_bb = self.new_bb();
+                let succ_bb = self.new_bb();
+                self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
+                self.cur_bb = then_bb;
+                let then_ = self.gen(local_map, then_)?;
+                self.insts.push(Hir::Br(succ_bb));
+                self.cur_bb = else_bb;
+                let else_ = self.gen(local_map, else_)?;
+                self.insts.push(Hir::Br(succ_bb));
+                if self[then_].ty != self[else_].ty {
+                    return Err(HirErr::TypeMismatch(self[then_].ty, self[else_].ty));
+                }
+                self.cur_bb = succ_bb;
+                let ret = self.new_phi(vec![(then_bb, then_), (else_bb, else_)]);
+                Ok(ret)
+            }
         }
     }
 }

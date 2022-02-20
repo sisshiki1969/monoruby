@@ -36,7 +36,7 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
     let op = |ch: char| just(ch).padded();
 
     recursive(|expr| {
-        let parenthesized = expr.delimited_by(just('('), just(')'));
+        let parenthesized = expr.clone().delimited_by(just('('), just(')'));
         // primary := <number>
         //          | '(' <expr> ')'
         let primary = choice((number, local, parenthesized));
@@ -83,7 +83,17 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(additive.clone())
             .map(|(lhs, rhs)| Expr::LocalStore(lhs, Box::new(rhs)));
 
-        let assign_expr = choice((assignment, additive));
-        assign_expr.padded()
+        let if_expr = just("if")
+            .ignore_then(expr.clone())
+            .then_ignore(just("then"))
+            .then(expr.clone())
+            .then_ignore(just("else"))
+            .then(expr)
+            .then_ignore(just("end"))
+            .map(|((cond_, then_), else_)| {
+                Expr::If(Box::new(cond_), Box::new(then_), Box::new(else_))
+            });
+
+        choice((if_expr, assignment, additive)).padded()
     })
 }

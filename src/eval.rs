@@ -2,6 +2,9 @@ use super::*;
 
 pub struct Evaluator {
     ssareg: Vec<Value>,
+    cur_bb: usize,
+    prev_bb: usize,
+    pc: usize,
 }
 
 impl std::ops::Index<SsaReg> for Evaluator {
@@ -29,15 +32,23 @@ impl Evaluator {
         let register_num = hir_context.register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
+            cur_bb: 0,
+            prev_bb: 0,
+            pc: 0,
         };
-        let mut pc = 0usize;
         loop {
-            let op = &hir_context.insts[pc];
-            pc += 1;
+            let op = &hir_context[eval.cur_bb].insts[eval.pc];
+            eval.pc += 1;
             if let Some(val) = eval.eval(op, locals) {
                 return val;
             }
         }
+    }
+
+    fn goto(&mut self, bb: usize) {
+        self.prev_bb = self.cur_bb;
+        self.cur_bb = bb;
+        self.pc = 0;
     }
 
     fn eval_operand(&self, op: &HirOperand) -> Value {
@@ -130,6 +141,29 @@ impl Evaluator {
             }
             Hir::LocalLoad(ident, lhs) => {
                 self[*lhs] = locals[ident.0].clone();
+                None
+            }
+            Hir::Br(next_bb) => {
+                self.goto(*next_bb);
+                None
+            }
+            &Hir::CondBr(cond_, then_, else_) => {
+                let next_bb = if self[cond_] == Value::Integer(0) {
+                    else_
+                } else {
+                    then_
+                };
+                self.goto(next_bb);
+                None
+            }
+            Hir::Phi(ret, phi) => {
+                let reg = phi
+                    .iter()
+                    .find(|(bb, _)| self.prev_bb == *bb)
+                    .unwrap()
+                    .1
+                    .clone();
+                self[*ret] = self[reg].clone();
                 None
             }
         }

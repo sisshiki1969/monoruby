@@ -3,6 +3,7 @@
 ///
 #[derive(Debug, PartialEq)]
 pub enum Expr {
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),

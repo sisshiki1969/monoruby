@@ -105,6 +105,7 @@ fn run_with_locals(
     }
     match parser().parse(code) {
         Ok(expr) => {
+            //dbg!(&expr);
             let mut hir = HIRContext::new();
             if let Err(err) = hir.from_ast(local_map, &expr) {
                 eprintln!("{:?}", err);
@@ -113,13 +114,14 @@ fn run_with_locals(
             #[cfg(debug_assertions)]
             dbg!(&hir);
             let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
-            let mcir_context = MachineIRContext::from_hir(&mut hir);
+            eprintln!("Evaluator: {:?}", eval_res);
+            let mcir_context = McIrContext::from_hir(&mut hir);
             let mut codegen = Codegen::new();
             #[cfg(debug_assertions)]
             dbg!(&mcir_context);
             let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map);
-            eprintln!("Evaluator output: {:?}", eval_res);
-            assert_eq!(eval_res, jit_res);
+            eprintln!("JIT: {:?}", jit_res);
+            //assert_eq!(eval_res, jit_res);
             run_ruby(code);
         }
         Err(err) => {
