@@ -135,8 +135,11 @@ impl Evaluator {
                 HirOperand::Reg(lhs) => Some(self[*lhs].clone()),
                 HirOperand::Const(c) => Some(c.clone()),
             },
-            Hir::LocalStore(ident, rhs) => {
+            Hir::LocalStore(ret, ident, rhs) => {
                 locals[ident.0] = self[*rhs].clone();
+                if let Some(ret) = ret {
+                    self[*ret] = self[*rhs].clone();
+                }
                 None
             }
             Hir::LocalLoad(ident, lhs) => {

@@ -68,8 +68,12 @@ impl std::fmt::Debug for HIRContext {
                         op.ret, self[op.ret].ty, op.lhs, op.rhs
                     ),
                     Hir::Ret(ret) => format!("ret {:?}", ret),
-                    Hir::LocalStore(ident, rhs) => {
-                        format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
+                    Hir::LocalStore(ret, ident, rhs) => {
+                        if let Some(ret) = ret {
+                            format!("${}: {:?} | %{} = %{}", ident.0, ident.1, ret, rhs)
+                        } else {
+                            format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
+                        }
                     }
                     Hir::LocalLoad(ident, lhs) => {
                         format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
@@ -285,9 +289,33 @@ impl HIRContext {
         if info.1 != ty {
             return Err(HirErr::TypeMismatch(info.1, ty));
         }
-        let hir = Hir::LocalStore(info, rhs);
+        let ret = self.next_reg();
+        self.add_assign(Hir::LocalStore(Some(ret), info, rhs), ty);
+        Ok(ret)
+    }
+
+    fn new_local_store_nouse(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ident: &String,
+        rhs: SsaReg,
+    ) -> Result<()> {
+        let ty = self[rhs].ty;
+        let len = local_map.len();
+        let info = match local_map.get(ident) {
+            Some(info) => info.clone(),
+            None => {
+                let info = (len, ty);
+                local_map.insert(ident.to_string(), info.clone());
+                info
+            }
+        };
+        if info.1 != ty {
+            return Err(HirErr::TypeMismatch(info.1, ty));
+        }
+        let hir = Hir::LocalStore(None, info, rhs);
         self.insts.push(hir);
-        Ok(rhs)
+        Ok(())
     }
 
     fn new_local_load(
@@ -354,7 +382,7 @@ pub enum Hir {
     FMul(HirBinop2),
     FDiv(HirBinop2),
     Ret(HirOperand),
-    LocalStore((usize, Type), SsaReg),
+    LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
 }
 
@@ -562,7 +590,7 @@ impl HIRContext {
             self.new_integer(0)
         } else {
             for node in &ast[..len - 1] {
-                self.gen(local_map, node)?;
+                self.gen_nouse(local_map, node)?;
             }
             self.gen(local_map, &ast[len - 1])?
         };
@@ -664,5 +692,57 @@ impl HIRContext {
                 Ok(ret)
             }
         }
+    }
+
+    /// Generate HIR from an *Expr*.
+    fn gen_nouse(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ast: &Expr,
+    ) -> Result<()> {
+        match ast {
+            Expr::Neg(box lhs) => {
+                match lhs {
+                    Expr::Integer(_) | Expr::Float(_) => {}
+                    _ => self.gen_nouse(local_map, lhs)?,
+                };
+            }
+            Expr::Add(box lhs, box rhs) => {
+                self.gen_nouse(local_map, lhs)?;
+                self.gen_nouse(local_map, rhs)?;
+            }
+            Expr::Sub(box lhs, box rhs) => {
+                self.gen_nouse(local_map, lhs)?;
+                self.gen_nouse(local_map, rhs)?;
+            }
+            Expr::Mul(box lhs, box rhs) => {
+                self.gen_nouse(local_map, lhs)?;
+                self.gen_nouse(local_map, rhs)?;
+            }
+            Expr::Div(box lhs, box rhs) => {
+                self.gen_nouse(local_map, lhs)?;
+                self.gen_nouse(local_map, rhs)?;
+            }
+            Expr::LocalStore(ident, box rhs) => {
+                let rhs = self.gen(local_map, rhs)?;
+                self.new_local_store_nouse(local_map, ident, rhs)?;
+            }
+            Expr::If(box cond_, box then_, box else_) => {
+                let cond_ = self.gen(local_map, cond_)?;
+                let then_bb = self.new_bb();
+                let else_bb = self.new_bb();
+                let succ_bb = self.new_bb();
+                self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
+                self.cur_bb = then_bb;
+                self.gen_nouse(local_map, then_)?;
+                self.insts.push(Hir::Br(succ_bb));
+                self.cur_bb = else_bb;
+                self.gen_nouse(local_map, else_)?;
+                self.insts.push(Hir::Br(succ_bb));
+                self.cur_bb = succ_bb;
+            }
+            _ => {}
+        };
+        Ok(())
     }
 }

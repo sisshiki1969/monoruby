@@ -38,6 +38,22 @@ impl std::ops::IndexMut<usize> for McIrContext {
     }
 }
 
+impl McIrContext {
+    fn invalidate(&mut self, reg: McReg) {
+        match reg {
+            McReg::FReg(f) => self[f].invalidate(),
+            McReg::GReg(g) => self[g].invalidate(),
+        }
+    }
+
+    fn alloc_reg(&mut self, ssareg: SsaReg, ty: Type) -> McReg {
+        match ty {
+            Type::Integer => McReg::GReg(self.alloc_greg(ssareg)),
+            Type::Float => McReg::FReg(self.alloc_freg(ssareg)),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct McIrBlock {
     pub insts: Vec<McIR>,
@@ -403,19 +419,21 @@ impl McIrContext {
                             ctx.insts.push(McIR::FNeg(reg));
                         }
                     },
-                    Hir::LocalStore(info, reg) => {
+                    Hir::LocalStore(ret, info, reg) => {
                         let ty = info.1;
                         assert_eq!(ty, hir_context[*reg].ty);
                         let reg = ctx.ssa_map[*reg].unwrap();
+                        if let Some(ret) = ret {
+                            ctx.ssa_map[*ret] = Some(reg);
+                        } else {
+                            ctx.invalidate(reg);
+                        }
                         ctx.insts.push(McIR::LocalStore(info.0, reg));
                     }
                     Hir::LocalLoad(info, reg) => {
                         let ty = info.1;
                         assert_eq!(ty, hir_context[*reg].ty);
-                        let reg = match ty {
-                            Type::Integer => McReg::GReg(ctx.alloc_greg(*reg)),
-                            Type::Float => McReg::FReg(ctx.alloc_freg(*reg)),
-                        };
+                        let reg = ctx.alloc_reg(*reg, ty);
                         ctx.insts.push(McIR::LocalLoad(info.0, reg));
                     }
                     Hir::Br(next_bb) => {
@@ -433,14 +451,15 @@ impl McIrContext {
                                 _ => None,
                             })
                             .collect::<Vec<_>>();
-                        assert_eq!(1, move_list.len());
-                        let src = move_list[0];
-                        let src_reg = ctx.ssa_map[*src].unwrap();
-                        ctx.insts.push(McIR::Out(src_reg));
-                        ctx.insts.push(McIR::Jmp(*next_bb));
-                        match src_reg {
-                            McReg::FReg(f) => ctx[f].invalidate(),
-                            McReg::GReg(g) => ctx[g].invalidate(),
+                        if move_list.len() == 0 {
+                            ctx.insts.push(McIR::Jmp(*next_bb));
+                        } else {
+                            assert_eq!(1, move_list.len());
+                            let src = move_list[0];
+                            let src_reg = ctx.ssa_map[*src].unwrap();
+                            ctx.insts.push(McIR::Out(src_reg));
+                            ctx.insts.push(McIR::Jmp(*next_bb));
+                            ctx.invalidate(src_reg);
                         }
                     }
                     Hir::CondBr(cond_, then_bb, else_bb) => {
@@ -449,10 +468,7 @@ impl McIrContext {
                         ctx.insts.push(McIR::Jmp(*then_bb));
                     }
                     Hir::Phi(ret, _) => {
-                        let reg = match hir_context[*ret].ty {
-                            Type::Integer => McReg::GReg(ctx.alloc_greg(*ret)),
-                            Type::Float => McReg::FReg(ctx.alloc_freg(*ret)),
-                        };
+                        let reg = ctx.alloc_reg(*ret, hir_context[*ret].ty);
                         ctx.insts.push(McIR::In(reg));
                     }
                 }
