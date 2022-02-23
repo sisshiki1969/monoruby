@@ -258,7 +258,7 @@ impl McIrContext {
             f_reginfo: vec![],
             ssa_map,
             cur_block: 0,
-            blocks: vec![McIrBlock::new()],
+            blocks: vec![],
         }
     }
 
@@ -273,6 +273,9 @@ impl McIrContext {
     pub fn from_hir(hir_context: &mut HIRContext) -> Self {
         let mut ctx = Self::new(SsaMap(vec![None; hir_context.register_num()]));
         for bb in &hir_context.basic_block {
+            ctx.blocks.push(McIrBlock::new());
+            ctx.g_reginfo = vec![];
+            ctx.f_reginfo = vec![];
             for hir in &bb.insts {
                 match hir {
                     Hir::Integer(ssa, i) => {
@@ -473,10 +476,7 @@ impl McIrContext {
                     }
                 }
             }
-            ctx.blocks.push(McIrBlock::new());
             ctx.cur_block += 1;
-            ctx.g_reginfo = vec![];
-            ctx.f_reginfo = vec![];
         }
         ctx
     }

@@ -680,9 +680,11 @@ impl HIRContext {
                 self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
                 self.cur_bb = then_bb;
                 let then_ = self.gen(local_map, then_)?;
+                let then_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
                 self.cur_bb = else_bb;
                 let else_ = self.gen(local_map, else_)?;
+                let else_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
                 if self[then_].ty != self[else_].ty {
                     return Err(HirErr::TypeMismatch(self[then_].ty, self[else_].ty));
