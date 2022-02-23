@@ -20,4 +20,9 @@ pub enum Expr {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CmpKind {
     Eq,
+    Ne,
+    Ge,
+    Gt,
+    Le,
+    Lt,
 }

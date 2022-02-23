@@ -173,6 +173,29 @@ impl Codegen {
         }
     }
 
+    fn emit_jcc(&mut self, kind: CmpKind, br: DestLabel) {
+        match kind {
+            CmpKind::Eq => {
+                monoasm!(self.jit, jeq br;);
+            }
+            CmpKind::Ne => {
+                monoasm!(self.jit, jne br;);
+            }
+            CmpKind::Gt => {
+                monoasm!(self.jit, jgt br;);
+            }
+            CmpKind::Ge => {
+                monoasm!(self.jit, jge br;);
+            }
+            CmpKind::Lt => {
+                monoasm!(self.jit, jlt br;);
+            }
+            CmpKind::Le => {
+                monoasm!(self.jit, jle br;);
+            }
+        }
+    }
+
     pub fn compile_and_run(
         &mut self,
         mcir_context: &McIrContext,
@@ -302,7 +325,6 @@ impl Codegen {
                         };
                     }
                     McIR::ICmp(kind, lhs, rhs) => {
-                        assert_eq!(*kind, CmpKind::Eq);
                         if let McGeneralOperand::Reg(rhs) = rhs {
                             let lhs = self.g_phys_reg(*lhs);
                             let rhs = self.g_phys_reg(*rhs);
@@ -318,8 +340,9 @@ impl Codegen {
                                             monoasm!(self.jit, cmpq  R(lhs), [rbp-(rhs)];);
                                         }
                                     }
+                                    self.emit_jcc(*kind, br);
+
                                     monoasm!(self.jit,
-                                      jeq   br;
                                       movq  R(lhs), 0;
                                       jmp   end;
                                       br:
@@ -339,8 +362,9 @@ impl Codegen {
                                             );
                                         }
                                     }
+                                    self.emit_jcc(*kind, br);
+
                                     monoasm!(self.jit,
-                                        jeq   br;
                                         movq  [rbp-(lhs)], 0;
                                         jmp   end;
                                         br:
@@ -352,6 +376,38 @@ impl Codegen {
                         } else {
                             unreachable!()
                         }
+                    }
+                    McIR::CmpJmp(kind, lhs, rhs, dest) => {
+                        let lhs = self.g_phys_reg(*lhs);
+                        let rhs = self.g_phys_reg(*rhs);
+                        let label = self.blocks[*dest];
+                        match (lhs, rhs) {
+                            (GeneralPhysReg::Reg(lhs), rhs) => {
+                                match rhs {
+                                    GeneralPhysReg::Reg(rhs) => {
+                                        monoasm!(self.jit, cmpq  R(lhs), R(rhs););
+                                    }
+                                    GeneralPhysReg::Stack(rhs) => {
+                                        monoasm!(self.jit, cmpq  R(lhs), [rbp-(rhs)];);
+                                    }
+                                }
+                                self.emit_jcc(*kind, label);
+                            }
+                            (GeneralPhysReg::Stack(lhs), rhs) => {
+                                match rhs {
+                                    GeneralPhysReg::Reg(rhs) => {
+                                        monoasm!(self.jit, cmpq  [rbp-(lhs)], R(rhs););
+                                    }
+                                    GeneralPhysReg::Stack(rhs) => {
+                                        monoasm!(self.jit,
+                                            movq  rax, [rbp-(rhs)];
+                                            cmpq  [rbp-(lhs)], rax;
+                                        );
+                                    }
+                                }
+                                self.emit_jcc(*kind, label);
+                            }
+                        };
                     }
                     McIR::FAdd(lhs, rhs) => float_ops!(self, addsd, lhs, rhs),
                     McIR::FSub(lhs, rhs) => float_ops!(self, subsd, lhs, rhs),
@@ -409,10 +465,11 @@ impl Codegen {
                     McIR::FRet(lhs) => {
                         match lhs {
                             McFloatOperand::Float(f) => {
-                                let label = self.jit.const_f64(*f);
+                                let n = i64::from_ne_bytes(f.to_le_bytes());
                                 monoasm!(self.jit,
-                                  movsd xmm0, [rip + label];
-                                  jmp epilogue;
+                                  movq rax, (n);
+                                  movq xmm0, rax;
+                                  jmp  epilogue;
                                 );
                             }
                             McFloatOperand::Reg(lhs) => match self.f_phys_reg(*lhs) {
@@ -432,9 +489,7 @@ impl Codegen {
                         }
                         match ret_ty {
                             Type::Float => {}
-                            _ => {
-                                panic!("Return type mismatch {:?} {:?}.", ret_ty, Type::Float)
-                            }
+                            _ => panic!("Return type mismatch {:?} {:?}.", ret_ty, Type::Float),
                         }
                     }
                     McIR::IRet(lhs, ty) => {
@@ -477,20 +532,22 @@ impl Codegen {
                         };
                     }
                     McIR::FNeg(reg) => {
-                        let label = self.jit.const_f64(0.0);
+                        let n = i64::from_ne_bytes((0.0f64).to_le_bytes());
                         match self.f_phys_reg(*reg) {
                             FloatPhysReg::Xmm(reg) => {
                                 monoasm!(self.jit,
-                                  movsd xmm0, [rip + label];
+                                  movq  rax, (n);
+                                  movq  xmm0, rax;
                                   subsd xmm0, xmm(reg);
                                   movsd xmm(reg), xmm0;
                                 );
                             }
                             FloatPhysReg::Stack(lhs) => {
                                 monoasm!(self.jit,
-                                    movsd xmm0, [rip + label];
-                                    subsd xmm0, [rbp-(lhs)];
-                                    movsd [rbp-(lhs)], xmm0;
+                                  movq  rax, (n);
+                                  movq  xmm0, rax;
+                                  subsd xmm0, [rbp-(lhs)];
+                                  movsd [rbp-(lhs)], xmm0;
                                 );
                             }
                         };
@@ -590,21 +647,7 @@ impl Codegen {
                                     }
                                 };
                             }
-                            McReg::FReg(reg) => {
-                                match self.f_phys_reg(*reg) {
-                                    FloatPhysReg::Xmm(reg) => {
-                                        monoasm!(self.jit,
-                                          movq rax, xmm(reg);
-                                          cmpq rax, 0;
-                                        );
-                                    }
-                                    FloatPhysReg::Stack(lhs) => {
-                                        monoasm!(self.jit,
-                                          cmpq [rbp-(lhs)], 0;
-                                        );
-                                    }
-                                };
-                            }
+                            _ => unreachable!(),
                         };
                         monoasm!(self.jit,
                           jeq label;

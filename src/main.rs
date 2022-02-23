@@ -242,6 +242,18 @@ mod test {
         run_test("-4 * (2.9 + 7 / (-1.15 - 6))");
         run_test("1.5 + (2.0 + 3) + 1.1");
         run_test("a = 55; a = a /5; a");
+        run_test("1 < 2");
+        run_test("1 <= 2");
+        run_test("1 >= 2");
+        run_test("1 > 2");
+        run_test("1 == 2");
+        run_test("1 != 2");
+        run_test("10 < 2");
+        run_test("10 <= 2");
+        run_test("10 >= 2");
+        run_test("10 > 2");
+        run_test("10 == 2");
+        run_test("10 != 2");
         run_test("a = 42; if a == 42 then 1.1 else 2.2 end");
     }
 }

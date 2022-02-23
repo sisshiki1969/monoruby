@@ -83,6 +83,12 @@ impl std::fmt::Debug for HIRContext {
                         format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
                     }
                     Hir::Br(dest) => format!("br {}", dest),
+                    Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
+                        format!(
+                            "cmpbr ({:?} %{}, %{}) then {} else {}",
+                            kind, lhs, rhs, then_, else_
+                        )
+                    }
                     Hir::CondBr(cond, then_, else_) => {
                         format!("condbr %{} then {} else {}", cond, then_, else_)
                     }
@@ -376,6 +382,7 @@ type Result<T> = std::result::Result<T, HirErr>;
 pub enum Hir {
     Br(usize),
     CondBr(SsaReg, usize, usize),
+    ICmpBr(CmpKind, SsaReg, SsaReg, usize, usize),
     Phi(SsaReg, Vec<(usize, SsaReg)>),
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
@@ -686,7 +693,7 @@ impl HIRContext {
                 }
             }
             Expr::Cmp(kind, box lhs, box rhs) => {
-                assert_eq!(*kind, CmpKind::Eq);
+                //assert_eq!(*kind, CmpKind::Eq);
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
                 let lhs_ty = self[lhs].ty;
@@ -702,15 +709,28 @@ impl HIRContext {
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
             Expr::If(box cond_, box then_, box else_) => {
-                let cond_ = self.gen(local_map, cond_)?;
-                match self[cond_].ty {
-                    Type::Bool => {}
-                    ty => return Err(HirErr::TypeMismatch(ty, Type::Bool)),
-                };
                 let then_bb = self.new_bb();
                 let else_bb = self.new_bb();
                 let succ_bb = self.new_bb();
-                self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
+                if let Expr::Cmp(kind, box lhs, box rhs) = cond_ {
+                    let lhs = self.gen(local_map, lhs)?;
+                    let rhs = self.gen(local_map, rhs)?;
+                    let lhs_ty = self[lhs].ty;
+                    let rhs_ty = self[rhs].ty;
+                    match (lhs_ty, rhs_ty) {
+                        (Type::Integer, Type::Integer) => {}
+                        (ty_l, ty_r) => return Err(HirErr::TypeMismatch(ty_l, ty_r)),
+                    };
+                    self.insts
+                        .push(Hir::ICmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                } else {
+                    let cond_ = self.gen(local_map, cond_)?;
+                    match self[cond_].ty {
+                        Type::Bool => {}
+                        ty => return Err(HirErr::TypeMismatch(ty, Type::Bool)),
+                    };
+                    self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
+                }
                 self.cur_bb = then_bb;
                 let then_ = self.gen(local_map, then_)?;
                 let then_bb = self.cur_bb;

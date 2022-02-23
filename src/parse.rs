@@ -81,7 +81,14 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         let comparative = additive
             .clone()
-            .then(op("==").to(CmpKind::Eq))
+            .then(choice((
+                op("==").to(CmpKind::Eq),
+                op("!=").to(CmpKind::Ne),
+                op(">=").to(CmpKind::Ge),
+                op("<=").to(CmpKind::Le),
+                op(">").to(CmpKind::Gt),
+                op("<").to(CmpKind::Lt),
+            )))
             .then(additive.clone())
             .map(|((lhs, kind), rhs)| Expr::Cmp(kind, Box::new(lhs), Box::new(rhs)));
 

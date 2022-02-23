@@ -132,10 +132,39 @@ impl Evaluator {
                 None
             }
             Hir::ICmp(kind, op) => {
-                assert_eq!(*kind, CmpKind::Eq);
                 let lhs = self[op.lhs].as_i();
                 let rhs = self[op.rhs].as_i();
-                self[op.ret] = Value::Bool(lhs == rhs);
+                self[op.ret] = Value::Bool(match kind {
+                    CmpKind::Eq => lhs == rhs,
+                    CmpKind::Ne => lhs != rhs,
+                    CmpKind::Lt => lhs < rhs,
+                    CmpKind::Gt => lhs > rhs,
+                    CmpKind::Le => lhs <= rhs,
+                    CmpKind::Ge => lhs >= rhs,
+                });
+                None
+            }
+            Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
+                /*let lhs = match lhs {
+                    HirOperand::Reg(r) => self[*r].as_i(),
+                    HirOperand::Const(c) => c.as_i(),
+                };
+                let rhs = match rhs {
+                    HirOperand::Reg(r) => self[*r].as_i(),
+                    HirOperand::Const(c) => c.as_i(),
+                };*/
+                let lhs = self[*lhs].as_i();
+                let rhs = self[*rhs].as_i();
+                let b = match kind {
+                    CmpKind::Eq => lhs == rhs,
+                    CmpKind::Ne => lhs != rhs,
+                    CmpKind::Lt => lhs < rhs,
+                    CmpKind::Gt => lhs > rhs,
+                    CmpKind::Le => lhs <= rhs,
+                    CmpKind::Ge => lhs >= rhs,
+                };
+                let next_bb = if b { else_ } else { then_ };
+                self.goto(*next_bb);
                 None
             }
             Hir::Ret(lhs) => match lhs {
