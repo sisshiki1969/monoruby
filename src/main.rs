@@ -25,6 +25,7 @@ pub use parse::*;
 pub enum Value {
     Integer(i32),
     Float(f64),
+    Bool(bool),
 }
 
 impl std::fmt::Debug for Value {
@@ -32,6 +33,7 @@ impl std::fmt::Debug for Value {
         match self {
             Self::Integer(n) => write!(f, "{}i32", n),
             Self::Float(n) => write!(f, "{}f64", n),
+            Self::Bool(b) => write!(f, "{}", b),
         }
     }
 }
@@ -40,6 +42,7 @@ impl std::fmt::Debug for Value {
 pub enum Type {
     Integer,
     Float,
+    Bool,
 }
 
 impl std::fmt::Debug for Type {
@@ -47,6 +50,7 @@ impl std::fmt::Debug for Type {
         let s = match self {
             Self::Integer => "i32",
             Self::Float => "f64",
+            Self::Bool => "bool",
         };
         write!(f, "{}", s)
     }
@@ -115,9 +119,12 @@ fn run_with_locals(
         Ok(expr) => {
             //dbg!(&expr);
             let mut hir = HIRContext::new();
-            if let Err(err) = hir.from_ast(local_map, &expr) {
-                eprintln!("{:?}", err);
-                return;
+            let ret_ty = match hir.from_ast(local_map, &expr) {
+                Ok((_, ty)) => ty,
+                Err(err) => {
+                    eprintln!("{:?}", err);
+                    return;
+                }
             };
             #[cfg(debug_assertions)]
             dbg!(&hir);
@@ -127,7 +134,7 @@ fn run_with_locals(
             let mut codegen = Codegen::new();
             #[cfg(debug_assertions)]
             dbg!(&mcir_context);
-            let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map);
+            let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map, ret_ty);
             eprintln!("JIT: {:?}", jit_res);
             eprintln!("Evaluator: {:?}", eval_res);
             eprintln!("Ruby output: {:?}", run_ruby(all_codes));
@@ -159,8 +166,9 @@ pub fn run_test(code: &str) {
         Ok(expr) => {
             //dbg!(&expr);
             let mut hir = HIRContext::new();
-            if let Err(err) = hir.from_ast(&mut local_map, &expr) {
-                panic!("Error in compiling AST. {:?}", err);
+            let ret_ty = match hir.from_ast(&mut local_map, &expr) {
+                Ok((_, ty)) => ty,
+                Err(err) => panic!("Error in compiling AST. {:?}", err),
             };
             //#[cfg(debug_assertions)]
             //dbg!(&hir);
@@ -169,7 +177,8 @@ pub fn run_test(code: &str) {
             let mut codegen = Codegen::new();
             //#[cfg(debug_assertions)]
             //dbg!(&mcir_context);
-            let jit_res = codegen.compile_and_run(&mcir_context, &mut locals, &mut local_map);
+            let jit_res =
+                codegen.compile_and_run(&mcir_context, &mut locals, &mut local_map, ret_ty);
             assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
             let ruby_res = run_ruby(&all_codes);
             assert_eq!(&jit_res, dbg!(&ruby_res));
@@ -209,6 +218,10 @@ fn run_ruby(code: &Vec<String>) -> Value {
                 Value::Integer(n as i32)
             } else if let Ok(n) = res.parse::<f64>() {
                 Value::Float(n)
+            } else if res == "true" {
+                Value::Bool(true)
+            } else if res == "false" {
+                Value::Bool(false)
             } else {
                 unreachable!("{:?}", res)
             }
@@ -229,5 +242,6 @@ mod test {
         run_test("-4 * (2.9 + 7 / (-1.15 - 6))");
         run_test("1.5 + (2.0 + 3) + 1.1");
         run_test("a = 55; a = a /5; a");
+        run_test("a = 42; if a == 42 then 1.1 else 2.2 end");
     }
 }

@@ -33,7 +33,7 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
 
     let ident = text::ident::<_, Simple<char>>();
 
-    let op = |ch: char| just(ch).padded();
+    let op = |ch: &str| just(ch.to_string()).padded();
 
     recursive(|expr| {
         let parenthesized = expr.clone().delimited_by(just('('), just(')'));
@@ -42,11 +42,11 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
         let primary = choice((number, local, parenthesized));
         // unary := -a
         //        | +a
-        let unary = choice((op('-'), op('+')))
+        let unary = choice((op("-"), op("+")))
             .repeated()
-            .then(primary)
+            .then(primary.clone())
             .foldr(|op, lhs| {
-                if op == '-' {
+                if op == "-" {
                     Expr::Neg(Box::new(lhs))
                 } else {
                     lhs
@@ -58,10 +58,10 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
             .clone()
             .then(
                 choice((
-                    op('*').to(Expr::Mul as fn(_, _) -> _),
-                    op('/').to(Expr::Div as fn(_, _) -> _),
+                    op("*").to(Expr::Mul as fn(_, _) -> _),
+                    op("/").to(Expr::Div as fn(_, _) -> _),
                 ))
-                .then(unary)
+                .then(unary.clone())
                 .repeated(),
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
@@ -71,16 +71,24 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
             .clone()
             .then(
                 choice((
-                    op('+').to(Expr::Add as fn(_, _) -> _),
-                    op('-').to(Expr::Sub as fn(_, _) -> _),
+                    op("+").to(Expr::Add as fn(_, _) -> _),
+                    op("-").to(Expr::Sub as fn(_, _) -> _),
                 ))
-                .then(multiplicative)
+                .then(multiplicative.clone())
                 .repeated(),
             )
             .foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
-        let assignment = ident
-            .then_ignore(op('='))
+
+        let comparative = additive
+            .clone()
+            .then(op("==").to(CmpKind::Eq))
             .then(additive.clone())
+            .map(|((lhs, kind), rhs)| Expr::Cmp(kind, Box::new(lhs), Box::new(rhs)));
+
+        let assignment = ident
+            .padded()
+            .then_ignore(op("="))
+            .then(expr.clone())
             .map(|(lhs, rhs)| Expr::LocalStore(lhs, Box::new(rhs)));
 
         let if_expr = just("if")
@@ -94,6 +102,9 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
                 Expr::If(Box::new(cond_), Box::new(then_), Box::new(else_))
             });
 
-        choice((if_expr, assignment, additive)).padded()
+        if_expr
+            .or(assignment)
+            .or(choice((comparative, additive, multiplicative, primary)))
+            .padded()
     })
 }

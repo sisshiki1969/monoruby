@@ -67,6 +67,10 @@ impl std::fmt::Debug for HIRContext {
                         "%{}: {:?} = fdiv {:?}, {:?}",
                         op.ret, self[op.ret].ty, op.lhs, op.rhs
                     ),
+                    Hir::ICmp(kind, op) => format!(
+                        "%{}: {:?} = icmp {:?} %{}, %{}",
+                        op.ret, self[op.ret].ty, kind, op.lhs, op.rhs
+                    ),
                     Hir::Ret(ret) => format!("ret {:?}", ret),
                     Hir::LocalStore(ret, ident, rhs) => {
                         if let Some(ret) = ret {
@@ -265,6 +269,11 @@ impl HIRContext {
         self.add_assign(Hir::FDiv(HirBinop2 { ret, lhs, rhs }), Type::Float)
     }
 
+    fn new_icmp(&mut self, kind: CmpKind, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(Hir::ICmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
+    }
+
     fn new_ret(&mut self, lhs: SsaReg) {
         let hir = Hir::Ret(HirOperand::Reg(lhs));
         self.insts.push(hir);
@@ -381,6 +390,7 @@ pub enum Hir {
     FSub(HirBinop2),
     FMul(HirBinop2),
     FDiv(HirBinop2),
+    ICmp(CmpKind, HIRBinop),
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
@@ -509,6 +519,7 @@ macro_rules! binary_ops {
                         let lhs = $self.new_as_float_imm(*lhs_);
                         Ok($self.$f_op(HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
                     }
+                    ty => Err(HirErr::TypeMismatch(ty, rhs_ty)),
                 }
             }
             (Expr::Float(lhs_), Expr::Integer(rhs_)) => {
@@ -527,6 +538,7 @@ macro_rules! binary_ops {
                         Ok($self.$f_op(HirOperand::float(*lhs_), HirOperand::reg(rhs)))
                     }
                     Type::Float => Ok($self.$f_op(HirOperand::float(*lhs_), HirOperand::reg(rhs))),
+                    ty => Err(HirErr::TypeMismatch(ty, rhs_ty)),
                 }
             }
             (_, Expr::Integer(rhs_)) => {
@@ -539,6 +551,7 @@ macro_rules! binary_ops {
                     Type::Float => {
                         Ok($self.$f_op(HirOperand::reg(lhs), HirOperand::float(*rhs_ as f64)))
                     }
+                    ty => Err(HirErr::TypeMismatch(ty, Type::Integer)),
                 }
             }
             (_, Expr::Float(rhs_)) => {
@@ -550,6 +563,7 @@ macro_rules! binary_ops {
                         Ok($self.$f_op(HirOperand::reg(lhs), HirOperand::float(*rhs_)))
                     }
                     Type::Float => Ok($self.$f_op(HirOperand::reg(lhs), HirOperand::float(*rhs_))),
+                    ty => Err(HirErr::TypeMismatch(ty, Type::Float)),
                 }
             }
             _ => {
@@ -572,6 +586,7 @@ macro_rules! binary_ops {
                     (Type::Float, Type::Float) => {
                         Ok($self.$f_op(HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
                     }
+                    (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
         }
@@ -618,6 +633,7 @@ impl HIRContext {
                 let ssa = match self[lhs_i].ty {
                     Type::Integer => self.new_ineg(lhs_i),
                     Type::Float => self.new_fneg(lhs_i),
+                    ty => return Err(HirErr::TypeMismatch(ty, ty)),
                 };
                 Ok(ssa)
             }
@@ -645,6 +661,7 @@ impl HIRContext {
                     (Type::Float, Type::Float) => {
                         Ok(self.new_fmul(HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
                     }
+                    (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
             Expr::Div(box lhs, box rhs) => {
@@ -665,6 +682,18 @@ impl HIRContext {
                     (Type::Float, Type::Float) => {
                         Ok(self.new_fdiv(HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
                     }
+                    (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
+                }
+            }
+            Expr::Cmp(kind, box lhs, box rhs) => {
+                assert_eq!(*kind, CmpKind::Eq);
+                let lhs = self.gen(local_map, lhs)?;
+                let rhs = self.gen(local_map, rhs)?;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
+                match (lhs_ty, rhs_ty) {
+                    (Type::Integer, Type::Integer) => Ok(self.new_icmp(*kind, lhs, rhs)),
+                    (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
             Expr::LocalStore(ident, box rhs) => {
@@ -674,6 +703,10 @@ impl HIRContext {
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
             Expr::If(box cond_, box then_, box else_) => {
                 let cond_ = self.gen(local_map, cond_)?;
+                match self[cond_].ty {
+                    Type::Bool => {}
+                    ty => return Err(HirErr::TypeMismatch(ty, Type::Bool)),
+                };
                 let then_bb = self.new_bb();
                 let else_bb = self.new_bb();
                 let succ_bb = self.new_bb();

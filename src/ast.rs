@@ -1,7 +1,7 @@
 ///
 /// AST for expression.
 ///
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -9,8 +9,15 @@ pub enum Expr {
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Neg(Box<Expr>),
+    Cmp(CmpKind, Box<Expr>, Box<Expr>),
+
     Integer(i32),
     Float(f64),
     LocalStore(String, Box<Expr>),
     LocalLoad(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CmpKind {
+    Eq,
 }

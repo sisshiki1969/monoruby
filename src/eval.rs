@@ -131,6 +131,13 @@ impl Evaluator {
                 self[op.ret] = Value::Float(lhs.as_f() / rhs.as_f());
                 None
             }
+            Hir::ICmp(kind, op) => {
+                assert_eq!(*kind, CmpKind::Eq);
+                let lhs = self[op.lhs].as_i();
+                let rhs = self[op.rhs].as_i();
+                self[op.ret] = Value::Bool(lhs == rhs);
+                None
+            }
             Hir::Ret(lhs) => match lhs {
                 HirOperand::Reg(lhs) => Some(self[*lhs].clone()),
                 HirOperand::Const(c) => Some(c.clone()),
@@ -150,13 +157,13 @@ impl Evaluator {
                 self.goto(*next_bb);
                 None
             }
-            &Hir::CondBr(cond_, then_, else_) => {
-                let next_bb = if self[cond_] == Value::Integer(0) {
+            Hir::CondBr(cond_, then_, else_) => {
+                let next_bb = if self[*cond_] == Value::Bool(false) {
                     else_
                 } else {
                     then_
                 };
-                self.goto(next_bb);
+                self.goto(*next_bb);
                 None
             }
             Hir::Phi(ret, phi) => {

@@ -48,7 +48,7 @@ impl McIrContext {
 
     fn alloc_reg(&mut self, ssareg: SsaReg, ty: Type) -> McReg {
         match ty {
-            Type::Integer => McReg::GReg(self.alloc_greg(ssareg)),
+            Type::Integer | Type::Bool => McReg::GReg(self.alloc_greg(ssareg)),
             Type::Float => McReg::FReg(self.alloc_freg(ssareg)),
         }
     }
@@ -149,7 +149,10 @@ impl std::fmt::Debug for McIrContext {
                     McIR::FSub(dst, src) => format!("%{:?} = fsub %{:?}, {:?}", dst, dst, src),
                     McIR::FMul(dst, src) => format!("%{:?} = fmul %{:?}, {:?}", dst, dst, src),
                     McIR::FDiv(dst, src) => format!("%{:?} = fdiv %{:?}, {:?}", dst, dst, src),
-                    McIR::IRet(ret) => format!("ret {:?}: i32", ret),
+                    McIR::ICmp(kind, dst, src) => {
+                        format!("%{:?} = icmp {:?} %{:?}, {:?}", dst, kind, dst, src)
+                    }
+                    McIR::IRet(ret, ty) => format!("ret {:?}:{:?}", ret, ty),
                     McIR::FRet(ret) => format!("ret {:?}: f64", ret),
                     McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
                     McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
@@ -376,25 +379,43 @@ impl McIrContext {
                     Hir::FSub(op) => float_ops!(ctx, op, FSub),
                     Hir::FMul(op) => float_ops!(ctx, op, FMul),
                     Hir::FDiv(op) => float_ops!(ctx, op, FDiv),
+
+                    Hir::ICmp(kind, op) => {
+                        let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
+                        let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
+                        ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
+                        ctx[rhs].invalidate();
+                        ctx.insts
+                            .push(McIR::ICmp(*kind, lhs, McGeneralOperand::Reg(rhs)));
+                    }
+
                     Hir::Ret(op) => match op {
-                        HirOperand::Reg(ssa) => match hir_context[*ssa].ty {
-                            Type::Integer => {
-                                let reg = ctx.ssa_map[*ssa].unwrap().as_g();
-                                ctx[reg].invalidate();
-                                ctx.insts.push(McIR::IRet(McGeneralOperand::Reg(reg)));
+                        HirOperand::Reg(ssa) => {
+                            let ty = hir_context[*ssa].ty;
+                            match ty {
+                                Type::Integer | Type::Bool => {
+                                    let reg = ctx.ssa_map[*ssa].unwrap().as_g();
+                                    ctx[reg].invalidate();
+                                    ctx.insts.push(McIR::IRet(McGeneralOperand::Reg(reg), ty));
+                                }
+                                Type::Float => {
+                                    let reg = ctx.ssa_map[*ssa].unwrap().as_f();
+                                    ctx[reg].invalidate();
+                                    ctx.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
+                                }
                             }
-                            Type::Float => {
-                                let reg = ctx.ssa_map[*ssa].unwrap().as_f();
-                                ctx[reg].invalidate();
-                                ctx.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
-                            }
-                        },
+                        }
                         HirOperand::Const(c) => match c {
-                            Value::Integer(i) => {
-                                ctx.insts.push(McIR::IRet(McGeneralOperand::Integer(*i)))
-                            }
+                            Value::Integer(i) => ctx
+                                .insts
+                                .push(McIR::IRet(McGeneralOperand::Integer(*i), Type::Integer)),
                             Value::Float(f) => {
                                 ctx.insts.push(McIR::FRet(McFloatOperand::Float(*f)))
+                            }
+                            Value::Bool(b) => {
+                                let b = if *b { 1 } else { 0 };
+                                ctx.insts
+                                    .push(McIR::IRet(McGeneralOperand::Integer(b), Type::Bool))
                             }
                         },
                     },
@@ -543,7 +564,8 @@ pub enum McIR {
     FSub(FReg, McFloatOperand),
     FMul(FReg, McFloatOperand),
     FDiv(FReg, McFloatOperand),
-    IRet(McGeneralOperand),
+    ICmp(CmpKind, GReg, McGeneralOperand),
+    IRet(McGeneralOperand, Type),
     FRet(McFloatOperand),
     LocalStore(usize, McReg),
     LocalLoad(usize, McReg),
