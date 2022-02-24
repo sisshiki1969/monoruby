@@ -378,8 +378,8 @@ impl McIrContext {
                         let rhs = ctx.ssa_map[*rhs].unwrap().as_g();
                         ctx[lhs].invalidate();
                         ctx[rhs].invalidate();
-                        ctx.insts.push(McIR::CmpJmp(*kind, lhs, rhs, *else_bb));
-                        ctx.insts.push(McIR::Jmp(*then_bb));
+                        ctx.insts.push(McIR::CmpJmp(*kind, lhs, rhs, *then_bb));
+                        ctx.insts.push(McIR::Jmp(*else_bb));
                     }
 
                     Hir::Ret(op) => match op {

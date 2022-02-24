@@ -163,7 +163,7 @@ impl Evaluator {
                     CmpKind::Le => lhs <= rhs,
                     CmpKind::Ge => lhs >= rhs,
                 };
-                let next_bb = if b { else_ } else { then_ };
+                let next_bb = if b { then_ } else { else_ };
                 self.goto(*next_bb);
                 None
             }

@@ -93,25 +93,24 @@ fn expr() -> impl Parser<char, Expr, Error = Simple<char>> {
             .map(|((lhs, kind), rhs)| Expr::Cmp(kind, Box::new(lhs), Box::new(rhs)));
 
         let assignment = ident
-            .padded()
             .then_ignore(op("="))
             .then(expr.clone())
             .map(|(lhs, rhs)| Expr::LocalStore(lhs, Box::new(rhs)));
 
-        let if_expr = just("if")
+        let if_expr = text::keyword("if")
             .ignore_then(expr.clone())
-            .then_ignore(just("then"))
+            .then_ignore(text::keyword("then"))
             .then(expr.clone())
-            .then_ignore(just("else"))
+            .then_ignore(text::keyword("else"))
             .then(expr)
-            .then_ignore(just("end"))
+            .then_ignore(text::keyword("end"))
             .map(|((cond_, then_), else_)| {
                 Expr::If(Box::new(cond_), Box::new(then_), Box::new(else_))
             });
 
         if_expr
             .or(assignment)
-            .or(choice((comparative, additive, multiplicative, primary)))
+            .or(choice((comparative, additive)))
             .padded()
     })
 }

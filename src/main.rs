@@ -227,8 +227,7 @@ fn run_ruby(code: &Vec<String>) -> Value {
             }
         }
         Err(err) => {
-            eprintln!("{:?}", err);
-            panic!();
+            panic!("Error occured in executing Ruby. {:?}", err);
         }
     }
 }
