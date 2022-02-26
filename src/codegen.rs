@@ -195,47 +195,49 @@ impl Codegen {
             }
         }
     }
+}
 
+impl Codegen {
     fn emit_setcc(&mut self, kind: CmpKind, dest: &GeneralPhysReg) {
         match dest {
             GeneralPhysReg::Reg(dest) => match kind {
                 CmpKind::Eq => {
-                    monoasm!(self.jit, sete R(*dest););
+                    monoasm!( self.jit, seteq R(*dest); );
                 }
                 CmpKind::Ne => {
-                    monoasm!(self.jit, setne R(*dest););
+                    monoasm!( self.jit, setne R(*dest); );
                 }
                 CmpKind::Gt => {
-                    monoasm!(self.jit, setgt R(*dest););
+                    monoasm!( self.jit, setgt R(*dest); );
                 }
                 CmpKind::Ge => {
-                    monoasm!(self.jit, setge R(*dest););
+                    monoasm!( self.jit, setge R(*dest); );
                 }
                 CmpKind::Lt => {
-                    monoasm!(self.jit, setlt R(*dest););
+                    monoasm!( self.jit, setlt R(*dest); );
                 }
                 CmpKind::Le => {
-                    monoasm!(self.jit, setle R(*dest););
+                    monoasm!( self.jit, setle R(*dest); );
                 }
             },
             GeneralPhysReg::Stack(dest) => match kind {
                 CmpKind::Eq => {
-                    monoasm!(self.jit, sete [rbp-(*dest)];);
+                    monoasm!( self.jit, seteq [rbp-(*dest)]; );
                 }
                 CmpKind::Ne => {
-                    monoasm!(self.jit, setne [rbp-(*dest)];);
+                    monoasm!( self.jit, setne [rbp-(*dest)]; );
                 }
                 CmpKind::Gt => {
-                    monoasm!(self.jit, setgt [rbp-(*dest)];);
+                    monoasm!( self.jit, setgt [rbp-(*dest)]; );
                 }
                 CmpKind::Ge => {
-                    monoasm!(self.jit, setge [rbp-(*dest)];);
+                    monoasm!( self.jit, setge [rbp-(*dest)]; );
                 }
                 CmpKind::Lt => {
-                    monoasm!(self.jit, setlt [rbp-(*dest)];);
+                    monoasm!( self.jit, setlt [rbp-(*dest)]; );
                 }
                 CmpKind::Le => {
-                    monoasm!(self.jit, setle [rbp-(*dest)];);
+                    monoasm!( self.jit, setle [rbp-(*dest)]; );
                 }
             },
         };
@@ -298,34 +300,34 @@ impl Codegen {
                     McIR::IAdd(lhs, rhs) => integer_ops!(self, addq, lhs, rhs),
                     McIR::ISub(lhs, rhs) => integer_ops!(self, subq, lhs, rhs),
                     McIR::IMul(lhs, rhs) => {
+                        fn emit_rhs(mut jit: &mut JitMemory, rhs: GeneralPhysReg) {
+                            match rhs {
+                                GeneralPhysReg::Reg(rhs) => {
+                                    monoasm!(jit, imul  rax, R(rhs); );
+                                }
+                                GeneralPhysReg::Stack(rhs) => {
+                                    monoasm!(jit, imul  rax, [rbp-(rhs)]; );
+                                }
+                            }
+                        }
                         let lhs = self.g_phys_reg(*lhs);
                         let rhs = self.g_phys_reg(*rhs);
-                        match (lhs, rhs) {
-                            (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Reg(rhs)) => {
+                        match lhs {
+                            GeneralPhysReg::Reg(lhs) => {
                                 monoasm!(self.jit,
                                   movq  rax, R(lhs);
-                                  imul  rax, R(rhs);
+                                );
+                                emit_rhs(&mut self.jit, rhs);
+                                monoasm!(self.jit,
                                   movq  R(lhs), rax;
                                 );
                             }
-                            (GeneralPhysReg::Reg(lhs), GeneralPhysReg::Stack(rhs)) => {
-                                monoasm!(self.jit,
-                                  movq  rax, R(lhs);
-                                  imul  rax, [rbp-(rhs)];
-                                  movq  R(lhs), rax;
-                                );
-                            }
-                            (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Reg(rhs)) => {
+                            GeneralPhysReg::Stack(lhs) => {
                                 monoasm!(self.jit,
                                   movq  rax, [rbp-(lhs)];
-                                  imul  rax, R(rhs);
-                                  movq  [rbp-(lhs)], rax;
                                 );
-                            }
-                            (GeneralPhysReg::Stack(lhs), GeneralPhysReg::Stack(rhs)) => {
+                                emit_rhs(&mut self.jit, rhs);
                                 monoasm!(self.jit,
-                                  movq  rax, [rbp-(lhs)];
-                                  imul  rax, [rbp-(rhs)];
                                   movq  [rbp-(lhs)], rax;
                                 );
                             }
@@ -368,8 +370,8 @@ impl Codegen {
                         };
                     }
                     McIR::ICmp(kind, lhs, rhs) => {
+                        let lhs = self.g_phys_reg(*lhs);
                         if let McGeneralOperand::Reg(rhs) = rhs {
-                            let lhs = self.g_phys_reg(*lhs);
                             let rhs = self.g_phys_reg(*rhs);
                             match (&lhs, &rhs) {
                                 (GeneralPhysReg::Reg(lhs_), rhs) => match rhs {
