@@ -23,9 +23,9 @@ impl std::fmt::Debug for HIRContext {
                 let s = match hir {
                     Hir::Integer(ret, i) => format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i),
                     Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
-                    Hir::IntAsFloat(op) => {
+                    Hir::CastIntFloat(op) => {
                         format!(
-                            "%{}: {:?} = i32_to_f64 {:?}",
+                            "%{}: {:?} = cast {:?} i32 to f64",
                             op.ret, self[op.ret].ty, op.src
                         )
                     }
@@ -68,7 +68,11 @@ impl std::fmt::Debug for HIRContext {
                         op.ret, self[op.ret].ty, op.lhs, op.rhs
                     ),
                     Hir::ICmp(kind, op) => format!(
-                        "%{}: {:?} = icmp {:?} %{}, %{}",
+                        "%{}: {:?} = icmp {:?} {:?}, {:?}",
+                        op.ret, self[op.ret].ty, kind, op.lhs, op.rhs
+                    ),
+                    Hir::FCmp(kind, op) => format!(
+                        "%{}: {:?} = fcmp {:?} {:?}, {:?}",
                         op.ret, self[op.ret].ty, kind, op.lhs, op.rhs
                     ),
                     Hir::Ret(ret) => format!("ret {:?}", ret),
@@ -84,6 +88,12 @@ impl std::fmt::Debug for HIRContext {
                     }
                     Hir::Br(dest) => format!("br {}", dest),
                     Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
+                        format!(
+                            "cmpbr ({:?} %{}, {:?}) then {} else {}",
+                            kind, lhs, rhs, then_, else_
+                        )
+                    }
+                    Hir::FCmpBr(kind, lhs, rhs, then_, else_) => {
                         format!(
                             "cmpbr ({:?} %{}, %{}) then {} else {}",
                             kind, lhs, rhs, then_, else_
@@ -194,7 +204,7 @@ impl HIRContext {
     fn new_as_float(&mut self, src: SsaReg) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(
-            Hir::IntAsFloat(HirUnop {
+            Hir::CastIntFloat(HirUnop {
                 ret,
                 src: HirOperand::Reg(src),
             }),
@@ -205,7 +215,7 @@ impl HIRContext {
     fn new_as_float_imm(&mut self, src: i32) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(
-            Hir::IntAsFloat(HirUnop {
+            Hir::CastIntFloat(HirUnop {
                 ret,
                 src: HirOperand::Const(Value::Integer(src)),
             }),
@@ -275,9 +285,14 @@ impl HIRContext {
         self.add_assign(Hir::FDiv(HirBinop2 { ret, lhs, rhs }), Type::Float)
     }
 
-    fn new_icmp(&mut self, kind: CmpKind, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+    fn new_icmp(&mut self, kind: CmpKind, lhs: HirOperand, rhs: HirOperand) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Hir::ICmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
+        self.add_assign(Hir::ICmp(kind, HirBinop2 { ret, lhs, rhs }), Type::Bool)
+    }
+
+    fn new_fcmp(&mut self, kind: CmpKind, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
     fn new_ret(&mut self, lhs: SsaReg) {
@@ -382,11 +397,12 @@ type Result<T> = std::result::Result<T, HirErr>;
 pub enum Hir {
     Br(usize),
     CondBr(SsaReg, usize, usize),
-    ICmpBr(CmpKind, SsaReg, SsaReg, usize, usize),
+    ICmpBr(CmpKind, SsaReg, HirOperand, usize, usize),
+    FCmpBr(CmpKind, SsaReg, SsaReg, usize, usize),
     Phi(SsaReg, Vec<(usize, SsaReg)>),
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
-    IntAsFloat(HirUnop),
+    CastIntFloat(HirUnop),
     INeg(HirUnop),
     FNeg(HirUnop),
     IAdd(HirBinop2),
@@ -397,7 +413,8 @@ pub enum Hir {
     FSub(HirBinop2),
     FMul(HirBinop2),
     FDiv(HirBinop2),
-    ICmp(CmpKind, HIRBinop),
+    ICmp(CmpKind, HirBinop2),
+    FCmp(CmpKind, HIRBinop),
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
@@ -605,16 +622,22 @@ impl HIRContext {
     pub fn from_ast(
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &[Expr],
+        ast: &[Stmt],
     ) -> Result<(SsaReg, Type)> {
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
         } else {
             for node in &ast[..len - 1] {
-                self.gen_nouse(local_map, node)?;
+                match node {
+                    Stmt::Expr(expr) => self.gen_nouse(local_map, expr)?,
+                    Stmt::Decl(_) => {}
+                }
             }
-            self.gen(local_map, &ast[len - 1])?
+            match &ast[len - 1] {
+                Stmt::Expr(expr) => self.gen(local_map, &expr)?,
+                Stmt::Decl(_) => self.new_integer(0),
+            }
         };
         let ty = self[ret].ty;
         self.new_ret(ret);
@@ -650,6 +673,66 @@ impl HIRContext {
             Expr::Sub(box lhs, box rhs) => {
                 binary_ops!(self, local_map, lhs, rhs, new_isub, new_fsub)
             }
+            Expr::Cmp(kind, box lhs, box rhs) => match (lhs, rhs) {
+                (Expr::Integer(lhs_), Expr::Integer(rhs_)) => Ok(self.new_icmp(
+                    *kind,
+                    HirOperand::integer(*lhs_),
+                    HirOperand::integer(*rhs_),
+                )),
+                (Expr::Integer(lhs_), _) => {
+                    let rhs = self.gen(local_map, rhs)?;
+                    let rhs_ty = self[rhs].ty;
+                    match rhs_ty {
+                        Type::Integer => Ok(self.new_icmp(
+                            *kind,
+                            HirOperand::integer(*lhs_),
+                            HirOperand::reg(rhs),
+                        )),
+                        Type::Float => {
+                            let lhs = self.new_as_float_imm(*lhs_);
+                            Ok(self.new_fcmp(*kind, lhs, rhs))
+                        }
+                        ty => Err(HirErr::TypeMismatch(ty, rhs_ty)),
+                    }
+                }
+                (_, Expr::Integer(rhs_)) => {
+                    let lhs = self.gen(local_map, lhs)?;
+                    let lhs_ty = self[lhs].ty;
+                    match lhs_ty {
+                        Type::Integer => Ok(self.new_icmp(
+                            *kind,
+                            HirOperand::reg(lhs),
+                            HirOperand::integer(*rhs_),
+                        )),
+                        Type::Float => {
+                            let rhs = self.new_as_float_imm(*rhs_);
+                            Ok(self.new_fcmp(*kind, lhs, rhs))
+                        }
+                        ty => Err(HirErr::TypeMismatch(ty, Type::Integer)),
+                    }
+                }
+                _ => {
+                    let lhs = self.gen(local_map, lhs)?;
+                    let rhs = self.gen(local_map, rhs)?;
+                    let lhs_ty = self[lhs].ty;
+                    let rhs_ty = self[rhs].ty;
+                    match (lhs_ty, rhs_ty) {
+                        (Type::Integer, Type::Integer) => {
+                            Ok(self.new_icmp(*kind, HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
+                        }
+                        (Type::Integer, Type::Float) => {
+                            let lhs = self.new_as_float(lhs);
+                            Ok(self.new_fcmp(*kind, lhs, rhs))
+                        }
+                        (Type::Float, Type::Integer) => {
+                            let rhs = self.new_as_float(rhs);
+                            Ok(self.new_fcmp(*kind, lhs, rhs))
+                        }
+                        (Type::Float, Type::Float) => Ok(self.new_fcmp(*kind, lhs, rhs)),
+                        (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
+                    }
+                }
+            },
             Expr::Mul(box lhs, box rhs) => {
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
@@ -692,37 +775,66 @@ impl HIRContext {
                     (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
-            Expr::Cmp(kind, box lhs, box rhs) => {
-                //assert_eq!(*kind, CmpKind::Eq);
-                let lhs = self.gen(local_map, lhs)?;
-                let rhs = self.gen(local_map, rhs)?;
-                let lhs_ty = self[lhs].ty;
-                let rhs_ty = self[rhs].ty;
-                match (lhs_ty, rhs_ty) {
-                    (Type::Integer, Type::Integer) => Ok(self.new_icmp(*kind, lhs, rhs)),
-                    (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
-                }
-            }
             Expr::LocalStore(ident, box rhs) => {
                 let rhs = self.gen(local_map, rhs)?;
                 self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
             Expr::If(box cond_, box then_, box else_) => {
-                let then_bb = self.new_bb();
                 let else_bb = self.new_bb();
+                let then_bb = self.new_bb();
                 let succ_bb = self.new_bb();
                 if let Expr::Cmp(kind, box lhs, box rhs) = cond_ {
                     let lhs = self.gen(local_map, lhs)?;
-                    let rhs = self.gen(local_map, rhs)?;
                     let lhs_ty = self[lhs].ty;
-                    let rhs_ty = self[rhs].ty;
-                    match (lhs_ty, rhs_ty) {
-                        (Type::Integer, Type::Integer) => {}
-                        (ty_l, ty_r) => return Err(HirErr::TypeMismatch(ty_l, ty_r)),
-                    };
-                    self.insts
-                        .push(Hir::ICmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                    if let Expr::Integer(rhs) = rhs {
+                        match lhs_ty {
+                            Type::Integer => {
+                                self.insts.push(Hir::ICmpBr(
+                                    *kind,
+                                    lhs,
+                                    HirOperand::Const(Value::Integer(*rhs)),
+                                    then_bb,
+                                    else_bb,
+                                ));
+                            }
+                            Type::Float => {
+                                let rhs = self.new_as_float_imm(*rhs);
+                                self.insts
+                                    .push(Hir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                            }
+                            _ => return Err(HirErr::TypeMismatch(lhs_ty, Type::Integer)),
+                        };
+                    } else {
+                        let rhs = self.gen(local_map, rhs)?;
+                        let rhs_ty = self[rhs].ty;
+                        match (lhs_ty, rhs_ty) {
+                            (Type::Integer, Type::Integer) => {
+                                self.insts.push(Hir::ICmpBr(
+                                    *kind,
+                                    lhs,
+                                    HirOperand::Reg(rhs),
+                                    then_bb,
+                                    else_bb,
+                                ));
+                            }
+                            (Type::Float, Type::Float) => {
+                                self.insts
+                                    .push(Hir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                            }
+                            (Type::Integer, Type::Float) => {
+                                let lhs = self.new_as_float(lhs);
+                                self.insts
+                                    .push(Hir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                            }
+                            (Type::Float, Type::Integer) => {
+                                let rhs = self.new_as_float(rhs);
+                                self.insts
+                                    .push(Hir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                            }
+                            (ty_l, ty_r) => return Err(HirErr::TypeMismatch(ty_l, ty_r)),
+                        };
+                    }
                 } else {
                     let cond_ = self.gen(local_map, cond_)?;
                     match self[cond_].ty {
@@ -731,14 +843,17 @@ impl HIRContext {
                     };
                     self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
                 }
-                self.cur_bb = then_bb;
-                let then_ = self.gen(local_map, then_)?;
-                let then_bb = self.cur_bb;
-                self.insts.push(Hir::Br(succ_bb));
+
                 self.cur_bb = else_bb;
                 let else_ = self.gen(local_map, else_)?;
                 let else_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
+
+                self.cur_bb = then_bb;
+                let then_ = self.gen(local_map, then_)?;
+                let then_bb = self.cur_bb;
+                self.insts.push(Hir::Br(succ_bb));
+
                 if self[then_].ty != self[else_].ty {
                     return Err(HirErr::TypeMismatch(self[then_].ty, self[else_].ty));
                 }

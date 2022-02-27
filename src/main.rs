@@ -115,7 +115,8 @@ fn run_with_locals(
     if code.len() == 0 {
         return;
     }
-    match parser().parse(code) {
+    let tokens = lexer().parse(code).unwrap();
+    match parser().parse(tokens) {
         Ok(expr) => {
             //dbg!(&expr);
             let mut hir = HIRContext::new();
@@ -162,7 +163,23 @@ pub fn run_test(code: &str) {
     let mut local_map = HashMap::default();
     let mut eval_locals = vec![];
     let all_codes = vec![code.to_string()];
-    match parser().parse(code) {
+    let tokens = match lexer().parse(code) {
+        Ok(t) => t,
+        Err(err) => {
+            let mut rep = Report::build(ReportKind::Error, (), 0);
+            for e in err {
+                let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
+                rep = rep.with_label(Label::new(e.span()).with_message(format!(
+                    "{:?} expected:{:?}",
+                    e.reason(),
+                    expected
+                )));
+            }
+            rep.finish().eprint(Source::from(code)).unwrap();
+            panic!()
+        }
+    };
+    match parser().parse(dbg!(tokens)) {
         Ok(expr) => {
             //dbg!(&expr);
             let mut hir = HIRContext::new();
@@ -173,7 +190,7 @@ pub fn run_test(code: &str) {
             //#[cfg(debug_assertions)]
             //dbg!(&hir);
             let eval_res = Evaluator::eval_hir(&hir, &mut local_map, &mut eval_locals);
-            let mcir_context = McIrContext::from_hir(&mut hir);
+            let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
             let mut codegen = Codegen::new();
             //#[cfg(debug_assertions)]
             //dbg!(&mcir_context);
@@ -207,7 +224,7 @@ fn run_ruby(code: &Vec<String>) -> Value {
         .collect::<Vec<String>>()
         .join(";");
     let output = Command::new("ruby")
-        .args(&["-e", &format!("puts(eval\"{}\")", code)])
+        .args(&["-e", &format!("p(eval\"{}\")", code)])
         .output();
     match &output {
         Ok(output) => {
@@ -255,6 +272,28 @@ mod test {
         run_test("10 > 2");
         run_test("10 == 2");
         run_test("10 != 2");
+
+        run_test("1.9 < 2.1");
+        run_test("1.9 <= 2.1");
+        run_test("1.9 >= 2.1");
+        run_test("1.9 > 2.1");
+        run_test("1.9 == 2.1");
+        run_test("1.9 != 2.1");
+        run_test("10.3 < 2.1");
+        run_test("10.3 <= 2.1");
+        run_test("10.3 >= 2.1");
+        run_test("10.3 > 2.1");
+        run_test("10.3 == 2.1");
+        run_test("10.3 != 2.1");
         run_test("a = 42; if a == 42 then 1.1 else 2.2 end");
+        run_test("a = 42.0; if a == 42.0 then 1.1 else 2.2 end");
+        run_test("a = 42.0; if a != 42.0 then 1.1 else 2.2 end");
+        run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
+        run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
+    }
+
+    #[test]
+    fn test2() {
+        run_test("1.9 < 2.1");
     }
 }

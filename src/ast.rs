@@ -1,4 +1,21 @@
 ///
+/// AST for statements.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stmt {
+    Expr(Expr),
+    Decl(Decl),
+}
+
+///
+/// AST for expression.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub enum Decl {
+    MethodDef(String, String, Vec<Expr>),
+}
+
+///
 /// AST for expression.
 ///
 #[derive(Clone, Debug, PartialEq)]
