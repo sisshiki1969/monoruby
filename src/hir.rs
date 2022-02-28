@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::parse::Span;
 use super::*;
 
 ///
@@ -524,7 +525,7 @@ impl SsaRegInfo {
 
 macro_rules! binary_ops {
     ($self:ident, $map:ident, $lhs:ident, $rhs:ident, $i_op:ident, $f_op:ident) => {
-        match ($lhs, $rhs) {
+        match (&$lhs.0, &$rhs.0) {
             (Expr::Integer(lhs_), Expr::Float(rhs_)) => {
                 let lhs = $self.new_as_float_imm(*lhs_);
                 Ok($self.$f_op(HirOperand::reg(lhs), HirOperand::float(*rhs_)))
@@ -533,7 +534,7 @@ macro_rules! binary_ops {
                 Ok($self.$i_op(HirOperand::integer(*lhs_), HirOperand::integer(*rhs_)))
             }
             (Expr::Integer(lhs_), _) => {
-                let rhs = $self.gen($map, $rhs)?;
+                let rhs = $self.gen($map, &$rhs.0)?;
                 let rhs_ty = $self[rhs].ty;
                 match rhs_ty {
                     Type::Integer => {
@@ -554,7 +555,7 @@ macro_rules! binary_ops {
                 Ok($self.$f_op(HirOperand::float(*lhs_), HirOperand::float(*rhs_)))
             }
             (Expr::Float(lhs_), _) => {
-                let rhs = $self.gen($map, $rhs)?;
+                let rhs = $self.gen($map, &$rhs.0)?;
                 let rhs_ty = $self[rhs].ty;
                 match rhs_ty {
                     Type::Integer => {
@@ -566,7 +567,7 @@ macro_rules! binary_ops {
                 }
             }
             (_, Expr::Integer(rhs_)) => {
-                let lhs = $self.gen($map, $lhs)?;
+                let lhs = $self.gen($map, &$lhs.0)?;
                 let lhs_ty = $self[lhs].ty;
                 match lhs_ty {
                     Type::Integer => {
@@ -579,7 +580,7 @@ macro_rules! binary_ops {
                 }
             }
             (_, Expr::Float(rhs_)) => {
-                let lhs = $self.gen($map, $lhs)?;
+                let lhs = $self.gen($map, &$lhs.0)?;
                 let lhs_ty = $self[lhs].ty;
                 match lhs_ty {
                     Type::Integer => {
@@ -591,8 +592,8 @@ macro_rules! binary_ops {
                 }
             }
             _ => {
-                let lhs = $self.gen($map, $lhs)?;
-                let rhs = $self.gen($map, $rhs)?;
+                let lhs = $self.gen($map, &$lhs.0)?;
+                let rhs = $self.gen($map, &$rhs.0)?;
                 let lhs_ty = $self[lhs].ty;
                 let rhs_ty = $self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
@@ -622,20 +623,20 @@ impl HIRContext {
     pub fn from_ast(
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &[Stmt],
+        ast: &[(Stmt, Span)],
     ) -> Result<(SsaReg, Type)> {
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
         } else {
-            for node in &ast[..len - 1] {
+            for (node, _) in &ast[..len - 1] {
                 match node {
-                    Stmt::Expr(expr) => self.gen_nouse(local_map, expr)?,
+                    Stmt::Expr(expr) => self.gen_nouse(local_map, &expr.0)?,
                     Stmt::Decl(_) => {}
                 }
             }
-            match &ast[len - 1] {
-                Stmt::Expr(expr) => self.gen(local_map, &expr)?,
+            match &ast[len - 1].0 {
+                Stmt::Expr(expr) => self.gen(local_map, &expr.0)?,
                 Stmt::Decl(_) => self.new_integer(0),
             }
         };
@@ -653,7 +654,7 @@ impl HIRContext {
         match ast {
             Expr::Integer(i) => Ok(self.new_integer(*i)),
             Expr::Float(f) => Ok(self.new_float(*f)),
-            Expr::Neg(box lhs) => {
+            Expr::Neg(box (lhs, _)) => {
                 match lhs {
                     Expr::Integer(i) => return Ok(self.new_integer(-i)),
                     Expr::Float(f) => return Ok(self.new_float(-f)),
@@ -673,7 +674,7 @@ impl HIRContext {
             Expr::Sub(box lhs, box rhs) => {
                 binary_ops!(self, local_map, lhs, rhs, new_isub, new_fsub)
             }
-            Expr::Cmp(kind, box lhs, box rhs) => match (lhs, rhs) {
+            Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => match (lhs, rhs) {
                 (Expr::Integer(lhs_), Expr::Integer(rhs_)) => Ok(self.new_icmp(
                     *kind,
                     HirOperand::integer(*lhs_),
@@ -733,7 +734,7 @@ impl HIRContext {
                     }
                 }
             },
-            Expr::Mul(box lhs, box rhs) => {
+            Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
                 let lhs_ty = self[lhs].ty;
@@ -754,7 +755,7 @@ impl HIRContext {
                     (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
-            Expr::Div(box lhs, box rhs) => {
+            Expr::Div(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
                 let lhs_ty = self[lhs].ty;
@@ -775,16 +776,16 @@ impl HIRContext {
                     (ty_l, ty_r) => Err(HirErr::TypeMismatch(ty_l, ty_r)),
                 }
             }
-            Expr::LocalStore(ident, box rhs) => {
+            Expr::LocalStore(ident, box (rhs, _)) => {
                 let rhs = self.gen(local_map, rhs)?;
                 self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
-            Expr::If(box cond_, box then_, box else_) => {
+            Expr::If(box (cond_, _), box (then_, _), box (else_, _)) => {
                 let else_bb = self.new_bb();
                 let then_bb = self.new_bb();
                 let succ_bb = self.new_bb();
-                if let Expr::Cmp(kind, box lhs, box rhs) = cond_ {
+                if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
                     let lhs = self.gen(local_map, lhs)?;
                     let lhs_ty = self[lhs].ty;
                     if let Expr::Integer(rhs) = rhs {
@@ -871,33 +872,33 @@ impl HIRContext {
         ast: &Expr,
     ) -> Result<()> {
         match ast {
-            Expr::Neg(box lhs) => {
+            Expr::Neg(box (lhs, _)) => {
                 match lhs {
                     Expr::Integer(_) | Expr::Float(_) => {}
                     _ => self.gen_nouse(local_map, lhs)?,
                 };
             }
-            Expr::Add(box lhs, box rhs) => {
+            Expr::Add(box (lhs, _), box (rhs, _)) => {
                 self.gen_nouse(local_map, lhs)?;
                 self.gen_nouse(local_map, rhs)?;
             }
-            Expr::Sub(box lhs, box rhs) => {
+            Expr::Sub(box (lhs, _), box (rhs, _)) => {
                 self.gen_nouse(local_map, lhs)?;
                 self.gen_nouse(local_map, rhs)?;
             }
-            Expr::Mul(box lhs, box rhs) => {
+            Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 self.gen_nouse(local_map, lhs)?;
                 self.gen_nouse(local_map, rhs)?;
             }
-            Expr::Div(box lhs, box rhs) => {
+            Expr::Div(box (lhs, _), box (rhs, _)) => {
                 self.gen_nouse(local_map, lhs)?;
                 self.gen_nouse(local_map, rhs)?;
             }
-            Expr::LocalStore(ident, box rhs) => {
+            Expr::LocalStore(ident, box (rhs, _)) => {
                 let rhs = self.gen(local_map, rhs)?;
                 self.new_local_store_nouse(local_map, ident, rhs)?;
             }
-            Expr::If(box cond_, box then_, box else_) => {
+            Expr::If(box (cond_, _), box (then_, _), box (else_, _)) => {
                 let cond_ = self.gen(local_map, cond_)?;
                 let then_bb = self.new_bb();
                 let else_bb = self.new_bb();

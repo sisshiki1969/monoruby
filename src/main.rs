@@ -1,10 +1,8 @@
 #![feature(box_patterns)]
 use std::collections::HashMap;
 
-//extern crate ariadne;
 use ariadne::*;
-//extern crate chumsky;
-use chumsky::prelude::*;
+use chumsky::{prelude::*, Stream};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -112,13 +110,15 @@ fn run_with_locals(
     eval_locals: &mut Vec<Value>,
     all_codes: &mut Vec<String>,
 ) {
-    if code.len() == 0 {
+    let len = code.len();
+    if len == 0 {
         return;
     }
     let tokens = lexer().parse(code).unwrap();
-    match parser().parse(tokens) {
+    dbg!(&tokens);
+    match parser().parse(Stream::from_iter(len..len + 1, tokens.into_iter())) {
         Ok(expr) => {
-            //dbg!(&expr);
+            dbg!(&expr);
             let mut hir = HIRContext::new();
             let ret_ty = match hir.from_ast(local_map, &expr) {
                 Ok((_, ty)) => ty,
@@ -156,7 +156,8 @@ fn run_with_locals(
 }
 
 pub fn run_test(code: &str) {
-    if code.len() == 0 {
+    let len = code.len();
+    if len == 0 {
         return;
     }
     let mut locals = vec![];
@@ -179,11 +180,12 @@ pub fn run_test(code: &str) {
             panic!()
         }
     };
-    match parser().parse(dbg!(tokens)) {
-        Ok(expr) => {
-            //dbg!(&expr);
+    dbg!(&tokens);
+    match parser().parse(Stream::from_iter(len..len + 1, tokens.into_iter())) {
+        Ok(stmt) => {
+            dbg!(&stmt);
             let mut hir = HIRContext::new();
-            let ret_ty = match hir.from_ast(&mut local_map, &expr) {
+            let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
                 Ok((_, ty)) => ty,
                 Err(err) => panic!("Error in compiling AST. {:?}", err),
             };

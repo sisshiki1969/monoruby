@@ -1,10 +1,12 @@
+use super::*;
+
 ///
 /// AST for statements.
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
-    Expr(Expr),
-    Decl(Decl),
+    Expr(Spanned<Expr>),
+    Decl(Spanned<Decl>),
 }
 
 ///
@@ -12,7 +14,7 @@ pub enum Stmt {
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Decl {
-    MethodDef(String, String, Vec<Expr>),
+    MethodDef(String, String, Vec<Spanned<Expr>>),
 }
 
 ///
@@ -20,17 +22,17 @@ pub enum Decl {
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Mul(Box<Expr>, Box<Expr>),
-    Div(Box<Expr>, Box<Expr>),
-    Add(Box<Expr>, Box<Expr>),
-    Sub(Box<Expr>, Box<Expr>),
-    Neg(Box<Expr>),
-    Cmp(CmpKind, Box<Expr>, Box<Expr>),
+    If(Box<Spanned<Expr>>, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Mul(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Div(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Add(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Sub(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Neg(Box<Spanned<Expr>>),
+    Cmp(CmpKind, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
 
     Integer(i32),
     Float(f64),
-    LocalStore(String, Box<Expr>),
+    LocalStore(String, Box<Spanned<Expr>>),
     LocalLoad(String),
 }
 
