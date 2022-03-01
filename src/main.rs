@@ -17,6 +17,7 @@ use codegen::*;
 use eval::*;
 use hir::*;
 use mcir::*;
+use parse::Span;
 pub use parse::*;
 
 #[derive(Clone, PartialEq)]
@@ -110,85 +111,76 @@ fn run_with_locals(
     eval_locals: &mut Vec<Value>,
     all_codes: &mut Vec<String>,
 ) {
-    let len = code.len();
     all_codes.push(code.to_string());
-    let (tokens, errs) = lexer().parse_recovery(code);
-    let parse_errs = if let Some(tokens) = tokens {
-        let (ast, parse_errs) =
-            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
-        if let Some(ast) = ast {
-            //dbg!(&stmt);
-            let mut hir = HIRContext::new();
-            let ret_ty = match hir.from_ast(local_map, &ast) {
-                Ok((_, ty)) => ty,
-                Err(err) => panic!("Error in compiling AST. {:?}", err),
-            };
-            #[cfg(debug_assertions)]
-            dbg!(&hir);
-            let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
-            let mcir_context = McIrContext::from_hir(&mut hir);
-            let mut codegen = Codegen::new();
-            #[cfg(debug_assertions)]
-            dbg!(&mcir_context);
-            let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map, ret_ty);
-            eprintln!("JIT: {:?}", jit_res);
-            eprintln!("Evaluator: {:?}", eval_res);
-            eprintln!("Ruby output: {:?}", run_ruby(all_codes));
-        }
-        parse_errs
-    } else {
-        vec![]
-    };
-    errs.into_iter()
-        .map(|e| e.map(|c| c.to_string()))
-        .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
-        .for_each(|e| {
-            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
-            let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
-            rep = rep.with_label(Label::new(e.span()).with_message(format!(
-                "{:?} expected:{:?}",
-                e.reason(),
-                expected
-            )));
-            rep.finish().eprint(Source::from(code)).unwrap();
-        });
+    let (ast, errs, parse_errs) = parse(code);
+    if let Some(ast) = ast {
+        //dbg!(&stmt);
+        let mut hir = HIRContext::new();
+        let ret_ty = match hir.from_ast(local_map, &ast) {
+            Ok((_, ty)) => ty,
+            Err(err) => panic!("Error in compiling AST. {:?}", err),
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&hir);
+        let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
+        let mcir_context = McIrContext::from_hir(&mut hir);
+        let mut codegen = Codegen::new();
+        #[cfg(debug_assertions)]
+        dbg!(&mcir_context);
+        let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map, ret_ty);
+        eprintln!("JIT: {:?}", jit_res);
+        eprintln!("Evaluator: {:?}", eval_res);
+        eprintln!("Ruby output: {:?}", run_ruby(all_codes));
+    }
+    show_err(errs, parse_errs, code);
 }
 
 pub fn run_test(code: &str) {
-    let len = code.len();
     let mut locals = vec![];
     let mut local_map = HashMap::default();
     let mut eval_locals = vec![];
     let all_codes = vec![code.to_string()];
+    let (ast, errs, parse_errs) = parse(code);
+    if let Some(stmt) = ast {
+        dbg!(&stmt);
+        let mut hir = HIRContext::new();
+        let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
+            Ok((_, ty)) => ty,
+            Err(err) => panic!("Error in compiling AST. {:?}", err),
+        };
+        //#[cfg(debug_assertions)]
+        //dbg!(&hir);
+        let eval_res = Evaluator::eval_hir(&hir, &mut local_map, &mut eval_locals);
+        let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
+        let mut codegen = Codegen::new();
+        //#[cfg(debug_assertions)]
+        //dbg!(&mcir_context);
+        let jit_res = codegen.compile_and_run(&mcir_context, &mut locals, &mut local_map, ret_ty);
+        assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
+        let ruby_res = run_ruby(&all_codes);
+        assert_eq!(&jit_res, dbg!(&ruby_res));
+    }
+    show_err(errs, parse_errs, code);
+}
+
+fn parse(
+    code: &str,
+) -> (
+    Option<Vec<(Stmt, Span)>>,
+    Vec<Simple<char>>,
+    Vec<Simple<Token>>,
+) {
+    let len = code.len();
     let (tokens, errs) = lexer().parse_recovery(code);
-    let parse_errs = if let Some(tokens) = tokens {
-        let (ast, parse_errs) =
-            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
-        dbg!(&ast);
-        if let Some(stmt) = ast {
-            dbg!(&stmt);
-            let mut hir = HIRContext::new();
-            let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
-                Ok((_, ty)) => ty,
-                Err(err) => panic!("Error in compiling AST. {:?}", err),
-            };
-            //#[cfg(debug_assertions)]
-            //dbg!(&hir);
-            let eval_res = Evaluator::eval_hir(&hir, &mut local_map, &mut eval_locals);
-            let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
-            let mut codegen = Codegen::new();
-            //#[cfg(debug_assertions)]
-            //dbg!(&mcir_context);
-            let jit_res =
-                codegen.compile_and_run(&mcir_context, &mut locals, &mut local_map, ret_ty);
-            assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
-            let ruby_res = run_ruby(&all_codes);
-            assert_eq!(&jit_res, dbg!(&ruby_res));
-        }
-        parse_errs
+    let (ast, parse_errs) = if let Some(tokens) = tokens {
+        parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()))
     } else {
-        vec![]
+        (None, vec![])
     };
+    (ast, errs, parse_errs)
+}
+
+fn show_err(errs: Vec<Simple<char>>, parse_errs: Vec<Simple<Token>>, code: &str) {
     errs.into_iter()
         .map(|e| e.map(|c| c.to_string()))
         .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))

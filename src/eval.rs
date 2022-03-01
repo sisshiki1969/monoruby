@@ -2,6 +2,7 @@ use super::*;
 
 pub struct Evaluator {
     ssareg: Vec<Value>,
+    cur_fn: usize,
     cur_bb: usize,
     prev_bb: usize,
     pc: usize,
@@ -27,12 +28,14 @@ impl Evaluator {
         local_map: &mut HashMap<String, (usize, Type)>,
         locals: &mut Vec<Value>,
     ) -> Value {
+        let cur_fn = 0;
         let locals_num = local_map.len();
         locals.resize(locals_num, Value::Integer(0));
         let register_num = hir_context.register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
-            cur_bb: 0,
+            cur_fn,
+            cur_bb: hir_context.functions[cur_fn].entry_bb,
             prev_bb: 0,
             pc: 0,
         };
