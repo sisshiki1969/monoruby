@@ -13,6 +13,9 @@ pub struct HIRContext {
     /// Basic blocks.
     pub basic_block: Vec<HirBasicBlock>,
     cur_bb: usize,
+    /// Functions.
+    pub functions: Vec<HirFunction>,
+    cur_fn: usize,
 }
 
 impl std::fmt::Debug for HIRContext {
@@ -164,11 +167,16 @@ impl std::ops::IndexMut<usize> for HIRContext {
 
 impl HIRContext {
     pub fn new() -> Self {
+        let cur_bb = 0;
         let basic_block = HirBasicBlock::new();
+        let cur_fn = 0;
+        let function = HirFunction::new("/main".to_string(), cur_bb);
         HIRContext {
             reginfo: vec![],
             basic_block: vec![basic_block],
-            cur_bb: 0,
+            cur_bb,
+            functions: vec![function],
+            cur_fn,
         }
     }
 
@@ -176,6 +184,16 @@ impl HIRContext {
         let bb = HirBasicBlock::new();
         let next = self.basic_block.len();
         self.basic_block.push(bb);
+        next
+    }
+
+    fn enter_new_func(&mut self, name: String) -> usize {
+        let entry_bb = self.new_bb();
+        let func = HirFunction::new(name, entry_bb);
+        let next = self.functions.len();
+        self.functions.push(func);
+        self.cur_fn = next;
+        self.cur_bb = entry_bb;
         next
     }
 
@@ -368,6 +386,25 @@ impl HIRContext {
         assert!(phi.iter().all(|(_, r)| self[*r].ty == ty));
         let ret = self.next_reg();
         self.add_assign(Hir::Phi(ret, phi), ty)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct HirFunction {
+    pub name: String,
+    pub entry_bb: usize,
+    pub ret: Option<SsaReg>,
+    pub ret_ty: Option<Type>,
+}
+
+impl HirFunction {
+    fn new(name: String, entry_bb: usize) -> Self {
+        Self {
+            name,
+            entry_bb,
+            ret: None,
+            ret_ty: None,
+        }
     }
 }
 
@@ -619,7 +656,7 @@ macro_rules! binary_ops {
 }
 
 impl HIRContext {
-    /// Generate HIR from AST.
+    /// Generate HIR in top level from [(Stmt, Span)].
     pub fn from_ast(
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
@@ -629,20 +666,58 @@ impl HIRContext {
         let ret = if len == 0 {
             self.new_integer(0)
         } else {
-            for (node, _) in &ast[..len - 1] {
-                match node {
-                    Stmt::Expr(expr) => self.gen_nouse(local_map, &expr.0)?,
-                    Stmt::Decl(_) => {}
-                }
-            }
-            match &ast[len - 1].0 {
-                Stmt::Expr(expr) => self.gen(local_map, &expr.0)?,
-                Stmt::Decl(_) => self.new_integer(0),
-            }
+            self.gen_stmts(local_map, ast)?
         };
         let ty = self[ret].ty;
         self.new_ret(ret);
         Ok((ret, ty))
+    }
+
+    /// Generate HIR in new function from [(Stmt, Span)].
+    pub fn new_func_from_ast(
+        &mut self,
+        func_name: String,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ast: &[(Expr, Span)],
+    ) -> Result<usize> {
+        let save = (self.cur_fn, self.cur_bb);
+        let func = self.enter_new_func(func_name);
+        let len = ast.len();
+        let ret = if len == 0 {
+            self.new_integer(0)
+        } else {
+            self.gen_stmts(
+                local_map,
+                &ast.iter()
+                    .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
+                    .collect::<Vec<(Stmt, Span)>>(),
+            )?
+        };
+        let ty = self[ret].ty;
+        self.new_ret(ret);
+        self.functions[func].ret = Some(ret);
+        self.functions[func].ret_ty = Some(ty);
+        (self.cur_fn, self.cur_bb) = save;
+        Ok(func)
+    }
+
+    /// Generate HIR from [(Stmt, Span)].
+    fn gen_stmts(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ast: &[(Stmt, Span)],
+    ) -> Result<SsaReg> {
+        let len = ast.len();
+        for (node, _) in &ast[..len - 1] {
+            match node {
+                Stmt::Expr(expr) => self.gen_nouse(local_map, &expr.0)?,
+                Stmt::Decl(decl) => self.gen_decl_nouse(&decl.0)?,
+            }
+        }
+        match &ast[len - 1].0 {
+            Stmt::Expr(expr) => self.gen(local_map, &expr.0),
+            Stmt::Decl(decl) => self.gen_decl(&decl.0),
+        }
     }
 
     /// Generate HIR from an *Expr*.
@@ -915,5 +990,20 @@ impl HIRContext {
             _ => {}
         };
         Ok(())
+    }
+
+    fn gen_decl(&mut self, decl: &Decl) -> Result<SsaReg> {
+        self.gen_decl_nouse(decl)?;
+        Ok(self.new_integer(0))
+    }
+
+    fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
+        match decl {
+            Decl::MethodDef(name, arg_name, body) => {
+                let mut local_map = HashMap::default();
+                let func = self.new_func_from_ast(name.to_string(), &mut local_map, body)?;
+                Ok(())
+            }
+        }
     }
 }
