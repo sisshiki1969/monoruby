@@ -111,26 +111,21 @@ fn run_with_locals(
     all_codes: &mut Vec<String>,
 ) {
     let len = code.len();
-    if len == 0 {
-        return;
-    }
-    let tokens = lexer().parse(code).unwrap();
-    dbg!(&tokens);
-    match parser().parse(Stream::from_iter(len..len + 1, tokens.into_iter())) {
-        Ok(expr) => {
-            dbg!(&expr);
+    all_codes.push(code.to_string());
+    let (tokens, errs) = lexer().parse_recovery(code);
+    let parse_errs = if let Some(tokens) = tokens {
+        let (ast, parse_errs) =
+            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+        if let Some(ast) = ast {
+            //dbg!(&stmt);
             let mut hir = HIRContext::new();
-            let ret_ty = match hir.from_ast(local_map, &expr) {
+            let ret_ty = match hir.from_ast(local_map, &ast) {
                 Ok((_, ty)) => ty,
-                Err(err) => {
-                    eprintln!("{:?}", err);
-                    return;
-                }
+                Err(err) => panic!("Error in compiling AST. {:?}", err),
             };
             #[cfg(debug_assertions)]
             dbg!(&hir);
             let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
-            all_codes.push(code.to_string());
             let mcir_context = McIrContext::from_hir(&mut hir);
             let mut codegen = Codegen::new();
             #[cfg(debug_assertions)]
@@ -140,49 +135,37 @@ fn run_with_locals(
             eprintln!("Evaluator: {:?}", eval_res);
             eprintln!("Ruby output: {:?}", run_ruby(all_codes));
         }
-        Err(err) => {
-            let mut rep = Report::build(ReportKind::Error, (), 0);
-            for e in err {
-                let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
-                rep = rep.with_label(Label::new(e.span()).with_message(format!(
-                    "{:?} expected:{:?}",
-                    e.reason(),
-                    expected
-                )));
-            }
-            rep.finish().print(Source::from(code)).unwrap();
-        }
+        parse_errs
+    } else {
+        vec![]
     };
+    errs.into_iter()
+        .map(|e| e.map(|c| c.to_string()))
+        .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
+        .for_each(|e| {
+            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+            let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
+            rep = rep.with_label(Label::new(e.span()).with_message(format!(
+                "{:?} expected:{:?}",
+                e.reason(),
+                expected
+            )));
+            rep.finish().eprint(Source::from(code)).unwrap();
+        });
 }
 
 pub fn run_test(code: &str) {
     let len = code.len();
-    if len == 0 {
-        return;
-    }
     let mut locals = vec![];
     let mut local_map = HashMap::default();
     let mut eval_locals = vec![];
     let all_codes = vec![code.to_string()];
-    let tokens = match lexer().parse(code) {
-        Ok(t) => t,
-        Err(err) => {
-            let mut rep = Report::build(ReportKind::Error, (), 0);
-            for e in err {
-                let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
-                rep = rep.with_label(Label::new(e.span()).with_message(format!(
-                    "{:?} expected:{:?}",
-                    e.reason(),
-                    expected
-                )));
-            }
-            rep.finish().eprint(Source::from(code)).unwrap();
-            panic!()
-        }
-    };
-    dbg!(&tokens);
-    match parser().parse(Stream::from_iter(len..len + 1, tokens.into_iter())) {
-        Ok(stmt) => {
+    let (tokens, errs) = lexer().parse_recovery(code);
+    let parse_errs = if let Some(tokens) = tokens {
+        let (ast, parse_errs) =
+            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+        dbg!(&ast);
+        if let Some(stmt) = ast {
             dbg!(&stmt);
             let mut hir = HIRContext::new();
             let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
@@ -202,20 +185,23 @@ pub fn run_test(code: &str) {
             let ruby_res = run_ruby(&all_codes);
             assert_eq!(&jit_res, dbg!(&ruby_res));
         }
-        Err(err) => {
-            let mut rep = Report::build(ReportKind::Error, (), 0);
-            for e in err {
-                let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
-                rep = rep.with_label(Label::new(e.span()).with_message(format!(
-                    "{:?} expected:{:?}",
-                    e.reason(),
-                    expected
-                )));
-            }
-            rep.finish().eprint(Source::from(code)).unwrap();
-            panic!()
-        }
+        parse_errs
+    } else {
+        vec![]
     };
+    errs.into_iter()
+        .map(|e| e.map(|c| c.to_string()))
+        .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
+        .for_each(|e| {
+            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+            let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
+            rep = rep.with_label(Label::new(e.span()).with_message(format!(
+                "{:?} expected:{:?}",
+                e.reason(),
+                expected
+            )));
+            rep.finish().eprint(Source::from(code)).unwrap();
+        });
 }
 
 fn run_ruby(code: &Vec<String>) -> Value {
@@ -242,7 +228,8 @@ fn run_ruby(code: &Vec<String>) -> Value {
             } else if res == "false" {
                 Value::Bool(false)
             } else {
-                unreachable!("{:?}", res)
+                eprintln!("Ruby: {:?}", res);
+                Value::Bool(false)
             }
         }
         Err(err) => {

@@ -29,6 +29,35 @@ pub enum Token {
     Separator,
 }
 
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::If => write!(f, "if"),
+            Self::Then => write!(f, "then"),
+            Self::Else => write!(f, "else"),
+            Self::End => write!(f, "end"),
+            Self::Def => write!(f, "def"),
+            Self::OParen => write!(f, "("),
+            Self::CParen => write!(f, ")"),
+            Self::Minus => write!(f, "-"),
+            Self::Plus => write!(f, "+"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "/"),
+            Self::Assign => write!(f, "="),
+            Self::Eq => write!(f, "=="),
+            Self::Ne => write!(f, "!="),
+            Self::Gt => write!(f, ">"),
+            Self::Ge => write!(f, ">="),
+            Self::Lt => write!(f, "<"),
+            Self::Le => write!(f, "<="),
+            Self::Int(i) => write!(f, "{}", i),
+            Self::Float(n) => write!(f, "{}", f64::from_ne_bytes(u64::to_ne_bytes(*n))),
+            Self::Ident(s) => write!(f, "{}", s),
+            Self::Separator => write!(f, ";"),
+        }
+    }
+}
+
 pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let token = choice::<_, Simple<char>>((
         just('(').to(Token::OParen),
@@ -83,7 +112,12 @@ pub fn parser() -> impl Parser<Token, Vec<Spanned<Stmt>>, Error = Simple<Token>>
         .separated_by(just(Token::Separator))
         .allow_trailing()
         .allow_leading()
+        .or_not()
         .then_ignore(end())
+        .map(|opt| match opt {
+            Some(v) => v,
+            None => vec![],
+        })
 }
 
 ///
