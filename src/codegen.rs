@@ -328,6 +328,8 @@ impl Codegen {
         let locals_num = local_map.len();
         self.g_offset = locals_num;
         self.f_offset = locals_num + g_regs;
+        let func_label = self.jit.label();
+        self.jit.bind_label_to_pos(func_label, 0);
         self.prologue(locals_num + g_regs + f_regs);
         let epilogue = self.jit.label();
         for _ in &mcir_context.blocks {
@@ -800,18 +802,19 @@ impl Codegen {
                         }
                     }
                     McIR::CondJmp(cond_, dest) => {
+                        // cond_ must be Type::Bool.
                         let label = self.block_labels[*dest];
                         match cond_ {
                             McReg::GReg(reg) => {
                                 match self.g_phys_reg(*reg) {
                                     GeneralPhysReg::Reg(reg) => {
                                         monoasm!(self.jit,
-                                          cmpq R(reg), 0;
+                                          cmpb R(reg), 0;
                                         );
                                     }
                                     GeneralPhysReg::Stack(lhs) => {
                                         monoasm!(self.jit,
-                                          cmpq [rbp-(lhs)], 0;
+                                          cmpb [rbp-(lhs)], 0;
                                         );
                                     }
                                 };
@@ -894,19 +897,20 @@ impl Codegen {
 
         locals.resize(locals_num, 0);
         let lp = locals.as_mut_ptr();
+        self.jit.finalize::<*mut u64, i64>();
         let res = match ret_ty {
             Type::Integer => {
-                let func = self.jit.finalize::<*mut u64, i64>();
+                let func = self.jit.get_label_addr::<*mut u64, i64>(func_label);
                 let i = func(lp);
                 Value::Integer(i as i32)
             }
             Type::Float => {
-                let func = self.jit.finalize::<*mut u64, f64>();
+                let func = self.jit.get_label_addr::<*mut u64, f64>(func_label);
                 let f = func(lp);
                 Value::Float(f)
             }
             Type::Bool => {
-                let func = self.jit.finalize::<*mut u64, u64>();
+                let func = self.jit.get_label_addr::<*mut u64, u8>(func_label);
                 let f = func(lp);
                 Value::Bool(f != 0)
             }
