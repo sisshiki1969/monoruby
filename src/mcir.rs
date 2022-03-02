@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 #[derive(Clone, PartialEq)]
@@ -8,6 +10,91 @@ pub struct McIrContext {
     ssa_map: SsaMap,
     cur_block: usize,
     pub blocks: Vec<McIrBlock>,
+    pub functions: Vec<McIrFunc>,
+}
+
+impl std::ops::Index<GReg> for McIrContext {
+    type Output = GRegInfo;
+
+    fn index(&self, i: GReg) -> &GRegInfo {
+        &self.g_reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<GReg> for McIrContext {
+    fn index_mut(&mut self, i: GReg) -> &mut GRegInfo {
+        &mut self.g_reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::Index<FReg> for McIrContext {
+    type Output = FRegInfo;
+
+    fn index(&self, i: FReg) -> &FRegInfo {
+        &self.f_reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<FReg> for McIrContext {
+    fn index_mut(&mut self, i: FReg) -> &mut FRegInfo {
+        &mut self.f_reginfo[i.to_usize()]
+    }
+}
+
+impl std::fmt::Debug for McIrContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "McIRContext {{")?;
+        for (i, func) in self.functions.iter().enumerate() {
+            writeln!(f, "\tFunc {} {{", i)?;
+            for bbi in &func.bbs {
+                let block = &self.blocks[*bbi];
+                writeln!(f, "\t\tBlock {} {{", i)?;
+                for hir in &block.insts {
+                    let s = match hir {
+                        McIR::Jmp(dest) => format!("jmp {}", dest),
+                        McIR::CondJmp(cond, dest) => format!("cond_jmp {:?} {}", cond, dest),
+                        McIR::ICmpJmp(kind, lhs, rhs, dest) => {
+                            format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
+                        }
+                        McIR::FCmpJmp(kind, lhs, rhs, dest) => {
+                            format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
+                        }
+                        McIR::In(reg) => format!("{:?} = %%", reg),
+                        McIR::Out(reg) => format!("%% = {:?}", reg),
+                        McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
+                        McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
+                        McIR::CastIntFloat(ret, src) => {
+                            format!("%{:?} = cast {:?} i32 to f64", ret, src)
+                        }
+                        McIR::INeg(reg) => format!("%{:?} = ineg %{:?}", reg, reg),
+                        McIR::FNeg(reg) => format!("%{:?} = fneg %{:?}", reg, reg),
+                        McIR::IAdd(dst, src) => format!("%{:?} = iadd %{:?}, {:?}", dst, dst, src),
+                        McIR::ISub(dst, src) => format!("%{:?} = isub %{:?}, {:?}", dst, dst, src),
+                        McIR::IMul(dst, src) => format!("%{:?} = imul %{:?}, %{:?}", dst, dst, src),
+                        McIR::IDiv(dst, src) => format!("%{:?} = idiv %{:?}, %{:?}", dst, dst, src),
+                        McIR::FAdd(dst, src) => format!("%{:?} = fadd %{:?}, {:?}", dst, dst, src),
+                        McIR::FSub(dst, src) => format!("%{:?} = fsub %{:?}, {:?}", dst, dst, src),
+                        McIR::FMul(dst, src) => format!("%{:?} = fmul %{:?}, {:?}", dst, dst, src),
+                        McIR::FDiv(dst, src) => format!("%{:?} = fdiv %{:?}, {:?}", dst, dst, src),
+                        McIR::ICmp(kind, dst, src) => {
+                            format!("%{:?} = icmp {:?} %{:?}, {:?}", dst, kind, dst, src)
+                        }
+                        McIR::FCmp(kind, ret, lhs, rhs) => {
+                            format!("%{:?} = fcmp {:?} %{:?}, {:?}", ret, kind, lhs, rhs)
+                        }
+                        McIR::IRet(ret, ty) => format!("ret {:?}:{:?}", ret, ty),
+                        McIR::FRet(ret) => format!("ret {:?}: f64", ret),
+                        McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
+                        McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
+                    };
+                    writeln!(f, "\t\t\t{}", s)?;
+                }
+                writeln!(f, "\t\t}}")?;
+            }
+            writeln!(f, "\t}}")?;
+        }
+        write!(f, "}}")
+    }
 }
 
 impl std::ops::Deref for McIrContext {
@@ -108,16 +195,75 @@ impl McIrContext {
             }
         }
     }
+
+    /// Get a vacant general register and update a SSA map.
+    fn alloc_greg(&mut self, ssareg: SsaReg) -> GReg {
+        fn new_greg(ctx: &mut McIrContext, ssareg: SsaReg) -> GReg {
+            for (i, r) in ctx.g_reginfo.iter_mut().enumerate() {
+                if r.ssareg.is_none() {
+                    r.assign(ssareg);
+                    return GReg(i);
+                }
+            }
+            let new = GReg(ctx.g_reginfo.len());
+            ctx.g_reginfo.push(GRegInfo::new(ssareg));
+            new
+        }
+
+        if let Some(reg) = self.ssa_map[ssareg] {
+            return reg.as_g();
+        }
+        let reg = new_greg(self, ssareg);
+        self.ssa_map[ssareg] = Some(McReg::GReg(reg));
+        reg
+    }
+
+    /// Get a vacant floating point register.
+    fn alloc_freg(&mut self, ssareg: SsaReg) -> FReg {
+        fn new_freg(ctx: &mut McIrContext, ssareg: SsaReg) -> FReg {
+            for (i, r) in ctx.f_reginfo.iter_mut().enumerate() {
+                if r.ssareg.is_none() {
+                    r.assign(ssareg);
+                    return FReg(i);
+                }
+            }
+            let new = ctx.f_reginfo.len();
+            ctx.f_reginfo.push(FRegInfo::new(ssareg));
+            FReg(new)
+        }
+
+        if let Some(reg) = self.ssa_map[ssareg] {
+            return reg.as_f();
+        }
+        let reg = new_freg(self, ssareg);
+        self.ssa_map[ssareg] = Some(McReg::FReg(reg));
+        reg
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct McIrFunc {
+    pub bbs: BTreeSet<usize>,
+}
+
+impl McIrFunc {
+    fn new(bbs: BTreeSet<usize>) -> Self {
+        Self { bbs }
+    }
 }
 
 #[derive(Clone, PartialEq)]
 pub struct McIrBlock {
     pub insts: Vec<McIR>,
+    pub owner_function: usize,
 }
 
 impl McIrBlock {
-    fn new() -> Self {
-        Self { insts: vec![] }
+    fn new(owner_function: usize) -> Self {
+        Self {
+            insts: vec![],
+            owner_function,
+        }
     }
 }
 
@@ -148,106 +294,6 @@ impl std::fmt::Debug for SsaMap {
             }
         }
         write!(f, "SSA_MAP: [{}]", v.join(", "))
-    }
-}
-
-impl std::ops::Index<GReg> for McIrContext {
-    type Output = GRegInfo;
-
-    fn index(&self, i: GReg) -> &GRegInfo {
-        &self.g_reginfo[i.to_usize()]
-    }
-}
-
-impl std::ops::IndexMut<GReg> for McIrContext {
-    fn index_mut(&mut self, i: GReg) -> &mut GRegInfo {
-        &mut self.g_reginfo[i.to_usize()]
-    }
-}
-
-impl std::ops::Index<FReg> for McIrContext {
-    type Output = FRegInfo;
-
-    fn index(&self, i: FReg) -> &FRegInfo {
-        &self.f_reginfo[i.to_usize()]
-    }
-}
-
-impl std::ops::IndexMut<FReg> for McIrContext {
-    fn index_mut(&mut self, i: FReg) -> &mut FRegInfo {
-        &mut self.f_reginfo[i.to_usize()]
-    }
-}
-
-impl std::fmt::Debug for McIrContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "McIRContext {{")?;
-        for (i, block) in self.blocks.iter().enumerate() {
-            writeln!(f, "\tBlock {} {{", i)?;
-            for hir in &block.insts {
-                let s = match hir {
-                    McIR::Jmp(dest) => format!("jmp {}", dest),
-                    McIR::CondJmp(cond, dest) => format!("cond_jmp {:?} {}", cond, dest),
-                    McIR::ICmpJmp(kind, lhs, rhs, dest) => {
-                        format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
-                    }
-                    McIR::FCmpJmp(kind, lhs, rhs, dest) => {
-                        format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
-                    }
-                    McIR::In(reg) => format!("{:?} = %%", reg),
-                    McIR::Out(reg) => format!("%% = {:?}", reg),
-                    McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
-                    McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
-                    McIR::CastIntFloat(ret, src) => {
-                        format!("%{:?} = cast {:?} i32 to f64", ret, src)
-                    }
-                    McIR::INeg(reg) => format!("%{:?} = ineg %{:?}", reg, reg),
-                    McIR::FNeg(reg) => format!("%{:?} = fneg %{:?}", reg, reg),
-                    McIR::IAdd(dst, src) => format!("%{:?} = iadd %{:?}, {:?}", dst, dst, src),
-                    McIR::ISub(dst, src) => format!("%{:?} = isub %{:?}, {:?}", dst, dst, src),
-                    McIR::IMul(dst, src) => format!("%{:?} = imul %{:?}, %{:?}", dst, dst, src),
-                    McIR::IDiv(dst, src) => format!("%{:?} = idiv %{:?}, %{:?}", dst, dst, src),
-                    McIR::FAdd(dst, src) => format!("%{:?} = fadd %{:?}, {:?}", dst, dst, src),
-                    McIR::FSub(dst, src) => format!("%{:?} = fsub %{:?}, {:?}", dst, dst, src),
-                    McIR::FMul(dst, src) => format!("%{:?} = fmul %{:?}, {:?}", dst, dst, src),
-                    McIR::FDiv(dst, src) => format!("%{:?} = fdiv %{:?}, {:?}", dst, dst, src),
-                    McIR::ICmp(kind, dst, src) => {
-                        format!("%{:?} = icmp {:?} %{:?}, {:?}", dst, kind, dst, src)
-                    }
-                    McIR::FCmp(kind, ret, lhs, rhs) => {
-                        format!("%{:?} = fcmp {:?} %{:?}, {:?}", ret, kind, lhs, rhs)
-                    }
-                    McIR::IRet(ret, ty) => format!("ret {:?}:{:?}", ret, ty),
-                    McIR::FRet(ret) => format!("ret {:?}: f64", ret),
-                    McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
-                    McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
-                };
-                writeln!(f, "\t\t{}", s)?;
-            }
-            writeln!(f, "\t}}")?;
-        }
-        /*write!(f, "\tG_REG_INFO ")?;
-        for (i, info) in self.g_reginfo.iter().enumerate() {
-            match info {
-                GRegInfo { ssareg } => match ssareg {
-                    Some(reg) => write!(f, "{}:[{:?}] ", i, reg)?,
-                    None => write!(f, "{}:[vacant] ", i)?,
-                },
-            }
-        }
-        writeln!(f)?;
-        write!(f, "\tF_REG_INFO ")?;
-        for (i, info) in self.f_reginfo.iter().enumerate() {
-            match info {
-                FRegInfo { ssareg } => match ssareg {
-                    Some(reg) => write!(f, "{}:[{:?}] ", i, reg)?,
-                    None => write!(f, "{}:[vacant] ", i)?,
-                },
-            }
-        }
-        writeln!(f)?;*/
-        //writeln!(f, "\t{:?}", self.ssa_map)?;
-        write!(f, "}}")
     }
 }
 
@@ -291,13 +337,14 @@ macro_rules! float_ops {
 }
 
 impl McIrContext {
-    fn new(ssa_map: SsaMap) -> Self {
+    fn new() -> Self {
         Self {
             g_reginfo: vec![],
             f_reginfo: vec![],
-            ssa_map,
+            ssa_map: SsaMap(vec![]),
             cur_block: 0,
             blocks: vec![],
+            functions: vec![],
         }
     }
 
@@ -310,245 +357,216 @@ impl McIrContext {
     }
 
     pub fn from_hir(hir_context: &mut HIRContext) -> Self {
-        let mut ctx = Self::new(SsaMap(vec![None; hir_context.register_num()]));
-        for bb in &hir_context.basic_block {
-            ctx.blocks.push(McIrBlock::new());
-            ctx.g_reginfo = vec![];
-            ctx.f_reginfo = vec![];
-            for hir in &bb.insts {
-                match hir {
-                    Hir::Integer(ssa, i) => {
-                        let reg = ctx.alloc_greg(*ssa);
-                        ctx.insts.push(McIR::Integer(reg, *i));
-                    }
-                    Hir::Float(ssa, f) => {
-                        let reg = ctx.alloc_freg(*ssa);
-                        ctx.insts.push(McIR::Float(reg, *f));
-                    }
-                    Hir::CastIntFloat(op) => {
-                        let dst = ctx.alloc_freg(op.ret);
-                        let src = match &op.src {
-                            HirOperand::Const(c) => McGeneralOperand::Integer(c.as_i()),
-                            HirOperand::Reg(r) => {
-                                let src = ctx.ssa_map[*r].unwrap().as_g();
-                                ctx[src].release();
-                                McGeneralOperand::Reg(src)
-                            }
-                        };
-                        ctx.insts.push(McIR::CastIntFloat(dst, src));
-                    }
-                    Hir::IAdd(op) => {
-                        let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
-                        let rhs = ctx.hir_to_general_operand(&op.rhs);
-                        ctx.insts.push(McIR::IAdd(lhs, rhs));
-                    }
-                    Hir::ISub(op) => {
-                        let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
-                        let rhs = ctx.hir_to_general_operand(&op.rhs);
-                        ctx.insts.push(McIR::ISub(lhs, rhs));
-                    }
-                    Hir::IMul(op) => {
-                        let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
-                        let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
-                        ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
-                        ctx[rhs].release();
-                        ctx.insts.push(McIR::IMul(lhs, rhs));
-                    }
-                    Hir::IDiv(op) => {
-                        let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
-                        let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
-                        ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
-                        ctx[rhs].release();
-                        ctx.insts.push(McIR::IDiv(lhs, rhs));
-                    }
-                    Hir::FAdd(op) => float_ops!(ctx, op, FAdd),
-                    Hir::FSub(op) => float_ops!(ctx, op, FSub),
-                    Hir::FMul(op) => float_ops!(ctx, op, FMul),
-                    Hir::FDiv(op) => float_ops!(ctx, op, FDiv),
-
-                    Hir::ICmp(kind, op) => {
-                        let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
-                        let rhs = ctx.hir_to_general_operand(&op.rhs);
-                        ctx.insts.push(McIR::ICmp(*kind, lhs, rhs));
-                    }
-                    Hir::FCmp(kind, op) => {
-                        let lhs = ctx.ssa_map[op.lhs].unwrap().as_f();
-                        let rhs = ctx.ssa_map[op.rhs].unwrap().as_f();
-                        let ret = ctx.alloc_greg(op.ret);
-                        ctx.ssa_map[op.ret] = Some(McReg::GReg(ret));
-                        ctx[lhs].release();
-                        ctx[rhs].release();
-                        ctx.insts.push(McIR::FCmp(*kind, ret, lhs, rhs));
-                    }
-                    Hir::ICmpBr(kind, lhs, rhs, then_bb, else_bb) => {
-                        let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
-                        let rhs = ctx.hir_to_general_operand(rhs);
-                        ctx[lhs].release();
-                        ctx.insts.push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb));
-                        ctx.insts.push(McIR::Jmp(*else_bb));
-                    }
-                    Hir::FCmpBr(kind, lhs, rhs, then_bb, else_bb) => {
-                        let lhs = ctx.ssa_map[*lhs].unwrap().as_f();
-                        let rhs = ctx.ssa_map[*rhs].unwrap().as_f();
-                        ctx[lhs].release();
-                        ctx[rhs].release();
-                        ctx.insts.push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb));
-                        ctx.insts.push(McIR::Jmp(*else_bb));
-                    }
-
-                    Hir::Ret(op) => match op {
-                        HirOperand::Reg(ssa) => {
-                            let ty = hir_context[*ssa].ty;
-                            match ty {
-                                Type::Integer | Type::Bool => {
-                                    let reg = ctx.ssa_map[*ssa].unwrap().as_g();
-                                    ctx[reg].release();
-                                    ctx.insts.push(McIR::IRet(McGeneralOperand::Reg(reg), ty));
-                                }
-                                Type::Float => {
-                                    let reg = ctx.ssa_map[*ssa].unwrap().as_f();
-                                    ctx[reg].release();
-                                    ctx.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
-                                }
-                            }
+        let mut ctx = Self::new();
+        ctx.functions = hir_context
+            .functions
+            .iter()
+            .map(|hir_func| McIrFunc::new(hir_func.bbs.clone()))
+            .collect();
+        ctx.blocks = hir_context
+            .basic_block
+            .iter()
+            .map(|hir_bb| McIrBlock::new(hir_bb.owner_function))
+            .collect();
+        for func in &hir_context.functions {
+            ctx.ssa_map = SsaMap(vec![None; func.register_num]);
+            for bbi in &func.bbs {
+                ctx.cur_block = *bbi;
+                let bb = &hir_context.basic_block[*bbi];
+                ctx.g_reginfo = vec![];
+                ctx.f_reginfo = vec![];
+                for hir in &bb.insts {
+                    match hir {
+                        Hir::Integer(ssa, i) => {
+                            let reg = ctx.alloc_greg(*ssa);
+                            ctx.insts.push(McIR::Integer(reg, *i));
                         }
-                        HirOperand::Const(c) => match c {
-                            Value::Integer(i) => ctx
-                                .insts
-                                .push(McIR::IRet(McGeneralOperand::Integer(*i), Type::Integer)),
-                            Value::Float(f) => {
-                                ctx.insts.push(McIR::FRet(McFloatOperand::Float(*f)))
+                        Hir::Float(ssa, f) => {
+                            let reg = ctx.alloc_freg(*ssa);
+                            ctx.insts.push(McIR::Float(reg, *f));
+                        }
+                        Hir::CastIntFloat(op) => {
+                            let dst = ctx.alloc_freg(op.ret);
+                            let src = match &op.src {
+                                HirOperand::Const(c) => McGeneralOperand::Integer(c.as_i()),
+                                HirOperand::Reg(r) => {
+                                    let src = ctx.ssa_map[*r].unwrap().as_g();
+                                    ctx[src].release();
+                                    McGeneralOperand::Reg(src)
+                                }
+                            };
+                            ctx.insts.push(McIR::CastIntFloat(dst, src));
+                        }
+                        Hir::IAdd(op) => {
+                            let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
+                            let rhs = ctx.hir_to_general_operand(&op.rhs);
+                            ctx.insts.push(McIR::IAdd(lhs, rhs));
+                        }
+                        Hir::ISub(op) => {
+                            let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
+                            let rhs = ctx.hir_to_general_operand(&op.rhs);
+                            ctx.insts.push(McIR::ISub(lhs, rhs));
+                        }
+                        Hir::IMul(op) => {
+                            let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
+                            let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
+                            ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
+                            ctx[rhs].release();
+                            ctx.insts.push(McIR::IMul(lhs, rhs));
+                        }
+                        Hir::IDiv(op) => {
+                            let lhs = ctx.ssa_map[op.lhs].unwrap().as_g();
+                            let rhs = ctx.ssa_map[op.rhs].unwrap().as_g();
+                            ctx.ssa_map[op.ret] = Some(McReg::GReg(lhs));
+                            ctx[rhs].release();
+                            ctx.insts.push(McIR::IDiv(lhs, rhs));
+                        }
+                        Hir::FAdd(op) => float_ops!(ctx, op, FAdd),
+                        Hir::FSub(op) => float_ops!(ctx, op, FSub),
+                        Hir::FMul(op) => float_ops!(ctx, op, FMul),
+                        Hir::FDiv(op) => float_ops!(ctx, op, FDiv),
+
+                        Hir::ICmp(kind, op) => {
+                            let lhs = ctx.hir_to_greg(&op.lhs, op.ret);
+                            let rhs = ctx.hir_to_general_operand(&op.rhs);
+                            ctx.insts.push(McIR::ICmp(*kind, lhs, rhs));
+                        }
+                        Hir::FCmp(kind, op) => {
+                            let lhs = ctx.ssa_map[op.lhs].unwrap().as_f();
+                            let rhs = ctx.ssa_map[op.rhs].unwrap().as_f();
+                            let ret = ctx.alloc_greg(op.ret);
+                            ctx.ssa_map[op.ret] = Some(McReg::GReg(ret));
+                            ctx[lhs].release();
+                            ctx[rhs].release();
+                            ctx.insts.push(McIR::FCmp(*kind, ret, lhs, rhs));
+                        }
+                        Hir::ICmpBr(kind, lhs, rhs, then_bb, else_bb) => {
+                            let lhs = ctx.ssa_map[*lhs].unwrap().as_g();
+                            let rhs = ctx.hir_to_general_operand(rhs);
+                            ctx[lhs].release();
+                            ctx.insts.push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb));
+                            ctx.insts.push(McIR::Jmp(*else_bb));
+                        }
+                        Hir::FCmpBr(kind, lhs, rhs, then_bb, else_bb) => {
+                            let lhs = ctx.ssa_map[*lhs].unwrap().as_f();
+                            let rhs = ctx.ssa_map[*rhs].unwrap().as_f();
+                            ctx[lhs].release();
+                            ctx[rhs].release();
+                            ctx.insts.push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb));
+                            ctx.insts.push(McIR::Jmp(*else_bb));
+                        }
+
+                        Hir::Ret(op) => match op {
+                            HirOperand::Reg(ssa) => {
+                                let ty = hir_context[*ssa].ty;
+                                match ty {
+                                    Type::Integer | Type::Bool => {
+                                        let reg = ctx.ssa_map[*ssa].unwrap().as_g();
+                                        ctx[reg].release();
+                                        ctx.insts.push(McIR::IRet(McGeneralOperand::Reg(reg), ty));
+                                    }
+                                    Type::Float => {
+                                        let reg = ctx.ssa_map[*ssa].unwrap().as_f();
+                                        ctx[reg].release();
+                                        ctx.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
+                                    }
+                                }
                             }
-                            Value::Bool(b) => {
-                                let b = if *b { 1 } else { 0 };
-                                ctx.insts
-                                    .push(McIR::IRet(McGeneralOperand::Integer(b), Type::Bool))
+                            HirOperand::Const(c) => match c {
+                                Value::Integer(i) => ctx
+                                    .insts
+                                    .push(McIR::IRet(McGeneralOperand::Integer(*i), Type::Integer)),
+                                Value::Float(f) => {
+                                    ctx.insts.push(McIR::FRet(McFloatOperand::Float(*f)))
+                                }
+                                Value::Bool(b) => {
+                                    let b = if *b { 1 } else { 0 };
+                                    ctx.insts
+                                        .push(McIR::IRet(McGeneralOperand::Integer(b), Type::Bool))
+                                }
+                            },
+                        },
+                        Hir::INeg(op) => match &op.src {
+                            HirOperand::Const(c) => {
+                                let n = c.as_i();
+                                let reg = ctx.alloc_greg(op.ret);
+                                ctx.insts.push(McIR::Integer(reg, -n));
+                            }
+                            HirOperand::Reg(src) => {
+                                let reg = ctx.ssa_map[*src].unwrap().as_g();
+                                ctx.ssa_map[op.ret] = Some(McReg::GReg(reg));
+                                ctx.insts.push(McIR::INeg(reg));
                             }
                         },
-                    },
-                    Hir::INeg(op) => match &op.src {
-                        HirOperand::Const(c) => {
-                            let n = c.as_i();
-                            let reg = ctx.alloc_greg(op.ret);
-                            ctx.insts.push(McIR::Integer(reg, -n));
+                        Hir::FNeg(op) => match &op.src {
+                            HirOperand::Const(c) => {
+                                let n = c.as_f();
+                                let reg = ctx.alloc_freg(op.ret);
+                                ctx.insts.push(McIR::Float(reg, -n));
+                            }
+                            HirOperand::Reg(src) => {
+                                let reg = ctx.ssa_map[*src].unwrap().as_f();
+                                ctx.ssa_map[op.ret] = Some(McReg::FReg(reg));
+                                ctx.insts.push(McIR::FNeg(reg));
+                            }
+                        },
+                        Hir::LocalStore(ret, info, reg) => {
+                            let ty = info.1;
+                            assert_eq!(ty, hir_context[*reg].ty);
+                            let reg = ctx.ssa_map[*reg].unwrap();
+                            if let Some(ret) = ret {
+                                ctx.ssa_map[*ret] = Some(reg);
+                            } else {
+                                ctx.invalidate(reg);
+                            }
+                            ctx.insts.push(McIR::LocalStore(info.0, reg));
                         }
-                        HirOperand::Reg(src) => {
-                            let reg = ctx.ssa_map[*src].unwrap().as_g();
-                            ctx.ssa_map[op.ret] = Some(McReg::GReg(reg));
-                            ctx.insts.push(McIR::INeg(reg));
+                        Hir::LocalLoad(info, reg) => {
+                            let ty = info.1;
+                            assert_eq!(ty, hir_context[*reg].ty);
+                            let reg = ctx.alloc_reg(*reg, ty);
+                            ctx.insts.push(McIR::LocalLoad(info.0, reg));
                         }
-                    },
-                    Hir::FNeg(op) => match &op.src {
-                        HirOperand::Const(c) => {
-                            let n = c.as_f();
-                            let reg = ctx.alloc_freg(op.ret);
-                            ctx.insts.push(McIR::Float(reg, -n));
+                        Hir::Br(next_bb) => {
+                            let move_list = hir_context[*next_bb]
+                                .insts
+                                .iter()
+                                .filter_map(|ir| match ir {
+                                    Hir::Phi(_, phi) => phi.iter().find_map(|(i, r)| {
+                                        if ctx.cur_block == *i {
+                                            Some(r)
+                                        } else {
+                                            None
+                                        }
+                                    }),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+                            if move_list.len() == 0 {
+                                ctx.insts.push(McIR::Jmp(*next_bb));
+                            } else {
+                                assert_eq!(1, move_list.len());
+                                let src = move_list[0];
+                                let src_reg = ctx.ssa_map[*src].unwrap();
+                                ctx.insts.push(McIR::Out(src_reg));
+                                ctx.insts.push(McIR::Jmp(*next_bb));
+                                ctx.invalidate(src_reg);
+                            }
                         }
-                        HirOperand::Reg(src) => {
-                            let reg = ctx.ssa_map[*src].unwrap().as_f();
-                            ctx.ssa_map[op.ret] = Some(McReg::FReg(reg));
-                            ctx.insts.push(McIR::FNeg(reg));
+                        Hir::CondBr(cond_, then_bb, else_bb) => {
+                            let cond_ = ctx.ssa_map[*cond_].unwrap();
+                            ctx.insts.push(McIR::CondJmp(cond_, *else_bb));
+                            ctx.insts.push(McIR::Jmp(*then_bb));
                         }
-                    },
-                    Hir::LocalStore(ret, info, reg) => {
-                        let ty = info.1;
-                        assert_eq!(ty, hir_context[*reg].ty);
-                        let reg = ctx.ssa_map[*reg].unwrap();
-                        if let Some(ret) = ret {
-                            ctx.ssa_map[*ret] = Some(reg);
-                        } else {
-                            ctx.invalidate(reg);
+                        Hir::Phi(ret, _) => {
+                            let reg = ctx.alloc_reg(*ret, hir_context[*ret].ty);
+                            ctx.insts.push(McIR::In(reg));
                         }
-                        ctx.insts.push(McIR::LocalStore(info.0, reg));
-                    }
-                    Hir::LocalLoad(info, reg) => {
-                        let ty = info.1;
-                        assert_eq!(ty, hir_context[*reg].ty);
-                        let reg = ctx.alloc_reg(*reg, ty);
-                        ctx.insts.push(McIR::LocalLoad(info.0, reg));
-                    }
-                    Hir::Br(next_bb) => {
-                        let move_list = hir_context[*next_bb]
-                            .insts
-                            .iter()
-                            .filter_map(|ir| match ir {
-                                Hir::Phi(_, phi) => phi.iter().find_map(|(i, r)| {
-                                    if ctx.cur_block == *i {
-                                        Some(r)
-                                    } else {
-                                        None
-                                    }
-                                }),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>();
-                        if move_list.len() == 0 {
-                            ctx.insts.push(McIR::Jmp(*next_bb));
-                        } else {
-                            assert_eq!(1, move_list.len());
-                            let src = move_list[0];
-                            let src_reg = ctx.ssa_map[*src].unwrap();
-                            ctx.insts.push(McIR::Out(src_reg));
-                            ctx.insts.push(McIR::Jmp(*next_bb));
-                            ctx.invalidate(src_reg);
-                        }
-                    }
-                    Hir::CondBr(cond_, then_bb, else_bb) => {
-                        let cond_ = ctx.ssa_map[*cond_].unwrap();
-                        ctx.insts.push(McIR::CondJmp(cond_, *else_bb));
-                        ctx.insts.push(McIR::Jmp(*then_bb));
-                    }
-                    Hir::Phi(ret, _) => {
-                        let reg = ctx.alloc_reg(*ret, hir_context[*ret].ty);
-                        ctx.insts.push(McIR::In(reg));
                     }
                 }
             }
-            ctx.cur_block += 1;
         }
         ctx
-    }
-
-    /// Get a vacant general register and update a SSA map.
-    fn alloc_greg(&mut self, ssareg: SsaReg) -> GReg {
-        fn new_greg(ctx: &mut McIrContext, ssareg: SsaReg) -> GReg {
-            for (i, r) in ctx.g_reginfo.iter_mut().enumerate() {
-                if r.ssareg.is_none() {
-                    r.assign(ssareg);
-                    return GReg(i);
-                }
-            }
-            let new = GReg(ctx.g_reginfo.len());
-            ctx.g_reginfo.push(GRegInfo::new(ssareg));
-            new
-        }
-        if let Some(reg) = self.ssa_map[ssareg] {
-            return reg.as_g();
-        }
-        let reg = new_greg(self, ssareg);
-        self.ssa_map[ssareg] = Some(McReg::GReg(reg));
-        reg
-    }
-
-    /// Get a vacant floating point register.
-    fn alloc_freg(&mut self, ssareg: SsaReg) -> FReg {
-        fn new_freg(ctx: &mut McIrContext, ssareg: SsaReg) -> FReg {
-            for (i, r) in ctx.f_reginfo.iter_mut().enumerate() {
-                if r.ssareg.is_none() {
-                    r.assign(ssareg);
-                    return FReg(i);
-                }
-            }
-            let new = ctx.f_reginfo.len();
-            ctx.f_reginfo.push(FRegInfo::new(ssareg));
-            FReg(new)
-        }
-        if let Some(reg) = self.ssa_map[ssareg] {
-            return reg.as_f();
-        }
-        let reg = new_freg(self, ssareg);
-        self.ssa_map[ssareg] = Some(McReg::FReg(reg));
-        reg
     }
 }
 

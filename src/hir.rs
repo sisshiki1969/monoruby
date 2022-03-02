@@ -411,6 +411,7 @@ pub struct HirFunction {
     pub entry_bb: usize,
     pub ret: Option<SsaReg>,
     pub ret_ty: Option<Type>,
+    pub register_num: usize,
     pub bbs: BTreeSet<usize>,
 }
 
@@ -421,6 +422,7 @@ impl HirFunction {
             entry_bb,
             ret: None,
             ret_ty: None,
+            register_num: 0,
             bbs: BTreeSet::default(),
         }
     }
@@ -685,6 +687,7 @@ impl HIRContext {
         local_map: &mut HashMap<String, (usize, Type)>,
         ast: &[(Stmt, Span)],
     ) -> Result<(SsaReg, Type)> {
+        assert_eq!(0, self.cur_fn);
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
@@ -692,6 +695,7 @@ impl HIRContext {
             self.gen_stmts(local_map, ast)?
         };
         let ty = self[ret].ty;
+        self.functions[self.cur_fn].register_num = self.register_num();
         self.new_ret(ret);
         Ok((ret, ty))
     }
@@ -703,7 +707,7 @@ impl HIRContext {
         local_map: &mut HashMap<String, (usize, Type)>,
         ast: &[(Expr, Span)],
     ) -> Result<usize> {
-        let save = (self.cur_fn, self.cur_bb);
+        let save = (self.cur_fn, self.cur_bb, std::mem::take(&mut self.reginfo));
         let func = self.enter_new_func(func_name);
         let len = ast.len();
         let ret = if len == 0 {
@@ -720,7 +724,8 @@ impl HIRContext {
         self.new_ret(ret);
         self.functions[func].ret = Some(ret);
         self.functions[func].ret_ty = Some(ty);
-        (self.cur_fn, self.cur_bb) = save;
+        self.functions[func].register_num = self.register_num();
+        (self.cur_fn, self.cur_bb, self.reginfo) = save;
         Ok(func)
     }
 

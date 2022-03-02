@@ -142,7 +142,7 @@ pub fn run_test(code: &str) {
     let all_codes = vec![code.to_string()];
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
-        dbg!(&stmt);
+        //dbg!(&stmt);
         let mut hir = HIRContext::new();
         let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
             Ok((_, ty)) => ty,
