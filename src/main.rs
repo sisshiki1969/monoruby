@@ -148,8 +148,8 @@ pub fn run_test(code: &str) {
             Ok((_, ty)) => ty,
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
-        //#[cfg(debug_assertions)]
-        //dbg!(&hir);
+        #[cfg(debug_assertions)]
+        dbg!(&hir);
         let eval_res = Evaluator::eval_hir(&hir, &mut local_map, &mut eval_locals);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
@@ -275,6 +275,6 @@ mod test {
 
     #[test]
     fn test2() {
-        run_test("1.9 < 2.1");
+        run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
     }
 }

@@ -8,8 +8,6 @@ use super::*;
 ///
 #[derive(Clone, PartialEq)]
 pub struct HIRContext {
-    /// SSA register information.
-    reginfo: Vec<SsaRegInfo>,
     /// Basic blocks.
     pub basic_block: Vec<HirBasicBlock>,
     cur_bb: usize,
@@ -24,66 +22,67 @@ impl std::fmt::Debug for HIRContext {
 
         for func in &self.functions {
             writeln!(f, "\tFunction {} {{", func.name)?;
+            writeln!(f, "\t\tSsaInfo {:?}", func.reginfo)?;
             for i in func.bbs.iter() {
                 let bb = &self.basic_block[*i];
                 writeln!(f, "\t\tBasicBlock {} {{ owner:{:?}", i, bb.owner_function)?;
                 for hir in &bb.insts {
                     let s = match hir {
                         Hir::Integer(ret, i) => {
-                            format!("%{}: {:?} = {}: i32", ret, self[*ret].ty, i)
+                            format!("%{}: {:?} = {}: i32", ret, func[*ret].ty, i)
                         }
-                        Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, self[*ret].ty, f),
+                        Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, func[*ret].ty, f),
                         Hir::CastIntFloat(op) => {
                             format!(
                                 "%{}: {:?} = cast {:?} i32 to f64",
-                                op.ret, self[op.ret].ty, op.src
+                                op.ret, func[op.ret].ty, op.src
                             )
                         }
                         Hir::INeg(op) => {
-                            format!("%{}: {:?} = ineg {:?}", op.ret, self[op.ret].ty, op.src)
+                            format!("%{}: {:?} = ineg {:?}", op.ret, func[op.ret].ty, op.src)
                         }
                         Hir::FNeg(op) => {
-                            format!("%{}: {:?} = fneg {:?}", op.ret, self[op.ret].ty, op.src)
+                            format!("%{}: {:?} = fneg {:?}", op.ret, func[op.ret].ty, op.src)
                         }
                         Hir::IAdd(op) => format!(
                             "%{}: {:?} = iadd {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FAdd(op) => format!(
                             "%{}: {:?} = fadd {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::ISub(op) => format!(
                             "%{}: {:?} = isub {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FSub(op) => format!(
                             "%{}: {:?} = fsub {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::IMul(op) => format!(
                             "%{}: {:?} = imul %{}, %{}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FMul(op) => format!(
                             "%{}: {:?} = fmul {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::IDiv(op) => format!(
                             "%{}: {:?} = idiv %{}, %{}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FDiv(op) => format!(
                             "%{}: {:?} = fdiv {:?}, {:?}",
-                            op.ret, self[op.ret].ty, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::ICmp(kind, op) => format!(
                             "%{}: {:?} = icmp {:?} {:?}, {:?}",
-                            op.ret, self[op.ret].ty, kind, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::FCmp(kind, op) => format!(
                             "%{}: {:?} = fcmp {:?} {:?}, {:?}",
-                            op.ret, self[op.ret].ty, kind, op.lhs, op.rhs
+                            op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::Ret(ret) => format!("ret {:?}", ret),
                         Hir::LocalStore(ret, ident, rhs) => {
@@ -145,20 +144,6 @@ impl std::ops::DerefMut for HIRContext {
     }
 }
 
-impl std::ops::Index<SsaReg> for HIRContext {
-    type Output = SsaRegInfo;
-
-    fn index(&self, i: SsaReg) -> &SsaRegInfo {
-        &self.reginfo[i.to_usize()]
-    }
-}
-
-impl std::ops::IndexMut<SsaReg> for HIRContext {
-    fn index_mut(&mut self, i: SsaReg) -> &mut SsaRegInfo {
-        &mut self.reginfo[i.to_usize()]
-    }
-}
-
 impl std::ops::Index<usize> for HIRContext {
     type Output = HirBasicBlock;
 
@@ -181,7 +166,6 @@ impl HIRContext {
         let mut function = HirFunction::new("/main".to_string(), cur_bb);
         function.bbs.insert(cur_bb);
         HIRContext {
-            reginfo: vec![],
             basic_block: vec![basic_block],
             cur_bb,
             functions: vec![function],
@@ -195,6 +179,14 @@ impl HIRContext {
         self.functions[self.cur_fn].bbs.insert(next);
         self.basic_block.push(bb);
         next
+    }
+
+    fn func(&self) -> &HirFunction {
+        &self.functions[self.cur_fn]
+    }
+
+    fn func_mut(&mut self) -> &mut HirFunction {
+        &mut self.functions[self.cur_fn]
     }
 
     fn enter_new_func(&mut self, name: String) -> usize {
@@ -215,17 +207,17 @@ impl HIRContext {
 
     fn add_assign(&mut self, hir: Hir, ty: Type) -> SsaReg {
         let ret_reg = self.next_reg();
-        self.reginfo.push(SsaRegInfo::new(ty));
+        self.func_mut().reginfo.push(SsaRegInfo::new(ty));
         self.insts.push(hir);
         ret_reg
     }
 
     pub fn register_num(&self) -> usize {
-        self.reginfo.len()
+        self.func().reginfo.len()
     }
 
     fn next_reg(&self) -> SsaReg {
-        SsaReg(self.reginfo.len())
+        SsaReg(self.register_num())
     }
 
     fn new_integer(&mut self, i: i32) -> SsaReg {
@@ -341,7 +333,7 @@ impl HIRContext {
         ident: &String,
         rhs: SsaReg,
     ) -> Result<SsaReg> {
-        let ty = self[rhs].ty;
+        let ty = self.func()[rhs].ty;
         let len = local_map.len();
         let info = match local_map.get(ident) {
             Some(info) => info.clone(),
@@ -365,7 +357,7 @@ impl HIRContext {
         ident: &String,
         rhs: SsaReg,
     ) -> Result<()> {
-        let ty = self[rhs].ty;
+        let ty = self.func()[rhs].ty;
         let len = local_map.len();
         let info = match local_map.get(ident) {
             Some(info) => info.clone(),
@@ -398,8 +390,8 @@ impl HIRContext {
     }
 
     fn new_phi(&mut self, phi: Vec<(usize, SsaReg)>) -> SsaReg {
-        let ty = self[phi[0].1].ty;
-        assert!(phi.iter().all(|(_, r)| self[*r].ty == ty));
+        let ty = self.func()[phi[0].1].ty;
+        assert!(phi.iter().all(|(_, r)| self.func()[*r].ty == ty));
         let ret = self.next_reg();
         self.add_assign(Hir::Phi(ret, phi), ty)
     }
@@ -411,8 +403,23 @@ pub struct HirFunction {
     pub entry_bb: usize,
     pub ret: Option<SsaReg>,
     pub ret_ty: Option<Type>,
-    pub register_num: usize,
+    /// SSA register information.
+    reginfo: Vec<SsaRegInfo>,
     pub bbs: BTreeSet<usize>,
+}
+
+impl std::ops::Index<SsaReg> for HirFunction {
+    type Output = SsaRegInfo;
+
+    fn index(&self, i: SsaReg) -> &SsaRegInfo {
+        &self.reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<SsaReg> for HirFunction {
+    fn index_mut(&mut self, i: SsaReg) -> &mut SsaRegInfo {
+        &mut self.reginfo[i.to_usize()]
+    }
 }
 
 impl HirFunction {
@@ -422,9 +429,13 @@ impl HirFunction {
             entry_bb,
             ret: None,
             ret_ty: None,
-            register_num: 0,
+            reginfo: vec![],
             bbs: BTreeSet::default(),
         }
+    }
+
+    pub fn register_num(&self) -> usize {
+        self.reginfo.len()
     }
 }
 
@@ -597,7 +608,7 @@ macro_rules! binary_ops {
             }
             (Expr::Integer(lhs_), _) => {
                 let rhs = $self.gen($map, &$rhs.0)?;
-                let rhs_ty = $self[rhs].ty;
+                let rhs_ty = $self.func()[rhs].ty;
                 match rhs_ty {
                     Type::Integer => {
                         Ok($self.$i_op(HirOperand::integer(*lhs_), HirOperand::reg(rhs)))
@@ -618,7 +629,7 @@ macro_rules! binary_ops {
             }
             (Expr::Float(lhs_), _) => {
                 let rhs = $self.gen($map, &$rhs.0)?;
-                let rhs_ty = $self[rhs].ty;
+                let rhs_ty = $self.func()[rhs].ty;
                 match rhs_ty {
                     Type::Integer => {
                         let rhs = $self.new_as_float(rhs);
@@ -630,7 +641,7 @@ macro_rules! binary_ops {
             }
             (_, Expr::Integer(rhs_)) => {
                 let lhs = $self.gen($map, &$lhs.0)?;
-                let lhs_ty = $self[lhs].ty;
+                let lhs_ty = $self.func()[lhs].ty;
                 match lhs_ty {
                     Type::Integer => {
                         Ok($self.$i_op(HirOperand::reg(lhs), HirOperand::integer(*rhs_)))
@@ -643,7 +654,7 @@ macro_rules! binary_ops {
             }
             (_, Expr::Float(rhs_)) => {
                 let lhs = $self.gen($map, &$lhs.0)?;
-                let lhs_ty = $self[lhs].ty;
+                let lhs_ty = $self.func()[lhs].ty;
                 match lhs_ty {
                     Type::Integer => {
                         let lhs = $self.new_as_float(lhs);
@@ -656,8 +667,8 @@ macro_rules! binary_ops {
             _ => {
                 let lhs = $self.gen($map, &$lhs.0)?;
                 let rhs = $self.gen($map, &$rhs.0)?;
-                let lhs_ty = $self[lhs].ty;
-                let rhs_ty = $self[rhs].ty;
+                let lhs_ty = $self.func()[lhs].ty;
+                let rhs_ty = $self.func()[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => {
                         Ok($self.$i_op(HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
@@ -694,8 +705,7 @@ impl HIRContext {
         } else {
             self.gen_stmts(local_map, ast)?
         };
-        let ty = self[ret].ty;
-        self.functions[self.cur_fn].register_num = self.register_num();
+        let ty = self.func()[ret].ty;
         self.new_ret(ret);
         Ok((ret, ty))
     }
@@ -707,7 +717,7 @@ impl HIRContext {
         local_map: &mut HashMap<String, (usize, Type)>,
         ast: &[(Expr, Span)],
     ) -> Result<usize> {
-        let save = (self.cur_fn, self.cur_bb, std::mem::take(&mut self.reginfo));
+        let save = (self.cur_fn, self.cur_bb);
         let func = self.enter_new_func(func_name);
         let len = ast.len();
         let ret = if len == 0 {
@@ -720,12 +730,11 @@ impl HIRContext {
                     .collect::<Vec<(Stmt, Span)>>(),
             )?
         };
-        let ty = self[ret].ty;
+        let ty = self.func()[ret].ty;
         self.new_ret(ret);
         self.functions[func].ret = Some(ret);
         self.functions[func].ret_ty = Some(ty);
-        self.functions[func].register_num = self.register_num();
-        (self.cur_fn, self.cur_bb, self.reginfo) = save;
+        (self.cur_fn, self.cur_bb) = save;
         Ok(func)
     }
 
@@ -764,7 +773,7 @@ impl HIRContext {
                     _ => {}
                 };
                 let lhs_i = self.gen(local_map, lhs)?;
-                let ssa = match self[lhs_i].ty {
+                let ssa = match self.func()[lhs_i].ty {
                     Type::Integer => self.new_ineg(lhs_i),
                     Type::Float => self.new_fneg(lhs_i),
                     ty => return Err(HirErr::TypeMismatch(ty, ty)),
@@ -785,7 +794,7 @@ impl HIRContext {
                 )),
                 (Expr::Integer(lhs_), _) => {
                     let rhs = self.gen(local_map, rhs)?;
-                    let rhs_ty = self[rhs].ty;
+                    let rhs_ty = self.func()[rhs].ty;
                     match rhs_ty {
                         Type::Integer => Ok(self.new_icmp(
                             *kind,
@@ -801,7 +810,7 @@ impl HIRContext {
                 }
                 (_, Expr::Integer(rhs_)) => {
                     let lhs = self.gen(local_map, lhs)?;
-                    let lhs_ty = self[lhs].ty;
+                    let lhs_ty = self.func()[lhs].ty;
                     match lhs_ty {
                         Type::Integer => Ok(self.new_icmp(
                             *kind,
@@ -818,8 +827,8 @@ impl HIRContext {
                 _ => {
                     let lhs = self.gen(local_map, lhs)?;
                     let rhs = self.gen(local_map, rhs)?;
-                    let lhs_ty = self[lhs].ty;
-                    let rhs_ty = self[rhs].ty;
+                    let lhs_ty = self.func()[lhs].ty;
+                    let rhs_ty = self.func()[rhs].ty;
                     match (lhs_ty, rhs_ty) {
                         (Type::Integer, Type::Integer) => {
                             Ok(self.new_icmp(*kind, HirOperand::Reg(lhs), HirOperand::Reg(rhs)))
@@ -840,8 +849,8 @@ impl HIRContext {
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
-                let lhs_ty = self[lhs].ty;
-                let rhs_ty = self[rhs].ty;
+                let lhs_ty = self.func()[lhs].ty;
+                let rhs_ty = self.func()[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => Ok(self.new_imul(lhs, rhs)),
                     (Type::Integer, Type::Float) => {
@@ -861,8 +870,8 @@ impl HIRContext {
             Expr::Div(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen(local_map, lhs)?;
                 let rhs = self.gen(local_map, rhs)?;
-                let lhs_ty = self[lhs].ty;
-                let rhs_ty = self[rhs].ty;
+                let lhs_ty = self.func()[lhs].ty;
+                let rhs_ty = self.func()[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => Ok(self.new_idiv(lhs, rhs)),
                     (Type::Integer, Type::Float) => {
@@ -890,7 +899,7 @@ impl HIRContext {
                 let succ_bb = self.new_bb();
                 if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
                     let lhs = self.gen(local_map, lhs)?;
-                    let lhs_ty = self[lhs].ty;
+                    let lhs_ty = self.func()[lhs].ty;
                     if let Expr::Integer(rhs) = rhs {
                         match lhs_ty {
                             Type::Integer => {
@@ -911,7 +920,7 @@ impl HIRContext {
                         };
                     } else {
                         let rhs = self.gen(local_map, rhs)?;
-                        let rhs_ty = self[rhs].ty;
+                        let rhs_ty = self.func()[rhs].ty;
                         match (lhs_ty, rhs_ty) {
                             (Type::Integer, Type::Integer) => {
                                 self.insts.push(Hir::ICmpBr(
@@ -941,7 +950,7 @@ impl HIRContext {
                     }
                 } else {
                     let cond_ = self.gen(local_map, cond_)?;
-                    match self[cond_].ty {
+                    match self.func()[cond_].ty {
                         Type::Bool => {}
                         ty => return Err(HirErr::TypeMismatch(ty, Type::Bool)),
                     };
@@ -958,8 +967,11 @@ impl HIRContext {
                 let then_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
 
-                if self[then_].ty != self[else_].ty {
-                    return Err(HirErr::TypeMismatch(self[then_].ty, self[else_].ty));
+                if self.func()[then_].ty != self.func()[else_].ty {
+                    return Err(HirErr::TypeMismatch(
+                        self.func()[then_].ty,
+                        self.func()[else_].ty,
+                    ));
                 }
                 self.cur_bb = succ_bb;
                 let ret = self.new_phi(vec![(then_bb, then_), (else_bb, else_)]);
