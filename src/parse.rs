@@ -10,6 +10,7 @@ pub enum Token {
     Else,
     End,
     Def,
+    Call(String),
     OParen,
     CParen,
     Minus,
@@ -37,6 +38,7 @@ impl std::fmt::Display for Token {
             Self::Else => write!(f, "else"),
             Self::End => write!(f, "end"),
             Self::Def => write!(f, "def"),
+            Self::Call(s) => write!(f, "call {}", s),
             Self::OParen => write!(f, "("),
             Self::CParen => write!(f, ")"),
             Self::Minus => write!(f, "-"),
@@ -91,6 +93,7 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
                 }
             }),
         text::int(10).from_str().unwrapped().map(Token::Int),
+        text::ident().then_ignore(just('(')).map(Token::Call),
         text::ident().map(Token::Ident),
         choice((just('\n'), just(';')))
             .ignored()
@@ -140,8 +143,9 @@ fn ident() -> impl Parser<Token, String, Error = Simple<Token>> {
 ///
 fn decl() -> impl Parser<Token, Spanned<Decl>, Error = Simple<Token>> {
     just(Token::Def)
-        .ignore_then(ident())
-        .then(ident().delimited_by(just(Token::OParen), just(Token::CParen)))
+        .ignore_then(select! {Token::Call(s) => s})
+        .then(ident())
+        .then_ignore(just(Token::CParen))
         .then(
             expr()
                 .separated_by(just(Token::Separator))
@@ -170,13 +174,24 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
         }
         .map_with_span(|expr, span| (expr, span));
 
+        let call = select! {Token::Call(s) => s}
+            .map_with_span(|s, span| (s, span))
+            .then(expr.clone())
+            .then_ignore(just(Token::CParen))
+            .map_with_span(|(f_name, arg), span| {
+                (
+                    Expr::Call(f_name.0, Box::new(arg)),
+                    f_name.1.start..span.end,
+                )
+            });
+
         let parenthesized = expr
             .clone()
             .delimited_by(just(Token::OParen), just(Token::CParen));
 
         // primary := <number>
         //          | '(' <expr> ')'
-        let primary = choice((number, local, parenthesized));
+        let primary = choice((call, number, local, parenthesized));
 
         // unary := -a
         //        | +a
@@ -185,11 +200,11 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
             .repeated()
             .then(primary.clone())
             .foldr(|op, rhs| {
+                let span = op.1.start..rhs.1.end;
                 if op.0 == Token::Minus {
-                    let span = op.1.start..rhs.1.end;
                     (Expr::Neg(Box::new(rhs)), span)
                 } else {
-                    rhs
+                    (rhs.0, span)
                 }
             });
 

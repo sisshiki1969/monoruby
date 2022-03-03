@@ -23,10 +23,12 @@ pub enum Decl {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     If(Box<Spanned<Expr>>, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Mul(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Div(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Add(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-    Sub(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Call(String, Box<Spanned<Expr>>), // (func_name, arg)
+
+    Mul(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (lhs, rhs)
+    Div(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (lhs, rhs)
+    Add(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (lhs, rhs)
+    Sub(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (lhs, rhs)
     Neg(Box<Spanned<Expr>>),
     Cmp(CmpKind, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
 

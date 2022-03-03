@@ -73,22 +73,13 @@ impl Value {
 
 fn main() {
     let mut rl = Editor::<()>::new();
-    let mut locals = vec![];
-    let mut eval_locals = vec![];
-    let mut local_map = HashMap::new();
     let mut all_codes = vec![];
     loop {
         let readline = rl.readline("monoruby> ");
         match readline {
             Ok(code) => {
                 rl.add_history_entry(code.as_str());
-                run_with_locals(
-                    &code,
-                    &mut locals,
-                    &mut local_map,
-                    &mut eval_locals,
-                    &mut all_codes,
-                );
+                run_with_locals(&code, &mut all_codes);
             }
             Err(ReadlineError::Interrupted) => {
                 break;
@@ -104,30 +95,28 @@ fn main() {
     }
 }
 
-fn run_with_locals(
-    code: &str,
-    locals: &mut Vec<u64>,
-    local_map: &mut HashMap<String, (usize, Type)>,
-    eval_locals: &mut Vec<Value>,
-    all_codes: &mut Vec<String>,
-) {
+fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
-    let (ast, errs, parse_errs) = parse(code);
+    let (ast, errs, parse_errs) = parse(&dbg!(all_codes.join(";")));
     if let Some(ast) = ast {
         //dbg!(&stmt);
         let mut hir = HIRContext::new();
-        match hir.from_ast(local_map, &ast) {
+        match hir.from_ast(&ast) {
             Ok(_) => {}
-            Err(err) => panic!("Error in compiling AST. {:?}", err),
+            Err(err) => {
+                eprintln!("Error in compiling AST. {:?}", err);
+                all_codes.pop();
+                return;
+            }
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, local_map, eval_locals);
+        let eval_res = Evaluator::eval_hir(&hir);
         let mcir_context = McIrContext::from_hir(&mut hir);
         let mut codegen = Codegen::new();
         #[cfg(debug_assertions)]
         dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context, locals);
+        let jit_res = codegen.compile_and_run(&mcir_context);
         eprintln!("JIT: {:?}", jit_res);
         eprintln!("Evaluator: {:?}", eval_res);
         eprintln!("Ruby output: {:?}", run_ruby(all_codes));
@@ -136,26 +125,23 @@ fn run_with_locals(
 }
 
 pub fn run_test(code: &str) {
-    let mut locals = vec![];
-    let mut local_map = HashMap::default();
-    let mut eval_locals = vec![];
     let all_codes = vec![code.to_string()];
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
         //dbg!(&stmt);
         let mut hir = HIRContext::new();
-        match hir.from_ast(&mut local_map, &stmt) {
+        match hir.from_ast(&stmt) {
             Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, &mut local_map, &mut eval_locals);
+        let eval_res = Evaluator::eval_hir(&hir);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]
         //dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context, &mut locals);
+        let jit_res = codegen.compile_and_run(&mcir_context);
         assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
         let ruby_res = run_ruby(&all_codes);
         assert_eq!(&jit_res, dbg!(&ruby_res));

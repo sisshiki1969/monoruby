@@ -604,6 +604,7 @@ impl McIrContext {
                     let reg = self.alloc_reg(*ret, func[*ret].ty);
                     self.insts.push(McIR::In(reg));
                 }
+                _ => unimplemented!(),
             }
         }
     }

@@ -81,7 +81,7 @@ impl std::fmt::Debug for HIRContext {
                             op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::FCmp(kind, op) => format!(
-                            "%{}: {:?} = fcmp {:?} {:?}, {:?}",
+                            "%{}: {:?} = fcmp {:?} %{}, %{}",
                             op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::Ret(ret) => format!("ret {:?}", ret),
@@ -94,6 +94,10 @@ impl std::fmt::Debug for HIRContext {
                         }
                         Hir::LocalLoad(ident, lhs) => {
                             format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
+                        }
+                        Hir::Call(id, ret, arg) => {
+                            let name = &self.functions[*id].name;
+                            format!("%{} = call {} (%{})", ret, name, arg)
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
@@ -322,6 +326,18 @@ impl HIRContext {
         self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
+    fn new_call(&mut self, name: String, arg: SsaReg, ty: Type) -> Result<SsaReg> {
+        let ret = self.next_reg();
+        let id = self
+            .functions
+            .iter()
+            .enumerate()
+            .find(|(_, func)| func.name == name)
+            .ok_or(HirErr::UndefinedMethod(name))?
+            .0;
+        Ok(self.add_assign(Hir::Call(id, ret, arg), ty))
+    }
+
     fn new_ret(&mut self, lhs: SsaReg) {
         let hir = Hir::Ret(HirOperand::Reg(lhs));
         self.insts.push(hir);
@@ -461,6 +477,7 @@ impl HirBasicBlock {
 #[derive(Debug, Clone)]
 pub enum HirErr {
     UndefinedLocal(String),
+    UndefinedMethod(String),
     TypeMismatch(Type, Type),
 }
 
@@ -494,6 +511,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
+    Call(usize, SsaReg, SsaReg), // (id, ret, arg)
 }
 
 ///
@@ -695,17 +713,14 @@ macro_rules! binary_ops {
 
 impl HIRContext {
     /// Generate HIR in top level from [(Stmt, Span)].
-    pub fn from_ast(
-        &mut self,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &[(Stmt, Span)],
-    ) -> Result<()> {
+    pub fn from_ast(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
         assert_eq!(0, self.cur_fn);
+        let mut local_map = HashMap::default();
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
         } else {
-            self.gen_stmts(local_map, ast)?
+            self.gen_stmts(&mut local_map, ast)?
         };
         let ty = self.func()[ret].ty;
         self.func_mut().locals = local_map.clone();
@@ -895,6 +910,11 @@ impl HIRContext {
                 self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
+            Expr::Call(name, arg) => {
+                let arg = self.gen(local_map, &arg.0)?;
+                let ty = Type::Integer;
+                self.new_call(name.to_string(), arg, ty)
+            }
             Expr::If(box (cond_, _), box (then_, _), box (else_, _)) => {
                 let else_bb = self.new_bb();
                 let then_bb = self.new_bb();
@@ -1042,7 +1062,7 @@ impl HIRContext {
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let func = self.new_func_from_ast(name.to_string(), body)?;
+                let _ = self.new_func_from_ast(name.to_string(), body)?;
                 Ok(())
             }
         }

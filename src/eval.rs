@@ -23,14 +23,10 @@ impl std::ops::IndexMut<SsaReg> for Evaluator {
 }
 
 impl Evaluator {
-    pub fn eval_hir(
-        hir_context: &HIRContext,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        locals: &mut Vec<Value>,
-    ) -> Value {
+    pub fn eval_hir(hir_context: &HIRContext) -> Value {
         let cur_fn = 0;
-        let locals_num = local_map.len();
-        locals.resize(locals_num, Value::Integer(0));
+        let locals_num = hir_context.functions[cur_fn].locals.len();
+        let mut locals = vec![Value::Integer(0); locals_num];
         let register_num = hir_context.functions[cur_fn].register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
@@ -42,7 +38,7 @@ impl Evaluator {
         loop {
             let op = &hir_context[eval.cur_bb].insts[eval.pc];
             eval.pc += 1;
-            if let Some(val) = eval.eval(op, locals) {
+            if let Some(val) = eval.eval(op, &mut locals) {
                 return val;
             }
         }
@@ -203,6 +199,14 @@ impl Evaluator {
             }
             Hir::LocalLoad(ident, lhs) => {
                 self[*lhs] = locals[ident.0].clone();
+                None
+            }
+            Hir::Call(id, ret, arg) => {
+                let save = (self.cur_fn, self.cur_bb, self.prev_bb, self.pc);
+                self.cur_fn = *id;
+                self.cur_bb = 0;
+                (self.cur_fn, self.cur_bb, self.prev_bb, self.pc) = save;
+                self[*ret] = Value::Integer(100);
                 None
             }
             Hir::Br(next_bb) => {

@@ -312,7 +312,7 @@ macro_rules! float_ops {
 }
 
 impl Codegen {
-    pub fn compile_and_run(&mut self, mcir_context: &McIrContext, locals: &mut Vec<u64>) -> Value {
+    pub fn compile_and_run(&mut self, mcir_context: &McIrContext) -> Value {
         for _ in &mcir_context.blocks {
             self.block_labels.push(self.jit.label());
         }
@@ -328,7 +328,7 @@ impl Codegen {
         let main_func = &mcir_context.functions[0];
         let ret_ty = main_func.ret_ty;
         let func_label = self.func_labels[0];
-        locals.resize(main_func.locals.len(), 0);
+        let mut locals = vec![0u64; main_func.locals.len()];
         let lp = locals.as_mut_ptr();
         self.jit.finalize::<*mut u64, i64>();
         let res = match ret_ty {
