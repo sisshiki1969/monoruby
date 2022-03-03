@@ -45,7 +45,11 @@ impl std::fmt::Debug for McIrContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "McIRContext {{")?;
         for func in &self.functions {
-            writeln!(f, "\tFunc {} {{", func.name)?;
+            writeln!(
+                f,
+                "\tFunc {} g_reg:{} f_reg:{} local:{:?} {{",
+                func.name, func.g_regs, func.f_regs, func.locals
+            )?;
             for bbi in &func.bbs {
                 let block = &self.blocks[*bbi];
                 writeln!(f, "\t\tBlock {} {{", *bbi)?;
@@ -241,15 +245,33 @@ impl McIrContext {
     }
 }
 
+/// Function information of McIr.
 #[derive(Clone, PartialEq)]
 pub struct McIrFunc {
+    /// Name of the function.
     pub name: String,
+    /// Basic blocks which belong to this function.
     pub bbs: BTreeSet<usize>,
+    /// Number of virtual general registers.
+    pub g_regs: usize,
+    /// Number of virtual float registers.
+    pub f_regs: usize,
+    /// Offsets and types of local variables.
+    pub locals: HashMap<String, (usize, Type)>,
+    /// Type of return value.
+    pub ret_ty: Type,
 }
 
 impl McIrFunc {
-    fn new(name: String, bbs: BTreeSet<usize>) -> Self {
-        Self { name, bbs }
+    fn new(name: String, bbs: BTreeSet<usize>, locals: HashMap<String, (usize, Type)>) -> Self {
+        Self {
+            name,
+            bbs,
+            g_regs: 0,
+            f_regs: 0,
+            locals,
+            ret_ty: Type::Integer,
+        }
     }
 }
 
@@ -362,20 +384,33 @@ impl McIrContext {
         ctx.functions = hir_context
             .functions
             .iter()
-            .map(|hir_func| McIrFunc::new(hir_func.name.clone(), hir_func.bbs.clone()))
+            .map(|hir_func| {
+                McIrFunc::new(
+                    hir_func.name.clone(),
+                    hir_func.bbs.clone(),
+                    hir_func.locals.clone(),
+                )
+            })
             .collect();
         ctx.blocks = hir_context
             .basic_block
             .iter()
             .map(|hir_bb| McIrBlock::new(hir_bb.owner_function))
             .collect();
-        for func in &hir_context.functions {
+        for (i, func) in hir_context.functions.iter().enumerate() {
             ctx.ssa_map = SsaMap(vec![None; func.register_num()]);
+            let mut g_reg_num = 0;
+            let mut f_reg_num = 0;
             for bbi in &func.bbs {
                 ctx.cur_block = *bbi;
                 let bb = &hir_context.basic_block[*bbi];
                 ctx.compile_bb(bb, hir_context);
+                g_reg_num = std::cmp::max(g_reg_num, ctx.g_reg_num());
+                f_reg_num = std::cmp::max(f_reg_num, ctx.f_reg_num());
             }
+            ctx.functions[i].g_regs = g_reg_num;
+            ctx.functions[i].f_regs = f_reg_num;
+            ctx.functions[i].ret_ty = func.ret_ty.unwrap();
         }
         ctx
     }

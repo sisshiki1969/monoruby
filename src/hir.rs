@@ -406,6 +406,7 @@ pub struct HirFunction {
     /// SSA register information.
     reginfo: Vec<SsaRegInfo>,
     pub bbs: BTreeSet<usize>,
+    pub locals: HashMap<String, (usize, Type)>,
 }
 
 impl std::ops::Index<SsaReg> for HirFunction {
@@ -431,6 +432,7 @@ impl HirFunction {
             ret_ty: None,
             reginfo: vec![],
             bbs: BTreeSet::default(),
+            locals: HashMap::default(),
         }
     }
 
@@ -697,7 +699,7 @@ impl HIRContext {
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
         ast: &[(Stmt, Span)],
-    ) -> Result<(SsaReg, Type)> {
+    ) -> Result<()> {
         assert_eq!(0, self.cur_fn);
         let len = ast.len();
         let ret = if len == 0 {
@@ -706,34 +708,34 @@ impl HIRContext {
             self.gen_stmts(local_map, ast)?
         };
         let ty = self.func()[ret].ty;
+        self.func_mut().locals = local_map.clone();
         self.new_ret(ret);
-        Ok((ret, ty))
+        self.func_mut().ret = Some(ret);
+        self.func_mut().ret_ty = Some(ty);
+        Ok(())
     }
 
     /// Generate HIR in new function from [(Stmt, Span)].
-    pub fn new_func_from_ast(
-        &mut self,
-        func_name: String,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &[(Expr, Span)],
-    ) -> Result<usize> {
+    pub fn new_func_from_ast(&mut self, func_name: String, ast: &[(Expr, Span)]) -> Result<usize> {
         let save = (self.cur_fn, self.cur_bb);
+        let mut local_map = HashMap::default();
         let func = self.enter_new_func(func_name);
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
         } else {
             self.gen_stmts(
-                local_map,
+                &mut local_map,
                 &ast.iter()
                     .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
                     .collect::<Vec<(Stmt, Span)>>(),
             )?
         };
         let ty = self.func()[ret].ty;
+        self.func_mut().locals = local_map;
         self.new_ret(ret);
-        self.functions[func].ret = Some(ret);
-        self.functions[func].ret_ty = Some(ty);
+        self.func_mut().ret = Some(ret);
+        self.func_mut().ret_ty = Some(ty);
         (self.cur_fn, self.cur_bb) = save;
         Ok(func)
     }
@@ -1040,8 +1042,7 @@ impl HIRContext {
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let mut local_map = HashMap::default();
-                let func = self.new_func_from_ast(name.to_string(), &mut local_map, body)?;
+                let func = self.new_func_from_ast(name.to_string(), body)?;
                 Ok(())
             }
         }

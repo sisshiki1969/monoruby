@@ -116,8 +116,8 @@ fn run_with_locals(
     if let Some(ast) = ast {
         //dbg!(&stmt);
         let mut hir = HIRContext::new();
-        let ret_ty = match hir.from_ast(local_map, &ast) {
-            Ok((_, ty)) => ty,
+        match hir.from_ast(local_map, &ast) {
+            Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
         #[cfg(debug_assertions)]
@@ -127,7 +127,7 @@ fn run_with_locals(
         let mut codegen = Codegen::new();
         #[cfg(debug_assertions)]
         dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context, locals, local_map, ret_ty);
+        let jit_res = codegen.compile_and_run(&mcir_context, locals);
         eprintln!("JIT: {:?}", jit_res);
         eprintln!("Evaluator: {:?}", eval_res);
         eprintln!("Ruby output: {:?}", run_ruby(all_codes));
@@ -144,8 +144,8 @@ pub fn run_test(code: &str) {
     if let Some(stmt) = ast {
         //dbg!(&stmt);
         let mut hir = HIRContext::new();
-        let ret_ty = match hir.from_ast(&mut local_map, &stmt) {
-            Ok((_, ty)) => ty,
+        match hir.from_ast(&mut local_map, &stmt) {
+            Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
         #[cfg(debug_assertions)]
@@ -155,7 +155,7 @@ pub fn run_test(code: &str) {
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]
         //dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context, &mut locals, &mut local_map, ret_ty);
+        let jit_res = codegen.compile_and_run(&mcir_context, &mut locals);
         assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
         let ruby_res = run_ruby(&all_codes);
         assert_eq!(&jit_res, dbg!(&ruby_res));

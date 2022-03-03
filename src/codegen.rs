@@ -35,6 +35,7 @@ pub struct Codegen {
     g_offset: usize,
     f_offset: usize,
     block_labels: Vec<DestLabel>,
+    func_labels: Vec<DestLabel>,
 }
 
 impl Codegen {
@@ -44,6 +45,7 @@ impl Codegen {
             g_offset: 0,
             f_offset: 0,
             block_labels: vec![],
+            func_labels: vec![],
         }
     }
 
@@ -310,36 +312,23 @@ macro_rules! float_ops {
 }
 
 impl Codegen {
-    pub fn compile_and_run(
-        &mut self,
-        mcir_context: &McIrContext,
-        locals: &mut Vec<u64>,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        ret_ty: Type,
-    ) -> Value {
-        let g_regs = match mcir_context.g_reg_num() {
-            i if i < 5 => 0,
-            i => i - 4,
-        };
-        let f_regs = match mcir_context.f_reg_num() {
-            i if i < 15 => 0,
-            i => i - 14,
-        };
-        let locals_num = local_map.len();
-        self.g_offset = locals_num;
-        self.f_offset = locals_num + g_regs;
-        let func_label = self.jit.label();
-        self.jit.bind_label(func_label);
-        self.prologue(locals_num + g_regs + f_regs);
+    pub fn compile_and_run(&mut self, mcir_context: &McIrContext, locals: &mut Vec<u64>) -> Value {
         for _ in &mcir_context.blocks {
             self.block_labels.push(self.jit.label());
         }
 
-        for bbi in &mcir_context.functions[0].bbs {
-            self.compile_bb(mcir_context, *bbi, ret_ty);
+        for _ in &mcir_context.functions {
+            self.func_labels.push(self.jit.label());
         }
 
-        locals.resize(locals_num, 0);
+        for cur_fn in 0..mcir_context.functions.len() {
+            self.compile_func(mcir_context, cur_fn);
+        }
+
+        let main_func = &mcir_context.functions[0];
+        let ret_ty = main_func.ret_ty;
+        let func_label = self.func_labels[0];
+        locals.resize(main_func.locals.len(), 0);
         let lp = locals.as_mut_ptr();
         self.jit.finalize::<*mut u64, i64>();
         let res = match ret_ty {
@@ -377,6 +366,29 @@ impl Codegen {
         #[cfg(debug_assertions)]
         self.dump_code();
         res
+    }
+
+    fn compile_func(&mut self, mcir_context: &McIrContext, cur_fn: usize) {
+        let func = &mcir_context.functions[cur_fn];
+        let ret_ty = func.ret_ty;
+        let g_regs = match func.g_regs {
+            i if i < 5 => 0,
+            i => i - 4,
+        };
+        let f_regs = match func.f_regs {
+            i if i < 15 => 0,
+            i => i - 14,
+        };
+        let locals_num = func.locals.len();
+        self.g_offset = locals_num;
+        self.f_offset = locals_num + g_regs;
+        let func_label = self.func_labels[cur_fn];
+        self.jit.bind_label(func_label);
+        self.prologue(locals_num + g_regs + f_regs);
+
+        for bbi in &func.bbs {
+            self.compile_bb(mcir_context, *bbi, ret_ty);
+        }
     }
 
     fn compile_bb(&mut self, mcir_context: &McIrContext, bbi: usize, ret_ty: Type) {
