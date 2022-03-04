@@ -99,7 +99,7 @@ fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
     let (ast, errs, parse_errs) = parse(&dbg!(all_codes.join(";")));
     if let Some(ast) = ast {
-        //dbg!(&stmt);
+        dbg!(&ast);
         let mut hir = HIRContext::new();
         match hir.from_ast(&ast) {
             Ok(_) => {}
@@ -111,7 +111,8 @@ fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir);
+        let eval_res = Evaluator::eval_hir(&hir, 0);
+        eprintln!("Evaluator: {:?}", eval_res);
         let mcir_context = McIrContext::from_hir(&mut hir);
         let mut codegen = Codegen::new();
         #[cfg(debug_assertions)]
@@ -136,7 +137,7 @@ pub fn run_test(code: &str) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir);
+        let eval_res = Evaluator::eval_hir(&hir, 0);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]

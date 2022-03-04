@@ -346,21 +346,7 @@ impl Codegen {
                 Value::Bool(f != 0)
             }
         };
-        // dump local variables.
-        /*for (name, (i, ty)) in local_map {
-            match ty {
-                Type::Integer => {
-                    eprintln!("{} [{}: i64]", name, locals[*i] as i64);
-                }
-                Type::Float => {
-                    eprintln!(
-                        "{} [{}: f64]",
-                        name,
-                        f64::from_ne_bytes(locals[*i].to_ne_bytes())
-                    );
-                }
-            }
-        }*/
+
         #[cfg(debug_assertions)]
         self.dump_code();
         res

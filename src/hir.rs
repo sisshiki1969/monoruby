@@ -350,21 +350,30 @@ impl HIRContext {
         rhs: SsaReg,
     ) -> Result<SsaReg> {
         let ty = self.func()[rhs].ty;
-        let len = local_map.len();
-        let info = match local_map.get(ident) {
-            Some(info) => info.clone(),
-            None => {
-                let info = (len, ty);
-                local_map.insert(ident.to_string(), info.clone());
-                info
-            }
-        };
+        let info = self.add_local_var_if_new(local_map, ident, ty);
         if info.1 != ty {
             return Err(HirErr::TypeMismatch(info.1, ty));
         }
         let ret = self.next_reg();
         self.add_assign(Hir::LocalStore(Some(ret), info, rhs), ty);
         Ok(ret)
+    }
+
+    fn add_local_var_if_new(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ident: &String,
+        ty: Type,
+    ) -> (usize, Type) {
+        let len = local_map.len();
+        match local_map.get(ident) {
+            Some(info) => info.clone(),
+            None => {
+                let info = (len, ty);
+                local_map.insert(ident.to_string(), info.clone());
+                info
+            }
+        }
     }
 
     fn new_local_store_nouse(
@@ -731,9 +740,17 @@ impl HIRContext {
     }
 
     /// Generate HIR in new function from [(Stmt, Span)].
-    pub fn new_func_from_ast(&mut self, func_name: String, ast: &[(Expr, Span)]) -> Result<usize> {
+    pub fn new_func_from_ast(
+        &mut self,
+        func_name: String,
+        args: Vec<String>,
+        ast: &[(Expr, Span)],
+    ) -> Result<usize> {
         let save = (self.cur_fn, self.cur_bb);
         let mut local_map = HashMap::default();
+        args.iter().for_each(|arg| {
+            self.add_local_var_if_new(&mut local_map, arg, Type::Integer);
+        });
         let func = self.enter_new_func(func_name);
         let len = ast.len();
         let ret = if len == 0 {
@@ -1062,7 +1079,8 @@ impl HIRContext {
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let _ = self.new_func_from_ast(name.to_string(), body)?;
+                let _ =
+                    self.new_func_from_ast(name.to_string(), vec![arg_name.to_string()], body)?;
                 Ok(())
             }
         }

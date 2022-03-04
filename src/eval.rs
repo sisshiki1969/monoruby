@@ -2,7 +2,6 @@ use super::*;
 
 pub struct Evaluator {
     ssareg: Vec<Value>,
-    cur_fn: usize,
     cur_bb: usize,
     prev_bb: usize,
     pc: usize,
@@ -23,14 +22,12 @@ impl std::ops::IndexMut<SsaReg> for Evaluator {
 }
 
 impl Evaluator {
-    pub fn eval_hir(hir_context: &HIRContext) -> Value {
-        let cur_fn = 0;
+    pub fn eval_hir(hir_context: &HIRContext, cur_fn: usize) -> Value {
         let locals_num = hir_context.functions[cur_fn].locals.len();
         let mut locals = vec![Value::Integer(0); locals_num];
         let register_num = hir_context.functions[cur_fn].register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
-            cur_fn,
             cur_bb: hir_context.functions[cur_fn].entry_bb,
             prev_bb: 0,
             pc: 0,
@@ -38,7 +35,7 @@ impl Evaluator {
         loop {
             let op = &hir_context[eval.cur_bb].insts[eval.pc];
             eval.pc += 1;
-            if let Some(val) = eval.eval(op, &mut locals) {
+            if let Some(val) = eval.eval(hir_context, op, &mut locals) {
                 return val;
             }
         }
@@ -57,7 +54,12 @@ impl Evaluator {
         }
     }
 
-    fn eval(&mut self, hir: &Hir, locals: &mut Vec<Value>) -> Option<Value> {
+    fn eval(
+        &mut self,
+        hir_context: &HIRContext,
+        hir: &Hir,
+        locals: &mut Vec<Value>,
+    ) -> Option<Value> {
         match hir {
             Hir::Integer(ret, i) => {
                 self[*ret] = Value::Integer(*i);
@@ -202,10 +204,7 @@ impl Evaluator {
                 None
             }
             Hir::Call(id, ret, arg) => {
-                let save = (self.cur_fn, self.cur_bb, self.prev_bb, self.pc);
-                self.cur_fn = *id;
-                self.cur_bb = 0;
-                (self.cur_fn, self.cur_bb, self.prev_bb, self.pc) = save;
+                Evaluator::eval_hir(hir_context, *id);
                 self[*ret] = Value::Integer(100);
                 None
             }
