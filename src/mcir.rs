@@ -90,6 +90,12 @@ impl std::fmt::Debug for McIrContext {
                         McIR::FRet(ret) => format!("ret {:?}: f64", ret),
                         McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
                         McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
+                        McIR::Call(fid, reg, g_using) => {
+                            format!(
+                                "%{:?} = call {} (%{:?}) save_reg:{:?}",
+                                reg, self.functions[*fid].name, reg, g_using
+                            )
+                        }
                     };
                     writeln!(f, "\t\t\t{}", s)?;
                 }
@@ -569,6 +575,17 @@ impl McIrContext {
                     let reg = self.alloc_reg(*reg, ty);
                     self.insts.push(McIR::LocalLoad(info.0, reg));
                 }
+                Hir::Call(func_id, ret, arg) => {
+                    let reg = self.ssa_map[*arg].unwrap();
+                    self.ssa_map[*ret] = Some(reg);
+                    let g_using: Vec<_> = self
+                        .g_reginfo
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, info)| info.ssareg.map(|_| GReg(i)))
+                        .collect();
+                    self.insts.push(McIR::Call(*func_id, reg.as_g(), g_using));
+                }
                 Hir::Br(next_bb) => {
                     let move_list = hir_context[*next_bb]
                         .insts
@@ -603,8 +620,7 @@ impl McIrContext {
                 Hir::Phi(ret, _) => {
                     let reg = self.alloc_reg(*ret, func[*ret].ty);
                     self.insts.push(McIR::In(reg));
-                }
-                _ => unimplemented!(),
+                } //_ => unimplemented!(),
             }
         }
     }
@@ -637,6 +653,7 @@ pub enum McIR {
     FRet(McFloatOperand),
     LocalStore(usize, McReg),
     LocalLoad(usize, McReg),
+    Call(usize, GReg, Vec<GReg>), // func_id, reg, using_general_registers
 }
 
 #[derive(Clone, PartialEq)]

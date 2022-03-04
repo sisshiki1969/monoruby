@@ -22,9 +22,10 @@ impl std::ops::IndexMut<SsaReg> for Evaluator {
 }
 
 impl Evaluator {
-    pub fn eval_hir(hir_context: &HIRContext, cur_fn: usize) -> Value {
+    pub fn eval_hir(hir_context: &HIRContext, cur_fn: usize, args: &[Value]) -> Value {
         let locals_num = hir_context.functions[cur_fn].locals.len();
         let mut locals = vec![Value::Integer(0); locals_num];
+        locals[0..args.len()].clone_from_slice(args);
         let register_num = hir_context.functions[cur_fn].register_num();
         let mut eval = Self {
             ssareg: vec![Value::Integer(0); register_num],
@@ -204,8 +205,8 @@ impl Evaluator {
                 None
             }
             Hir::Call(id, ret, arg) => {
-                Evaluator::eval_hir(hir_context, *id);
-                self[*ret] = Value::Integer(100);
+                let arg = self[*arg].clone();
+                self[*ret] = Evaluator::eval_hir(hir_context, *id, &[arg]);
                 None
             }
             Hir::Br(next_bb) => {

@@ -111,7 +111,7 @@ fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, 0);
+        let eval_res = Evaluator::eval_hir(&hir, 0, &[]);
         eprintln!("Evaluator: {:?}", eval_res);
         let mcir_context = McIrContext::from_hir(&mut hir);
         let mut codegen = Codegen::new();
@@ -120,7 +120,7 @@ fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
         let jit_res = codegen.compile_and_run(&mcir_context);
         eprintln!("JIT: {:?}", jit_res);
         eprintln!("Evaluator: {:?}", eval_res);
-        eprintln!("Ruby output: {:?}", run_ruby(all_codes));
+        //eprintln!("Ruby output: {:?}", run_ruby(all_codes));
     }
     show_err(errs, parse_errs, code);
 }
@@ -137,7 +137,7 @@ pub fn run_test(code: &str) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, 0);
+        let eval_res = Evaluator::eval_hir(&hir, 0, &[]);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]
@@ -259,10 +259,11 @@ mod test {
         run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
+        run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
     }
 
     #[test]
     fn test2() {
-        run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
+        run_test("def fib(x) if x < 3 then 1 else fib(x-1)+fib(x-2) end end; fib(10)");
     }
 }

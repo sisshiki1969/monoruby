@@ -212,6 +212,26 @@ impl Codegen {
             },
         };
     }
+
+    fn emit_call(&mut self, g_using: &[GReg], dest: DestLabel) {
+        for greg in g_using {
+            match self.g_phys_reg(*greg) {
+                GeneralPhysReg::Reg(reg) => {
+                    monoasm!(self.jit, pushq R(reg); );
+                }
+                _ => {}
+            }
+        }
+        monoasm!(self.jit, call dest; );
+        for greg in g_using.iter().rev() {
+            match self.g_phys_reg(*greg) {
+                GeneralPhysReg::Reg(reg) => {
+                    monoasm!(self.jit, popq R(reg); );
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 macro_rules! integer_ops {
@@ -329,6 +349,9 @@ impl Codegen {
         let ret_ty = main_func.ret_ty;
         let func_label = self.func_labels[0];
         self.jit.finalize::<*mut u64, i64>();
+
+        #[cfg(debug_assertions)]
+        self.dump_code();
         let res = match ret_ty {
             Type::Integer => {
                 let func = self.jit.get_label_addr::<(), i64>(func_label);
@@ -347,8 +370,6 @@ impl Codegen {
             }
         };
 
-        #[cfg(debug_assertions)]
-        self.dump_code();
         res
     }
 
@@ -369,6 +390,12 @@ impl Codegen {
         let func_label = self.func_labels[cur_fn];
         self.jit.bind_label(func_label);
         self.prologue(locals_num + g_spill + f_spill);
+        let ofs = (0 * 8) as i64 + 8;
+        if locals_num != 0 {
+            monoasm!(self.jit,
+                movq  [rbp - (ofs)], rdi;
+            );
+        }
 
         for bbi in &func.bbs {
             self.compile_bb(mcir_context, *bbi, ret_ty);
@@ -760,7 +787,7 @@ impl Codegen {
                     };
                 }
                 McIR::LocalStore(ofs, reg) => {
-                    let ofs = (ofs * 8) as i64;
+                    let ofs = (ofs * 8 + 8) as i64;
                     match reg {
                         McReg::GReg(reg) => {
                             match self.g_phys_reg(*reg) {
@@ -795,7 +822,7 @@ impl Codegen {
                     };
                 }
                 McIR::LocalLoad(ofs, reg) => {
-                    let ofs = (ofs * 8) as i64;
+                    let ofs = (ofs * 8 + 8) as i64;
                     match reg {
                         McReg::GReg(reg) => {
                             match self.g_phys_reg(*reg) {
@@ -828,6 +855,29 @@ impl Codegen {
                             };
                         }
                     };
+                }
+                McIR::Call(func_id, reg, g_using) => {
+                    let dest = self.func_labels[*func_id];
+                    match self.g_phys_reg(*reg) {
+                        GeneralPhysReg::Reg(reg) => {
+                            monoasm!(self.jit,
+                              movq rdi, R(reg);
+                            );
+                            self.emit_call(g_using, dest);
+                            monoasm!(self.jit,
+                              movq R(reg), rax;
+                            );
+                        }
+                        GeneralPhysReg::Stack(ofs) => {
+                            monoasm!(self.jit,
+                              movq rdi, [rbp-(ofs)];
+                            );
+                            self.emit_call(g_using, dest);
+                            monoasm!(self.jit,
+                              movq [rbp-(ofs)], rax;
+                            );
+                        }
+                    }
                 }
                 McIR::Jmp(dest) => {
                     if bbi + 1 != *dest {
