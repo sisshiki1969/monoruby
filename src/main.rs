@@ -257,6 +257,7 @@ mod test {
         run_test("a = 42.0; if a != 42.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
+        run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
     }
 
     #[test]

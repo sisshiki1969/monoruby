@@ -328,23 +328,21 @@ impl Codegen {
         let main_func = &mcir_context.functions[0];
         let ret_ty = main_func.ret_ty;
         let func_label = self.func_labels[0];
-        let mut locals = vec![0u64; main_func.locals.len()];
-        let lp = locals.as_mut_ptr();
         self.jit.finalize::<*mut u64, i64>();
         let res = match ret_ty {
             Type::Integer => {
-                let func = self.jit.get_label_addr::<*mut u64, i64>(func_label);
-                let i = func(lp);
+                let func = self.jit.get_label_addr::<(), i64>(func_label);
+                let i = func(());
                 Value::Integer(i as i32)
             }
             Type::Float => {
-                let func = self.jit.get_label_addr::<*mut u64, f64>(func_label);
-                let f = func(lp);
+                let func = self.jit.get_label_addr::<(), f64>(func_label);
+                let f = func(());
                 Value::Float(f)
             }
             Type::Bool => {
-                let func = self.jit.get_label_addr::<*mut u64, u8>(func_label);
-                let f = func(lp);
+                let func = self.jit.get_label_addr::<(), u8>(func_label);
+                let f = func(());
                 Value::Bool(f != 0)
             }
         };
@@ -371,20 +369,20 @@ impl Codegen {
     fn compile_func(&mut self, mcir_context: &McIrContext, cur_fn: usize) {
         let func = &mcir_context.functions[cur_fn];
         let ret_ty = func.ret_ty;
-        let g_regs = match func.g_regs {
+        let g_spill = match func.g_regs {
             i if i < 5 => 0,
             i => i - 4,
         };
-        let f_regs = match func.f_regs {
+        let f_spill = match func.f_regs {
             i if i < 15 => 0,
             i => i - 14,
         };
         let locals_num = func.locals.len();
         self.g_offset = locals_num;
-        self.f_offset = locals_num + g_regs;
+        self.f_offset = locals_num + g_spill;
         let func_label = self.func_labels[cur_fn];
         self.jit.bind_label(func_label);
-        self.prologue(locals_num + g_regs + f_regs);
+        self.prologue(locals_num + g_spill + f_spill);
 
         for bbi in &func.bbs {
             self.compile_bb(mcir_context, *bbi, ret_ty);
@@ -782,13 +780,13 @@ impl Codegen {
                             match self.g_phys_reg(*reg) {
                                 GeneralPhysReg::Reg(reg) => {
                                     monoasm!(self.jit,
-                                      movq [rbx+(ofs)], R(reg);
+                                      movq [rbp-(ofs)], R(reg);
                                     );
                                 }
                                 GeneralPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
                                       movq rax, [rbp-(lhs)];
-                                      movq [rbx+(ofs)], rax;
+                                      movq [rbp-(ofs)], rax;
                                     );
                                 }
                             };
@@ -797,13 +795,13 @@ impl Codegen {
                             match self.f_phys_reg(*reg) {
                                 FloatPhysReg::Xmm(reg) => {
                                     monoasm!(self.jit,
-                                      movq [rbx+(ofs)], xmm(reg);
+                                      movq [rbp-(ofs)], xmm(reg);
                                     );
                                 }
                                 FloatPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
                                       movq rax, [rbp-(lhs)];
-                                      movq [rbx+(ofs)], rax;
+                                      movq [rbp-(ofs)], rax;
                                     );
                                 }
                             };
@@ -817,12 +815,12 @@ impl Codegen {
                             match self.g_phys_reg(*reg) {
                                 GeneralPhysReg::Reg(reg) => {
                                     monoasm!(self.jit,
-                                      movq R(reg), [rbx+(ofs)];
+                                      movq R(reg), [rbp-(ofs)];
                                     );
                                 }
                                 GeneralPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, [rbx+(ofs)];
+                                      movq rax, [rbp-(ofs)];
                                       movq [rbp-(lhs)], rax;
                                     );
                                 }
@@ -832,12 +830,12 @@ impl Codegen {
                             match self.f_phys_reg(*reg) {
                                 FloatPhysReg::Xmm(reg) => {
                                     monoasm!(self.jit,
-                                      movq xmm(reg), [rbx+(ofs)];
+                                      movq xmm(reg), [rbp-(ofs)];
                                     );
                                 }
                                 FloatPhysReg::Stack(lhs) => {
                                     monoasm!(self.jit,
-                                      movq rax, [rbx+(ofs)];
+                                      movq rax, [rbp-(ofs)];
                                       movq [rbp-(lhs)], rax;
                                     );
                                 }
@@ -973,8 +971,6 @@ impl Codegen {
 
     fn prologue(&mut self, locals: usize) {
         monoasm!(self.jit,
-            pushq rbx;
-            movq rbx, rdi;
             pushq rbp;
             movq rbp, rsp;
         );
@@ -989,7 +985,6 @@ impl Codegen {
         monoasm!(self.jit,
             movq rsp, rbp;
             popq rbp;
-            popq rbx;
             ret;
         );
     }
