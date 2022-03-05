@@ -79,7 +79,7 @@ fn main() {
         match readline {
             Ok(code) => {
                 rl.add_history_entry(code.as_str());
-                run_with_locals(&code, &mut all_codes);
+                run(&code, &mut all_codes);
             }
             Err(ReadlineError::Interrupted) => {
                 break;
@@ -95,11 +95,13 @@ fn main() {
     }
 }
 
-fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
+fn run(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
     let (ast, errs, parse_errs) = parse(&dbg!(all_codes.join(";")));
     if let Some(ast) = ast {
-        dbg!(&ast);
+        if let Some(last_ast) = ast.last() {
+            dbg!(last_ast);
+        }
         let mut hir = HIRContext::new();
         match hir.from_ast(&ast) {
             Ok(_) => {}
@@ -121,6 +123,8 @@ fn run_with_locals(code: &str, all_codes: &mut Vec<String>) {
         eprintln!("JIT: {:?}", jit_res);
         eprintln!("Evaluator: {:?}", eval_res);
         //eprintln!("Ruby output: {:?}", run_ruby(all_codes));
+    } else {
+        all_codes.pop();
     }
     show_err(errs, parse_errs, code);
 }

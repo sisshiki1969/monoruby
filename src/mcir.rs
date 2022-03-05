@@ -56,12 +56,20 @@ impl std::fmt::Debug for McIrContext {
                 for hir in &block.insts {
                     let s = match hir {
                         McIR::Jmp(dest) => format!("jmp {}", dest),
-                        McIR::CondJmp(cond, dest) => format!("cond_jmp {:?} {}", cond, dest),
-                        McIR::ICmpJmp(kind, lhs, rhs, dest) => {
-                            format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
+                        McIR::CondJmp(cond, then_, else_) => {
+                            format!("cond_jmp {:?} {} {}", cond, then_, else_)
                         }
-                        McIR::FCmpJmp(kind, lhs, rhs, dest) => {
-                            format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
+                        McIR::ICmpJmp(kind, lhs, rhs, then_, else_) => {
+                            format!(
+                                "cmp_jmp ({:?} %{:?}, %{:?}) then {} else {}",
+                                kind, lhs, rhs, then_, else_
+                            )
+                        }
+                        McIR::FCmpJmp(kind, lhs, rhs, then_, else_) => {
+                            format!(
+                                "cmp_jmp ({:?} %{:?}, %{:?}) then {} else {}",
+                                kind, lhs, rhs, then_, else_
+                            )
                         }
                         McIR::In(reg) => format!("{:?} = %%", reg),
                         McIR::Out(reg) => format!("%% = {:?}", reg),
@@ -90,10 +98,10 @@ impl std::fmt::Debug for McIrContext {
                         McIR::FRet(ret) => format!("ret {:?}: f64", ret),
                         McIR::LocalStore(ofs, reg) => format!("store ${}, {:?}", ofs, reg),
                         McIR::LocalLoad(ofs, reg) => format!("load ${}, {:?}", ofs, reg),
-                        McIR::Call(fid, reg, g_using) => {
+                        McIR::Call(fid, ret, arg, g_using) => {
                             format!(
                                 "%{:?} = call {} (%{:?}) save_reg:{:?}",
-                                reg, self.functions[*fid].name, reg, g_using
+                                ret, self.functions[*fid].name, arg, g_using
                             )
                         }
                     };
@@ -494,16 +502,16 @@ impl McIrContext {
                     let lhs = self.ssa_map[*lhs].unwrap().as_g();
                     let rhs = self.hir_to_general_operand(rhs);
                     self[lhs].release();
-                    self.insts.push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb));
-                    self.insts.push(McIR::Jmp(*else_bb));
+                    self.insts
+                        .push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
                 }
                 Hir::FCmpBr(kind, lhs, rhs, then_bb, else_bb) => {
                     let lhs = self.ssa_map[*lhs].unwrap().as_f();
                     let rhs = self.ssa_map[*rhs].unwrap().as_f();
                     self[lhs].release();
                     self[rhs].release();
-                    self.insts.push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb));
-                    self.insts.push(McIR::Jmp(*else_bb));
+                    self.insts
+                        .push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
                 }
 
                 Hir::Ret(op) => match op {
@@ -577,14 +585,17 @@ impl McIrContext {
                 }
                 Hir::Call(func_id, ret, arg) => {
                     let reg = self.ssa_map[*arg].unwrap();
-                    self.ssa_map[*ret] = Some(reg);
+                    self.invalidate(reg);
                     let g_using: Vec<_> = self
                         .g_reginfo
                         .iter()
                         .enumerate()
                         .filter_map(|(i, info)| info.ssareg.map(|_| GReg(i)))
                         .collect();
-                    self.insts.push(McIR::Call(*func_id, reg.as_g(), g_using));
+                    //self.ssa_map[*ret] = Some(reg);
+                    let ret = self.alloc_greg(*ret);
+                    self.insts
+                        .push(McIR::Call(*func_id, ret, reg.as_g(), g_using));
                 }
                 Hir::Br(next_bb) => {
                     let move_list = hir_context[*next_bb]
@@ -614,8 +625,7 @@ impl McIrContext {
                 }
                 Hir::CondBr(cond_, then_bb, else_bb) => {
                     let cond_ = self.ssa_map[*cond_].unwrap();
-                    self.insts.push(McIR::CondJmp(cond_, *else_bb));
-                    self.insts.push(McIR::Jmp(*then_bb));
+                    self.insts.push(McIR::CondJmp(cond_, *then_bb, *else_bb));
                 }
                 Hir::Phi(ret, _) => {
                     let reg = self.alloc_reg(*ret, func[*ret].ty);
@@ -629,9 +639,9 @@ impl McIrContext {
 #[derive(Clone, Debug, PartialEq)]
 pub enum McIR {
     Jmp(usize),
-    ICmpJmp(CmpKind, GReg, McGeneralOperand, usize),
-    FCmpJmp(CmpKind, FReg, FReg, usize),
-    CondJmp(McReg, usize),
+    ICmpJmp(CmpKind, GReg, McGeneralOperand, usize, usize), // kind, lhs, rhs, then_bb, else_bb
+    FCmpJmp(CmpKind, FReg, FReg, usize, usize),             // kind, lhs, rhs, then_bb, else_bb
+    CondJmp(McReg, usize, usize),
     Out(McReg),
     In(McReg),
     Integer(GReg, i32),
@@ -653,7 +663,7 @@ pub enum McIR {
     FRet(McFloatOperand),
     LocalStore(usize, McReg),
     LocalLoad(usize, McReg),
-    Call(usize, GReg, Vec<GReg>), // func_id, reg, using_general_registers
+    Call(usize, GReg, GReg, Vec<GReg>), // func_id, ret, arg, using_general_registers
 }
 
 #[derive(Clone, PartialEq)]
