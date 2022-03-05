@@ -911,69 +911,47 @@ impl Codegen {
                       jeq label;
                     );
                 }
-                McIR::In(dest) => {
-                    match dest {
-                        McReg::GReg(reg) => {
-                            match self.g_phys_reg(*reg) {
-                                GeneralPhysReg::Reg(reg) => {
-                                    monoasm!(self.jit,
-                                      movq R(reg), rax;
-                                    );
-                                }
-                                GeneralPhysReg::Stack(lhs) => {
-                                    monoasm!(self.jit,
-                                      movq [rbp-(lhs)], rax;
-                                    );
-                                }
-                            };
-                        }
-                        McReg::FReg(reg) => {
-                            match self.f_phys_reg(*reg) {
-                                FloatPhysReg::Xmm(reg) => {
-                                    monoasm!(self.jit,
-                                      movq xmm(reg), rax;
-                                    );
-                                }
-                                FloatPhysReg::Stack(lhs) => {
-                                    monoasm!(self.jit,
-                                      movq [rbp-(lhs)], rax;
-                                    );
-                                }
-                            };
-                        }
-                    };
+                McIR::GMove(src, dst) => {
+                    if src != dst {
+                        match (self.g_phys_reg(*src), self.g_phys_reg(*dst)) {
+                            (GeneralPhysReg::Reg(src), GeneralPhysReg::Reg(dst)) => {
+                                monoasm!(self.jit, movq R(dst), R(src); );
+                            }
+                            (GeneralPhysReg::Reg(src), GeneralPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit, movq [rbp-(dst)], R(src); );
+                            }
+                            (GeneralPhysReg::Stack(src), GeneralPhysReg::Reg(dst)) => {
+                                monoasm!(self.jit, movq R(dst), [rbp-(src)]; );
+                            }
+                            (GeneralPhysReg::Stack(src), GeneralPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit,
+                                    movq rax, [rbp-(src)];
+                                    movq [rbp-(dst)], rax;
+                                );
+                            }
+                        };
+                    }
                 }
-                McIR::Out(dest) => {
-                    match dest {
-                        McReg::GReg(reg) => {
-                            match self.g_phys_reg(*reg) {
-                                GeneralPhysReg::Reg(reg) => {
-                                    monoasm!(self.jit,
-                                      movq rax, R(reg);
-                                    );
-                                }
-                                GeneralPhysReg::Stack(lhs) => {
-                                    monoasm!(self.jit,
-                                      movq rax, [rbp-(lhs)];
-                                    );
-                                }
-                            };
-                        }
-                        McReg::FReg(reg) => {
-                            match self.f_phys_reg(*reg) {
-                                FloatPhysReg::Xmm(reg) => {
-                                    monoasm!(self.jit,
-                                      movq rax, xmm(reg);
-                                    );
-                                }
-                                FloatPhysReg::Stack(lhs) => {
-                                    monoasm!(self.jit,
-                                      movq rax, [rbp-(lhs)];
-                                    );
-                                }
-                            };
-                        }
-                    };
+                McIR::FMove(src, dst) => {
+                    if src != dst {
+                        match (self.f_phys_reg(*src), self.f_phys_reg(*dst)) {
+                            (FloatPhysReg::Xmm(src), FloatPhysReg::Xmm(dst)) => {
+                                monoasm!(self.jit, movq xmm(dst), xmm(src); );
+                            }
+                            (FloatPhysReg::Xmm(src), FloatPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit, movq [rbp-(dst)], xmm(src); );
+                            }
+                            (FloatPhysReg::Stack(src), FloatPhysReg::Xmm(dst)) => {
+                                monoasm!(self.jit, movq xmm(dst), [rbp-(src)]; );
+                            }
+                            (FloatPhysReg::Stack(src), FloatPhysReg::Stack(dst)) => {
+                                monoasm!(self.jit,
+                                    movq rax, [rbp-(src)];
+                                    movq [rbp-(dst)], rax;
+                                );
+                            }
+                        };
+                    }
                 }
             }
         }

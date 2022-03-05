@@ -63,8 +63,8 @@ impl std::fmt::Debug for McIrContext {
                         McIR::FCmpJmp(kind, lhs, rhs, dest) => {
                             format!("cmp_jmp ({:?} %{:?}, %{:?}) {}", kind, lhs, rhs, dest)
                         }
-                        McIR::In(reg) => format!("{:?} = %%", reg),
-                        McIR::Out(reg) => format!("%% = {:?}", reg),
+                        McIR::GMove(src, dst) => format!("%{:?} = %{:?}", dst, src),
+                        McIR::FMove(src, dst) => format!("%{:?} = %{:?}", dst, src),
                         McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
                         McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
                         McIR::CastIntFloat(ret, src) => {
@@ -285,6 +285,7 @@ impl McIrFunc {
 pub struct McIrBlock {
     pub insts: Vec<McIR>,
     pub owner_function: usize,
+    using_reg: Option<(usize, usize)>, // using_greg, using_freg
 }
 
 impl McIrBlock {
@@ -292,6 +293,7 @@ impl McIrBlock {
         Self {
             insts: vec![],
             owner_function,
+            using_reg: None,
         }
     }
 }
@@ -591,9 +593,9 @@ impl McIrContext {
                         .insts
                         .iter()
                         .filter_map(|ir| match ir {
-                            Hir::Phi(_, phi) => phi.iter().find_map(|(i, r)| {
+                            Hir::Phi(_, phi) => phi.iter().find_map(|(i, r, ty)| {
                                 if self.cur_block == *i {
-                                    Some(r)
+                                    Some((r, ty))
                                 } else {
                                     None
                                 }
@@ -603,13 +605,36 @@ impl McIrContext {
                         .collect::<Vec<_>>();
                     if move_list.len() == 0 {
                         self.insts.push(McIR::Jmp(*next_bb));
+                        let using_reg = &mut self.blocks[*next_bb].using_reg;
+                        match using_reg {
+                            Some((0, 0)) => {}
+                            None => *using_reg = Some((0, 0)),
+                            using_reg => panic!("abnormal using_reg info. {:?}", using_reg),
+                        };
                     } else {
                         assert_eq!(1, move_list.len());
-                        let src = move_list[0];
-                        let src_reg = self.ssa_map[*src].unwrap();
-                        self.insts.push(McIR::Out(src_reg));
-                        self.insts.push(McIR::Jmp(*next_bb));
-                        self.invalidate(src_reg);
+                        let mut f_reg = 0;
+                        let mut g_reg = 0;
+                        for src in move_list {
+                            let src_reg = self.ssa_map[*src.0].unwrap();
+                            match src.1 {
+                                &Type::Float => {
+                                    self.insts.push(McIR::FMove(src_reg.as_f(), FReg(f_reg)));
+                                    f_reg += 1;
+                                }
+                                _ => {
+                                    self.insts.push(McIR::GMove(src_reg.as_g(), GReg(g_reg)));
+                                    g_reg += 1;
+                                }
+                            }
+                            self.insts.push(McIR::Jmp(*next_bb));
+                            self.invalidate(src_reg);
+                            let using_reg = &mut self.blocks[*next_bb].using_reg;
+                            match using_reg {
+                                Some(using) => assert!(*using == (g_reg, f_reg)),
+                                None => *using_reg = Some((g_reg, f_reg)),
+                            };
+                        }
                     }
                 }
                 Hir::CondBr(cond_, then_bb, else_bb) => {
@@ -618,9 +643,9 @@ impl McIrContext {
                     self.insts.push(McIR::Jmp(*then_bb));
                 }
                 Hir::Phi(ret, _) => {
-                    let reg = self.alloc_reg(*ret, func[*ret].ty);
-                    self.insts.push(McIR::In(reg));
-                } //_ => unimplemented!(),
+                    let _reg = self.alloc_reg(*ret, func[*ret].ty);
+                    //self.insts.push(McIR::In(reg));*/
+                }
             }
         }
     }
@@ -632,8 +657,8 @@ pub enum McIR {
     ICmpJmp(CmpKind, GReg, McGeneralOperand, usize),
     FCmpJmp(CmpKind, FReg, FReg, usize),
     CondJmp(McReg, usize),
-    Out(McReg),
-    In(McReg),
+    GMove(GReg, GReg),
+    FMove(FReg, FReg),
     Integer(GReg, i32),
     Float(FReg, f64),
     CastIntFloat(FReg, McGeneralOperand),

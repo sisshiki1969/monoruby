@@ -223,12 +223,7 @@ impl Evaluator {
                 None
             }
             Hir::Phi(ret, phi) => {
-                let reg = phi
-                    .iter()
-                    .find(|(bb, _)| self.prev_bb == *bb)
-                    .unwrap()
-                    .1
-                    .clone();
+                let reg = phi.iter().find(|(bb, _, _)| self.prev_bb == *bb).unwrap().1;
                 self[*ret] = self[reg].clone();
                 None
             }

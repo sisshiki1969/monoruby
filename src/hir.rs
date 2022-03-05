@@ -118,7 +118,7 @@ impl std::fmt::Debug for HIRContext {
                         Hir::Phi(ret, phi) => {
                             let phi_s = phi
                                 .iter()
-                                .map(|(bb, r)| format!("({},%{})", bb, r))
+                                .map(|(bb, r, ty)| format!("({}, %{}: {:?})", bb, r, ty))
                                 .collect::<Vec<String>>()
                                 .join(", ");
                             format!("%{} = phi {}", ret, phi_s)
@@ -414,9 +414,9 @@ impl HIRContext {
         Ok(self.add_assign(hir, ty))
     }
 
-    fn new_phi(&mut self, phi: Vec<(usize, SsaReg)>) -> SsaReg {
-        let ty = self.func()[phi[0].1].ty;
-        assert!(phi.iter().all(|(_, r)| self.func()[*r].ty == ty));
+    fn new_phi(&mut self, phi: Vec<(usize, SsaReg, Type)>) -> SsaReg {
+        let ty = phi[0].2;
+        assert!(phi.iter().all(|(_, _, ty)| ty == ty));
         let ret = self.next_reg();
         self.add_assign(Hir::Phi(ret, phi), ty)
     }
@@ -501,7 +501,7 @@ pub enum Hir {
     CondBr(SsaReg, usize, usize),
     ICmpBr(CmpKind, SsaReg, HirOperand, usize, usize),
     FCmpBr(CmpKind, SsaReg, SsaReg, usize, usize),
-    Phi(SsaReg, Vec<(usize, SsaReg)>),
+    Phi(SsaReg, Vec<(usize, SsaReg, Type)>), // ret, [(bb, reg, type)]
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
     CastIntFloat(HirUnop),
@@ -996,24 +996,36 @@ impl HIRContext {
                     self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
                 }
 
+                // generate bb for else clause
                 self.cur_bb = else_bb;
-                let else_ = self.gen(local_map, else_)?;
+                // return value of else clause.
+                let else_reg = self.gen(local_map, else_)?;
+                // terminal bb of else clause.
                 let else_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
 
+                // generate bb for then clause
                 self.cur_bb = then_bb;
-                let then_ = self.gen(local_map, then_)?;
+                // return value of then clause.
+                let then_reg = self.gen(local_map, then_)?;
+                // terminal bb of then clause.
                 let then_bb = self.cur_bb;
                 self.insts.push(Hir::Br(succ_bb));
 
-                if self.func()[then_].ty != self.func()[else_].ty {
-                    return Err(HirErr::TypeMismatch(
-                        self.func()[then_].ty,
-                        self.func()[else_].ty,
-                    ));
+                // check types of return values of then and else clause.
+                let then_ty = self.func()[then_reg].ty;
+                let else_ty = self.func()[else_reg].ty;
+
+                if then_ty != else_ty {
+                    return Err(HirErr::TypeMismatch(then_ty, else_ty));
                 }
+
+                // generate phi on the top of successor bb.
                 self.cur_bb = succ_bb;
-                let ret = self.new_phi(vec![(then_bb, then_), (else_bb, else_)]);
+                let ret = self.new_phi(vec![
+                    (then_bb, then_reg, then_ty),
+                    (else_bb, else_reg, else_ty),
+                ]);
                 Ok(ret)
             }
         }
