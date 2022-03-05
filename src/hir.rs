@@ -167,7 +167,7 @@ impl HIRContext {
         let cur_bb = 0;
         let cur_fn = 0;
         let basic_block = HirBasicBlock::new(cur_fn);
-        let mut function = HirFunction::new("/main".to_string(), cur_bb);
+        let mut function = HirFunction::new("/main".to_string(), cur_bb, vec![]);
         function.bbs.insert(cur_bb);
         HIRContext {
             basic_block: vec![basic_block],
@@ -193,14 +193,14 @@ impl HIRContext {
         &mut self.functions[self.cur_fn]
     }
 
-    fn enter_new_func(&mut self, name: String) -> usize {
+    fn enter_new_func(&mut self, name: String, args: Vec<(String, Type)>) -> usize {
         let entry_bb = self.basic_block.len();
         let next_fn = self.functions.len();
 
         let bb = HirBasicBlock::new(next_fn);
         self.basic_block.push(bb);
 
-        let mut func = HirFunction::new(name, entry_bb);
+        let mut func = HirFunction::new(name, entry_bb, args);
         func.bbs.insert(entry_bb);
         self.functions.push(func);
 
@@ -432,6 +432,7 @@ pub struct HirFunction {
     reginfo: Vec<SsaRegInfo>,
     pub bbs: BTreeSet<usize>,
     pub locals: HashMap<String, (usize, Type)>,
+    pub args: Vec<(String, Type)>,
 }
 
 impl std::ops::Index<SsaReg> for HirFunction {
@@ -449,7 +450,7 @@ impl std::ops::IndexMut<SsaReg> for HirFunction {
 }
 
 impl HirFunction {
-    fn new(name: String, entry_bb: usize) -> Self {
+    fn new(name: String, entry_bb: usize, args: Vec<(String, Type)>) -> Self {
         Self {
             name,
             entry_bb,
@@ -458,6 +459,7 @@ impl HirFunction {
             reginfo: vec![],
             bbs: BTreeSet::default(),
             locals: HashMap::default(),
+            args,
         }
     }
 
@@ -743,15 +745,15 @@ impl HIRContext {
     pub fn new_func_from_ast(
         &mut self,
         func_name: String,
-        args: Vec<String>,
+        args: Vec<(String, Type)>,
         ast: &[(Expr, Span)],
     ) -> Result<usize> {
         let save = (self.cur_fn, self.cur_bb);
         let mut local_map = HashMap::default();
-        args.iter().for_each(|arg| {
+        args.iter().for_each(|(arg, _)| {
             self.add_local_var_if_new(&mut local_map, arg, Type::Integer);
         });
-        let func = self.enter_new_func(func_name);
+        let func = self.enter_new_func(func_name, args);
         let len = ast.len();
         let ret = if len == 0 {
             self.new_integer(0)
@@ -1091,8 +1093,11 @@ impl HIRContext {
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let _ =
-                    self.new_func_from_ast(name.to_string(), vec![arg_name.to_string()], body)?;
+                let _ = self.new_func_from_ast(
+                    name.to_string(),
+                    vec![(arg_name.to_string(), Type::Integer)],
+                    body,
+                )?;
                 Ok(())
             }
         }
