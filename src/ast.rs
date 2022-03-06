@@ -22,7 +22,8 @@ pub enum Decl {
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
-    If(Box<Spanned<Expr>>, Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    If(Box<Spanned<Expr>>, Vec<Spanned<Expr>>, Vec<Spanned<Expr>>), // (cond, then, else)
+    While(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
     Call(String, Box<Spanned<Expr>>), // (func_name, arg)
 
     Mul(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (lhs, rhs)

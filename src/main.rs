@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use ariadne::*;
-use chumsky::{prelude::*, Stream};
+use chumsky::{error::Cheap, prelude::*, Stream};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -97,11 +97,11 @@ fn main() {
 
 fn run(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
-    let (ast, errs, parse_errs) = parse(&dbg!(all_codes.join(";")));
+    let (ast, errs, parse_errs) = parse(&all_codes.join(";"));
     if let Some(ast) = ast {
-        if let Some(last_ast) = ast.last() {
-            dbg!(last_ast);
-        }
+        //if let Some(last_ast) = ast.last() {
+        //    dbg!(last_ast);
+        //}
         let mut hir = HIRContext::new();
         match hir.from_ast(&ast) {
             Ok(_) => {}
@@ -158,11 +158,12 @@ fn parse(
     code: &str,
 ) -> (
     Option<Vec<(Stmt, Span)>>,
-    Vec<Simple<char>>,
-    Vec<Simple<Token>>,
+    Vec<Cheap<char>>,
+    Vec<Cheap<Token>>,
 ) {
     let len = code.len();
     let (tokens, errs) = lexer().parse_recovery(code);
+    dbg!(&tokens);
     let (ast, parse_errs) = if let Some(tokens) = tokens {
         parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()))
     } else {
@@ -171,20 +172,24 @@ fn parse(
     (ast, errs, parse_errs)
 }
 
-fn show_err(errs: Vec<Simple<char>>, parse_errs: Vec<Simple<Token>>, code: &str) {
-    errs.into_iter()
-        .map(|e| e.map(|c| c.to_string()))
-        .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
-        .for_each(|e| {
-            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
-            let expected: Vec<_> = e.expected().filter_map(|o| o.as_ref()).collect();
-            rep = rep.with_label(Label::new(e.span()).with_message(format!(
-                "{:?} expected:{:?}",
-                e.reason(),
-                expected
-            )));
-            rep.finish().eprint(Source::from(code)).unwrap();
-        });
+fn show_err(errs: Vec<Cheap<char>>, parse_errs: Vec<Cheap<Token>>, code: &str) {
+    errs.into_iter().for_each(|e| {
+        let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+        rep = rep
+            .with_label(Label::new(e.span()).with_message(format!("unexpected:{:?}", e.label())));
+        rep.finish().eprint(Source::from(code)).unwrap();
+    });
+    parse_errs.into_iter().for_each(|e| {
+        let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+        rep = rep.with_label(Label::new(e.span()).with_message(format!(
+            "unexpected:{}",
+            match e.label() {
+                Some(s) => s,
+                None => "",
+            }
+        )));
+        rep.finish().eprint(Source::from(code)).unwrap();
+    });
 }
 
 fn run_ruby(code: &Vec<String>) -> Value {
@@ -268,6 +273,38 @@ mod test {
 
     #[test]
     fn test2() {
-        run_test("def fib(x) if x < 3 then 1 else fib(x-1)+fib(x-2) end end; fib(10)");
+        run_test(
+            r#"
+            def fib(x)
+                if x<3 then
+                    1
+                else
+                    fib(x-1)+fib(x-2)
+                end
+            end;
+            fib(15)"#,
+        );
+        run_test(
+            r#"
+            a=1
+            while a<25 do
+                a=a+1
+            end
+            a
+            "#,
+        );
+    }
+
+    #[test]
+    fn test3() {
+        run_test(
+            r#"
+        a=3;
+        if a==1;
+          3
+        else
+          4
+        end"#,
+        );
     }
 }

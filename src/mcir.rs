@@ -630,16 +630,19 @@ impl McIrContext {
                             let src_reg = self.ssa_map[*src.0].unwrap();
                             match src.1 {
                                 &Type::Float => {
-                                    self.insts.push(McIR::FMove(src_reg.as_f(), FReg(f_reg)));
+                                    let reg = src_reg.as_f();
+                                    self.insts.push(McIR::FMove(reg, FReg(f_reg)));
+                                    self[reg].release();
                                     f_reg += 1;
                                 }
                                 _ => {
-                                    self.insts.push(McIR::GMove(src_reg.as_g(), GReg(g_reg)));
+                                    let reg = src_reg.as_g();
+                                    self.insts.push(McIR::GMove(reg, GReg(g_reg)));
+                                    self[reg].release();
                                     g_reg += 1;
                                 }
                             }
                             self.insts.push(McIR::Jmp(*next_bb));
-                            self.invalidate(src_reg);
                             let using_reg = &mut self.blocks[*next_bb].using_reg;
                             match using_reg {
                                 Some(using) => assert!(*using == (g_reg, f_reg)),

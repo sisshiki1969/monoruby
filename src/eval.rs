@@ -34,7 +34,8 @@ impl Evaluator {
             pc: 0,
         };
         loop {
-            let op = &hir_context[eval.cur_bb].insts[eval.pc];
+            let bb = &hir_context[eval.cur_bb];
+            let op = &bb.insts[eval.pc];
             eval.pc += 1;
             if let Some(val) = eval.eval(hir_context, op, &mut locals) {
                 return val;

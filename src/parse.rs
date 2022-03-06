@@ -9,6 +9,8 @@ pub enum Token {
     Then,
     Else,
     End,
+    While,
+    Do,
     Def,
     Call(String),
     OParen,
@@ -37,6 +39,8 @@ impl std::fmt::Display for Token {
             Self::Then => write!(f, "then"),
             Self::Else => write!(f, "else"),
             Self::End => write!(f, "end"),
+            Self::While => write!(f, "while"),
+            Self::Do => write!(f, "do"),
             Self::Def => write!(f, "def"),
             Self::Call(s) => write!(f, "call {}", s),
             Self::OParen => write!(f, "("),
@@ -60,8 +64,8 @@ impl std::fmt::Display for Token {
     }
 }
 
-pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
-    let token = choice::<_, Simple<char>>((
+pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Cheap<char>> {
+    let token = choice::<_, Cheap<char>>((
         just('(').to(Token::OParen),
         just(')').to(Token::CParen),
         just('-').to(Token::Minus),
@@ -79,6 +83,8 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         text::keyword("then").to(Token::Then),
         text::keyword("else").to(Token::Else),
         text::keyword("end").to(Token::End),
+        text::keyword("while").to(Token::While),
+        text::keyword("do").to(Token::Do),
         text::keyword("def").to(Token::Def),
         text::int(10)
             .then(just('.').ignore_then(text::digits(10)).or_not())
@@ -95,22 +101,27 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         text::int(10).from_str().unwrapped().map(Token::Int),
         text::ident().then_ignore(just('(')).map(Token::Call),
         text::ident().map(Token::Ident),
-        choice((just('\n'), just(';')))
-            .ignored()
+        one_of(" \t")
             .repeated()
-            .at_least(1)
-            .padded()
+            .ignored()
+            .then(
+                choice((just('\n'), just(';')))
+                    .ignored()
+                    .then_ignore(one_of(" ;\t\n").repeated()),
+            )
             .to(Token::Separator),
     ));
 
-    token
+    one_of(" \t")
+        .repeated()
+        .ignore_then(token)
         .map_with_span(|tok, span| (tok, span))
-        .padded()
+        .then_ignore(one_of(" \t").repeated())
         .repeated()
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Token, Vec<Spanned<Stmt>>, Error = Simple<Token>> {
+pub fn parser() -> impl Parser<Token, Vec<Spanned<Stmt>>, Error = Cheap<Token>> {
     stmt()
         .separated_by(just(Token::Separator))
         .allow_trailing()
@@ -126,13 +137,13 @@ pub fn parser() -> impl Parser<Token, Vec<Spanned<Stmt>>, Error = Simple<Token>>
 ///
 /// A parser of *Statement*
 ///
-fn stmt() -> impl Parser<Token, Spanned<Stmt>, Error = Simple<Token>> {
+fn stmt() -> impl Parser<Token, Spanned<Stmt>, Error = Cheap<Token>> {
     decl()
         .map(|(decl, span)| (Stmt::Decl((decl, span.clone())), span))
         .or(expr().map(|(expr, span)| (Stmt::Expr((expr, span.clone())), span)))
 }
 
-fn ident() -> impl Parser<Token, String, Error = Simple<Token>> {
+fn ident() -> impl Parser<Token, String, Error = Cheap<Token>> {
     select! {
         Token::Ident(s) => s
     }
@@ -141,7 +152,7 @@ fn ident() -> impl Parser<Token, String, Error = Simple<Token>> {
 ///
 /// A parser of *Declaration*
 ///
-fn decl() -> impl Parser<Token, Spanned<Decl>, Error = Simple<Token>> {
+fn decl() -> impl Parser<Token, Spanned<Decl>, Error = Cheap<Token>> {
     just(Token::Def)
         .ignore_then(select! {Token::Call(s) => s})
         .then(ident())
@@ -161,8 +172,14 @@ fn decl() -> impl Parser<Token, Spanned<Decl>, Error = Simple<Token>> {
 ///
 /// A parser of *Expr*
 ///
-fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
-    recursive(|expr: Recursive<Token, Spanned<Expr>, Simple<Token>>| {
+fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Cheap<Token>> {
+    recursive(|expr: Recursive<Token, Spanned<Expr>, Cheap<Token>>| {
+        let exprs = expr
+            .clone()
+            .separated_by(just(Token::Separator))
+            .allow_leading()
+            .allow_trailing();
+
         let number = select! {
             Token::Int(i) => Expr::Integer(i),
             Token::Float(f) => Expr::Float(f64::from_ne_bytes(u64::to_ne_bytes(f))),
@@ -269,19 +286,37 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> {
 
         let if_expr = just(Token::If)
             .ignore_then(expr.clone())
-            .then_ignore(just(Token::Then))
-            .then(expr.clone())
+            .then_ignore(choice((
+                just(Token::Then),
+                just(Token::Separator).then_ignore(just(Token::Then).or_not()),
+            )))
+            .or_else(|e| Err(e.with_label("expected 'then' or ';' or new line.")))
+            .then(exprs.clone())
             .then_ignore(just(Token::Else))
-            .then(expr)
-            .then_ignore(just(Token::End))
-            .map(|((cond_, then_), else_)| {
-                let span = cond_.1.start..else_.1.end;
-                (
-                    Expr::If(Box::new(cond_), Box::new(then_), Box::new(else_)),
-                    span,
-                )
+            .or_else(|e| Err(e.with_label("expected 'else'.")))
+            .then(exprs.clone())
+            .then(just(Token::End).map_with_span(|_, span| span))
+            .or_else(|e| Err(e.with_label("expected 'end'.")))
+            .map(|(((cond_, then_), else_), end_span)| {
+                let span = cond_.1.start..end_span.end;
+                (Expr::If(Box::new(cond_), then_, else_), span)
+            });
+        let while_expr = just(Token::While)
+            .map_with_span(|_, span| span)
+            .then(expr.clone())
+            .then_ignore(just(Token::Do))
+            .or_else(|e| Err(e.with_label("expected 'do'.")))
+            .then(exprs.clone())
+            .then(just(Token::End).map_with_span(|_, span| span))
+            .or_else(|e| Err(e.with_label("expected 'end'.")))
+            .map(|(((span1, cond), body), span2)| {
+                let span = span1.start..span2.end;
+                (Expr::While(Box::new(cond), body), span)
             });
 
-        if_expr.or(assignment).or(choice((comparative, additive)))
+        if_expr
+            .or(while_expr)
+            .or(assignment)
+            .or(choice((comparative, additive)))
     })
 }
