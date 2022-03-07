@@ -307,4 +307,19 @@ mod test {
         end"#,
         );
     }
+
+    #[test]
+    fn test4() {
+        run_test(
+            r#"
+            def f(x)
+              x + 1
+            end
+            a = f(4)
+            a = f(a)
+            a = f(a)
+            a
+        "#,
+        );
+    }
 }

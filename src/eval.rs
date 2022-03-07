@@ -199,7 +199,10 @@ impl Evaluator {
             }
             Hir::Call(id, ret, arg) => {
                 let arg = self[*arg].clone();
-                self[*ret] = Evaluator::eval_hir(hir_context, *id, &[arg]);
+                let res = Evaluator::eval_hir(hir_context, *id, &[arg]);
+                if let Some(ret) = *ret {
+                    self[ret] = res;
+                }
             }
             Hir::Br(next_bb) => {
                 self.goto(*next_bb);

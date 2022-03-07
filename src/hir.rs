@@ -97,7 +97,10 @@ impl std::fmt::Debug for HIRContext {
                         }
                         Hir::Call(id, ret, arg) => {
                             let name = &self.functions[*id].name;
-                            format!("%{} = call {} (%{})", ret, name, arg)
+                            match ret {
+                                Some(ret) => format!("%{} = call {} (%{})", ret, name, arg),
+                                None => format!("%_ = call {} (%{})", name, arg),
+                            }
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
@@ -326,16 +329,28 @@ impl HIRContext {
         self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
-    fn new_call(&mut self, name: String, arg: SsaReg, ty: Type) -> Result<SsaReg> {
+    fn new_call(&mut self, name: &str, arg: SsaReg, ty: Type) -> Result<SsaReg> {
+        let id = self.get_function(&name)?;
         let ret = self.next_reg();
+        Ok(self.add_assign(Hir::Call(id, Some(ret), arg), ty))
+    }
+
+    fn new_call_nouse(&mut self, name: &str, arg: SsaReg) -> Result<()> {
+        let id = self.get_function(&name)?;
+        let hir = Hir::Call(id, None, arg);
+        self.insts.push(hir);
+        Ok(())
+    }
+
+    fn get_function(&mut self, name: &str) -> Result<usize> {
         let id = self
             .functions
             .iter()
             .enumerate()
-            .find(|(_, func)| func.name == name)
-            .ok_or(HirErr::UndefinedMethod(name))?
+            .find(|(_, func)| &func.name == name)
+            .ok_or(HirErr::UndefinedMethod(name.to_string()))?
             .0;
-        Ok(self.add_assign(Hir::Call(id, ret, arg), ty))
+        Ok(id)
     }
 
     fn new_ret(&mut self, lhs: SsaReg) {
@@ -522,7 +537,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
-    Call(usize, SsaReg, SsaReg), // (id, ret, arg)
+    Call(usize, Option<SsaReg>, SsaReg), // (id, ret, arg)
 }
 
 ///
@@ -955,7 +970,7 @@ impl HIRContext {
             Expr::Call(name, arg) => {
                 let arg = self.gen_expr(local_map, &arg.0)?;
                 let ty = Type::Integer;
-                self.new_call(name.to_string(), arg, ty)
+                self.new_call(name, arg, ty)
             }
             Expr::If(box (cond_, _), then_, else_) => {
                 let else_bb = self.new_bb();
@@ -995,6 +1010,88 @@ impl HIRContext {
                 Ok(ret)
             }
             Expr::While(box (cond, _), body) => self.gen_while(cond, body, local_map),
+        }
+    }
+
+    /// Generate HIR from an *Expr*.
+    fn gen_expr_nouse(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ast: &Expr,
+    ) -> Result<()> {
+        match ast {
+            Expr::Neg(box (lhs, _)) => {
+                match lhs {
+                    Expr::Integer(_) | Expr::Float(_) => {}
+                    _ => self.gen_expr_nouse(local_map, lhs)?,
+                };
+            }
+            Expr::Add(box (lhs, _), box (rhs, _)) => {
+                self.gen_expr_nouse(local_map, lhs)?;
+                self.gen_expr_nouse(local_map, rhs)?;
+            }
+            Expr::Sub(box (lhs, _), box (rhs, _)) => {
+                self.gen_expr_nouse(local_map, lhs)?;
+                self.gen_expr_nouse(local_map, rhs)?;
+            }
+            Expr::Mul(box (lhs, _), box (rhs, _)) => {
+                self.gen_expr_nouse(local_map, lhs)?;
+                self.gen_expr_nouse(local_map, rhs)?;
+            }
+            Expr::Div(box (lhs, _), box (rhs, _)) => {
+                self.gen_expr_nouse(local_map, lhs)?;
+                self.gen_expr_nouse(local_map, rhs)?;
+            }
+            Expr::LocalStore(ident, box (rhs, _)) => {
+                let rhs = self.gen_expr(local_map, rhs)?;
+                self.new_local_store_nouse(local_map, ident, rhs)?;
+            }
+            Expr::If(box (cond_, _), then_, else_) => {
+                let then_bb = self.new_bb();
+                let else_bb = self.new_bb();
+                let succ_bb = self.new_bb();
+                self.gen_cond(cond_, then_bb, else_bb, local_map)?;
+
+                self.cur_bb = else_bb;
+                self.gen_exprs_nouse(local_map, else_)?;
+                self.insts.push(Hir::Br(succ_bb));
+
+                self.cur_bb = then_bb;
+                self.gen_exprs_nouse(local_map, then_)?;
+                self.insts.push(Hir::Br(succ_bb));
+
+                self.cur_bb = succ_bb;
+            }
+            Expr::While(box (cond, _), body) => {
+                let _ = self.gen_while(cond, body, local_map)?;
+            }
+            Expr::Call(name, arg) => {
+                let arg = self.gen_expr(local_map, &arg.0)?;
+                self.new_call_nouse(name, arg)?;
+            }
+            Expr::Integer(_) => {}
+            Expr::Float(_) => {}
+            Expr::LocalLoad(_) => {}
+            Expr::Cmp(_, _, _) => {}
+        };
+        Ok(())
+    }
+
+    fn gen_decl(&mut self, decl: &Decl) -> Result<SsaReg> {
+        self.gen_decl_nouse(decl)?;
+        Ok(self.new_integer(0))
+    }
+
+    fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
+        match decl {
+            Decl::MethodDef(name, arg_name, body) => {
+                let _ = self.new_func_from_ast(
+                    name.to_string(),
+                    vec![(arg_name.to_string(), Type::Integer)],
+                    body,
+                )?;
+                Ok(())
+            }
         }
     }
 
@@ -1085,80 +1182,5 @@ impl HIRContext {
         self.cur_bb = succ_bb;
         let ret = self.new_integer(0);
         Ok(ret)
-    }
-
-    /// Generate HIR from an *Expr*.
-    fn gen_expr_nouse(
-        &mut self,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        ast: &Expr,
-    ) -> Result<()> {
-        match ast {
-            Expr::Neg(box (lhs, _)) => {
-                match lhs {
-                    Expr::Integer(_) | Expr::Float(_) => {}
-                    _ => self.gen_expr_nouse(local_map, lhs)?,
-                };
-            }
-            Expr::Add(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
-            }
-            Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
-            }
-            Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
-            }
-            Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
-            }
-            Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(local_map, rhs)?;
-                self.new_local_store_nouse(local_map, ident, rhs)?;
-            }
-            Expr::If(box (cond_, _), then_, else_) => {
-                let then_bb = self.new_bb();
-                let else_bb = self.new_bb();
-                let succ_bb = self.new_bb();
-                self.gen_cond(cond_, then_bb, else_bb, local_map)?;
-
-                self.cur_bb = else_bb;
-                self.gen_exprs_nouse(local_map, else_)?;
-                self.insts.push(Hir::Br(succ_bb));
-
-                self.cur_bb = then_bb;
-                self.gen_exprs_nouse(local_map, then_)?;
-                self.insts.push(Hir::Br(succ_bb));
-
-                self.cur_bb = succ_bb;
-            }
-            Expr::While(box (cond, _), body) => {
-                let _ = self.gen_while(cond, body, local_map)?;
-            }
-            _ => {}
-        };
-        Ok(())
-    }
-
-    fn gen_decl(&mut self, decl: &Decl) -> Result<SsaReg> {
-        self.gen_decl_nouse(decl)?;
-        Ok(self.new_integer(0))
-    }
-
-    fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
-        match decl {
-            Decl::MethodDef(name, arg_name, body) => {
-                let _ = self.new_func_from_ast(
-                    name.to_string(),
-                    vec![(arg_name.to_string(), Type::Integer)],
-                    body,
-                )?;
-                Ok(())
-            }
-        }
     }
 }
