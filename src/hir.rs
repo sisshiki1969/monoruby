@@ -365,30 +365,10 @@ impl HIRContext {
         rhs: SsaReg,
     ) -> Result<SsaReg> {
         let ty = self.func()[rhs].ty;
-        let info = self.add_local_var_if_new(local_map, ident, ty);
-        if info.1 != ty {
-            return Err(HirErr::TypeMismatch(info.1, ty));
-        }
+        let info = self.add_local_var_if_new(local_map, ident, ty)?;
         let ret = self.next_reg();
         self.add_assign(Hir::LocalStore(Some(ret), info, rhs), ty);
         Ok(ret)
-    }
-
-    fn add_local_var_if_new(
-        &mut self,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        ident: &String,
-        ty: Type,
-    ) -> (usize, Type) {
-        let len = local_map.len();
-        match local_map.get(ident) {
-            Some(info) => info.clone(),
-            None => {
-                let info = (len, ty);
-                local_map.insert(ident.to_string(), info.clone());
-                info
-            }
-        }
     }
 
     fn new_local_store_nouse(
@@ -398,21 +378,33 @@ impl HIRContext {
         rhs: SsaReg,
     ) -> Result<()> {
         let ty = self.func()[rhs].ty;
+        let info = self.add_local_var_if_new(local_map, ident, ty)?;
+        let hir = Hir::LocalStore(None, info, rhs);
+        self.insts.push(hir);
+        Ok(())
+    }
+
+    fn add_local_var_if_new(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        ident: &String,
+        ty: Type,
+    ) -> Result<(usize, Type)> {
         let len = local_map.len();
         let info = match local_map.get(ident) {
-            Some(info) => info.clone(),
+            Some(info) => {
+                if info.1 != ty {
+                    return Err(HirErr::TypeMismatch(info.1, ty));
+                }
+                info.clone()
+            }
             None => {
                 let info = (len, ty);
                 local_map.insert(ident.to_string(), info.clone());
                 info
             }
         };
-        if info.1 != ty {
-            return Err(HirErr::TypeMismatch(info.1, ty));
-        }
-        let hir = Hir::LocalStore(None, info, rhs);
-        self.insts.push(hir);
-        Ok(())
+        Ok(info)
     }
 
     fn new_local_load(
@@ -765,9 +757,9 @@ impl HIRContext {
     ) -> Result<usize> {
         let save = (self.cur_fn, self.cur_bb);
         let mut local_map = HashMap::default();
-        args.iter().for_each(|(arg, _)| {
-            self.add_local_var_if_new(&mut local_map, arg, Type::Integer);
-        });
+        for (arg, _) in &args {
+            self.add_local_var_if_new(&mut local_map, arg, Type::Integer)?;
+        }
         let func = self.enter_new_func(func_name, args);
         let len = ast.len();
         let ret = if len == 0 {
