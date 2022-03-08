@@ -609,7 +609,7 @@ impl McIrContext {
                         .filter_map(|(i, info)| info.ssareg.map(|_| GReg(i)))
                         .collect();
                     //self.ssa_map[*ret] = Some(reg);
-                    let ret = self.alloc_greg(*ret);
+                    let ret = ret.map(|ret| self.alloc_greg(ret));
                     self.insts.push(McIR::Call(*func_id, ret, args, g_using));
                 }
                 Hir::Br(next_bb) => {
@@ -704,7 +704,7 @@ pub enum McIR {
     FRet(McFloatOperand),
     LocalStore(usize, McReg),
     LocalLoad(usize, McReg),
-    Call(usize, GReg, Vec<GReg>, Vec<GReg>), // func_id, ret, arg, using_general_registers
+    Call(usize, Option<GReg>, Vec<GReg>, Vec<GReg>), // func_id, ret, arg, using_general_registers
 }
 
 #[derive(Clone, PartialEq)]

@@ -97,7 +97,10 @@ impl std::fmt::Debug for HIRContext {
                         }
                         Hir::Call(id, ret, arg) => {
                             let name = &self.functions[*id].name;
-                            format!("%{} = call {} ({:?})", ret, name, arg)
+                            match ret {
+                                Some(ret) => format!("%{} = call {} ({:?})", ret, name, arg),
+                                None => format!("%_ = call {} ({:?})", name, arg),
+                            }
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
@@ -326,16 +329,28 @@ impl HIRContext {
         self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
-    fn new_call(&mut self, name: String, args: Vec<SsaReg>, ty: Type) -> Result<SsaReg> {
+    fn new_call(&mut self, name: &str, args: Vec<SsaReg>, ty: Type) -> Result<SsaReg> {
         let ret = self.next_reg();
+        let id = self.get_function(&name)?;
+        Ok(self.add_assign(Hir::Call(id, Some(ret), args), ty))
+    }
+
+    fn new_call_nouse(&mut self, name: &str, args: Vec<SsaReg>) -> Result<()> {
+        let id = self.get_function(&name)?;
+        let hir = Hir::Call(id, None, args);
+        self.insts.push(hir);
+        Ok(())
+    }
+
+    fn get_function(&mut self, name: &str) -> Result<usize> {
         let id = self
             .functions
             .iter()
             .enumerate()
-            .find(|(_, func)| func.name == name)
-            .ok_or(HirErr::UndefinedMethod(name))?
+            .find(|(_, func)| &func.name == name)
+            .ok_or(HirErr::UndefinedMethod(name.to_string()))?
             .0;
-        Ok(self.add_assign(Hir::Call(id, ret, args), ty))
+        Ok(id)
     }
 
     fn new_ret(&mut self, lhs: SsaReg) {
@@ -522,7 +537,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
-    Call(usize, SsaReg, Vec<SsaReg>), // (id, ret, arg)
+    Call(usize, Option<SsaReg>, Vec<SsaReg>), // (id, ret, arg)
 }
 
 ///
@@ -959,7 +974,7 @@ impl HIRContext {
                     arg_regs.push(reg);
                 }
                 let ty = Type::Integer;
-                self.new_call(name.to_string(), arg_regs, ty)
+                self.new_call(name, arg_regs, ty)
             }
             Expr::If(box (cond_, _), then_, else_) => {
                 let else_bb = self.new_bb();
@@ -1143,7 +1158,18 @@ impl HIRContext {
             Expr::While(box (cond, _), body) => {
                 let _ = self.gen_while(cond, body, local_map)?;
             }
-            _ => {}
+            Expr::Call(name, args) => {
+                let mut arg_regs = vec![];
+                for arg in args {
+                    let reg = self.gen_expr(local_map, &arg.0)?;
+                    arg_regs.push(reg);
+                }
+                self.new_call_nouse(name, arg_regs)?;
+            }
+            Expr::Integer(_) => {}
+            Expr::Float(_) => {}
+            Expr::LocalLoad(_) => {}
+            Expr::Cmp(_, _, _) => {}
         };
         Ok(())
     }

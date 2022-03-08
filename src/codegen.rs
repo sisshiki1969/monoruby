@@ -845,12 +845,14 @@ impl Codegen {
                     }
 
                     self.emit_call(g_using, dest);
-                    match self.g_phys_reg(*ret) {
-                        GeneralPhysReg::Reg(ret) => {
-                            monoasm!(self.jit, movq R(ret), rax; );
-                        }
-                        GeneralPhysReg::Stack(ofs) => {
-                            monoasm!(self.jit, movq [rbp-(ofs)], rax; );
+                    if let Some(ret) = *ret {
+                        match self.g_phys_reg(ret) {
+                            GeneralPhysReg::Reg(ret) => {
+                                monoasm!(self.jit, movq R(ret), rax; );
+                            }
+                            GeneralPhysReg::Stack(ofs) => {
+                                monoasm!(self.jit, movq [rbp-(ofs)], rax; );
+                            }
                         }
                     }
                 }

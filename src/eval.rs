@@ -202,7 +202,9 @@ impl Evaluator {
                     .iter()
                     .map(|r| self[*r].clone())
                     .collect::<Vec<Value>>();
-                self[*ret] = Evaluator::eval_hir(hir_context, *id, &args);
+                if let Some(ret) = *ret {
+                    self[ret] = Evaluator::eval_hir(hir_context, *id, &args)
+                }
             }
             Hir::Br(next_bb) => {
                 self.goto(*next_bb);
