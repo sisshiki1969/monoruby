@@ -97,7 +97,7 @@ impl std::fmt::Debug for HIRContext {
                         }
                         Hir::Call(id, ret, arg) => {
                             let name = &self.functions[*id].name;
-                            format!("%{} = call {} (%{})", ret, name, arg)
+                            format!("%{} = call {} ({:?})", ret, name, arg)
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
@@ -326,7 +326,7 @@ impl HIRContext {
         self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
-    fn new_call(&mut self, name: String, arg: SsaReg, ty: Type) -> Result<SsaReg> {
+    fn new_call(&mut self, name: String, args: Vec<SsaReg>, ty: Type) -> Result<SsaReg> {
         let ret = self.next_reg();
         let id = self
             .functions
@@ -335,7 +335,7 @@ impl HIRContext {
             .find(|(_, func)| func.name == name)
             .ok_or(HirErr::UndefinedMethod(name))?
             .0;
-        Ok(self.add_assign(Hir::Call(id, ret, arg), ty))
+        Ok(self.add_assign(Hir::Call(id, ret, args), ty))
     }
 
     fn new_ret(&mut self, lhs: SsaReg) {
@@ -522,7 +522,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
-    Call(usize, SsaReg, SsaReg), // (id, ret, arg)
+    Call(usize, SsaReg, Vec<SsaReg>), // (id, ret, arg)
 }
 
 ///
@@ -952,10 +952,14 @@ impl HIRContext {
                 self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
-            Expr::Call(name, arg) => {
-                let arg = self.gen_expr(local_map, &arg.0)?;
+            Expr::Call(name, args) => {
+                let mut arg_regs = vec![];
+                for arg in args {
+                    let reg = self.gen_expr(local_map, &arg.0)?;
+                    arg_regs.push(reg);
+                }
                 let ty = Type::Integer;
-                self.new_call(name.to_string(), arg, ty)
+                self.new_call(name.to_string(), arg_regs, ty)
             }
             Expr::If(box (cond_, _), then_, else_) => {
                 let else_bb = self.new_bb();
@@ -1152,11 +1156,11 @@ impl HIRContext {
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let _ = self.new_func_from_ast(
-                    name.to_string(),
-                    vec![(arg_name.to_string(), Type::Integer)],
-                    body,
-                )?;
+                let args = arg_name
+                    .iter()
+                    .map(|arg_name| (arg_name.to_string(), Type::Integer))
+                    .collect();
+                let _ = self.new_func_from_ast(name.to_string(), args, body)?;
                 Ok(())
             }
         }

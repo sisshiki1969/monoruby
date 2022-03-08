@@ -15,6 +15,7 @@ pub enum Token {
     Call(String),
     OParen,
     CParen,
+    Comma,
     Minus,
     Plus,
     Mul,
@@ -45,6 +46,7 @@ impl std::fmt::Display for Token {
             Self::Call(s) => write!(f, "call {}", s),
             Self::OParen => write!(f, "("),
             Self::CParen => write!(f, ")"),
+            Self::Comma => write!(f, ","),
             Self::Minus => write!(f, "-"),
             Self::Plus => write!(f, "+"),
             Self::Mul => write!(f, "*"),
@@ -64,10 +66,23 @@ impl std::fmt::Display for Token {
     }
 }
 
+fn reserved() -> impl Parser<char, Token, Error = Cheap<char>> {
+    choice((
+        text::keyword("if").to(Token::If),
+        text::keyword("then").to(Token::Then),
+        text::keyword("else").to(Token::Else),
+        text::keyword("end").to(Token::End),
+        text::keyword("while").to(Token::While),
+        text::keyword("do").to(Token::Do),
+        text::keyword("def").to(Token::Def),
+    ))
+}
+
 pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Cheap<char>> {
     let token = choice::<_, Cheap<char>>((
         just('(').to(Token::OParen),
         just(')').to(Token::CParen),
+        just(',').to(Token::Comma),
         just('-').to(Token::Minus),
         just('+').to(Token::Plus),
         just('*').to(Token::Mul),
@@ -79,13 +94,7 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Cheap<char>> {
         just('=').to(Token::Assign),
         just(">").to(Token::Gt),
         just("<").to(Token::Lt),
-        text::keyword("if").to(Token::If),
-        text::keyword("then").to(Token::Then),
-        text::keyword("else").to(Token::Else),
-        text::keyword("end").to(Token::End),
-        text::keyword("while").to(Token::While),
-        text::keyword("do").to(Token::Do),
-        text::keyword("def").to(Token::Def),
+        reserved(),
         text::int(10)
             .then(just('.').ignore_then(text::digits(10)).or_not())
             .map(|(int, frac)| match frac {
@@ -149,13 +158,20 @@ fn ident() -> impl Parser<Token, String, Error = Cheap<Token>> {
     }
 }
 
+fn ident_list() -> impl Parser<Token, Vec<String>, Error = Cheap<Token>> {
+    select! {
+        Token::Ident(s) => s
+    }
+    .separated_by(just(Token::Comma))
+}
+
 ///
 /// A parser of *Declaration*
 ///
 fn decl() -> impl Parser<Token, Spanned<Decl>, Error = Cheap<Token>> {
     just(Token::Def)
         .ignore_then(select! {Token::Call(s) => s})
-        .then(ident())
+        .then(ident_list())
         .then_ignore(just(Token::CParen))
         .then(
             expr()
@@ -193,13 +209,14 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Cheap<Token>> {
 
         let call = select! {Token::Call(s) => s}
             .map_with_span(|s, span| (s, span))
-            .then(expr.clone())
+            .then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing(),
+            )
             .then_ignore(just(Token::CParen))
             .map_with_span(|(f_name, arg), span| {
-                (
-                    Expr::Call(f_name.0, Box::new(arg)),
-                    f_name.1.start..span.end,
-                )
+                (Expr::Call(f_name.0, arg), f_name.1.start..span.end)
             });
 
         let parenthesized = expr

@@ -270,6 +270,7 @@ pub struct McIrFunc {
     pub g_regs: usize,
     /// Number of virtual float registers.
     pub f_regs: usize,
+    pub args: usize,
     /// Offsets and types of local variables.
     pub locals: HashMap<String, (usize, Type)>,
     /// Type of return value.
@@ -277,12 +278,18 @@ pub struct McIrFunc {
 }
 
 impl McIrFunc {
-    fn new(name: String, bbs: BTreeSet<usize>, locals: HashMap<String, (usize, Type)>) -> Self {
+    fn new(
+        name: String,
+        bbs: BTreeSet<usize>,
+        args: usize,
+        locals: HashMap<String, (usize, Type)>,
+    ) -> Self {
         Self {
             name,
             bbs,
             g_regs: 0,
             f_regs: 0,
+            args,
             locals,
             ret_ty: Type::Integer,
         }
@@ -404,6 +411,7 @@ impl McIrContext {
                 McIrFunc::new(
                     hir_func.name.clone(),
                     hir_func.bbs.clone(),
+                    hir_func.args.len(),
                     hir_func.locals.clone(),
                 )
             })
@@ -585,9 +593,15 @@ impl McIrContext {
                     let reg = self.alloc_reg(*reg, ty);
                     self.insts.push(McIR::LocalLoad(info.0, reg));
                 }
-                Hir::Call(func_id, ret, arg) => {
-                    let reg = self.ssa_map[*arg].unwrap();
-                    self.invalidate(reg);
+                Hir::Call(func_id, ret, args) => {
+                    let args = args
+                        .iter()
+                        .map(|arg| {
+                            let reg = self.ssa_map[*arg].unwrap();
+                            self.invalidate(reg);
+                            reg.as_g()
+                        })
+                        .collect();
                     let g_using: Vec<_> = self
                         .g_reginfo
                         .iter()
@@ -596,8 +610,7 @@ impl McIrContext {
                         .collect();
                     //self.ssa_map[*ret] = Some(reg);
                     let ret = self.alloc_greg(*ret);
-                    self.insts
-                        .push(McIR::Call(*func_id, ret, reg.as_g(), g_using));
+                    self.insts.push(McIR::Call(*func_id, ret, args, g_using));
                 }
                 Hir::Br(next_bb) => {
                     let move_list = hir_context[*next_bb]
@@ -691,7 +704,7 @@ pub enum McIR {
     FRet(McFloatOperand),
     LocalStore(usize, McReg),
     LocalLoad(usize, McReg),
-    Call(usize, GReg, GReg, Vec<GReg>), // func_id, ret, arg, using_general_registers
+    Call(usize, GReg, Vec<GReg>, Vec<GReg>), // func_id, ret, arg, using_general_registers
 }
 
 #[derive(Clone, PartialEq)]

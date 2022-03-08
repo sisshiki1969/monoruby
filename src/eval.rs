@@ -197,9 +197,12 @@ impl Evaluator {
             Hir::LocalLoad(ident, lhs) => {
                 self[*lhs] = locals[ident.0].clone();
             }
-            Hir::Call(id, ret, arg) => {
-                let arg = self[*arg].clone();
-                self[*ret] = Evaluator::eval_hir(hir_context, *id, &[arg]);
+            Hir::Call(id, ret, args) => {
+                let args = args
+                    .iter()
+                    .map(|r| self[*r].clone())
+                    .collect::<Vec<Value>>();
+                self[*ret] = Evaluator::eval_hir(hir_context, *id, &args);
             }
             Hir::Br(next_bb) => {
                 self.goto(*next_bb);

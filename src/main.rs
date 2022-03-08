@@ -307,4 +307,16 @@ mod test {
         end"#,
         );
     }
+
+    #[test]
+    fn test4() {
+        run_test(
+            r#"
+        def f(a,b)
+          a + b
+        end
+        f(5,7)
+        "#,
+        );
+    }
 }
