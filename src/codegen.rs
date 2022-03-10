@@ -815,30 +815,45 @@ impl Codegen {
                     let dest = self.func_labels[*func_id];
                     match args.len() {
                         0 => {}
-                        1 => match self.g_phys_reg(args[0]) {
-                            GeneralPhysReg::Reg(reg) => {
-                                monoasm!(self.jit, movq rdi, R(reg); );
+                        1 => match args[0] {
+                            McGeneralOperand::Integer(i) => {
+                                monoasm!(self.jit, movq rdi, (i); );
                             }
-                            GeneralPhysReg::Stack(ofs) => {
-                                monoasm!(self.jit, movq rdi, [rbp-(ofs)]; );
-                            }
-                        },
-                        2 => {
-                            match self.g_phys_reg(args[0]) {
+                            McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
                                 GeneralPhysReg::Reg(reg) => {
                                     monoasm!(self.jit, movq rdi, R(reg); );
                                 }
                                 GeneralPhysReg::Stack(ofs) => {
                                     monoasm!(self.jit, movq rdi, [rbp-(ofs)]; );
                                 }
+                            },
+                        },
+                        2 => {
+                            match args[0] {
+                                McGeneralOperand::Integer(i) => {
+                                    monoasm!(self.jit, movq rdi, (i); );
+                                }
+                                McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
+                                    GeneralPhysReg::Reg(reg) => {
+                                        monoasm!(self.jit, movq rdi, R(reg); );
+                                    }
+                                    GeneralPhysReg::Stack(ofs) => {
+                                        monoasm!(self.jit, movq rdi, [rbp-(ofs)]; );
+                                    }
+                                },
                             }
-                            match self.g_phys_reg(args[1]) {
-                                GeneralPhysReg::Reg(reg) => {
-                                    monoasm!(self.jit, movq rsi, R(reg); );
+                            match args[1] {
+                                McGeneralOperand::Integer(i) => {
+                                    monoasm!(self.jit, movq rsi, (i); );
                                 }
-                                GeneralPhysReg::Stack(ofs) => {
-                                    monoasm!(self.jit, movq rsi, [rbp-(ofs)]; );
-                                }
+                                McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
+                                    GeneralPhysReg::Reg(reg) => {
+                                        monoasm!(self.jit, movq rsi, R(reg); );
+                                    }
+                                    GeneralPhysReg::Stack(ofs) => {
+                                        monoasm!(self.jit, movq rsi, [rbp-(ofs)]; );
+                                    }
+                                },
                             }
                         }
                         _ => unimplemented!(),

@@ -1,3 +1,4 @@
+use super::uir::SsaReg;
 use super::*;
 
 pub struct Evaluator {
@@ -21,8 +22,20 @@ impl std::ops::IndexMut<SsaReg> for Evaluator {
     }
 }
 
+macro_rules! value_op {
+    ($lhs:ident, $rhs:ident, $op:ident) => {{
+        match ($lhs, $rhs) {
+            (Value::Integer($lhs), Value::Integer($rhs)) => $lhs.$op(&$rhs),
+            (Value::Integer($lhs), Value::Float($rhs)) => ($lhs as f64).$op(&$rhs),
+            (Value::Float($lhs), Value::Integer($rhs)) => $lhs.$op(&($rhs as f64)),
+            (Value::Float($lhs), Value::Float($rhs)) => $lhs.$op(&$rhs),
+            _ => unreachable!(),
+        }
+    }};
+}
+
 impl Evaluator {
-    pub fn eval_hir(hir_context: &HIRContext, cur_fn: usize, args: &[Value]) -> Value {
+    pub fn eval_function(hir_context: &UirContext, cur_fn: usize, args: &[Value]) -> Value {
         let locals_num = hir_context.functions[cur_fn].locals.len();
         let mut locals = vec![Value::Integer(0); locals_num];
         locals[0..args.len()].clone_from_slice(args);
@@ -49,167 +62,127 @@ impl Evaluator {
         self.pc = 0;
     }
 
-    fn eval_operand(&self, op: &HirOperand) -> Value {
+    fn eval_operand(&self, op: &UirOperand) -> Value {
         match op {
-            HirOperand::Const(c) => c.clone(),
-            HirOperand::Reg(r) => self[*r].clone(),
-        }
-    }
-
-    fn eval_operand_i(&self, op: &HirOperand) -> i32 {
-        match op {
-            HirOperand::Const(c) => c.as_i(),
-            HirOperand::Reg(r) => self[*r].as_i(),
-        }
-    }
-
-    fn eval_operand_f(&self, op: &HirOperand) -> f64 {
-        match op {
-            HirOperand::Const(c) => c.as_f(),
-            HirOperand::Reg(r) => self[*r].as_f(),
+            UirOperand::Const(c) => c.clone(),
+            UirOperand::Reg(r) => self[*r].clone(),
         }
     }
 
     fn eval(
         &mut self,
-        hir_context: &HIRContext,
-        hir: &Hir,
+        hir_context: &UirContext,
+        hir: &Uir,
         locals: &mut Vec<Value>,
     ) -> Option<Value> {
         match hir {
-            Hir::Integer(ret, i) => {
+            Uir::Integer(ret, i) => {
                 self[*ret] = Value::Integer(*i);
             }
-            Hir::Float(ret, f) => {
+            Uir::Float(ret, f) => {
                 self[*ret] = Value::Float(*f);
             }
-            Hir::CastIntFloat(op) => {
-                let src = self.eval_operand_i(&op.src);
-                self[op.ret] = Value::Float(src as f64);
-            }
-            Hir::INeg(op) => {
-                let src = self.eval_operand_i(&op.src);
-                self[op.ret] = Value::Integer(-src);
-            }
-            Hir::FNeg(op) => {
+            Uir::Neg(op) => {
                 let src = self.eval_operand(&op.src);
-                self[op.ret] = Value::Float(-src.as_f());
+                self[op.ret] = match src {
+                    Value::Integer(i) => Value::Integer(-i),
+                    Value::Float(f) => Value::Float(-f),
+                    _ => unreachable!(),
+                };
             }
-            Hir::IAdd(op) => {
-                let lhs = self.eval_operand_i(&op.lhs);
-                let rhs = self.eval_operand_i(&op.rhs);
-                self[op.ret] = Value::Integer(lhs + rhs);
+            Uir::Add(op) => {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs, rhs) {
+                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs + rhs),
+                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 + rhs),
+                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs + rhs as f64),
+                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs + rhs),
+                    _ => unreachable!(),
+                };
             }
-            Hir::FAdd(op) => {
-                let lhs = self.eval_operand_f(&op.lhs);
-                let rhs = self.eval_operand_f(&op.rhs);
-                self[op.ret] = Value::Float(lhs + rhs);
+            Uir::Sub(op) => {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs, rhs) {
+                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs - rhs),
+                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 - rhs),
+                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs - rhs as f64),
+                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs - rhs),
+                    _ => unreachable!(),
+                };
             }
-            Hir::ISub(op) => {
-                let lhs = self.eval_operand_i(&op.lhs);
-                let rhs = self.eval_operand_i(&op.rhs);
-                self[op.ret] = Value::Integer(lhs - rhs);
+            Uir::Mul(op) => {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs, rhs) {
+                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs * rhs),
+                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 * rhs),
+                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs * rhs as f64),
+                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs * rhs),
+                    _ => unreachable!(),
+                };
             }
-            Hir::FSub(op) => {
-                let lhs = self.eval_operand_f(&op.lhs);
-                let rhs = self.eval_operand_f(&op.rhs);
-                self[op.ret] = Value::Float(lhs - rhs);
+            Uir::Div(op) => {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs, rhs) {
+                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs / rhs),
+                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 / rhs),
+                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs / rhs as f64),
+                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs / rhs),
+                    _ => unreachable!(),
+                };
             }
-            Hir::IMul(op) => {
-                let lhs = self[op.lhs].as_i();
-                let rhs = self[op.rhs].as_i();
-                self[op.ret] = Value::Integer(lhs * rhs);
-            }
-            Hir::FMul(op) => {
-                let lhs = self.eval_operand_f(&op.lhs);
-                let rhs = self.eval_operand_f(&op.rhs);
-                self[op.ret] = Value::Float(lhs * rhs);
-            }
-            Hir::IDiv(op) => {
-                let lhs = self[op.lhs].as_i();
-                let rhs = self[op.rhs].as_i();
-                self[op.ret] = Value::Integer(lhs / rhs);
-            }
-            Hir::FDiv(op) => {
-                let lhs = self.eval_operand_f(&op.lhs);
-                let rhs = self.eval_operand_f(&op.rhs);
-                self[op.ret] = Value::Float(lhs / rhs);
-            }
-            Hir::ICmp(kind, op) => {
-                let lhs = self.eval_operand_i(&op.lhs);
-                let rhs = self.eval_operand_i(&op.rhs);
+            Uir::Cmp(kind, op) => {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Bool(match kind {
-                    CmpKind::Eq => lhs == rhs,
-                    CmpKind::Ne => lhs != rhs,
-                    CmpKind::Lt => lhs < rhs,
-                    CmpKind::Gt => lhs > rhs,
-                    CmpKind::Le => lhs <= rhs,
-                    CmpKind::Ge => lhs >= rhs,
+                    CmpKind::Eq => value_op!(lhs, rhs, eq),
+                    CmpKind::Ne => value_op!(lhs, rhs, ne),
+                    CmpKind::Lt => value_op!(lhs, rhs, lt),
+                    CmpKind::Gt => value_op!(lhs, rhs, gt),
+                    CmpKind::Le => value_op!(lhs, rhs, le),
+                    CmpKind::Ge => value_op!(lhs, rhs, ge),
                 });
             }
-            Hir::FCmp(kind, op) => {
-                let lhs = self[op.lhs].as_f();
-                let rhs = self[op.rhs].as_f();
-                self[op.ret] = Value::Bool(match kind {
-                    CmpKind::Eq => lhs == rhs,
-                    CmpKind::Ne => lhs != rhs,
-                    CmpKind::Lt => lhs < rhs,
-                    CmpKind::Gt => lhs > rhs,
-                    CmpKind::Le => lhs <= rhs,
-                    CmpKind::Ge => lhs >= rhs,
-                });
-            }
-            Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
-                let lhs = self[*lhs].as_i();
-                let rhs = self.eval_operand_i(rhs);
+            Uir::CmpBr(kind, lhs, rhs, then_, else_) => {
+                let lhs = self[*lhs].clone();
+                let rhs = self.eval_operand(rhs);
                 let b = match kind {
-                    CmpKind::Eq => lhs == rhs,
-                    CmpKind::Ne => lhs != rhs,
-                    CmpKind::Lt => lhs < rhs,
-                    CmpKind::Gt => lhs > rhs,
-                    CmpKind::Le => lhs <= rhs,
-                    CmpKind::Ge => lhs >= rhs,
+                    CmpKind::Eq => value_op!(lhs, rhs, eq),
+                    CmpKind::Ne => value_op!(lhs, rhs, ne),
+                    CmpKind::Lt => value_op!(lhs, rhs, lt),
+                    CmpKind::Gt => value_op!(lhs, rhs, gt),
+                    CmpKind::Le => value_op!(lhs, rhs, le),
+                    CmpKind::Ge => value_op!(lhs, rhs, ge),
                 };
                 let next_bb = if b { then_ } else { else_ };
                 self.goto(*next_bb);
             }
-            Hir::FCmpBr(kind, lhs, rhs, then_, else_) => {
-                let lhs = self[*lhs].as_f();
-                let rhs = self[*rhs].as_f();
-                let b = match kind {
-                    CmpKind::Eq => lhs == rhs,
-                    CmpKind::Ne => lhs != rhs,
-                    CmpKind::Lt => lhs < rhs,
-                    CmpKind::Gt => lhs > rhs,
-                    CmpKind::Le => lhs <= rhs,
-                    CmpKind::Ge => lhs >= rhs,
-                };
-                let next_bb = if b { then_ } else { else_ };
-                self.goto(*next_bb);
-            }
-            Hir::Ret(lhs) => return Some(self.eval_operand(lhs)),
-            Hir::LocalStore(ret, ident, rhs) => {
-                locals[ident.0] = self[*rhs].clone();
+            Uir::Ret(lhs) => return Some(self.eval_operand(lhs)),
+            Uir::LocalStore(ret, ident, rhs) => {
+                locals[*ident] = self[*rhs].clone();
                 if let Some(ret) = ret {
                     self[*ret] = self[*rhs].clone();
                 }
             }
-            Hir::LocalLoad(ident, lhs) => {
-                self[*lhs] = locals[ident.0].clone();
+            Uir::LocalLoad(ident, lhs) => {
+                self[*lhs] = locals[*ident].clone();
             }
-            Hir::Call(id, ret, args) => {
+            Uir::Call(id, ret, args) => {
                 let args = args
                     .iter()
-                    .map(|r| self[*r].clone())
+                    .map(|op| self.eval_operand(op))
                     .collect::<Vec<Value>>();
                 if let Some(ret) = *ret {
-                    self[ret] = Evaluator::eval_hir(hir_context, *id, &args)
+                    self[ret] = Evaluator::eval_function(hir_context, *id, &args)
                 }
             }
-            Hir::Br(next_bb) => {
+            Uir::Br(next_bb) => {
                 self.goto(*next_bb);
             }
-            Hir::CondBr(cond_, then_, else_) => {
+            Uir::CondBr(cond_, then_, else_) => {
                 let next_bb = if self[*cond_] == Value::Bool(false) {
                     else_
                 } else {
@@ -217,8 +190,8 @@ impl Evaluator {
                 };
                 self.goto(*next_bb);
             }
-            Hir::Phi(ret, phi) => {
-                let reg = phi.iter().find(|(bb, _, _)| self.prev_bb == *bb).unwrap().1;
+            Uir::Phi(ret, phi) => {
+                let reg = phi.iter().find(|(bb, _)| self.prev_bb == *bb).unwrap().1;
                 self[*ret] = self[reg].clone();
             }
         }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::parse::Span;
-use super::*;
+use super::{CmpKind, Decl, Expr, Stmt, Type, Value};
 
 ///
 /// A state of HIR.
@@ -29,102 +29,104 @@ impl std::fmt::Debug for HIRContext {
                 for hir in &bb.insts {
                     let s = match hir {
                         Hir::Integer(ret, i) => {
-                            format!("%{}: {:?} = {}: i32", ret, func[*ret].ty, i)
+                            format!("{:?}: {:?} = {}: i32", ret, func[*ret].ty, i)
                         }
-                        Hir::Float(ret, f) => format!("%{}: {:?} = {}: f64", ret, func[*ret].ty, f),
+                        Hir::Float(ret, f) => {
+                            format!("{:?}: {:?} = {}: f64", ret, func[*ret].ty, f)
+                        }
                         Hir::CastIntFloat(op) => {
                             format!(
-                                "%{}: {:?} = cast {:?} i32 to f64",
+                                "{:?}: {:?} = cast {:?} i32 to f64",
                                 op.ret, func[op.ret].ty, op.src
                             )
                         }
                         Hir::INeg(op) => {
-                            format!("%{}: {:?} = ineg {:?}", op.ret, func[op.ret].ty, op.src)
+                            format!("{:?}: {:?} = ineg {:?}", op.ret, func[op.ret].ty, op.src)
                         }
                         Hir::FNeg(op) => {
-                            format!("%{}: {:?} = fneg {:?}", op.ret, func[op.ret].ty, op.src)
+                            format!("{:?}: {:?} = fneg {:?}", op.ret, func[op.ret].ty, op.src)
                         }
                         Hir::IAdd(op) => format!(
-                            "%{}: {:?} = iadd {:?}, {:?}",
+                            "{:?}: {:?} = iadd {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FAdd(op) => format!(
-                            "%{}: {:?} = fadd {:?}, {:?}",
+                            "{:?}: {:?} = fadd {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::ISub(op) => format!(
-                            "%{}: {:?} = isub {:?}, {:?}",
+                            "{:?}: {:?} = isub {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FSub(op) => format!(
-                            "%{}: {:?} = fsub {:?}, {:?}",
+                            "{:?}: {:?} = fsub {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::IMul(op) => format!(
-                            "%{}: {:?} = imul %{}, %{}",
+                            "{:?}: {:?} = imul {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FMul(op) => format!(
-                            "%{}: {:?} = fmul {:?}, {:?}",
+                            "{:?}: {:?} = fmul {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::IDiv(op) => format!(
-                            "%{}: {:?} = idiv %{}, %{}",
+                            "{:?}: {:?} = idiv {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::FDiv(op) => format!(
-                            "%{}: {:?} = fdiv {:?}, {:?}",
+                            "{:?}: {:?} = fdiv {:?}, {:?}",
                             op.ret, func[op.ret].ty, op.lhs, op.rhs
                         ),
                         Hir::ICmp(kind, op) => format!(
-                            "%{}: {:?} = icmp {:?} {:?}, {:?}",
+                            "{:?}: {:?} = icmp {:?} {:?}, {:?}",
                             op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::FCmp(kind, op) => format!(
-                            "%{}: {:?} = fcmp {:?} %{}, %{}",
+                            "{:?}: {:?} = fcmp {:?} {:?}, {:?}",
                             op.ret, func[op.ret].ty, kind, op.lhs, op.rhs
                         ),
                         Hir::Ret(ret) => format!("ret {:?}", ret),
                         Hir::LocalStore(ret, ident, rhs) => {
                             if let Some(ret) = ret {
-                                format!("${}: {:?} | %{} = %{}", ident.0, ident.1, ret, rhs)
+                                format!("${}: {:?} | {:?} = {:?}", ident.0, ident.1, ret, rhs)
                             } else {
-                                format!("${}: {:?} = %{}", ident.0, ident.1, rhs)
+                                format!("${}: {:?} = {:?}", ident.0, ident.1, rhs)
                             }
                         }
                         Hir::LocalLoad(ident, lhs) => {
-                            format!("%{} = ${}: {:?}", lhs, ident.0, ident.1)
+                            format!("{:?} = ${}: {:?}", lhs, ident.0, ident.1)
                         }
                         Hir::Call(id, ret, arg) => {
                             let name = &self.functions[*id].name;
                             match ret {
-                                Some(ret) => format!("%{} = call {} ({:?})", ret, name, arg),
+                                Some(ret) => format!("{:?} = call {} ({:?})", ret, name, arg),
                                 None => format!("%_ = call {} ({:?})", name, arg),
                             }
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::ICmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} %{}, {:?}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Hir::FCmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} %{}, %{}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Hir::CondBr(cond, then_, else_) => {
-                            format!("condbr %{} then {} else {}", cond, then_, else_)
+                            format!("condbr {:?} then {} else {}", cond, then_, else_)
                         }
                         Hir::Phi(ret, phi) => {
                             let phi_s = phi
                                 .iter()
-                                .map(|(bb, r, ty)| format!("({}, %{}: {:?})", bb, r, ty))
+                                .map(|(bb, r, ty)| format!("({}, {:?}: {:?})", bb, r, ty))
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            format!("%{} = phi {}", ret, phi_s)
+                            format!("{:?} = phi {}", ret, phi_s)
                         }
                     };
                     writeln!(f, "\t\t\t{}", s)?;
@@ -329,13 +331,13 @@ impl HIRContext {
         self.add_assign(Hir::FCmp(kind, HIRBinop { ret, lhs, rhs }), Type::Bool)
     }
 
-    fn new_call(&mut self, name: &str, args: Vec<SsaReg>, ty: Type) -> Result<SsaReg> {
+    fn new_call(&mut self, name: &str, args: Vec<HirOperand>, ty: Type) -> Result<SsaReg> {
         let ret = self.next_reg();
         let id = self.get_function(&name)?;
         Ok(self.add_assign(Hir::Call(id, Some(ret), args), ty))
     }
 
-    fn new_call_nouse(&mut self, name: &str, args: Vec<SsaReg>) -> Result<()> {
+    fn new_call_nouse(&mut self, name: &str, args: Vec<HirOperand>) -> Result<()> {
         let id = self.get_function(&name)?;
         let hir = Hir::Call(id, None, args);
         self.insts.push(hir);
@@ -537,7 +539,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
-    Call(usize, Option<SsaReg>, Vec<SsaReg>), // (id, ret, arg)
+    Call(usize, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
 }
 
 ///
@@ -606,12 +608,12 @@ impl HirOperand {
 ///
 /// ID of SSA registers.
 ///
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct SsaReg(usize);
 
-impl std::fmt::Display for SsaReg {
+impl std::fmt::Debug for SsaReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "%{}", self.0)
     }
 }
 
@@ -787,6 +789,26 @@ impl HIRContext {
         self.func_mut().ret_ty = Some(ty);
         (self.cur_fn, self.cur_bb) = save;
         Ok(func)
+    }
+
+    fn gen_operand(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        expr: &Expr,
+    ) -> Result<HirOperand> {
+        let res = match expr {
+            Expr::Integer(i) => HirOperand::Const(Value::Integer(*i)),
+            Expr::Float(f) => HirOperand::Const(Value::Float(*f)),
+            _ => HirOperand::Reg(self.gen_expr(local_map, expr)?),
+        };
+        Ok(res)
+    }
+
+    fn get_operand_ty(&self, op: &HirOperand) -> Type {
+        match op {
+            HirOperand::Reg(reg) => self.func()[*reg].ty,
+            HirOperand::Const(val) => val.ty(),
+        }
     }
 
     /// Generate HIR from [(Stmt, Span)].
@@ -970,7 +992,8 @@ impl HIRContext {
             Expr::Call(name, args) => {
                 let mut arg_regs = vec![];
                 for arg in args {
-                    let reg = self.gen_expr(local_map, &arg.0)?;
+                    let reg = self.gen_operand(local_map, &arg.0)?;
+                    assert_eq!(self.get_operand_ty(&reg), Type::Integer);
                     arg_regs.push(reg);
                 }
                 let ty = Type::Integer;
@@ -1161,7 +1184,8 @@ impl HIRContext {
             Expr::Call(name, args) => {
                 let mut arg_regs = vec![];
                 for arg in args {
-                    let reg = self.gen_expr(local_map, &arg.0)?;
+                    let reg = self.gen_operand(local_map, &arg.0)?;
+                    assert_eq!(self.get_operand_ty(&reg), Type::Integer);
                     arg_regs.push(reg);
                 }
                 self.new_call_nouse(name, arg_regs)?;

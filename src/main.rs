@@ -12,6 +12,7 @@ mod eval;
 mod hir;
 mod mcir;
 mod parse;
+mod uir;
 pub use ast::*;
 use codegen::*;
 use eval::*;
@@ -19,6 +20,7 @@ use hir::*;
 use mcir::*;
 use parse::Span;
 pub use parse::*;
+use uir::*;
 
 #[derive(Clone, PartialEq)]
 pub enum Value {
@@ -33,6 +35,16 @@ impl std::fmt::Debug for Value {
             Self::Integer(n) => write!(f, "{}i32", n),
             Self::Float(n) => write!(f, "{}f64", n),
             Self::Bool(b) => write!(f, "{}", b),
+        }
+    }
+}
+
+impl Value {
+    pub fn ty(&self) -> Type {
+        match self {
+            Self::Integer(_) => Type::Integer,
+            Self::Float(_) => Type::Float,
+            Self::Bool(_) => Type::Bool,
         }
     }
 }
@@ -113,7 +125,17 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, 0, &[]);
+
+        let mut uir = UirContext::new();
+        match uir.from_ast(&ast) {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("Error in compiling AST. {:?}", err);
+                all_codes.pop();
+                return;
+            }
+        };
+        let eval_res = Evaluator::eval_function(&uir, 0, &[]);
         eprintln!("Evaluator: {:?}", eval_res);
         let mcir_context = McIrContext::from_hir(&mut hir);
         let mut codegen = Codegen::new();
@@ -141,7 +163,15 @@ pub fn run_test(code: &str) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-        let eval_res = Evaluator::eval_hir(&hir, 0, &[]);
+
+        let mut uir = UirContext::new();
+        match uir.from_ast(&stmt) {
+            Ok(_) => {}
+            Err(err) => panic!("Error in compiling AST. {:?}", err),
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&uir);
+        let eval_res = Evaluator::eval_function(&uir, 0, &[]);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]
@@ -163,7 +193,7 @@ fn parse(
 ) {
     let len = code.len();
     let (tokens, errs) = lexer().parse_recovery(code);
-    dbg!(&tokens);
+    //dbg!(&tokens);
     let (ast, parse_errs) = if let Some(tokens) = tokens {
         parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()))
     } else {
