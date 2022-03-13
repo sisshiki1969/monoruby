@@ -11,16 +11,16 @@ mod codegen;
 mod eval;
 mod hir;
 mod mcir;
+mod mir;
 mod parse;
-mod uir;
 pub use ast::*;
 use codegen::*;
 use eval::*;
 use hir::*;
 use mcir::*;
+use mir::*;
 use parse::Span;
 pub use parse::*;
-use uir::*;
 
 #[derive(Clone, PartialEq)]
 pub enum Value {
@@ -71,7 +71,7 @@ impl Value {
     fn as_i(&self) -> i32 {
         match self {
             Value::Integer(i) => *i,
-            _ => unreachable!(),
+            _ => unreachable!("{:?}", self),
         }
     }
 
@@ -114,7 +114,7 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
         //if let Some(last_ast) = ast.last() {
         //    dbg!(last_ast);
         //}
-        let mut hir = HIRContext::new();
+        let mut hir = MirContext::new();
         match hir.from_ast(&ast) {
             Ok(_) => {}
             Err(err) => {
@@ -126,7 +126,7 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
         #[cfg(debug_assertions)]
         dbg!(&hir);
 
-        let mut uir = UirContext::new();
+        let mut uir = HirContext::new();
         match uir.from_ast(&ast) {
             Ok(_) => {}
             Err(err) => {
@@ -156,7 +156,7 @@ pub fn run_test(code: &str) {
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
         //dbg!(&stmt);
-        let mut hir = HIRContext::new();
+        let mut hir = MirContext::new();
         match hir.from_ast(&stmt) {
             Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
@@ -164,7 +164,7 @@ pub fn run_test(code: &str) {
         #[cfg(debug_assertions)]
         dbg!(&hir);
 
-        let mut uir = UirContext::new();
+        let mut uir = HirContext::new();
         match uir.from_ast(&stmt) {
             Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),

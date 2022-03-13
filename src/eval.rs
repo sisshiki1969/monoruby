@@ -1,4 +1,4 @@
-use super::uir::SsaReg;
+use super::hir::SsaReg;
 use super::*;
 
 pub struct Evaluator {
@@ -35,7 +35,7 @@ macro_rules! value_op {
 }
 
 impl Evaluator {
-    pub fn eval_function(hir_context: &UirContext, cur_fn: usize, args: &[Value]) -> Value {
+    pub fn eval_function(hir_context: &HirContext, cur_fn: usize, args: &[Value]) -> Value {
         let locals_num = hir_context.functions[cur_fn].locals.len();
         let mut locals = vec![Value::Integer(0); locals_num];
         locals[0..args.len()].clone_from_slice(args);
@@ -62,27 +62,27 @@ impl Evaluator {
         self.pc = 0;
     }
 
-    fn eval_operand(&self, op: &UirOperand) -> Value {
+    fn eval_operand(&self, op: &HirOperand) -> Value {
         match op {
-            UirOperand::Const(c) => c.clone(),
-            UirOperand::Reg(r) => self[*r].clone(),
+            HirOperand::Const(c) => c.clone(),
+            HirOperand::Reg(r) => self[*r].clone(),
         }
     }
 
     fn eval(
         &mut self,
-        hir_context: &UirContext,
-        hir: &Uir,
+        hir_context: &HirContext,
+        hir: &Hir,
         locals: &mut Vec<Value>,
     ) -> Option<Value> {
         match hir {
-            Uir::Integer(ret, i) => {
+            Hir::Integer(ret, i) => {
                 self[*ret] = Value::Integer(*i);
             }
-            Uir::Float(ret, f) => {
+            Hir::Float(ret, f) => {
                 self[*ret] = Value::Float(*f);
             }
-            Uir::Neg(op) => {
+            Hir::Neg(op) => {
                 let src = self.eval_operand(&op.src);
                 self[op.ret] = match src {
                     Value::Integer(i) => Value::Integer(-i),
@@ -90,7 +90,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 };
             }
-            Uir::Add(op) => {
+            Hir::Add(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = match (lhs, rhs) {
@@ -101,7 +101,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 };
             }
-            Uir::Sub(op) => {
+            Hir::Sub(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = match (lhs, rhs) {
@@ -112,7 +112,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 };
             }
-            Uir::Mul(op) => {
+            Hir::Mul(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = match (lhs, rhs) {
@@ -123,7 +123,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 };
             }
-            Uir::Div(op) => {
+            Hir::Div(op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = match (lhs, rhs) {
@@ -134,7 +134,7 @@ impl Evaluator {
                     _ => unreachable!(),
                 };
             }
-            Uir::Cmp(kind, op) => {
+            Hir::Cmp(kind, op) => {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::Bool(match kind {
@@ -146,7 +146,7 @@ impl Evaluator {
                     CmpKind::Ge => value_op!(lhs, rhs, ge),
                 });
             }
-            Uir::CmpBr(kind, lhs, rhs, then_, else_) => {
+            Hir::CmpBr(kind, lhs, rhs, then_, else_) => {
                 let lhs = self[*lhs].clone();
                 let rhs = self.eval_operand(rhs);
                 let b = match kind {
@@ -160,17 +160,17 @@ impl Evaluator {
                 let next_bb = if b { then_ } else { else_ };
                 self.goto(*next_bb);
             }
-            Uir::Ret(lhs) => return Some(self.eval_operand(lhs)),
-            Uir::LocalStore(ret, ident, rhs) => {
+            Hir::Ret(lhs) => return Some(self.eval_operand(lhs)),
+            Hir::LocalStore(ret, ident, rhs) => {
                 locals[*ident] = self[*rhs].clone();
                 if let Some(ret) = ret {
                     self[*ret] = self[*rhs].clone();
                 }
             }
-            Uir::LocalLoad(ident, lhs) => {
+            Hir::LocalLoad(ident, lhs) => {
                 self[*lhs] = locals[*ident].clone();
             }
-            Uir::Call(id, ret, args) => {
+            Hir::Call(id, ret, args) => {
                 let args = args
                     .iter()
                     .map(|op| self.eval_operand(op))
@@ -179,10 +179,10 @@ impl Evaluator {
                     self[ret] = Evaluator::eval_function(hir_context, *id, &args)
                 }
             }
-            Uir::Br(next_bb) => {
+            Hir::Br(next_bb) => {
                 self.goto(*next_bb);
             }
-            Uir::CondBr(cond_, then_, else_) => {
+            Hir::CondBr(cond_, then_, else_) => {
                 let next_bb = if self[*cond_] == Value::Bool(false) {
                     else_
                 } else {
@@ -190,7 +190,7 @@ impl Evaluator {
                 };
                 self.goto(*next_bb);
             }
-            Uir::Phi(ret, phi) => {
+            Hir::Phi(ret, phi) => {
                 let reg = phi.iter().find(|(bb, _)| self.prev_bb == *bb).unwrap().1;
                 self[*ret] = self[reg].clone();
             }
