@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use monoasm::*;
 use monoasm_macro::monoasm;
 
@@ -341,7 +339,7 @@ macro_rules! float_ops {
 }
 
 impl Codegen {
-    pub fn compile_and_run(&mut self, mcir_context: &McIrContext) -> Value {
+    pub fn compile(&mut self, mcir_context: &McIrContext) -> (DestLabel, Type) {
         for _ in &mcir_context.blocks {
             self.block_labels.push(self.jit.label());
         }
@@ -357,10 +355,12 @@ impl Codegen {
         let main_func = &mcir_context.functions[0];
         let ret_ty = main_func.ret_ty;
         let func_label = self.func_labels[0];
-        self.jit.finalize::<*mut u64, i64>();
+        self.jit.finalize();
 
-        #[cfg(debug_assertions)]
-        self.dump_code();
+        (func_label, ret_ty)
+    }
+
+    pub fn run(&mut self, func_label: DestLabel, ret_ty: Type) -> Value {
         let res = match ret_ty {
             Type::Integer => {
                 let func = self.jit.get_label_addr::<(), i64>(func_label);
@@ -1015,32 +1015,6 @@ impl Codegen {
                 }
             }
         }
-    }
-
-    /// Dump generated code.
-    fn dump_code(&self) {
-        use std::fs::File;
-        use std::process::Command;
-        let asm = self.jit.to_vec();
-        let mut file = File::create("tmp.bin").unwrap();
-        file.write_all(&asm).unwrap();
-
-        let output = Command::new("objdump")
-            .args(&[
-                "-D",
-                "-Mintel,x86-64",
-                "-b",
-                "binary",
-                "-m",
-                "i386",
-                "tmp.bin",
-            ])
-            .output();
-        let asm = match &output {
-            Ok(output) => std::str::from_utf8(&output.stdout).unwrap().to_string(),
-            Err(err) => err.to_string(),
-        };
-        eprintln!("{}", asm);
     }
 
     fn prologue(&mut self, locals: usize) {

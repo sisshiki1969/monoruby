@@ -165,7 +165,7 @@ impl McIrContext {
         }
     }
 
-    fn hir_to_general_operand(&mut self, rhs: &MirOperand) -> McGeneralOperand {
+    fn mir_to_general_operand(&mut self, rhs: &MirOperand) -> McGeneralOperand {
         match rhs {
             MirOperand::Reg(rhs) => {
                 let rhs = self.ssa_map[*rhs].unwrap().as_g();
@@ -176,7 +176,7 @@ impl McIrContext {
         }
     }
 
-    fn hir_to_greg(&mut self, op: &MirOperand, ret: SsaReg) -> GReg {
+    fn mir_to_greg(&mut self, op: &MirOperand, ret: SsaReg) -> GReg {
         match &op {
             MirOperand::Reg(lhs) => {
                 let lhs = self.ssa_map[*lhs].unwrap();
@@ -193,7 +193,7 @@ impl McIrContext {
         }
     }
 
-    fn hir_to_float_operand(&mut self, rhs: &MirOperand) -> McFloatOperand {
+    fn mir_to_float_operand(&mut self, rhs: &MirOperand) -> McFloatOperand {
         match rhs {
             MirOperand::Reg(rhs) => {
                 let rhs = self.ssa_map[*rhs].unwrap().as_f();
@@ -204,7 +204,7 @@ impl McIrContext {
         }
     }
 
-    fn hir_to_freg(&mut self, op: &MirOperand, ret: SsaReg) -> FReg {
+    fn mir_to_freg(&mut self, op: &MirOperand, ret: SsaReg) -> FReg {
         match &op {
             MirOperand::Reg(lhs) => {
                 let lhs = self.ssa_map[*lhs].unwrap();
@@ -383,8 +383,8 @@ impl McReg {
 
 macro_rules! float_ops {
     ($self:ident, $op:ident, $v:ident) => {{
-        let lhs = $self.hir_to_freg(&$op.lhs, $op.ret);
-        let rhs = $self.hir_to_float_operand(&$op.rhs);
+        let lhs = $self.mir_to_freg(&$op.lhs, $op.ret);
+        let rhs = $self.mir_to_float_operand(&$op.rhs);
         $self.insts.push(McIR::$v(lhs, rhs));
     }};
 }
@@ -473,13 +473,13 @@ impl McIrContext {
                     self.insts.push(McIR::CastIntFloat(dst, src));
                 }
                 Mir::IAdd(op) => {
-                    let lhs = self.hir_to_greg(&op.lhs, op.ret);
-                    let rhs = self.hir_to_general_operand(&op.rhs);
+                    let lhs = self.mir_to_greg(&op.lhs, op.ret);
+                    let rhs = self.mir_to_general_operand(&op.rhs);
                     self.insts.push(McIR::IAdd(lhs, rhs));
                 }
                 Mir::ISub(op) => {
-                    let lhs = self.hir_to_greg(&op.lhs, op.ret);
-                    let rhs = self.hir_to_general_operand(&op.rhs);
+                    let lhs = self.mir_to_greg(&op.lhs, op.ret);
+                    let rhs = self.mir_to_general_operand(&op.rhs);
                     self.insts.push(McIR::ISub(lhs, rhs));
                 }
                 Mir::IMul(op) => {
@@ -502,8 +502,8 @@ impl McIrContext {
                 Mir::FDiv(op) => float_ops!(self, op, FDiv),
 
                 Mir::ICmp(kind, op) => {
-                    let lhs = self.hir_to_greg(&op.lhs, op.ret);
-                    let rhs = self.hir_to_general_operand(&op.rhs);
+                    let lhs = self.mir_to_greg(&op.lhs, op.ret);
+                    let rhs = self.mir_to_general_operand(&op.rhs);
                     self.insts.push(McIR::ICmp(*kind, lhs, rhs));
                 }
                 Mir::FCmp(kind, op) => {
@@ -517,7 +517,7 @@ impl McIrContext {
                 }
                 Mir::ICmpBr(kind, lhs, rhs, then_bb, else_bb) => {
                     let lhs = self.ssa_map[*lhs].unwrap().as_g();
-                    let rhs = self.hir_to_general_operand(rhs);
+                    let rhs = self.mir_to_general_operand(rhs);
                     self[lhs].release();
                     self.insts
                         .push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
@@ -603,7 +603,7 @@ impl McIrContext {
                 Mir::Call(func_id, ret, args) => {
                     let args = args
                         .iter()
-                        .map(|arg| self.hir_to_general_operand(arg))
+                        .map(|arg| self.mir_to_general_operand(arg))
                         .collect();
                     let g_using: Vec<_> = self
                         .g_reginfo

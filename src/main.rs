@@ -135,13 +135,14 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 return;
             }
         };
-        let eval_res = Evaluator::eval_function(&uir, 0, &[]);
+        let eval_res = Evaluator::eval_toplevel(&uir);
         eprintln!("Evaluator: {:?}", eval_res);
         let mcir_context = McIrContext::from_hir(&mut hir);
         let mut codegen = Codegen::new();
         #[cfg(debug_assertions)]
         dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context);
+        let (func, ty) = codegen.compile(&mcir_context);
+        let jit_res = codegen.run(func, ty);
         eprintln!("JIT: {:?}", jit_res);
         eprintln!("Evaluator: {:?}", eval_res);
         //eprintln!("Ruby output: {:?}", run_ruby(all_codes));
@@ -171,12 +172,13 @@ pub fn run_test(code: &str) {
         };
         #[cfg(debug_assertions)]
         dbg!(&uir);
-        let eval_res = Evaluator::eval_function(&uir, 0, &[]);
+        let eval_res = Evaluator::eval_toplevel(&uir);
         let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
         let mut codegen = Codegen::new();
         //#[cfg(debug_assertions)]
         //dbg!(&mcir_context);
-        let jit_res = codegen.compile_and_run(&mcir_context);
+        let (func, ty) = codegen.compile(&mcir_context);
+        let jit_res = codegen.run(func, ty);
         assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
         let ruby_res = run_ruby(&all_codes);
         assert_eq!(&jit_res, dbg!(&ruby_res));
