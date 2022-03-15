@@ -27,6 +27,7 @@ pub enum Value {
     Integer(i32),
     Float(f64),
     Bool(bool),
+    Nil,
 }
 
 impl std::fmt::Debug for Value {
@@ -35,6 +36,7 @@ impl std::fmt::Debug for Value {
             Self::Integer(n) => write!(f, "{}i32", n),
             Self::Float(n) => write!(f, "{}f64", n),
             Self::Bool(b) => write!(f, "{}", b),
+            Self::Nil => write!(f, "nil"),
         }
     }
 }
@@ -45,6 +47,7 @@ impl Value {
             Self::Integer(_) => Type::Integer,
             Self::Float(_) => Type::Float,
             Self::Bool(_) => Type::Bool,
+            Self::Nil => Type::Nil,
         }
     }
 }
@@ -54,6 +57,7 @@ pub enum Type {
     Integer,
     Float,
     Bool,
+    Nil,
 }
 
 impl std::fmt::Debug for Type {
@@ -62,6 +66,7 @@ impl std::fmt::Debug for Type {
             Self::Integer => "i32",
             Self::Float => "f64",
             Self::Bool => "bool",
+            Self::Nil => "nil",
         };
         write!(f, "{}", s)
     }
@@ -111,10 +116,20 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
     let (ast, errs, parse_errs) = parse(&all_codes.join(";"));
     if let Some(ast) = ast {
-        //if let Some(last_ast) = ast.last() {
-        //    dbg!(last_ast);
-        //}
-        let mut hir = MirContext::new();
+        /*let mut mir = MirContext::new();
+                match mir.from_ast(&ast) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        eprintln!("Error in compiling AST. {:?}", err);
+                        all_codes.pop();
+                        return;
+                    }
+                };
+                #[cfg(debug_assertions)]
+                dbg!(&mir);
+        */
+        let mut hir = HirContext::new();
+        //        dbg!(&ast);
         match hir.from_ast(&ast) {
             Ok(_) => {}
             Err(err) => {
@@ -123,27 +138,15 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 return;
             }
         };
-        #[cfg(debug_assertions)]
-        dbg!(&hir);
-
-        let mut uir = HirContext::new();
-        match uir.from_ast(&ast) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Error in compiling AST. {:?}", err);
-                all_codes.pop();
-                return;
-            }
-        };
-        let eval_res = Evaluator::eval_toplevel(&uir);
-        eprintln!("Evaluator: {:?}", eval_res);
-        let mcir_context = McIrContext::from_hir(&mut hir);
+        let eval_res = Evaluator::eval_toplevel(&hir);
+        //eprintln!("Evaluator: {:?}", eval_res);
+        /*let mcir_context = McIrContext::from_mir(&mut mir);
         let mut codegen = Codegen::new();
         #[cfg(debug_assertions)]
         dbg!(&mcir_context);
         let (func, ty) = codegen.compile(&mcir_context);
         let jit_res = codegen.run(func, ty);
-        eprintln!("JIT: {:?}", jit_res);
+        eprintln!("JIT: {:?}", jit_res);*/
         eprintln!("Evaluator: {:?}", eval_res);
         //eprintln!("Ruby output: {:?}", run_ruby(all_codes));
     } else {
@@ -157,31 +160,31 @@ pub fn run_test(code: &str) {
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
         //dbg!(&stmt);
-        let mut hir = MirContext::new();
+        /*let mut hir = MirContext::new();
+        match hir.from_ast(&stmt) {
+            Ok(_) => {}
+            Err(err) => panic!("Error in compiling AST. {:?}", err),
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&hir);*/
+
+        let mut hir = HirContext::new();
         match hir.from_ast(&stmt) {
             Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
-
-        let mut uir = HirContext::new();
-        match uir.from_ast(&stmt) {
-            Ok(_) => {}
-            Err(err) => panic!("Error in compiling AST. {:?}", err),
-        };
-        #[cfg(debug_assertions)]
-        dbg!(&uir);
-        let eval_res = Evaluator::eval_toplevel(&uir);
-        let mcir_context = dbg!(McIrContext::from_hir(&mut hir));
-        let mut codegen = Codegen::new();
+        let eval_res = Evaluator::eval_toplevel(&hir);
+        /*let mcir_context = dbg!(McIrContext::from_mir(&mut hir));
+        let mut codegen = Codegen::new();*/
         //#[cfg(debug_assertions)]
         //dbg!(&mcir_context);
-        let (func, ty) = codegen.compile(&mcir_context);
-        let jit_res = codegen.run(func, ty);
-        assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
+        //let (func, ty) = codegen.compile(&mcir_context);
+        //let jit_res = codegen.run(func, ty);
+        //assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
         let ruby_res = run_ruby(&all_codes);
-        assert_eq!(&jit_res, dbg!(&ruby_res));
+        assert_eq!(dbg!(&eval_res), dbg!(&ruby_res));
     }
     show_err(errs, parse_errs, code);
 }
@@ -304,7 +307,7 @@ mod test {
     }
 
     #[test]
-    fn test2() {
+    fn test_fib() {
         run_test(
             r#"
             def fib(x)
@@ -316,6 +319,10 @@ mod test {
             end;
             fib(15)"#,
         );
+    }
+
+    #[test]
+    fn test2() {
         run_test(
             r#"
             a=1

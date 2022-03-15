@@ -1,15 +1,11 @@
-use super::mir::SsaReg;
 use super::*;
-use std::collections::BTreeSet;
 
 #[derive(Clone, PartialEq)]
 pub struct McIrContext {
-    //pub insts: Vec<McIR>,
     g_reginfo: Vec<GRegInfo>,
     f_reginfo: Vec<FRegInfo>,
     ssa_map: SsaMap,
-    cur_block: usize,
-    pub blocks: Vec<McIrBlock>,
+    cur_fn: usize,
     pub functions: Vec<McIrFunc>,
 }
 
@@ -47,12 +43,11 @@ impl std::fmt::Debug for McIrContext {
         for func in &self.functions {
             writeln!(
                 f,
-                "\tFunc {} g_reg:{} f_reg:{} local:{:?} {{",
-                func.name, func.g_regs, func.f_regs, func.locals
+                "\tFunc {} {} g_reg:{} f_reg:{} local:{:?} {{",
+                func.id, func.name, func.g_regs, func.f_regs, func.locals
             )?;
-            for bbi in &func.bbs {
-                let block = &self.blocks[*bbi];
-                writeln!(f, "\t\tBlock {} {{", *bbi)?;
+            for (bbi, block) in func.blocks.iter().enumerate() {
+                writeln!(f, "\t\tBlock {} {{", bbi)?;
                 for hir in &block.insts {
                     let s = match hir {
                         McIR::Jmp(dest) => format!("jmp {}", dest),
@@ -75,6 +70,7 @@ impl std::fmt::Debug for McIrContext {
                         McIR::FMove(src, dst) => format!("%{:?} = %{:?}", dst, src),
                         McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
                         McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
+                        McIR::Nil(ret) => format!("%{:?} = nil", ret),
                         McIR::CastIntFloat(ret, src) => {
                             format!("%{:?} = cast {:?} i32 to f64", ret, src)
                         }
@@ -122,35 +118,14 @@ impl std::fmt::Debug for McIrContext {
     }
 }
 
-impl std::ops::Deref for McIrContext {
-    type Target = McIrBlock;
-
-    fn deref(&self) -> &McIrBlock {
-        &self.blocks[self.cur_block]
-    }
-}
-
-impl std::ops::DerefMut for McIrContext {
-    fn deref_mut(&mut self) -> &mut McIrBlock {
-        &mut self.blocks[self.cur_block]
-    }
-}
-
-impl std::ops::Index<usize> for McIrContext {
-    type Output = McIrBlock;
-
-    fn index(&self, i: usize) -> &McIrBlock {
-        &self.blocks[i]
-    }
-}
-
-impl std::ops::IndexMut<usize> for McIrContext {
-    fn index_mut(&mut self, i: usize) -> &mut McIrBlock {
-        &mut self.blocks[i]
-    }
-}
-
 impl McIrContext {
+    /*fn func(&self) -> &McIrFunc {
+        &self.functions[self.cur_fn]
+    }*/
+
+    fn func_mut(&mut self) -> &mut McIrFunc {
+        &mut self.functions[self.cur_fn]
+    }
     fn invalidate(&mut self, reg: McReg) {
         match reg {
             McReg::FReg(f) => self[f].release(),
@@ -160,7 +135,7 @@ impl McIrContext {
 
     fn alloc_reg(&mut self, ssareg: SsaReg, ty: Type) -> McReg {
         match ty {
-            Type::Integer | Type::Bool => McReg::GReg(self.alloc_greg(ssareg)),
+            Type::Integer | Type::Bool | Type::Nil => McReg::GReg(self.alloc_greg(ssareg)),
             Type::Float => McReg::FReg(self.alloc_freg(ssareg)),
         }
     }
@@ -187,7 +162,7 @@ impl McIrContext {
             MirOperand::Const(lhs) => {
                 let n = lhs.as_i();
                 let lhs = self.alloc_greg(ret);
-                self.insts.push(McIR::Integer(lhs, n));
+                self.func_mut().insts.push(McIR::Integer(lhs, n));
                 lhs
             }
         }
@@ -215,7 +190,7 @@ impl McIrContext {
             MirOperand::Const(lhs) => {
                 let n = lhs.as_f();
                 let lhs = self.alloc_freg(ret);
-                self.insts.push(McIR::Float(lhs, n));
+                self.func_mut().insts.push(McIR::Float(lhs, n));
                 lhs
             }
         }
@@ -269,10 +244,9 @@ impl McIrContext {
 /// Function information of McIr.
 #[derive(Clone, PartialEq)]
 pub struct McIrFunc {
+    pub id: usize,
     /// Name of the function.
     pub name: String,
-    /// Basic blocks which belong to this function.
-    pub bbs: BTreeSet<usize>,
     /// Number of virtual general registers.
     pub g_regs: usize,
     /// Number of virtual float registers.
@@ -282,24 +256,51 @@ pub struct McIrFunc {
     pub locals: HashMap<String, (usize, Type)>,
     /// Type of return value.
     pub ret_ty: Type,
+    cur_block: usize,
+    pub blocks: Vec<McIrBlock>,
 }
 
 impl McIrFunc {
-    fn new(
-        name: String,
-        bbs: BTreeSet<usize>,
-        args: usize,
-        locals: HashMap<String, (usize, Type)>,
-    ) -> Self {
+    fn new(id: usize, name: String, args: usize, locals: HashMap<String, (usize, Type)>) -> Self {
         Self {
+            id,
             name,
-            bbs,
             g_regs: 0,
             f_regs: 0,
             args,
             locals,
             ret_ty: Type::Integer,
+            cur_block: 0,
+            blocks: vec![],
         }
+    }
+}
+
+impl std::ops::Deref for McIrFunc {
+    type Target = McIrBlock;
+
+    fn deref(&self) -> &McIrBlock {
+        &self.blocks[self.cur_block]
+    }
+}
+
+impl std::ops::DerefMut for McIrFunc {
+    fn deref_mut(&mut self) -> &mut McIrBlock {
+        &mut self.blocks[self.cur_block]
+    }
+}
+
+impl std::ops::Index<usize> for McIrFunc {
+    type Output = McIrBlock;
+
+    fn index(&self, i: usize) -> &McIrBlock {
+        &self.blocks[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for McIrFunc {
+    fn index_mut(&mut self, i: usize) -> &mut McIrBlock {
+        &mut self.blocks[i]
     }
 }
 
@@ -385,18 +386,17 @@ macro_rules! float_ops {
     ($self:ident, $op:ident, $v:ident) => {{
         let lhs = $self.mir_to_freg(&$op.lhs, $op.ret);
         let rhs = $self.mir_to_float_operand(&$op.rhs);
-        $self.insts.push(McIR::$v(lhs, rhs));
+        $self.func_mut().insts.push(McIR::$v(lhs, rhs));
     }};
 }
 
 impl McIrContext {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             g_reginfo: vec![],
             f_reginfo: vec![],
             ssa_map: SsaMap(vec![]),
-            cur_block: 0,
-            blocks: vec![],
+            cur_fn: 0,
             functions: vec![],
         }
     }
@@ -409,56 +409,53 @@ impl McIrContext {
         self.f_reginfo.len()
     }
 
-    pub fn from_hir(hir_context: &mut MirContext) -> Self {
-        let mut ctx = Self::new();
-        ctx.functions = hir_context
-            .functions
-            .iter()
-            .map(|hir_func| {
-                McIrFunc::new(
-                    hir_func.name.clone(),
-                    hir_func.bbs.clone(),
-                    hir_func.args.len(),
-                    hir_func.locals.clone(),
-                )
-            })
-            .collect();
-        ctx.blocks = hir_context
+    pub fn from_mir(&mut self, hir_func: &MirFunction) -> usize {
+        let next_fn = self.functions.len();
+        let mut mir_func = McIrFunc::new(
+            next_fn,
+            hir_func.name.clone(),
+            hir_func.args.len(),
+            hir_func.locals.clone(),
+        );
+        mir_func.blocks = hir_func
             .basic_block
             .iter()
             .map(|hir_bb| McIrBlock::new(hir_bb.owner_function))
             .collect();
-        for (i, func) in hir_context.functions.iter().enumerate() {
-            ctx.ssa_map = SsaMap(vec![None; func.register_num()]);
-            let mut g_reg_num = 0;
-            let mut f_reg_num = 0;
-            for bbi in &func.bbs {
-                ctx.cur_block = *bbi;
-                let bb = &hir_context.basic_block[*bbi];
-                ctx.compile_bb(bb, hir_context);
-                g_reg_num = std::cmp::max(g_reg_num, ctx.g_reg_num());
-                f_reg_num = std::cmp::max(f_reg_num, ctx.f_reg_num());
-            }
-            ctx.functions[i].g_regs = g_reg_num;
-            ctx.functions[i].f_regs = f_reg_num;
-            ctx.functions[i].ret_ty = func.ret_ty.unwrap();
+        self.functions.push(mir_func);
+        self.cur_fn = next_fn;
+        self.ssa_map = SsaMap(vec![None; hir_func.register_num()]);
+        let mut g_reg_num = 0;
+        let mut f_reg_num = 0;
+        for (i, bb) in hir_func.basic_block.iter().enumerate() {
+            self.func_mut().cur_block = i;
+            self.compile_bb(bb, hir_func);
+            g_reg_num = std::cmp::max(g_reg_num, self.g_reg_num());
+            f_reg_num = std::cmp::max(f_reg_num, self.f_reg_num());
         }
-        ctx
+        self.func_mut().g_regs = g_reg_num;
+        self.func_mut().f_regs = f_reg_num;
+        self.func_mut().ret_ty = hir_func.ret_ty.unwrap();
+        dbg!(self);
+        next_fn
     }
 
-    fn compile_bb(&mut self, bb: &MirBasicBlock, hir_context: &MirContext) {
+    fn compile_bb(&mut self, bb: &MirBasicBlock, hir_func: &MirFunction) {
         self.g_reginfo = vec![];
         self.f_reginfo = vec![];
-        let func = &hir_context.functions[bb.owner_function];
         for hir in &bb.insts {
             match hir {
                 Mir::Integer(ssa, i) => {
                     let reg = self.alloc_greg(*ssa);
-                    self.insts.push(McIR::Integer(reg, *i));
+                    self.func_mut().insts.push(McIR::Integer(reg, *i));
                 }
                 Mir::Float(ssa, f) => {
                     let reg = self.alloc_freg(*ssa);
-                    self.insts.push(McIR::Float(reg, *f));
+                    self.func_mut().insts.push(McIR::Float(reg, *f));
+                }
+                Mir::Nil(ssa) => {
+                    let reg = self.alloc_greg(*ssa);
+                    self.func_mut().insts.push(McIR::Nil(reg));
                 }
                 Mir::CastIntFloat(op) => {
                     let dst = self.alloc_freg(op.ret);
@@ -470,31 +467,31 @@ impl McIrContext {
                             McGeneralOperand::Reg(src)
                         }
                     };
-                    self.insts.push(McIR::CastIntFloat(dst, src));
+                    self.func_mut().insts.push(McIR::CastIntFloat(dst, src));
                 }
                 Mir::IAdd(op) => {
                     let lhs = self.mir_to_greg(&op.lhs, op.ret);
                     let rhs = self.mir_to_general_operand(&op.rhs);
-                    self.insts.push(McIR::IAdd(lhs, rhs));
+                    self.func_mut().insts.push(McIR::IAdd(lhs, rhs));
                 }
                 Mir::ISub(op) => {
                     let lhs = self.mir_to_greg(&op.lhs, op.ret);
                     let rhs = self.mir_to_general_operand(&op.rhs);
-                    self.insts.push(McIR::ISub(lhs, rhs));
+                    self.func_mut().insts.push(McIR::ISub(lhs, rhs));
                 }
                 Mir::IMul(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].release();
-                    self.insts.push(McIR::IMul(lhs, rhs));
+                    self.func_mut().insts.push(McIR::IMul(lhs, rhs));
                 }
                 Mir::IDiv(op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_g();
                     let rhs = self.ssa_map[op.rhs].unwrap().as_g();
                     self.ssa_map[op.ret] = Some(McReg::GReg(lhs));
                     self[rhs].release();
-                    self.insts.push(McIR::IDiv(lhs, rhs));
+                    self.func_mut().insts.push(McIR::IDiv(lhs, rhs));
                 }
                 Mir::FAdd(op) => float_ops!(self, op, FAdd),
                 Mir::FSub(op) => float_ops!(self, op, FSub),
@@ -504,7 +501,7 @@ impl McIrContext {
                 Mir::ICmp(kind, op) => {
                     let lhs = self.mir_to_greg(&op.lhs, op.ret);
                     let rhs = self.mir_to_general_operand(&op.rhs);
-                    self.insts.push(McIR::ICmp(*kind, lhs, rhs));
+                    self.func_mut().insts.push(McIR::ICmp(*kind, lhs, rhs));
                 }
                 Mir::FCmp(kind, op) => {
                     let lhs = self.ssa_map[op.lhs].unwrap().as_f();
@@ -513,13 +510,14 @@ impl McIrContext {
                     self.ssa_map[op.ret] = Some(McReg::GReg(ret));
                     self[lhs].release();
                     self[rhs].release();
-                    self.insts.push(McIR::FCmp(*kind, ret, lhs, rhs));
+                    self.func_mut().insts.push(McIR::FCmp(*kind, ret, lhs, rhs));
                 }
                 Mir::ICmpBr(kind, lhs, rhs, then_bb, else_bb) => {
                     let lhs = self.ssa_map[*lhs].unwrap().as_g();
                     let rhs = self.mir_to_general_operand(rhs);
                     self[lhs].release();
-                    self.insts
+                    self.func_mut()
+                        .insts
                         .push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
                 }
                 Mir::FCmpBr(kind, lhs, rhs, then_bb, else_bb) => {
@@ -527,78 +525,93 @@ impl McIrContext {
                     let rhs = self.ssa_map[*rhs].unwrap().as_f();
                     self[lhs].release();
                     self[rhs].release();
-                    self.insts
+                    self.func_mut()
+                        .insts
                         .push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
                 }
 
                 Mir::Ret(op) => match op {
                     MirOperand::Reg(ssa) => {
-                        let ty = func[*ssa].ty;
+                        let ty = hir_func[*ssa].ty;
                         match ty {
-                            Type::Integer | Type::Bool => {
+                            Type::Integer | Type::Bool | Type::Nil => {
                                 let reg = self.ssa_map[*ssa].unwrap().as_g();
                                 self[reg].release();
-                                self.insts.push(McIR::IRet(McGeneralOperand::Reg(reg), ty));
+                                self.func_mut()
+                                    .insts
+                                    .push(McIR::IRet(McGeneralOperand::Reg(reg), ty));
                             }
                             Type::Float => {
                                 let reg = self.ssa_map[*ssa].unwrap().as_f();
                                 self[reg].release();
-                                self.insts.push(McIR::FRet(McFloatOperand::Reg(reg)));
+                                self.func_mut()
+                                    .insts
+                                    .push(McIR::FRet(McFloatOperand::Reg(reg)));
                             }
                         }
                     }
                     MirOperand::Const(c) => match c {
                         Value::Integer(i) => self
+                            .func_mut()
                             .insts
                             .push(McIR::IRet(McGeneralOperand::Integer(*i), Type::Integer)),
-                        Value::Float(f) => self.insts.push(McIR::FRet(McFloatOperand::Float(*f))),
+                        Value::Float(f) => self
+                            .func_mut()
+                            .insts
+                            .push(McIR::FRet(McFloatOperand::Float(*f))),
                         Value::Bool(b) => {
                             let b = if *b { 1 } else { 0 };
-                            self.insts
+                            self.func_mut()
+                                .insts
                                 .push(McIR::IRet(McGeneralOperand::Integer(b), Type::Bool))
                         }
+                        Value::Nil => self
+                            .func_mut()
+                            .insts
+                            .push(McIR::IRet(McGeneralOperand::Integer(0), Type::Nil)),
                     },
                 },
+
                 Mir::INeg(op) => match &op.src {
                     MirOperand::Const(c) => {
                         let n = c.as_i();
                         let reg = self.alloc_greg(op.ret);
-                        self.insts.push(McIR::Integer(reg, -n));
+                        self.func_mut().insts.push(McIR::Integer(reg, -n));
                     }
                     MirOperand::Reg(src) => {
                         let reg = self.ssa_map[*src].unwrap().as_g();
                         self.ssa_map[op.ret] = Some(McReg::GReg(reg));
-                        self.insts.push(McIR::INeg(reg));
+                        self.func_mut().insts.push(McIR::INeg(reg));
                     }
                 },
                 Mir::FNeg(op) => match &op.src {
                     MirOperand::Const(c) => {
                         let n = c.as_f();
                         let reg = self.alloc_freg(op.ret);
-                        self.insts.push(McIR::Float(reg, -n));
+                        self.func_mut().insts.push(McIR::Float(reg, -n));
                     }
                     MirOperand::Reg(src) => {
                         let reg = self.ssa_map[*src].unwrap().as_f();
                         self.ssa_map[op.ret] = Some(McReg::FReg(reg));
-                        self.insts.push(McIR::FNeg(reg));
+                        self.func_mut().insts.push(McIR::FNeg(reg));
                     }
                 },
                 Mir::LocalStore(ret, info, reg) => {
                     let ty = info.1;
-                    assert_eq!(ty, func[*reg].ty);
+                    assert_eq!(ty, hir_func[*reg].ty);
                     let reg = self.ssa_map[*reg].unwrap();
                     if let Some(ret) = ret {
                         self.ssa_map[*ret] = Some(reg);
                     } else {
                         self.invalidate(reg);
                     }
-                    self.insts.push(McIR::LocalStore(info.0, reg));
+                    self.func_mut().insts.push(McIR::LocalStore(info.0, reg));
                 }
                 Mir::LocalLoad(info, reg) => {
                     let ty = info.1;
-                    assert_eq!(ty, func[*reg].ty);
+                    assert_eq!(ty, hir_func[*reg].ty);
                     let reg = self.alloc_reg(*reg, ty);
-                    self.insts.push(McIR::LocalLoad(info.0, reg));
+                    self.func_mut().insts.push(McIR::LocalLoad(info.0, reg));
                 }
                 Mir::Call(func_id, ret, args) => {
                     let args = args
@@ -613,15 +626,17 @@ impl McIrContext {
                         .collect();
                     //self.ssa_map[*ret] = Some(reg);
                     let ret = ret.map(|ret| self.alloc_greg(ret));
-                    self.insts.push(McIR::Call(*func_id, ret, args, g_using));
+                    self.func_mut()
+                        .insts
+                        .push(McIR::Call(*func_id, ret, args, g_using));
                 }
                 Mir::Br(next_bb) => {
-                    let move_list = hir_context[*next_bb]
+                    let move_list = hir_func[*next_bb]
                         .insts
                         .iter()
                         .filter_map(|ir| match ir {
                             Mir::Phi(_, phi) => phi.iter().find_map(|(i, r, ty)| {
-                                if self.cur_block == *i {
+                                if self.func_mut().cur_block == *i {
                                     Some((r, ty))
                                 } else {
                                     None
@@ -631,8 +646,8 @@ impl McIrContext {
                         })
                         .collect::<Vec<_>>();
                     if move_list.len() == 0 {
-                        self.insts.push(McIR::Jmp(*next_bb));
-                        let using_reg = &mut self.blocks[*next_bb].using_reg;
+                        self.func_mut().insts.push(McIR::Jmp(*next_bb));
+                        let using_reg = &mut self.func_mut().blocks[*next_bb].using_reg;
                         match using_reg {
                             Some((0, 0)) => {}
                             None => *using_reg = Some((0, 0)),
@@ -647,19 +662,19 @@ impl McIrContext {
                             match src.1 {
                                 &Type::Float => {
                                     let reg = src_reg.as_f();
-                                    self.insts.push(McIR::FMove(reg, FReg(f_reg)));
+                                    self.func_mut().insts.push(McIR::FMove(reg, FReg(f_reg)));
                                     self[reg].release();
                                     f_reg += 1;
                                 }
                                 _ => {
                                     let reg = src_reg.as_g();
-                                    self.insts.push(McIR::GMove(reg, GReg(g_reg)));
+                                    self.func_mut().insts.push(McIR::GMove(reg, GReg(g_reg)));
                                     self[reg].release();
                                     g_reg += 1;
                                 }
                             }
-                            self.insts.push(McIR::Jmp(*next_bb));
-                            let using_reg = &mut self.blocks[*next_bb].using_reg;
+                            self.func_mut().insts.push(McIR::Jmp(*next_bb));
+                            let using_reg = &mut self.func_mut().blocks[*next_bb].using_reg;
                             match using_reg {
                                 Some(using) => assert!(*using == (g_reg, f_reg)),
                                 None => *using_reg = Some((g_reg, f_reg)),
@@ -669,10 +684,12 @@ impl McIrContext {
                 }
                 Mir::CondBr(cond_, then_bb, else_bb) => {
                     let cond_ = self.ssa_map[*cond_].unwrap();
-                    self.insts.push(McIR::CondJmp(cond_, *then_bb, *else_bb));
+                    self.func_mut()
+                        .insts
+                        .push(McIR::CondJmp(cond_, *then_bb, *else_bb));
                 }
                 Mir::Phi(ret, _) => {
-                    let _reg = self.alloc_reg(*ret, func[*ret].ty);
+                    let _reg = self.alloc_reg(*ret, hir_func[*ret].ty);
                     //self.insts.push(McIR::In(reg));*/
                 }
             }
@@ -690,6 +707,7 @@ pub enum McIR {
     FMove(FReg, FReg),
     Integer(GReg, i32),
     Float(FReg, f64),
+    Nil(GReg),
     CastIntFloat(FReg, McGeneralOperand),
     INeg(GReg),
     FNeg(FReg),

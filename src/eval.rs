@@ -1,7 +1,19 @@
+use monoasm::DestLabel;
+
 use super::hir::SsaReg;
 use super::*;
 
-pub struct Evaluator {}
+pub struct Evaluator {
+    codegen: Codegen,
+    mir_context: MirContext,
+    mcir_context: McIrContext,
+    jit_state: HashMap<usize, JitState>,
+}
+
+enum JitState {
+    Fail,
+    Success(DestLabel, Type),
+}
 
 macro_rules! value_op {
     ($lhs:ident, $rhs:ident, $op:ident) => {{
@@ -17,7 +29,47 @@ macro_rules! value_op {
 
 impl Evaluator {
     fn new() -> Self {
-        Self {}
+        Self {
+            codegen: Codegen::new(),
+            mir_context: MirContext::new(),
+            mcir_context: McIrContext::new(),
+            jit_state: HashMap::default(),
+        }
+    }
+
+    fn jit_compile(
+        &mut self,
+        hir_context: &HirContext,
+        hir_id: usize,
+        args: &[Value],
+    ) -> Option<(DestLabel, Type)> {
+        let hir_func = &hir_context.functions[hir_id];
+        let args = hir_func
+            .args
+            .iter()
+            .zip(args.iter())
+            .map(|(name, val)| (name.clone(), val.ty()))
+            .collect();
+        let mir_id =
+            match self
+                .mir_context
+                .new_func_from_ast(hir_func.name.clone(), args, &hir_func.ast)
+            {
+                Ok(id) => id,
+                Err(err) => {
+                    dbg!(err);
+                    self.mir_context.functions.pop().unwrap();
+                    return None;
+                }
+            };
+        dbg!(&self.mir_context);
+        let func_id = self
+            .mcir_context
+            .from_mir(&self.mir_context.functions[mir_id]);
+        Some(
+            self.codegen
+                .compile_func(&self.mcir_context.functions[func_id], func_id),
+        )
     }
 
     pub fn eval_toplevel(hir_context: &HirContext) -> Value {
@@ -26,13 +78,32 @@ impl Evaluator {
     }
 
     fn eval_function(&mut self, hir_context: &HirContext, cur_fn: usize, args: &[Value]) -> Value {
+        match self.jit_state.get(&cur_fn) {
+            None => {
+                if let Some((dest, ty)) = self.jit_compile(hir_context, cur_fn, args) {
+                    eprintln!("JIT success");
+                    self.jit_state.insert(cur_fn, JitState::Success(dest, ty));
+                    eprintln!("call JIT");
+                    return self.codegen.run(dest, ty, args);
+                } else {
+                    eprintln!("JIT failed");
+                    self.jit_state.insert(cur_fn, JitState::Fail);
+                }
+            }
+            Some(JitState::Fail) => {}
+            Some(JitState::Success(dest, ty)) => {
+                eprintln!("call JIT");
+                return self.codegen.run(*dest, *ty, args);
+            }
+        }
+
         let func = &hir_context.functions[cur_fn];
         let locals_num = func.locals.len();
-        let mut locals = vec![Value::Integer(0); locals_num];
+        let mut locals = vec![Value::Nil; locals_num];
         locals[0..args.len()].clone_from_slice(args);
         let register_num = func.register_num();
         let mut eval = FuncContext {
-            ssareg: vec![Value::Integer(0); register_num],
+            ssareg: vec![Value::Nil; register_num],
             locals,
             cur_bb: func.entry_bb,
             prev_bb: 0,
@@ -60,6 +131,9 @@ impl Evaluator {
             }
             Hir::Float(ret, f) => {
                 ctx[*ret] = Value::Float(*f);
+            }
+            Hir::Nil(ret) => {
+                ctx[*ret] = Value::Nil;
             }
             Hir::Neg(op) => {
                 let src = ctx.eval_operand(&op.src);

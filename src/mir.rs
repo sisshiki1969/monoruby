@@ -1,16 +1,16 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
+
+use crate::hir::SsaReg;
+use crate::Stmt;
 
 use super::parse::Span;
-use super::{CmpKind, Decl, Expr, Stmt, Type, Value};
+use super::{CmpKind, Expr, Type, Value};
 
 ///
 /// A state of MIR.
 ///
 #[derive(Clone, PartialEq)]
 pub struct MirContext {
-    /// Basic blocks.
-    pub basic_block: Vec<MirBasicBlock>,
-    cur_bb: usize,
     /// Functions.
     pub functions: Vec<MirFunction>,
     cur_fn: usize,
@@ -21,10 +21,9 @@ impl std::fmt::Debug for MirContext {
         writeln!(f, "MirContxt {{")?;
 
         for func in &self.functions {
-            writeln!(f, "\tFunction {} {{", func.name)?;
+            writeln!(f, "\tFunction {} {:?}{{", func.name, func.ret_ty)?;
             writeln!(f, "\t\tSsaInfo {:?}", func.reginfo)?;
-            for i in func.bbs.iter() {
-                let bb = &self.basic_block[*i];
+            for (i, bb) in func.basic_block.iter().enumerate() {
                 writeln!(f, "\t\tBasicBlock {} {{ owner:{:?}", i, bb.owner_function)?;
                 for hir in &bb.insts {
                     let s = match hir {
@@ -33,6 +32,9 @@ impl std::fmt::Debug for MirContext {
                         }
                         Mir::Float(ret, f) => {
                             format!("{:?}: {:?} = {}: f64", ret, func[*ret].ty, f)
+                        }
+                        Mir::Nil(ret) => {
+                            format!("{:?}: {:?} = nil", ret, func[*ret].ty,)
                         }
                         Mir::CastIntFloat(op) => {
                             format!(
@@ -139,55 +141,13 @@ impl std::fmt::Debug for MirContext {
     }
 }
 
-impl std::ops::Deref for MirContext {
-    type Target = MirBasicBlock;
-
-    fn deref(&self) -> &Self::Target {
-        &self.basic_block[self.cur_bb]
-    }
-}
-
-impl std::ops::DerefMut for MirContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.basic_block[self.cur_bb]
-    }
-}
-
-impl std::ops::Index<usize> for MirContext {
-    type Output = MirBasicBlock;
-
-    fn index(&self, i: usize) -> &MirBasicBlock {
-        &self.basic_block[i]
-    }
-}
-
-impl std::ops::IndexMut<usize> for MirContext {
-    fn index_mut(&mut self, i: usize) -> &mut MirBasicBlock {
-        &mut self.basic_block[i]
-    }
-}
-
 impl MirContext {
     pub fn new() -> Self {
-        let cur_bb = 0;
         let cur_fn = 0;
-        let basic_block = MirBasicBlock::new(cur_fn);
-        let mut function = MirFunction::new("/main".to_string(), cur_bb, vec![]);
-        function.bbs.insert(cur_bb);
         MirContext {
-            basic_block: vec![basic_block],
-            cur_bb,
-            functions: vec![function],
+            functions: vec![],
             cur_fn,
         }
-    }
-
-    fn new_bb(&mut self) -> usize {
-        let bb = MirBasicBlock::new(self.cur_fn);
-        let next = self.basic_block.len();
-        self.functions[self.cur_fn].bbs.insert(next);
-        self.basic_block.push(bb);
-        next
     }
 
     fn func(&self) -> &MirFunction {
@@ -199,34 +159,154 @@ impl MirContext {
     }
 
     fn enter_new_func(&mut self, name: String, args: Vec<(String, Type)>) -> usize {
-        let entry_bb = self.basic_block.len();
         let next_fn = self.functions.len();
+        let mut func = MirFunction::new(next_fn, name, args);
+        assert_eq!(0, func.new_bb());
 
-        let bb = MirBasicBlock::new(next_fn);
-        self.basic_block.push(bb);
-
-        let mut func = MirFunction::new(name, entry_bb, args);
-        func.bbs.insert(entry_bb);
         self.functions.push(func);
-
         self.cur_fn = next_fn;
-        self.cur_bb = entry_bb;
         next_fn
+    }
+
+    /// Generate HIR in new function from [(Stmt, Span)].
+    pub fn new_func_from_ast(
+        &mut self,
+        func_name: String,
+        args: Vec<(String, Type)>,
+        ast: &[(Stmt, Span)],
+    ) -> Result<usize> {
+        let mut local_map = HashMap::default();
+        args.iter().for_each(|(arg, _)| {
+            MirFunction::add_local_var_if_new(&mut local_map, arg, Type::Integer);
+        });
+        let func_id = self.enter_new_func(func_name, args);
+        let mut func = self.func_mut();
+        let ret = func.gen_stmts(&mut local_map, ast)?;
+        let ty = func[ret].ty;
+        func.locals = local_map;
+        func.new_ret(ret);
+        func.ret = Some(ret);
+        func.ret_ty = Some(ty);
+        Ok(func_id)
+    }
+
+    /*fn new_call(&mut self, name: &str, args: Vec<MirOperand>, ty: Type) -> Result<SsaReg> {
+        let ret = self.next_reg();
+        let id = self.get_function(&name)?;
+        Ok(self.add_assign(Mir::Call(id, Some(ret), args), ty))
+    }
+
+    fn new_call_nouse(&mut self, name: &str, args: Vec<MirOperand>) -> Result<()> {
+        let id = self.get_function(&name)?;
+        let hir = Mir::Call(id, None, args);
+        self.func_mut().insts.push(hir);
+        Ok(())
+    }
+
+    fn get_function(&mut self, name: &str) -> Result<usize> {
+        let id = self
+            .functions
+            .iter()
+            .enumerate()
+            .find(|(_, func)| &func.name == name)
+            .ok_or(MirErr::UndefinedMethod(name.to_string()))?
+            .0;
+        Ok(id)
+    }*/
+}
+
+#[derive(Clone, PartialEq)]
+pub struct MirFunction {
+    pub id: usize,
+    pub name: String,
+    pub ret: Option<SsaReg>,
+    pub ret_ty: Option<Type>,
+    /// SSA register information.
+    reginfo: Vec<SsaRegInfo>,
+    pub locals: HashMap<String, (usize, Type)>,
+    pub args: Vec<(String, Type)>,
+    /// Basic blocks.
+    pub basic_block: Vec<MirBasicBlock>,
+    cur_bb: usize,
+}
+
+impl std::ops::Index<SsaReg> for MirFunction {
+    type Output = SsaRegInfo;
+
+    fn index(&self, i: SsaReg) -> &SsaRegInfo {
+        &self.reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<SsaReg> for MirFunction {
+    fn index_mut(&mut self, i: SsaReg) -> &mut SsaRegInfo {
+        &mut self.reginfo[i.to_usize()]
+    }
+}
+
+impl std::ops::Deref for MirFunction {
+    type Target = MirBasicBlock;
+
+    fn deref(&self) -> &Self::Target {
+        &self.basic_block[self.cur_bb]
+    }
+}
+
+impl std::ops::DerefMut for MirFunction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.basic_block[self.cur_bb]
+    }
+}
+
+impl std::ops::Index<usize> for MirFunction {
+    type Output = MirBasicBlock;
+
+    fn index(&self, i: usize) -> &MirBasicBlock {
+        &self.basic_block[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for MirFunction {
+    fn index_mut(&mut self, i: usize) -> &mut MirBasicBlock {
+        &mut self.basic_block[i]
+    }
+}
+
+impl MirFunction {
+    fn new(id: usize, name: String, args: Vec<(String, Type)>) -> Self {
+        Self {
+            id,
+            name,
+            ret: None,
+            ret_ty: None,
+            reginfo: vec![],
+            locals: HashMap::default(),
+            args,
+            basic_block: vec![],
+            cur_bb: 0,
+        }
+    }
+
+    pub fn register_num(&self) -> usize {
+        self.reginfo.len()
+    }
+
+    fn next_reg(&self) -> SsaReg {
+        SsaReg::new(self.register_num())
+    }
+
+    fn new_bb(&mut self) -> usize {
+        let bb = MirBasicBlock::new(self.id);
+        let next = self.basic_block.len();
+        self.basic_block.push(bb);
+        next
     }
 
     fn add_assign(&mut self, hir: Mir, ty: Type) -> SsaReg {
         let ret_reg = self.next_reg();
-        self.func_mut().reginfo.push(SsaRegInfo::new(ty));
+        self.reginfo.push(SsaRegInfo::new(ty));
         self.insts.push(hir);
         ret_reg
-    }
-
-    pub fn register_num(&self) -> usize {
-        self.func().reginfo.len()
-    }
-
-    fn next_reg(&self) -> SsaReg {
-        SsaReg(self.register_num())
     }
 
     fn new_integer(&mut self, i: i32) -> SsaReg {
@@ -235,6 +315,10 @@ impl MirContext {
 
     fn new_float(&mut self, f: f64) -> SsaReg {
         self.add_assign(Mir::Float(self.next_reg(), f), Type::Float)
+    }
+
+    fn new_nil(&mut self) -> SsaReg {
+        self.add_assign(Mir::Nil(self.next_reg()), Type::Nil)
     }
 
     fn new_as_float_operand(&mut self, src: MirOperand) -> MirOperand {
@@ -337,30 +421,6 @@ impl MirContext {
         self.add_assign(Mir::FCmp(kind, MirBinop { ret, lhs, rhs }), Type::Bool)
     }
 
-    fn new_call(&mut self, name: &str, args: Vec<MirOperand>, ty: Type) -> Result<SsaReg> {
-        let ret = self.next_reg();
-        let id = self.get_function(&name)?;
-        Ok(self.add_assign(Mir::Call(id, Some(ret), args), ty))
-    }
-
-    fn new_call_nouse(&mut self, name: &str, args: Vec<MirOperand>) -> Result<()> {
-        let id = self.get_function(&name)?;
-        let hir = Mir::Call(id, None, args);
-        self.insts.push(hir);
-        Ok(())
-    }
-
-    fn get_function(&mut self, name: &str) -> Result<usize> {
-        let id = self
-            .functions
-            .iter()
-            .enumerate()
-            .find(|(_, func)| &func.name == name)
-            .ok_or(MirErr::UndefinedMethod(name.to_string()))?
-            .0;
-        Ok(id)
-    }
-
     fn new_ret(&mut self, lhs: SsaReg) {
         let hir = Mir::Ret(MirOperand::Reg(lhs));
         self.insts.push(hir);
@@ -372,8 +432,8 @@ impl MirContext {
         ident: &String,
         rhs: SsaReg,
     ) -> Result<SsaReg> {
-        let ty = self.func()[rhs].ty;
-        let info = self.add_local_var_if_new(local_map, ident, ty);
+        let ty = self[rhs].ty;
+        let info = MirFunction::add_local_var_if_new(local_map, ident, ty);
         if info.1 != ty {
             return Err(MirErr::TypeMismatch(info.1, ty));
         }
@@ -383,7 +443,6 @@ impl MirContext {
     }
 
     fn add_local_var_if_new(
-        &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
         ident: &String,
         ty: Type,
@@ -405,7 +464,7 @@ impl MirContext {
         ident: &String,
         rhs: SsaReg,
     ) -> Result<()> {
-        let ty = self.func()[rhs].ty;
+        let ty = self[rhs].ty;
         let len = local_map.len();
         let info = match local_map.get(ident) {
             Some(info) => info.clone(),
@@ -443,51 +502,25 @@ impl MirContext {
         let ret = self.next_reg();
         self.add_assign(Mir::Phi(ret, phi), ty)
     }
-}
 
-#[derive(Clone, PartialEq)]
-pub struct MirFunction {
-    pub name: String,
-    pub entry_bb: usize,
-    pub ret: Option<SsaReg>,
-    pub ret_ty: Option<Type>,
-    /// SSA register information.
-    reginfo: Vec<SsaRegInfo>,
-    pub bbs: BTreeSet<usize>,
-    pub locals: HashMap<String, (usize, Type)>,
-    pub args: Vec<(String, Type)>,
-}
-
-impl std::ops::Index<SsaReg> for MirFunction {
-    type Output = SsaRegInfo;
-
-    fn index(&self, i: SsaReg) -> &SsaRegInfo {
-        &self.reginfo[i.to_usize()]
+    fn gen_operand(
+        &mut self,
+        local_map: &mut HashMap<String, (usize, Type)>,
+        expr: &Expr,
+    ) -> Result<MirOperand> {
+        let res = match expr {
+            Expr::Integer(i) => MirOperand::Const(Value::Integer(*i)),
+            Expr::Float(f) => MirOperand::Const(Value::Float(*f)),
+            _ => MirOperand::Reg(self.gen_expr(local_map, expr)?),
+        };
+        Ok(res)
     }
-}
 
-impl std::ops::IndexMut<SsaReg> for MirFunction {
-    fn index_mut(&mut self, i: SsaReg) -> &mut SsaRegInfo {
-        &mut self.reginfo[i.to_usize()]
-    }
-}
-
-impl MirFunction {
-    fn new(name: String, entry_bb: usize, args: Vec<(String, Type)>) -> Self {
-        Self {
-            name,
-            entry_bb,
-            ret: None,
-            ret_ty: None,
-            reginfo: vec![],
-            bbs: BTreeSet::default(),
-            locals: HashMap::default(),
-            args,
+    fn get_operand_ty(&self, op: &MirOperand) -> Type {
+        match op {
+            MirOperand::Reg(reg) => self[*reg].ty,
+            MirOperand::Const(val) => val.ty(),
         }
-    }
-
-    pub fn register_num(&self) -> usize {
-        self.reginfo.len()
     }
 }
 
@@ -513,6 +546,7 @@ pub enum MirErr {
     UndefinedLocal(String),
     UndefinedMethod(String),
     TypeMismatch(Type, Type),
+    FuncCall,
 }
 
 type Result<T> = std::result::Result<T, MirErr>;
@@ -529,6 +563,7 @@ pub enum Mir {
     Phi(SsaReg, Vec<(usize, SsaReg, Type)>), // ret, [(bb, reg, type)]
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
+    Nil(SsaReg),
     CastIntFloat(MirUnop),
     INeg(MirUnop),
     FNeg(MirUnop),
@@ -591,27 +626,9 @@ pub enum MirOperand {
 impl std::fmt::Debug for MirOperand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Reg(r) => write!(f, "%{}", r.to_usize()),
+            Self::Reg(r) => write!(f, "{:?}", r),
             Self::Const(c) => write!(f, "{:?}", c),
         }
-    }
-}
-
-///
-/// ID of SSA registers.
-///
-#[derive(Clone, Copy, PartialEq)]
-pub struct SsaReg(usize);
-
-impl std::fmt::Debug for SsaReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "%{}", self.0)
-    }
-}
-
-impl SsaReg {
-    pub fn to_usize(self) -> usize {
-        self.0
     }
 }
 
@@ -658,95 +675,27 @@ macro_rules! binary_ops {
     }};
 }
 
-impl MirContext {
-    /// Generate HIR in top level from [(Stmt, Span)].
-    pub fn from_ast(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
-        assert_eq!(0, self.cur_fn);
-        let mut local_map = HashMap::default();
-        let len = ast.len();
-        let ret = if len == 0 {
-            self.new_integer(0)
-        } else {
-            self.gen_stmts(&mut local_map, ast)?
-        };
-        let ty = self.func()[ret].ty;
-        self.func_mut().locals = local_map.clone();
-        self.new_ret(ret);
-        self.func_mut().ret = Some(ret);
-        self.func_mut().ret_ty = Some(ty);
-        Ok(())
-    }
-
-    /// Generate HIR in new function from [(Stmt, Span)].
-    pub fn new_func_from_ast(
-        &mut self,
-        func_name: String,
-        args: Vec<(String, Type)>,
-        ast: &[(Expr, Span)],
-    ) -> Result<usize> {
-        let save = (self.cur_fn, self.cur_bb);
-        let mut local_map = HashMap::default();
-        args.iter().for_each(|(arg, _)| {
-            self.add_local_var_if_new(&mut local_map, arg, Type::Integer);
-        });
-        let func = self.enter_new_func(func_name, args);
-        let len = ast.len();
-        let ret = if len == 0 {
-            self.new_integer(0)
-        } else {
-            self.gen_stmts(
-                &mut local_map,
-                &ast.iter()
-                    .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
-                    .collect::<Vec<(Stmt, Span)>>(),
-            )?
-        };
-        let ty = self.func()[ret].ty;
-        self.func_mut().locals = local_map;
-        self.new_ret(ret);
-        self.func_mut().ret = Some(ret);
-        self.func_mut().ret_ty = Some(ty);
-        (self.cur_fn, self.cur_bb) = save;
-        Ok(func)
-    }
-
-    fn gen_operand(
-        &mut self,
-        local_map: &mut HashMap<String, (usize, Type)>,
-        expr: &Expr,
-    ) -> Result<MirOperand> {
-        let res = match expr {
-            Expr::Integer(i) => MirOperand::Const(Value::Integer(*i)),
-            Expr::Float(f) => MirOperand::Const(Value::Float(*f)),
-            _ => MirOperand::Reg(self.gen_expr(local_map, expr)?),
-        };
-        Ok(res)
-    }
-
-    fn get_operand_ty(&self, op: &MirOperand) -> Type {
-        match op {
-            MirOperand::Reg(reg) => self.func()[*reg].ty,
-            MirOperand::Const(val) => val.ty(),
-        }
-    }
-
-    /// Generate HIR from [(Stmt, Span)].
+impl MirFunction {
     fn gen_stmts(
         &mut self,
         local_map: &mut HashMap<String, (usize, Type)>,
         ast: &[(Stmt, Span)],
     ) -> Result<SsaReg> {
+        let ast: Vec<Expr> = ast
+            .iter()
+            .filter_map(|(stmt, _)| match stmt {
+                Stmt::Expr((expr, _)) => Some(expr.clone()),
+                _ => None,
+            })
+            .collect();
         let len = ast.len();
-        for (node, _) in &ast[..len - 1] {
-            match node {
-                Stmt::Expr(expr) => self.gen_expr_nouse(local_map, &expr.0)?,
-                Stmt::Decl(decl) => self.gen_decl_nouse(&decl.0)?,
-            }
+        if len == 0 {
+            return Ok(self.new_nil());
         }
-        match &ast[len - 1].0 {
-            Stmt::Expr(expr) => self.gen_expr(local_map, &expr.0),
-            Stmt::Decl(decl) => self.gen_decl(&decl.0),
+        for expr in &ast[..len - 1] {
+            self.gen_expr_nouse(local_map, &expr)?;
         }
+        self.gen_expr(local_map, &ast[len - 1])
     }
 
     fn gen_exprs(
@@ -755,6 +704,9 @@ impl MirContext {
         ast: &[(Expr, Span)],
     ) -> Result<SsaReg> {
         let len = ast.len();
+        if len == 0 {
+            return Ok(self.new_nil());
+        }
         for (expr, _) in &ast[..len - 1] {
             self.gen_expr_nouse(local_map, &expr)?;
         }
@@ -788,7 +740,7 @@ impl MirContext {
                     _ => {}
                 };
                 let lhs_i = self.gen_expr(local_map, lhs)?;
-                let ssa = match self.func()[lhs_i].ty {
+                let ssa = match self[lhs_i].ty {
                     Type::Integer => self.new_ineg(lhs_i),
                     Type::Float => self.new_fneg(lhs_i),
                     ty => return Err(MirErr::TypeMismatch(ty, ty)),
@@ -831,8 +783,8 @@ impl MirContext {
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen_expr(local_map, lhs)?;
                 let rhs = self.gen_expr(local_map, rhs)?;
-                let lhs_ty = self.func()[lhs].ty;
-                let rhs_ty = self.func()[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => Ok(self.new_imul(lhs, rhs)),
                     (Type::Integer, Type::Float) => {
@@ -852,8 +804,8 @@ impl MirContext {
             Expr::Div(box (lhs, _), box (rhs, _)) => {
                 let lhs = self.gen_expr(local_map, lhs)?;
                 let rhs = self.gen_expr(local_map, rhs)?;
-                let lhs_ty = self.func()[lhs].ty;
-                let rhs_ty = self.func()[rhs].ty;
+                let lhs_ty = self[lhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => Ok(self.new_idiv(lhs, rhs)),
                     (Type::Integer, Type::Float) => {
@@ -875,15 +827,16 @@ impl MirContext {
                 self.new_local_store(local_map, ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
-            Expr::Call(name, args) => {
-                let mut arg_regs = vec![];
+            Expr::Call(_name, _args) => {
+                Err(MirErr::FuncCall)
+                /*let mut arg_regs = vec![];
                 for arg in args {
                     let reg = self.gen_operand(local_map, &arg.0)?;
                     assert_eq!(self.get_operand_ty(&reg), Type::Integer);
                     arg_regs.push(reg);
                 }
                 let ty = Type::Integer;
-                self.new_call(name, arg_regs, ty)
+                self.new_call(name, arg_regs, ty)*/
             }
             Expr::If(box (cond_, _), then_, else_) => {
                 let else_bb = self.new_bb();
@@ -907,8 +860,8 @@ impl MirContext {
                 self.insts.push(Mir::Br(succ_bb));
 
                 // check types of return values of then and else clause.
-                let then_ty = self.func()[then_reg].ty;
-                let else_ty = self.func()[else_reg].ty;
+                let then_ty = self[then_reg].ty;
+                let else_ty = self[else_reg].ty;
 
                 if then_ty != else_ty {
                     return Err(MirErr::TypeMismatch(then_ty, else_ty));
@@ -935,7 +888,7 @@ impl MirContext {
     ) -> Result<()> {
         if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
             let lhs = self.gen_expr(local_map, lhs)?;
-            let lhs_ty = self.func()[lhs].ty;
+            let lhs_ty = self[lhs].ty;
             if let Expr::Integer(rhs) = rhs {
                 match lhs_ty {
                     Type::Integer => {
@@ -956,7 +909,7 @@ impl MirContext {
                 };
             } else {
                 let rhs = self.gen_expr(local_map, rhs)?;
-                let rhs_ty = self.func()[rhs].ty;
+                let rhs_ty = self[rhs].ty;
                 match (lhs_ty, rhs_ty) {
                     (Type::Integer, Type::Integer) => {
                         self.insts.push(Mir::ICmpBr(
@@ -986,7 +939,7 @@ impl MirContext {
             }
         } else {
             let cond_ = self.gen_expr(local_map, cond_)?;
-            match self.func()[cond_].ty {
+            match self[cond_].ty {
                 Type::Bool => {}
                 ty => return Err(MirErr::TypeMismatch(ty, Type::Bool)),
             };
@@ -1011,7 +964,7 @@ impl MirContext {
         self.gen_exprs_nouse(local_map, body)?;
         self.insts.push(Mir::Br(cond_bb));
         self.cur_bb = succ_bb;
-        let ret = self.new_integer(0);
+        let ret = self.new_nil();
         Ok(ret)
     }
 
@@ -1067,14 +1020,15 @@ impl MirContext {
             Expr::While(box (cond, _), body) => {
                 let _ = self.gen_while(cond, body, local_map)?;
             }
-            Expr::Call(name, args) => {
-                let mut arg_regs = vec![];
+            Expr::Call(_name, _args) => {
+                return Err(MirErr::FuncCall);
+                /*let mut arg_regs = vec![];
                 for arg in args {
                     let reg = self.gen_operand(local_map, &arg.0)?;
                     assert_eq!(self.get_operand_ty(&reg), Type::Integer);
                     arg_regs.push(reg);
                 }
-                self.new_call_nouse(name, arg_regs)?;
+                self.new_call_nouse(name, arg_regs)?;*/
             }
             Expr::Integer(_) => {}
             Expr::Float(_) => {}
@@ -1082,23 +1036,5 @@ impl MirContext {
             Expr::Cmp(_, _, _) => {}
         };
         Ok(())
-    }
-
-    fn gen_decl(&mut self, decl: &Decl) -> Result<SsaReg> {
-        self.gen_decl_nouse(decl)?;
-        Ok(self.new_integer(0))
-    }
-
-    fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
-        match decl {
-            Decl::MethodDef(name, arg_name, body) => {
-                let args = arg_name
-                    .iter()
-                    .map(|arg_name| (arg_name.to_string(), Type::Integer))
-                    .collect();
-                let _ = self.new_func_from_ast(name.to_string(), args, body)?;
-                Ok(())
-            }
-        }
     }
 }

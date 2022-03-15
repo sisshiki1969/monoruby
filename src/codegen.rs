@@ -32,8 +32,10 @@ pub struct Codegen {
     jit: JitMemory,
     g_offset: usize,
     f_offset: usize,
-    block_labels: Vec<DestLabel>,
+    block_labels: Vec<Vec<DestLabel>>,
     func_labels: Vec<DestLabel>,
+    no_prologue: bool,
+    cur_fn: usize,
 }
 
 impl Codegen {
@@ -44,6 +46,8 @@ impl Codegen {
             f_offset: 0,
             block_labels: vec![],
             func_labels: vec![],
+            no_prologue: false,
+            cur_fn: 0,
         }
     }
 
@@ -100,7 +104,7 @@ impl Codegen {
 
     fn emit_jump_next(&mut self, dest: usize, next_bb: Option<usize>) {
         if next_bb != Some(dest) {
-            let label = self.block_labels[dest];
+            let label = self.block_labels[self.cur_fn][dest];
             monoasm!(self.jit,
               jmp label;
             );
@@ -339,68 +343,99 @@ macro_rules! float_ops {
 }
 
 impl Codegen {
-    pub fn compile(&mut self, mcir_context: &McIrContext) -> (DestLabel, Type) {
-        for _ in &mcir_context.blocks {
-            self.block_labels.push(self.jit.label());
-        }
-
-        for _ in &mcir_context.functions {
-            self.func_labels.push(self.jit.label());
-        }
-
-        for cur_fn in 0..mcir_context.functions.len() {
-            self.compile_func(mcir_context, cur_fn);
-        }
-
-        let main_func = &mcir_context.functions[0];
-        let ret_ty = main_func.ret_ty;
-        let func_label = self.func_labels[0];
-        self.jit.finalize();
-
-        (func_label, ret_ty)
-    }
-
-    pub fn run(&mut self, func_label: DestLabel, ret_ty: Type) -> Value {
+    pub fn run(&mut self, func_label: DestLabel, ret_ty: Type, args: &[Value]) -> Value {
+        assert!(args.iter().map(|v| v.ty()).all(|ty| ty == Type::Integer));
         let res = match ret_ty {
-            Type::Integer => {
-                let func = self.jit.get_label_addr::<(), i64>(func_label);
-                let i = func(());
-                Value::Integer(i as i32)
-            }
-            Type::Float => {
-                let func = self.jit.get_label_addr::<(), f64>(func_label);
-                let f = func(());
-                Value::Float(f)
-            }
+            Type::Integer => match args.len() {
+                0 => {
+                    let func: extern "C" fn() -> i32 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
+                    };
+                    let i = func();
+                    Value::Integer(i)
+                }
+                1 => {
+                    let func: extern "C" fn(i32) -> i32 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
+                    };
+                    let i = func(args[0].as_i());
+                    Value::Integer(i)
+                }
+                2 => {
+                    let func: extern "C" fn(i32, i32) -> i32 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
+                    };
+                    let i = func(args[0].as_i(), args[1].as_i());
+                    Value::Integer(i)
+                }
+                _ => unimplemented!(),
+            },
+            Type::Float => match args.len() {
+                0 => {
+                    let func: extern "C" fn() -> f64 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
+                    };
+                    let f = func();
+                    Value::Float(f)
+                }
+                1 => {
+                    let func: extern "C" fn(i32) -> f64 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
+                    };
+                    let f = func(args[0].as_i());
+                    Value::Float(f)
+                }
+                2 => {
+                    let func: extern "C" fn(i32, i32) -> f64 = unsafe {
+                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
+                    };
+                    let f = func(args[0].as_i(), args[1].as_i());
+                    Value::Float(f)
+                }
+                _ => unimplemented!(),
+            },
             Type::Bool => {
                 let func = self.jit.get_label_addr::<(), u8>(func_label);
                 let f = func(());
                 Value::Bool(f != 0)
+            }
+            Type::Nil => {
+                let func = self.jit.get_label_addr::<(), ()>(func_label);
+                func(());
+                Value::Nil
             }
         };
 
         res
     }
 
-    fn compile_func(&mut self, mcir_context: &McIrContext, cur_fn: usize) {
-        let func = &mcir_context.functions[cur_fn];
-        let ret_ty = func.ret_ty;
-        let g_spill = match func.g_regs {
+    pub fn compile_func(&mut self, mcir_func: &McIrFunc, cur_fn: usize) -> (DestLabel, Type) {
+        let ret_ty = mcir_func.ret_ty;
+        let g_spill = match mcir_func.g_regs {
             i if i < 5 => 0,
             i => i - 4,
         };
-        let f_spill = match func.f_regs {
+        let f_spill = match mcir_func.f_regs {
             i if i < 15 => 0,
             i => i - 14,
         };
-        let locals_num = func.locals.len();
+        let locals_num = mcir_func.locals.len();
         self.g_offset = locals_num;
         self.f_offset = locals_num + g_spill;
-        let func_label = self.func_labels[cur_fn];
+        let func_label = self.jit.label();
+        assert_eq!(cur_fn, self.func_labels.len());
+        self.cur_fn = cur_fn;
+        self.func_labels.push(func_label);
+        let mut block_labels = vec![];
+        for _ in &mcir_func.blocks {
+            let label = self.jit.label();
+            block_labels.push(label);
+        }
+        self.block_labels.push(block_labels);
         self.jit.bind_label(func_label);
         self.prologue(locals_num + g_spill + f_spill);
         let ofs = (0 * 8) as i64 + 8;
-        match func.args {
+        match mcir_func.args {
             0 => {}
             1 => {
                 monoasm!(self.jit,
@@ -416,22 +451,23 @@ impl Codegen {
             _ => unimplemented!(),
         }
 
-        let mut next_bb_iter = func.bbs.iter().skip(1).map(|bb| *bb);
-
-        for bbi in &func.bbs {
-            self.compile_bb(mcir_context, *bbi, ret_ty, next_bb_iter.next());
+        for bbi in 0..mcir_func.blocks.len() - 1 {
+            self.compile_bb(mcir_func, bbi, ret_ty, Some(bbi + 1));
         }
+        self.compile_bb(mcir_func, mcir_func.blocks.len() - 1, ret_ty, None);
+        self.jit.finalize();
+        (func_label, ret_ty)
     }
 
     fn compile_bb(
         &mut self,
-        mcir_context: &McIrContext,
+        mcir_func: &McIrFunc,
         bbi: usize,
         ret_ty: Type,
         next_bb: Option<usize>,
     ) {
-        let bb = &mcir_context.blocks[bbi];
-        let label = self.block_labels[bbi];
+        let bb = &mcir_func.blocks[bbi];
+        let label = self.block_labels[self.cur_fn][bbi];
         self.jit.bind_label(label);
         for op in &bb.insts {
             match op {
@@ -443,6 +479,7 @@ impl Codegen {
                         monoasm!(self.jit, movq  [rbp-(ofs)], (*i););
                     }
                 },
+                McIR::Nil(_) => {}
                 McIR::Float(reg, f) => {
                     let label = self.jit.const_f64(*f);
                     let f = u64::from_ne_bytes(f.to_ne_bytes()) as i64;
@@ -656,6 +693,10 @@ impl Codegen {
                     }
                 },
                 McIR::FRet(lhs) => {
+                    match ret_ty {
+                        Type::Float => {}
+                        _ => panic!("Return type mismatch {:?} {:?}.", ret_ty, Type::Float),
+                    }
                     match lhs {
                         McFloatOperand::Float(f) => {
                             let n = i64::from_ne_bytes(f.to_le_bytes());
@@ -678,37 +719,35 @@ impl Codegen {
                         },
                     }
                     self.epilogue();
-                    match ret_ty {
-                        Type::Float => {}
-                        _ => panic!("Return type mismatch {:?} {:?}.", ret_ty, Type::Float),
-                    }
                 }
                 McIR::IRet(lhs, ty) => {
-                    match lhs {
-                        McGeneralOperand::Integer(i) => {
-                            monoasm!(self.jit,
-                              movq rax, (*i as i64);
-                            );
-                        }
-                        McGeneralOperand::Reg(lhs) => {
-                            match self.g_phys_reg(*lhs) {
-                                GeneralPhysReg::Reg(reg) => {
-                                    monoasm!(self.jit,
-                                      movq rax, R(reg);
-                                    );
-                                }
-                                GeneralPhysReg::Stack(lhs) => {
-                                    monoasm!(self.jit,
-                                      movq rax, [rbp-(lhs)];
-                                    );
-                                }
-                            };
-                        }
-                    }
-                    self.epilogue();
                     if ret_ty != *ty {
                         panic!("Return type mismatch {:?} {:?}.", ret_ty, ty)
                     }
+                    if ty != &Type::Nil {
+                        match lhs {
+                            McGeneralOperand::Integer(i) => {
+                                monoasm!(self.jit,
+                                  movq rax, (*i as i64);
+                                );
+                            }
+                            McGeneralOperand::Reg(lhs) => {
+                                match self.g_phys_reg(*lhs) {
+                                    GeneralPhysReg::Reg(reg) => {
+                                        monoasm!(self.jit,
+                                          movq rax, R(reg);
+                                        );
+                                    }
+                                    GeneralPhysReg::Stack(lhs) => {
+                                        monoasm!(self.jit,
+                                          movq rax, [rbp-(lhs)];
+                                        );
+                                    }
+                                };
+                            }
+                        }
+                    }
+                    self.epilogue();
                 }
                 McIR::INeg(reg) => {
                     match self.g_phys_reg(*reg) {
@@ -893,7 +932,7 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
-                    let label = self.block_labels[*else_];
+                    let label = self.block_labels[self.cur_fn][*else_];
                     monoasm!(self.jit, jeq label; );
                     self.emit_jump_next(*then_, next_bb);
                 }
@@ -936,7 +975,7 @@ impl Codegen {
                             }
                         },
                     };
-                    let label = self.block_labels[*then_bb];
+                    let label = self.block_labels[self.cur_fn][*then_bb];
                     self.emit_jcc(*kind, label);
                     self.emit_jump_next(*else_bb, next_bb);
                 }
@@ -967,7 +1006,7 @@ impl Codegen {
                             }
                         },
                     };
-                    let label = self.block_labels[*then_bb];
+                    let label = self.block_labels[self.cur_fn][*then_bb];
                     self.emit_fjcc(*kind, label);
                     self.emit_jump_next(*else_bb, next_bb);
                 }
@@ -1018,22 +1057,25 @@ impl Codegen {
     }
 
     fn prologue(&mut self, locals: usize) {
-        monoasm!(self.jit,
-            pushq rbp;
-            movq rbp, rsp;
-        );
         if locals != 0 {
             monoasm!(self.jit,
+                pushq rbp;
+                movq rbp, rsp;
                 subq rsp, ((locals + locals % 2) * 8);
             );
+            self.no_prologue = false;
+        } else {
+            self.no_prologue = true;
         }
     }
 
     fn epilogue(&mut self) {
-        monoasm!(self.jit,
-            movq rsp, rbp;
-            popq rbp;
-            ret;
-        );
+        if !self.no_prologue {
+            monoasm!(self.jit,
+                movq rsp, rbp;
+                popq rbp;
+            );
+        }
+        monoasm!( self.jit, ret; );
     }
 }

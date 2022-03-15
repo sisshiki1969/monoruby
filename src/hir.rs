@@ -3,6 +3,106 @@ use std::collections::{BTreeSet, HashMap};
 use super::parse::Span;
 use super::*;
 
+type Result<T> = std::result::Result<T, HirErr>;
+
+///
+/// Instructions of High-level IR.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hir {
+    Br(usize),
+    CondBr(SsaReg, usize, usize),
+    CmpBr(CmpKind, SsaReg, HirOperand, usize, usize),
+    Phi(SsaReg, Vec<(usize, SsaReg)>), // ret, [(bb, reg)]
+    Integer(SsaReg, i32),
+    Float(SsaReg, f64),
+    Nil(SsaReg),
+    Neg(HirUnop),
+    Add(HirBinop2),
+    Sub(HirBinop2),
+    Mul(HirBinop2),
+    Div(HirBinop2),
+    Cmp(CmpKind, HirBinop2),
+    Ret(HirOperand),
+    LocalStore(Option<SsaReg>, usize, SsaReg), // (ret, offset, rhs)
+    LocalLoad(usize, SsaReg),
+    Call(usize, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
+}
+
+///
+/// Binary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HirBinop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of left-hand side.
+    pub lhs: SsaReg,
+    /// Register ID of right-hand side.
+    pub rhs: SsaReg,
+}
+
+///
+/// Binary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HirBinop2 {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of left-hand side.
+    pub lhs: HirOperand,
+    /// Register ID of right-hand side.
+    pub rhs: HirOperand,
+}
+
+///
+/// Unary operations.
+///
+#[derive(Clone, Debug, PartialEq)]
+pub struct HirUnop {
+    /// Register ID of return value.
+    pub ret: SsaReg,
+    /// Register ID of source value.
+    pub src: HirOperand,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum HirOperand {
+    Reg(SsaReg),
+    Const(Value),
+}
+
+impl std::fmt::Debug for HirOperand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reg(r) => write!(f, "%{}", r.to_usize()),
+            Self::Const(c) => write!(f, "{:?}", c),
+        }
+    }
+}
+
+///
+/// ID of SSA registers.
+///
+#[derive(Clone, Copy, PartialEq)]
+pub struct SsaReg(usize);
+
+impl std::fmt::Debug for SsaReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "%{}", self.0)
+    }
+}
+
+impl SsaReg {
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
 ///
 /// A state of Hir.
 ///
@@ -21,59 +121,64 @@ impl std::fmt::Debug for HirContext {
         writeln!(f, "HirContxt {{")?;
 
         for func in &self.functions {
-            writeln!(f, "\tFunction {} {{", func.name)?;
+            writeln!(
+                f,
+                "\tFunction {} ({:?}) {:?}{{",
+                func.name, func.args, func.ast
+            )?;
             for i in func.bbs.iter() {
                 let bb = &self.basic_block[*i];
                 writeln!(f, "\t\tBasicBlock {} {{ owner:{:?}", i, bb.owner_function)?;
                 for hir in &bb.insts {
                     let s = match hir {
-                        Hir::Integer(ret, i) => format!("%{} = {}: i32", ret, i),
-                        Hir::Float(ret, f) => format!("%{} = {}: f64", ret, f),
+                        Hir::Integer(ret, i) => format!("{:?} = {}: i32", ret, i),
+                        Hir::Float(ret, f) => format!("{:?} = {}: f64", ret, f),
+                        Hir::Nil(ret) => format!("{:?} = nil", ret),
                         Hir::Neg(op) => {
-                            format!("%{} = neg {:?}", op.ret, op.src)
+                            format!("{:?} = neg {:?}", op.ret, op.src)
                         }
-                        Hir::Add(op) => format!("%{} = add {:?}, {:?}", op.ret, op.lhs, op.rhs),
-                        Hir::Sub(op) => format!("%{} = sub {:?}, {:?}", op.ret, op.lhs, op.rhs),
-                        Hir::Mul(op) => format!("%{} = mul {:?}, {:?}", op.ret, op.lhs, op.rhs),
-                        Hir::Div(op) => format!("%{} = div {:?}, {:?}", op.ret, op.lhs, op.rhs),
+                        Hir::Add(op) => format!("{:?} = add {:?}, {:?}", op.ret, op.lhs, op.rhs),
+                        Hir::Sub(op) => format!("{:?} = sub {:?}, {:?}", op.ret, op.lhs, op.rhs),
+                        Hir::Mul(op) => format!("{:?} = mul {:?}, {:?}", op.ret, op.lhs, op.rhs),
+                        Hir::Div(op) => format!("{:?} = div {:?}, {:?}", op.ret, op.lhs, op.rhs),
                         Hir::Cmp(kind, op) => {
-                            format!("%{} = icmp {:?} {:?}, {:?}", op.ret, kind, op.lhs, op.rhs)
+                            format!("{:?} = icmp {:?} {:?}, {:?}", op.ret, kind, op.lhs, op.rhs)
                         }
                         Hir::Ret(ret) => format!("ret {:?}", ret),
                         Hir::LocalStore(ret, ident, rhs) => {
                             if let Some(ret) = ret {
-                                format!("${} | %{} = %{}", ident, ret, rhs)
+                                format!("${} | {:?} = {:?}", ident, ret, rhs)
                             } else {
-                                format!("${} = %{}", ident, rhs)
+                                format!("${} = {:?}", ident, rhs)
                             }
                         }
                         Hir::LocalLoad(ident, lhs) => {
-                            format!("%{} = ${}", lhs, ident)
+                            format!("{:?} = ${}", lhs, ident)
                         }
                         Hir::Call(id, ret, arg) => {
                             let name = &self.functions[*id].name;
                             match ret {
-                                Some(ret) => format!("%{} = call {} ({:?})", ret, name, arg),
+                                Some(ret) => format!("{:?} = call {} ({:?})", ret, name, arg),
                                 None => format!("%_ = call {} ({:?})", name, arg),
                             }
                         }
                         Hir::Br(dest) => format!("br {}", dest),
                         Hir::CmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} %{}, {:?}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Hir::CondBr(cond, then_, else_) => {
-                            format!("condbr %{} then {} else {}", cond, then_, else_)
+                            format!("condbr {:?} then {} else {}", cond, then_, else_)
                         }
                         Hir::Phi(ret, phi) => {
                             let phi_s = phi
                                 .iter()
-                                .map(|(bb, r)| format!("({}, %{})", bb, r))
+                                .map(|(bb, r)| format!("({}, {:?})", bb, r))
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            format!("%{} = phi {}", ret, phi_s)
+                            format!("{:?} = phi {}", ret, phi_s)
                         }
                     };
                     writeln!(f, "\t\t\t{}", s)?;
@@ -182,6 +287,10 @@ impl HirContext {
 
     fn new_float(&mut self, f: f64) -> SsaReg {
         self.add_assign(Hir::Float(self.next_reg(), f))
+    }
+
+    fn new_nil(&mut self) -> SsaReg {
+        self.add_assign(Hir::Nil(self.next_reg()))
     }
 
     fn new_neg(&mut self, src: SsaReg) -> SsaReg {
@@ -320,6 +429,7 @@ pub struct HirFunction {
     pub locals: HashMap<String, usize>,
     pub args: Vec<String>,
     pub regs: usize,
+    pub ast: Vec<(Stmt, Span)>,
 }
 
 impl HirFunction {
@@ -332,6 +442,7 @@ impl HirFunction {
             locals: HashMap::default(),
             args,
             regs: 0,
+            ast: vec![],
         }
     }
 
@@ -363,101 +474,6 @@ pub enum HirErr {
     UndefinedMethod(String),
 }
 
-type Result<T> = std::result::Result<T, HirErr>;
-
-///
-/// Instructions of High-level IR.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub enum Hir {
-    Br(usize),
-    CondBr(SsaReg, usize, usize),
-    CmpBr(CmpKind, SsaReg, HirOperand, usize, usize),
-    Phi(SsaReg, Vec<(usize, SsaReg)>), // ret, [(bb, reg)]
-    Integer(SsaReg, i32),
-    Float(SsaReg, f64),
-    Neg(HirUnop),
-    Add(HirBinop2),
-    Sub(HirBinop2),
-    Mul(HirBinop2),
-    Div(HirBinop2),
-    Cmp(CmpKind, HirBinop2),
-    Ret(HirOperand),
-    LocalStore(Option<SsaReg>, usize, SsaReg), // (ret, offset, rhs)
-    LocalLoad(usize, SsaReg),
-    Call(usize, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
-}
-
-///
-/// Binary operations.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub struct HirBinop {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of left-hand side.
-    pub lhs: SsaReg,
-    /// Register ID of right-hand side.
-    pub rhs: SsaReg,
-}
-
-///
-/// Binary operations.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub struct HirBinop2 {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of left-hand side.
-    pub lhs: HirOperand,
-    /// Register ID of right-hand side.
-    pub rhs: HirOperand,
-}
-
-///
-/// Unary operations.
-///
-#[derive(Clone, Debug, PartialEq)]
-pub struct HirUnop {
-    /// Register ID of return value.
-    pub ret: SsaReg,
-    /// Register ID of source value.
-    pub src: HirOperand,
-}
-
-#[derive(Clone, PartialEq)]
-pub enum HirOperand {
-    Reg(SsaReg),
-    Const(Value),
-}
-
-impl std::fmt::Debug for HirOperand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reg(r) => write!(f, "%{}", r.to_usize()),
-            Self::Const(c) => write!(f, "{:?}", c),
-        }
-    }
-}
-
-///
-/// ID of SSA registers.
-///
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SsaReg(usize);
-
-impl std::fmt::Display for SsaReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl SsaReg {
-    pub fn to_usize(self) -> usize {
-        self.0
-    }
-}
-
 impl HirContext {
     /// Generate HIR in top level from [(Stmt, Span)].
     pub fn from_ast(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
@@ -465,13 +481,14 @@ impl HirContext {
         let mut local_map = HashMap::default();
         let len = ast.len();
         let ret = if len == 0 {
-            self.new_integer(0)
+            self.new_nil()
         } else {
             self.gen_stmts(&mut local_map, ast)?
         };
         self.func_mut().locals = local_map.clone();
         self.new_ret(ret);
         self.func_mut().ret = Some(ret);
+        self.func_mut().ast = ast.to_vec();
         Ok(())
     }
 
@@ -490,18 +507,21 @@ impl HirContext {
         let func = self.enter_new_func(func_name, args);
         let len = ast.len();
         let ret = if len == 0 {
-            self.new_integer(0)
+            self.new_nil()
         } else {
-            self.gen_stmts(
-                &mut local_map,
-                &ast.iter()
-                    .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
-                    .collect::<Vec<(Stmt, Span)>>(),
-            )?
+            let ast = ast
+                .iter()
+                .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
+                .collect::<Vec<(Stmt, Span)>>();
+            self.gen_stmts(&mut local_map, &ast)?
         };
         self.func_mut().locals = local_map;
         self.new_ret(ret);
         self.func_mut().ret = Some(ret);
+        self.func_mut().ast = ast
+            .iter()
+            .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
+            .collect();
         (self.cur_fn, self.cur_bb) = save;
         Ok(func)
     }
@@ -710,7 +730,7 @@ impl HirContext {
 
     fn gen_decl(&mut self, decl: &Decl) -> Result<SsaReg> {
         self.gen_decl_nouse(decl)?;
-        Ok(self.new_integer(0))
+        Ok(self.new_nil())
     }
 
     fn gen_decl_nouse(&mut self, decl: &Decl) -> Result<()> {
@@ -763,7 +783,7 @@ impl HirContext {
         self.gen_exprs_nouse(local_map, body)?;
         self.insts.push(Hir::Br(cond_bb));
         self.cur_bb = succ_bb;
-        let ret = self.new_integer(0);
+        let ret = self.new_nil();
         Ok(ret)
     }
 }
