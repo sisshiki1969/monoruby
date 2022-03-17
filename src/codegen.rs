@@ -3,6 +3,10 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+// System V ABI
+// registers for args: rdi(R7), rsi(R6), rdx(R2), rcx(R1)
+const ABI_GENERAL_REGS: [u64; 4] = [7, 6, 2, 1];
+
 ///
 /// Physical registers for general purpose.
 ///
@@ -68,14 +72,14 @@ impl Codegen {
     ///
     /// Allocate general register to physical register.
     ///
-    /// Currently, first 14 registers are allocated to xmm1-xmm15 registers.
+    /// Currently, first 14 registers are allocated to xmm7-xmm15 registers.
     ///
     fn f_phys_reg(&self, reg: FReg) -> FloatPhysReg {
         let reg = reg.to_usize();
-        if reg < 15 {
-            FloatPhysReg::Xmm((reg + 1) as u64)
+        if reg < 9 {
+            FloatPhysReg::Xmm((reg + 7) as u64)
         } else {
-            FloatPhysReg::Stack(((reg - 14 + self.f_offset) * 8) as i64 + 8)
+            FloatPhysReg::Stack(((reg - 8 + self.f_offset) * 8) as i64 + 8)
         }
     }
 
@@ -343,57 +347,74 @@ macro_rules! float_ops {
 }
 
 impl Codegen {
-    pub fn run(&mut self, func_label: DestLabel, ret_ty: Type, args: &[Value]) -> Value {
-        assert!(args.iter().map(|v| v.ty()).all(|ty| ty == Type::Integer));
+    pub fn call_jit_func(&mut self, func_label: DestLabel, ret_ty: Type, args: &[Value]) -> Value {
+        use std::mem::transmute;
+        let func = self.jit.get_label_u64(func_label);
         let res = match ret_ty {
-            Type::Integer => match args.len() {
-                0 => {
-                    let func: extern "C" fn() -> i32 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
-                    };
-                    let i = func();
-                    Value::Integer(i)
-                }
-                1 => {
-                    let func: extern "C" fn(i32) -> i32 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
-                    };
-                    let i = func(args[0].as_i());
-                    Value::Integer(i)
-                }
-                2 => {
-                    let func: extern "C" fn(i32, i32) -> i32 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), i32>(func_label))
-                    };
-                    let i = func(args[0].as_i(), args[1].as_i());
-                    Value::Integer(i)
-                }
-                _ => unimplemented!(),
-            },
-            Type::Float => match args.len() {
-                0 => {
-                    let func: extern "C" fn() -> f64 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
-                    };
-                    let f = func();
-                    Value::Float(f)
-                }
-                1 => {
-                    let func: extern "C" fn(i32) -> f64 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
-                    };
-                    let f = func(args[0].as_i());
-                    Value::Float(f)
-                }
-                2 => {
-                    let func: extern "C" fn(i32, i32) -> f64 = unsafe {
-                        std::mem::transmute(self.jit.get_label_addr::<(), f64>(func_label))
-                    };
-                    let f = func(args[0].as_i(), args[1].as_i());
-                    Value::Float(f)
-                }
-                _ => unimplemented!(),
-            },
+            Type::Integer => {
+                let res = match args.len() {
+                    0 => unsafe { transmute::<u64, extern "C" fn() -> i32>(func)() },
+                    1 => match &args[0] {
+                        Value::Float(f) => unsafe {
+                            transmute::<u64, extern "C" fn(f64) -> i32>(func)(*f)
+                        },
+                        arg0 => unsafe {
+                            transmute::<u64, extern "C" fn(u64) -> i32>(func)(arg0.pack())
+                        },
+                    },
+                    2 => match (&args[0], &args[1]) {
+                        (Value::Float(f0), Value::Float(f2)) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, f64) -> i32>(func)(*f0, *f2)
+                        },
+                        (arg0, Value::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, f64) -> i32>(func)(arg0.pack(), *f1)
+                        },
+                        (Value::Float(f0), arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, u64) -> i32>(func)(*f0, arg1.pack())
+                        },
+                        (arg0, arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, u64) -> i32>(func)(
+                                arg0.pack(),
+                                arg1.pack(),
+                            )
+                        },
+                    },
+                    _ => unimplemented!(),
+                };
+                Value::Integer(res)
+            }
+            Type::Float => {
+                let res = match args.len() {
+                    0 => unsafe { transmute::<u64, extern "C" fn() -> f64>(func)() },
+                    1 => match &args[0] {
+                        Value::Float(f) => unsafe {
+                            transmute::<u64, extern "C" fn(f64) -> f64>(func)(*f)
+                        },
+                        arg0 => unsafe {
+                            transmute::<u64, extern "C" fn(u64) -> f64>(func)(arg0.pack())
+                        },
+                    },
+                    2 => match (&args[0], &args[1]) {
+                        (Value::Float(f0), Value::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, f64) -> f64>(func)(*f0, *f1)
+                        },
+                        (arg0, Value::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, f64) -> f64>(func)(arg0.pack(), *f1)
+                        },
+                        (Value::Float(f0), arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, u64) -> f64>(func)(*f0, arg1.pack())
+                        },
+                        (arg0, arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, u64) -> f64>(func)(
+                                arg0.pack(),
+                                arg1.pack(),
+                            )
+                        },
+                    },
+                    _ => unimplemented!(),
+                };
+                Value::Float(res)
+            }
             Type::Bool => {
                 let func = self.jit.get_label_addr::<(), u8>(func_label);
                 let f = func(());
@@ -409,7 +430,11 @@ impl Codegen {
         res
     }
 
-    pub fn compile_func(&mut self, mcir_func: &McIrFunc, cur_fn: usize) -> (DestLabel, Type) {
+    pub fn compile_func(
+        &mut self,
+        mcir_func: &McIrFunc,
+        cur_fn: usize,
+    ) -> (usize, DestLabel, Type) {
         let ret_ty = mcir_func.ret_ty;
         let g_spill = match mcir_func.g_regs {
             i if i < 5 => 0,
@@ -434,21 +459,21 @@ impl Codegen {
         self.block_labels.push(block_labels);
         self.jit.bind_label(func_label);
         self.prologue(locals_num + g_spill + f_spill);
-        let ofs = (0 * 8) as i64 + 8;
-        match mcir_func.args {
-            0 => {}
-            1 => {
-                monoasm!(self.jit,
-                    movq  [rbp - (ofs)], rdi;
-                );
+        let mut greg = 0;
+        let mut freg = 0;
+        for (i, (_, ty)) in mcir_func.args.iter().enumerate() {
+            let offset = 8 + 8 * i as i64;
+            match ty {
+                Type::Integer | Type::Bool | Type::Nil => {
+                    let src = ABI_GENERAL_REGS[greg];
+                    monoasm!(self.jit, movq  [rbp - (offset)], R(src); );
+                    greg += 1;
+                }
+                Type::Float => {
+                    monoasm!(self.jit, movq  [rbp - (offset)], xmm(freg); );
+                    freg += 1;
+                }
             }
-            2 => {
-                monoasm!(self.jit,
-                    movq  [rbp - (ofs)], rdi;
-                    movq  [rbp - (ofs + 8)], rsi;
-                );
-            }
-            _ => unimplemented!(),
         }
 
         for bbi in 0..mcir_func.blocks.len() - 1 {
@@ -456,7 +481,7 @@ impl Codegen {
         }
         self.compile_bb(mcir_func, mcir_func.blocks.len() - 1, ret_ty, None);
         self.jit.finalize();
-        (func_label, ret_ty)
+        (cur_fn, func_label, ret_ty)
     }
 
     fn compile_bb(
@@ -852,52 +877,7 @@ impl Codegen {
                 }
                 McIR::Call(func_id, ret, args, g_using) => {
                     let dest = self.func_labels[*func_id];
-                    match args.len() {
-                        0 => {}
-                        1 => match args[0] {
-                            McGeneralOperand::Integer(i) => {
-                                monoasm!(self.jit, movq rdi, (i); );
-                            }
-                            McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
-                                GeneralPhysReg::Reg(reg) => {
-                                    monoasm!(self.jit, movq rdi, R(reg); );
-                                }
-                                GeneralPhysReg::Stack(ofs) => {
-                                    monoasm!(self.jit, movq rdi, [rbp-(ofs)]; );
-                                }
-                            },
-                        },
-                        2 => {
-                            match args[0] {
-                                McGeneralOperand::Integer(i) => {
-                                    monoasm!(self.jit, movq rdi, (i); );
-                                }
-                                McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
-                                    GeneralPhysReg::Reg(reg) => {
-                                        monoasm!(self.jit, movq rdi, R(reg); );
-                                    }
-                                    GeneralPhysReg::Stack(ofs) => {
-                                        monoasm!(self.jit, movq rdi, [rbp-(ofs)]; );
-                                    }
-                                },
-                            }
-                            match args[1] {
-                                McGeneralOperand::Integer(i) => {
-                                    monoasm!(self.jit, movq rsi, (i); );
-                                }
-                                McGeneralOperand::Reg(reg) => match self.g_phys_reg(reg) {
-                                    GeneralPhysReg::Reg(reg) => {
-                                        monoasm!(self.jit, movq rsi, R(reg); );
-                                    }
-                                    GeneralPhysReg::Stack(ofs) => {
-                                        monoasm!(self.jit, movq rsi, [rbp-(ofs)]; );
-                                    }
-                                },
-                            }
-                        }
-                        _ => unimplemented!(),
-                    }
-
+                    self.emit_store_args(args);
                     self.emit_call(g_using, dest);
                     if let Some(ret) = *ret {
                         match self.g_phys_reg(ret) {
@@ -1051,6 +1031,54 @@ impl Codegen {
                             }
                         };
                     }
+                }
+            }
+        }
+    }
+
+    fn emit_store_args(&mut self, args: &[McOperand]) {
+        let mut arg_greg = 0; // Must be n<=3
+        let mut arg_freg = 1; // Must be 1<=n<=6 (xmm1-xmm6)
+        for arg in args {
+            match arg {
+                McOperand::General(op) => {
+                    assert!(arg_greg <= 3);
+                    let dst = ABI_GENERAL_REGS[arg_greg];
+                    match op {
+                        McGeneralOperand::Integer(i) => {
+                            monoasm!(self.jit, movq R(dst), (*i); );
+                        }
+                        McGeneralOperand::Reg(reg) => match self.g_phys_reg(*reg) {
+                            GeneralPhysReg::Reg(reg) => {
+                                monoasm!(self.jit, movq R(dst), R(reg); );
+                            }
+                            GeneralPhysReg::Stack(ofs) => {
+                                monoasm!(self.jit, movq R(dst), [rbp-(ofs)]; );
+                            }
+                        },
+                    }
+                    arg_greg += 1;
+                }
+                McOperand::Float(op) => {
+                    assert!(arg_freg <= 6);
+                    match op {
+                        McFloatOperand::Float(f) => {
+                            let i = u64::from_ne_bytes(f.to_ne_bytes());
+                            monoasm!(self.jit,
+                                movq rax, (i);
+                                movq xmm(arg_freg), rax;
+                            );
+                        }
+                        McFloatOperand::Reg(reg) => match self.f_phys_reg(*reg) {
+                            FloatPhysReg::Xmm(reg) => {
+                                monoasm!(self.jit, movq xmm(arg_freg), xmm(reg); );
+                            }
+                            FloatPhysReg::Stack(ofs) => {
+                                monoasm!(self.jit, movq xmm(arg_freg), [rbp-(ofs)]; );
+                            }
+                        },
+                    }
+                    arg_freg += 1;
                 }
             }
         }

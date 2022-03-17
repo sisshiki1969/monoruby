@@ -22,13 +22,26 @@ use mir::*;
 use parse::Span;
 pub use parse::*;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub enum Value {
     Integer(i32),
     Float(f64),
     Bool(bool),
     Nil,
 }
+
+impl std::cmp::PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Integer(lhs), Value::Integer(rhs)) => lhs == rhs,
+            (Value::Float(lhs), Value::Float(rhs)) => lhs == rhs,
+            (Value::Bool(lhs), Value::Bool(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl std::cmp::Eq for Value {}
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -50,9 +63,24 @@ impl Value {
             Self::Nil => Type::Nil,
         }
     }
+
+    pub fn pack(&self) -> u64 {
+        match self {
+            Self::Integer(i) => *i as i64 as u64,
+            Self::Float(f) => u64::from_ne_bytes(f.to_ne_bytes()),
+            Self::Bool(b) => {
+                if *b {
+                    1
+                } else {
+                    0
+                }
+            }
+            Self::Nil => 0,
+        }
+    }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     Integer,
     Float,
@@ -317,7 +345,24 @@ mod test {
                     fib(x-1)+fib(x-2)
                 end
             end;
-            fib(15)"#,
+            fib(35)"#,
+        );
+    }
+
+    #[test]
+    fn test_fibpoly() {
+        run_test(
+            r#"
+            def fib(x)
+                if x<3 then
+                    1
+                else
+                    fib(x-1)+fib(x-2)
+                end
+            end;
+            fib(30)
+            fib(30.0)
+            "#,
         );
     }
 
@@ -356,6 +401,18 @@ mod test {
         end
         f(5,7)
         f(4,9)
+        "#,
+        );
+    }
+
+    #[test]
+    fn test5() {
+        run_test(
+            r#"
+        def f(a,b)
+          a + b
+        end
+        f(5.1, 7)
         "#,
         );
     }

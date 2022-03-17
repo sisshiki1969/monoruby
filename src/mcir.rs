@@ -1,5 +1,142 @@
 use super::*;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum McIR {
+    Jmp(usize),
+    ICmpJmp(CmpKind, GReg, McGeneralOperand, usize, usize), // kind, lhs, rhs, then_bb, else_bb
+    FCmpJmp(CmpKind, FReg, FReg, usize, usize),             // kind, lhs, rhs, then_bb, else_bb
+    CondJmp(McReg, usize, usize),
+    GMove(GReg, GReg),
+    FMove(FReg, FReg),
+    Integer(GReg, i32),
+    Float(FReg, f64),
+    Nil(GReg),
+    CastIntFloat(FReg, McGeneralOperand),
+    INeg(GReg),
+    FNeg(FReg),
+    IAdd(GReg, McGeneralOperand),
+    ISub(GReg, McGeneralOperand),
+    IMul(GReg, GReg),
+    IDiv(GReg, GReg),
+    FAdd(FReg, McFloatOperand),
+    FSub(FReg, McFloatOperand),
+    FMul(FReg, McFloatOperand),
+    FDiv(FReg, McFloatOperand),
+    ICmp(CmpKind, GReg, McGeneralOperand),
+    FCmp(CmpKind, GReg, FReg, FReg),
+    IRet(McGeneralOperand, Type),
+    FRet(McFloatOperand),
+    LocalStore(usize, McReg),
+    LocalLoad(usize, McReg),
+    Call(usize, Option<GReg>, Vec<McOperand>, Vec<GReg>), // func_id, ret, arg, using_general_registers
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum McOperand {
+    General(McGeneralOperand),
+    Float(McFloatOperand),
+}
+
+#[derive(Clone, PartialEq)]
+pub enum McGeneralOperand {
+    Reg(GReg),
+    Integer(i32),
+}
+
+impl std::fmt::Debug for McGeneralOperand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reg(r) => write!(f, "%G{}", r.to_usize()),
+            Self::Integer(c) => write!(f, "{:?}: i32", c),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub enum McFloatOperand {
+    Reg(FReg),
+    Float(f64),
+}
+
+impl std::fmt::Debug for McFloatOperand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reg(r) => write!(f, "%F{}", r.to_usize()),
+            Self::Float(c) => write!(f, "{:?}: f64", c),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GRegInfo {
+    ssareg: Option<SsaReg>,
+}
+
+impl GRegInfo {
+    fn new(ssareg: SsaReg) -> Self {
+        let ssareg = Some(ssareg);
+        Self { ssareg }
+    }
+
+    fn assign(&mut self, ssa: SsaReg) {
+        self.ssareg = Some(ssa);
+    }
+
+    fn release(&mut self) {
+        self.ssareg = None;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FRegInfo {
+    ssareg: Option<SsaReg>,
+}
+
+impl FRegInfo {
+    fn new(ssareg: SsaReg) -> Self {
+        let ssareg = Some(ssareg);
+        Self { ssareg }
+    }
+
+    fn assign(&mut self, ssa: SsaReg) {
+        self.ssareg = Some(ssa);
+    }
+
+    fn release(&mut self) {
+        self.ssareg = None;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct GReg(usize);
+
+impl std::fmt::Debug for GReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "G{}", self.0)
+    }
+}
+
+impl GReg {
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct FReg(usize);
+
+impl std::fmt::Debug for FReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "F{}", self.0)
+    }
+}
+
+impl FReg {
+    pub fn to_usize(self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct McIrContext {
     g_reginfo: Vec<GRegInfo>,
@@ -140,6 +277,26 @@ impl McIrContext {
         }
     }
 
+    fn mir_to_operand(&mut self, op: &MirOperand) -> McOperand {
+        match op {
+            MirOperand::Reg(reg) => match self.ssa_map[*reg].unwrap() {
+                McReg::GReg(reg) => {
+                    self[reg].release();
+                    McOperand::General(McGeneralOperand::Reg(reg))
+                }
+                McReg::FReg(reg) => {
+                    self[reg].release();
+                    McOperand::Float(McFloatOperand::Reg(reg))
+                }
+            },
+            MirOperand::Const(rhs) => match rhs {
+                Value::Integer(i) => McOperand::General(McGeneralOperand::Integer(*i)),
+                Value::Float(f) => McOperand::Float(McFloatOperand::Float(*f)),
+                _ => unreachable!(),
+            },
+        }
+    }
+
     fn mir_to_general_operand(&mut self, rhs: &MirOperand) -> McGeneralOperand {
         match rhs {
             MirOperand::Reg(rhs) => {
@@ -251,7 +408,7 @@ pub struct McIrFunc {
     pub g_regs: usize,
     /// Number of virtual float registers.
     pub f_regs: usize,
-    pub args: usize,
+    pub args: Vec<(String, Type)>,
     /// Offsets and types of local variables.
     pub locals: HashMap<String, (usize, Type)>,
     /// Type of return value.
@@ -261,7 +418,12 @@ pub struct McIrFunc {
 }
 
 impl McIrFunc {
-    fn new(id: usize, name: String, args: usize, locals: HashMap<String, (usize, Type)>) -> Self {
+    fn new(
+        id: usize,
+        name: String,
+        args: Vec<(String, Type)>,
+        locals: HashMap<String, (usize, Type)>,
+    ) -> Self {
         Self {
             id,
             name,
@@ -414,7 +576,7 @@ impl McIrContext {
         let mut mir_func = McIrFunc::new(
             next_fn,
             hir_func.name.clone(),
-            hir_func.args.len(),
+            hir_func.args.clone(),
             hir_func.locals.clone(),
         );
         mir_func.blocks = hir_func
@@ -614,10 +776,7 @@ impl McIrContext {
                     self.func_mut().insts.push(McIR::LocalLoad(info.0, reg));
                 }
                 Mir::Call(func_id, ret, args) => {
-                    let args = args
-                        .iter()
-                        .map(|arg| self.mir_to_general_operand(arg))
-                        .collect();
+                    let args = args.iter().map(|arg| self.mir_to_operand(arg)).collect();
                     let g_using: Vec<_> = self
                         .g_reginfo
                         .iter()
@@ -694,136 +853,5 @@ impl McIrContext {
                 }
             }
         }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum McIR {
-    Jmp(usize),
-    ICmpJmp(CmpKind, GReg, McGeneralOperand, usize, usize), // kind, lhs, rhs, then_bb, else_bb
-    FCmpJmp(CmpKind, FReg, FReg, usize, usize),             // kind, lhs, rhs, then_bb, else_bb
-    CondJmp(McReg, usize, usize),
-    GMove(GReg, GReg),
-    FMove(FReg, FReg),
-    Integer(GReg, i32),
-    Float(FReg, f64),
-    Nil(GReg),
-    CastIntFloat(FReg, McGeneralOperand),
-    INeg(GReg),
-    FNeg(FReg),
-    IAdd(GReg, McGeneralOperand),
-    ISub(GReg, McGeneralOperand),
-    IMul(GReg, GReg),
-    IDiv(GReg, GReg),
-    FAdd(FReg, McFloatOperand),
-    FSub(FReg, McFloatOperand),
-    FMul(FReg, McFloatOperand),
-    FDiv(FReg, McFloatOperand),
-    ICmp(CmpKind, GReg, McGeneralOperand),
-    FCmp(CmpKind, GReg, FReg, FReg),
-    IRet(McGeneralOperand, Type),
-    FRet(McFloatOperand),
-    LocalStore(usize, McReg),
-    LocalLoad(usize, McReg),
-    Call(usize, Option<GReg>, Vec<McGeneralOperand>, Vec<GReg>), // func_id, ret, arg, using_general_registers
-}
-
-#[derive(Clone, PartialEq)]
-pub enum McGeneralOperand {
-    Reg(GReg),
-    Integer(i32),
-}
-
-impl std::fmt::Debug for McGeneralOperand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reg(r) => write!(f, "%G{}", r.to_usize()),
-            Self::Integer(c) => write!(f, "{:?}: i32", c),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub enum McFloatOperand {
-    Reg(FReg),
-    Float(f64),
-}
-
-impl std::fmt::Debug for McFloatOperand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reg(r) => write!(f, "%F{}", r.to_usize()),
-            Self::Float(c) => write!(f, "{:?}: f64", c),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct GRegInfo {
-    ssareg: Option<SsaReg>,
-}
-
-impl GRegInfo {
-    fn new(ssareg: SsaReg) -> Self {
-        let ssareg = Some(ssareg);
-        Self { ssareg }
-    }
-
-    fn assign(&mut self, ssa: SsaReg) {
-        self.ssareg = Some(ssa);
-    }
-
-    fn release(&mut self) {
-        self.ssareg = None;
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct FRegInfo {
-    ssareg: Option<SsaReg>,
-}
-
-impl FRegInfo {
-    fn new(ssareg: SsaReg) -> Self {
-        let ssareg = Some(ssareg);
-        Self { ssareg }
-    }
-
-    fn assign(&mut self, ssa: SsaReg) {
-        self.ssareg = Some(ssa);
-    }
-
-    fn release(&mut self) {
-        self.ssareg = None;
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub struct GReg(usize);
-
-impl std::fmt::Debug for GReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "G{}", self.0)
-    }
-}
-
-impl GReg {
-    pub fn to_usize(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub struct FReg(usize);
-
-impl std::fmt::Debug for FReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "F{}", self.0)
-    }
-}
-
-impl FReg {
-    pub fn to_usize(self) -> usize {
-        self.0
     }
 }
