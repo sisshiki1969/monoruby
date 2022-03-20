@@ -10,10 +10,10 @@ type Result<T> = std::result::Result<T, HirErr>;
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hir {
-    Br(usize),
-    CondBr(SsaReg, usize, usize),
-    CmpBr(CmpKind, SsaReg, HirOperand, usize, usize),
-    Phi(SsaReg, Vec<(usize, SsaReg)>), // ret, [(bb, reg)]
+    Br(HirBBId),
+    CondBr(SsaReg, HirBBId, HirBBId),
+    CmpBr(CmpKind, SsaReg, HirOperand, HirBBId, HirBBId),
+    Phi(SsaReg, Vec<(HirBBId, SsaReg)>), // ret, [(bb, reg)]
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
     Nil(SsaReg),
@@ -104,16 +104,28 @@ impl SsaReg {
 }
 
 ///
+/// ID of HIR function.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HirId(usize);
+
+///
+/// ID of HIR basic block.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct HirBBId(usize);
+
+///
 /// A state of Hir.
 ///
 #[derive(Clone, PartialEq)]
 pub struct HirContext {
     /// Basic blocks.
     pub basic_block: Vec<HirBasicBlock>,
-    cur_bb: usize,
+    cur_bb: HirBBId,
     /// Functions.
     pub functions: Vec<HirFunction>,
-    cur_fn: usize,
+    cur_fn: HirId,
 }
 
 impl std::fmt::Debug for HirContext {
@@ -127,8 +139,8 @@ impl std::fmt::Debug for HirContext {
                 func.name, func.args, func.ast
             )?;
             for i in func.bbs.iter() {
-                let bb = &self.basic_block[*i];
-                writeln!(f, "\t\tBasicBlock {} {{ owner:{:?}", i, bb.owner_function)?;
+                let bb = &self[*i];
+                writeln!(f, "\t\tBasicBlock {:?} {{ owner:{:?}", i, bb.owner_function)?;
                 for hir in &bb.insts {
                     let s = match hir {
                         Hir::Integer(ret, i) => format!("{:?} = {}: i32", ret, i),
@@ -162,20 +174,20 @@ impl std::fmt::Debug for HirContext {
                                 None => format!("%_ = call {} ({:?})", name, arg),
                             }
                         }
-                        Hir::Br(dest) => format!("br {}", dest),
+                        Hir::Br(dest) => format!("br {:?}", dest),
                         Hir::CmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {:?} else {:?}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Hir::CondBr(cond, then_, else_) => {
-                            format!("condbr {:?} then {} else {}", cond, then_, else_)
+                            format!("condbr {:?} then {:?} else {:?}", cond, then_, else_)
                         }
                         Hir::Phi(ret, phi) => {
                             let phi_s = phi
                                 .iter()
-                                .map(|(bb, r)| format!("({}, {:?})", bb, r))
+                                .map(|(bb, r)| format!("({:?}, {:?})", bb, r))
                                 .collect::<Vec<String>>()
                                 .join(", ");
                             format!("{:?} = phi {}", ret, phi_s)
@@ -195,34 +207,50 @@ impl std::ops::Deref for HirContext {
     type Target = HirBasicBlock;
 
     fn deref(&self) -> &Self::Target {
-        &self.basic_block[self.cur_bb]
+        let cur_bb = self.cur_bb;
+        &self[cur_bb]
     }
 }
 
 impl std::ops::DerefMut for HirContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.basic_block[self.cur_bb]
+        let cur_bb = self.cur_bb;
+        &mut self[cur_bb]
     }
 }
 
-impl std::ops::Index<usize> for HirContext {
+impl std::ops::Index<HirBBId> for HirContext {
     type Output = HirBasicBlock;
 
-    fn index(&self, i: usize) -> &HirBasicBlock {
-        &self.basic_block[i]
+    fn index(&self, i: HirBBId) -> &HirBasicBlock {
+        &self.basic_block[i.0]
     }
 }
 
-impl std::ops::IndexMut<usize> for HirContext {
-    fn index_mut(&mut self, i: usize) -> &mut HirBasicBlock {
-        &mut self.basic_block[i]
+impl std::ops::IndexMut<HirBBId> for HirContext {
+    fn index_mut(&mut self, i: HirBBId) -> &mut HirBasicBlock {
+        &mut self.basic_block[i.0]
+    }
+}
+
+impl std::ops::Index<HirId> for HirContext {
+    type Output = HirFunction;
+
+    fn index(&self, i: HirId) -> &HirFunction {
+        &self.functions[i.0]
+    }
+}
+
+impl std::ops::IndexMut<HirId> for HirContext {
+    fn index_mut(&mut self, i: HirId) -> &mut HirFunction {
+        &mut self.functions[i.0]
     }
 }
 
 impl HirContext {
     pub fn new() -> Self {
-        let cur_bb = 0;
-        let cur_fn = 0;
+        let cur_bb = HirBBId(0);
+        let cur_fn = HirId(0);
         let basic_block = HirBasicBlock::new(cur_fn);
         let mut function = HirFunction::new("/main".to_string(), cur_bb, vec![]);
         function.bbs.insert(cur_bb);
@@ -234,25 +262,35 @@ impl HirContext {
         }
     }
 
-    fn new_bb(&mut self) -> usize {
-        let bb = HirBasicBlock::new(self.cur_fn);
-        let next = self.basic_block.len();
-        self.functions[self.cur_fn].bbs.insert(next);
+    fn next_bb(&self) -> HirBBId {
+        HirBBId(self.basic_block.len())
+    }
+
+    fn new_bb(&mut self) -> HirBBId {
+        let cur_fn = self.cur_fn;
+        let bb = HirBasicBlock::new(cur_fn);
+        let next = self.next_bb();
+        self[cur_fn].bbs.insert(next);
         self.basic_block.push(bb);
         next
     }
 
     fn func(&self) -> &HirFunction {
-        &self.functions[self.cur_fn]
+        &self[self.cur_fn]
     }
 
     fn func_mut(&mut self) -> &mut HirFunction {
-        &mut self.functions[self.cur_fn]
+        let cur_fn = self.cur_fn;
+        &mut self[cur_fn]
     }
 
-    fn enter_new_func(&mut self, name: String, args: Vec<String>) -> usize {
-        let entry_bb = self.basic_block.len();
-        let next_fn = self.functions.len();
+    fn next_fn(&self) -> HirId {
+        HirId(self.functions.len())
+    }
+
+    fn enter_new_func(&mut self, name: String, args: Vec<String>) -> HirId {
+        let entry_bb = self.next_bb();
+        let next_fn = self.next_fn();
 
         let bb = HirBasicBlock::new(next_fn);
         self.basic_block.push(bb);
@@ -414,7 +452,7 @@ impl HirContext {
         Ok(self.add_assign(hir))
     }
 
-    fn new_phi(&mut self, phi: Vec<(usize, SsaReg)>) -> SsaReg {
+    fn new_phi(&mut self, phi: Vec<(HirBBId, SsaReg)>) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(Hir::Phi(ret, phi))
     }
@@ -423,9 +461,9 @@ impl HirContext {
 #[derive(Clone, PartialEq)]
 pub struct HirFunction {
     pub name: String,
-    pub entry_bb: usize,
+    pub entry_bb: HirBBId,
     pub ret: Option<SsaReg>,
-    pub bbs: BTreeSet<usize>,
+    pub bbs: BTreeSet<HirBBId>,
     pub locals: HashMap<String, usize>,
     pub args: Vec<String>,
     pub regs: usize,
@@ -433,7 +471,7 @@ pub struct HirFunction {
 }
 
 impl HirFunction {
-    fn new(name: String, entry_bb: usize, args: Vec<String>) -> Self {
+    fn new(name: String, entry_bb: HirBBId, args: Vec<String>) -> Self {
         Self {
             name,
             entry_bb,
@@ -456,11 +494,11 @@ pub struct HirBasicBlock {
     /// HIR instructions.
     pub insts: Vec<Hir>,
     /// The function this bb is owned.
-    pub owner_function: usize,
+    pub owner_function: HirId,
 }
 
 impl HirBasicBlock {
-    fn new(owner_function: usize) -> Self {
+    fn new(owner_function: HirId) -> Self {
         Self {
             insts: vec![],
             owner_function,
@@ -477,7 +515,7 @@ pub enum HirErr {
 impl HirContext {
     /// Generate HIR in top level from [(Stmt, Span)].
     pub fn from_ast(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
-        assert_eq!(0, self.cur_fn);
+        assert_eq!(0, self.cur_fn.0);
         let mut local_map = HashMap::default();
         let len = ast.len();
         let ret = if len == 0 {
@@ -498,7 +536,7 @@ impl HirContext {
         func_name: String,
         args: Vec<String>,
         ast: &[(Expr, Span)],
-    ) -> Result<usize> {
+    ) -> Result<HirId> {
         let save = (self.cur_fn, self.cur_bb);
         let mut local_map = HashMap::default();
         args.iter().for_each(|arg| {
@@ -745,8 +783,8 @@ impl HirContext {
     fn gen_cond(
         &mut self,
         cond_: &Expr,
-        then_bb: usize,
-        else_bb: usize,
+        then_bb: HirBBId,
+        else_bb: HirBBId,
         local_map: &mut HashMap<String, usize>,
     ) -> Result<()> {
         if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {

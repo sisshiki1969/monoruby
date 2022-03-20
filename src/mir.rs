@@ -13,11 +13,11 @@ type Result<T> = std::result::Result<T, MirErr>;
 ///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Mir {
-    Br(usize),
-    CondBr(SsaReg, usize, usize),
-    ICmpBr(CmpKind, SsaReg, MirOperand, usize, usize),
-    FCmpBr(CmpKind, SsaReg, SsaReg, usize, usize),
-    Phi(SsaReg, Vec<(usize, SsaReg, Type)>), // ret, [(bb, reg, type)]
+    Br(MirBBId),
+    CondBr(SsaReg, MirBBId, MirBBId),
+    ICmpBr(CmpKind, SsaReg, MirOperand, MirBBId, MirBBId),
+    FCmpBr(CmpKind, SsaReg, SsaReg, MirBBId, MirBBId),
+    Phi(SsaReg, Vec<(MirBBId, SsaReg, Type)>), // ret, [(bb, reg, type)]
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
     Nil(SsaReg),
@@ -37,7 +37,7 @@ pub enum Mir {
     Ret(MirOperand),
     LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
-    Call(usize, Option<SsaReg>, Vec<MirOperand>), // (id, ret, arg)
+    Call(MirFuncId, Option<SsaReg>, Vec<MirOperand>), // (id, ret, arg)
 }
 
 ///
@@ -117,7 +117,7 @@ impl SsaRegInfo {
 pub struct MirContext {
     /// Functions.
     pub functions: Vec<MirFunction>,
-    cur_fn: usize,
+    cur_fn: MirFuncId,
 }
 
 impl std::fmt::Debug for MirContext {
@@ -208,32 +208,32 @@ impl std::fmt::Debug for MirContext {
                             format!("{:?} = ${}: {:?}", lhs, ident.0, ident.1)
                         }
                         Mir::Call(id, ret, arg) => {
-                            let name = &self.functions[*id].name;
+                            let name = &self[*id].name;
                             match ret {
                                 Some(ret) => format!("{:?} = call {} ({:?})", ret, name, arg),
                                 None => format!("%_ = call {} ({:?})", name, arg),
                             }
                         }
-                        Mir::Br(dest) => format!("br {}", dest),
+                        Mir::Br(dest) => format!("br {:?}", dest),
                         Mir::ICmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {:?} else {:?}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Mir::FCmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} {:?}, {:?}) then {} else {}",
+                                "cmpbr ({:?} {:?}, {:?}) then {:?} else {:?}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Mir::CondBr(cond, then_, else_) => {
-                            format!("condbr {:?} then {} else {}", cond, then_, else_)
+                            format!("condbr {:?} then {:?} else {:?}", cond, then_, else_)
                         }
                         Mir::Phi(ret, phi) => {
                             let phi_s = phi
                                 .iter()
-                                .map(|(bb, r, ty)| format!("({}, {:?}: {:?})", bb, r, ty))
+                                .map(|(bb, r, ty)| format!("({:?}, {:?}: {:?})", bb, r, ty))
                                 .collect::<Vec<String>>()
                                 .join(", ");
                             format!("{:?} = phi {}", ret, phi_s)
@@ -249,9 +249,23 @@ impl std::fmt::Debug for MirContext {
     }
 }
 
+impl std::ops::Index<MirFuncId> for MirContext {
+    type Output = MirFunction;
+
+    fn index(&self, i: MirFuncId) -> &MirFunction {
+        &self.functions[i.0]
+    }
+}
+
+impl std::ops::IndexMut<MirFuncId> for MirContext {
+    fn index_mut(&mut self, i: MirFuncId) -> &mut MirFunction {
+        &mut self.functions[i.0]
+    }
+}
+
 impl MirContext {
     pub fn new() -> Self {
-        let cur_fn = 0;
+        let cur_fn = MirFuncId::default();
         MirContext {
             functions: vec![],
             cur_fn,
@@ -259,17 +273,23 @@ impl MirContext {
     }
 
     fn func(&self) -> &MirFunction {
-        &self.functions[self.cur_fn]
+        let cur_fn = self.cur_fn;
+        &self.functions[cur_fn.0]
     }
 
     fn func_mut(&mut self) -> &mut MirFunction {
-        &mut self.functions[self.cur_fn]
+        let cur_fn = self.cur_fn;
+        &mut self.functions[cur_fn.0]
+    }
+
+    fn next_fn(&self) -> MirFuncId {
+        MirFuncId(self.functions.len())
     }
 
     fn enter_new_func(&mut self, name: String, args: Vec<(String, Type)>) {
-        let next_fn = self.functions.len();
+        let next_fn = self.next_fn();
         let mut func = MirFunction::new(next_fn, name, args);
-        assert_eq!(0, func.new_bb());
+        assert_eq!(0, func.new_bb().0);
 
         self.functions.push(func);
         self.cur_fn = next_fn;
@@ -281,7 +301,7 @@ impl MirContext {
         func_name: String,
         args: Vec<(String, Type)>,
         ast: &[(Stmt, Span)],
-    ) -> Result<usize> {
+    ) -> Result<MirFuncId> {
         self.enter_new_func(func_name, args);
         self.func_mut().gen_func(ast)?;
         Ok(self.cur_fn)
@@ -314,9 +334,33 @@ impl MirContext {
     }*/
 }
 
+///
+/// ID of MIR function.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MirFuncId(usize);
+
+impl MirFuncId {
+    pub fn to_usize(&self) -> usize {
+        self.0
+    }
+}
+
+///
+/// ID of MIR basic block.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct MirBBId(usize);
+
+impl MirBBId {
+    pub fn to_usize(&self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct MirFunction {
-    pub id: usize,
+    pub id: MirFuncId,
     pub name: String,
     pub ret: Option<SsaReg>,
     pub ret_ty: Option<Type>,
@@ -326,7 +370,7 @@ pub struct MirFunction {
     pub args: Vec<(String, Type)>,
     /// Basic blocks.
     pub basic_block: Vec<MirBasicBlock>,
-    cur_bb: usize,
+    cur_bb: MirBBId,
 }
 
 impl std::ops::Index<SsaReg> for MirFunction {
@@ -347,32 +391,34 @@ impl std::ops::Deref for MirFunction {
     type Target = MirBasicBlock;
 
     fn deref(&self) -> &Self::Target {
-        &self.basic_block[self.cur_bb]
+        let cur_bb = self.cur_bb;
+        &self[cur_bb]
     }
 }
 
 impl std::ops::DerefMut for MirFunction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.basic_block[self.cur_bb]
+        let cur_bb = self.cur_bb;
+        &mut self[cur_bb]
     }
 }
 
-impl std::ops::Index<usize> for MirFunction {
+impl std::ops::Index<MirBBId> for MirFunction {
     type Output = MirBasicBlock;
 
-    fn index(&self, i: usize) -> &MirBasicBlock {
-        &self.basic_block[i]
+    fn index(&self, i: MirBBId) -> &MirBasicBlock {
+        &self.basic_block[i.0]
     }
 }
 
-impl std::ops::IndexMut<usize> for MirFunction {
-    fn index_mut(&mut self, i: usize) -> &mut MirBasicBlock {
-        &mut self.basic_block[i]
+impl std::ops::IndexMut<MirBBId> for MirFunction {
+    fn index_mut(&mut self, i: MirBBId) -> &mut MirBasicBlock {
+        &mut self.basic_block[i.0]
     }
 }
 
 impl MirFunction {
-    fn new(id: usize, name: String, args: Vec<(String, Type)>) -> Self {
+    fn new(id: MirFuncId, name: String, args: Vec<(String, Type)>) -> Self {
         let mut locals = HashMap::default();
         args.iter().for_each(|(arg, ty)| {
             let len = locals.len();
@@ -387,7 +433,7 @@ impl MirFunction {
             locals,
             args,
             basic_block: vec![],
-            cur_bb: 0,
+            cur_bb: MirBBId::default(),
         }
     }
 
@@ -399,11 +445,11 @@ impl MirFunction {
         SsaReg::new(self.register_num())
     }
 
-    fn new_bb(&mut self) -> usize {
+    fn new_bb(&mut self) -> MirBBId {
         let bb = MirBasicBlock::new(self.id);
         let next = self.basic_block.len();
         self.basic_block.push(bb);
-        next
+        MirBBId(next)
     }
 
     fn add_assign(&mut self, hir: Mir, ty: Type) -> SsaReg {
@@ -595,7 +641,7 @@ impl MirFunction {
         Ok(self.add_assign(hir, ty))
     }
 
-    fn new_phi(&mut self, phi: Vec<(usize, SsaReg, Type)>) -> SsaReg {
+    fn new_phi(&mut self, phi: Vec<(MirBBId, SsaReg, Type)>) -> SsaReg {
         let ty = phi[0].2;
         assert!(phi.iter().all(|(_, _, ty)| ty == ty));
         let ret = self.next_reg();
@@ -624,11 +670,11 @@ pub struct MirBasicBlock {
     /// HIR instructions.
     pub insts: Vec<Mir>,
     /// The function this bb is owned.
-    pub owner_function: usize,
+    pub owner_function: MirFuncId,
 }
 
 impl MirBasicBlock {
-    fn new(owner_function: usize) -> Self {
+    fn new(owner_function: MirFuncId) -> Self {
         Self {
             insts: vec![],
             owner_function,
@@ -967,7 +1013,7 @@ impl MirFunction {
         Ok(arg_regs)
     }
 
-    fn gen_cond(&mut self, cond_: &Expr, then_bb: usize, else_bb: usize) -> Result<()> {
+    fn gen_cond(&mut self, cond_: &Expr, then_bb: MirBBId, else_bb: MirBBId) -> Result<()> {
         if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
             let lhs = self.gen_expr(lhs)?;
             let lhs_ty = self[lhs].ty;

@@ -1,5 +1,6 @@
 #![feature(box_patterns)]
 use std::collections::HashMap;
+use std::time::*;
 
 use ariadne::*;
 use chumsky::{error::Cheap, prelude::*, Stream};
@@ -188,14 +189,6 @@ pub fn run_test(code: &str) {
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
         //dbg!(&stmt);
-        /*let mut hir = MirContext::new();
-        match hir.from_ast(&stmt) {
-            Ok(_) => {}
-            Err(err) => panic!("Error in compiling AST. {:?}", err),
-        };
-        #[cfg(debug_assertions)]
-        dbg!(&hir);*/
-
         let mut hir = HirContext::new();
         match hir.from_ast(&stmt) {
             Ok(_) => {}
@@ -203,16 +196,13 @@ pub fn run_test(code: &str) {
         };
         #[cfg(debug_assertions)]
         dbg!(&hir);
+        let now = Instant::now();
         let eval_res = Evaluator::eval_toplevel(&hir);
-        /*let mcir_context = dbg!(McIrContext::from_mir(&mut hir));
-        let mut codegen = Codegen::new();*/
-        //#[cfg(debug_assertions)]
-        //dbg!(&mcir_context);
-        //let (func, ty) = codegen.compile(&mcir_context);
-        //let jit_res = codegen.run(func, ty);
-        //assert_eq!(dbg!(&jit_res), dbg!(&eval_res));
+        eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
+        let now = Instant::now();
         let ruby_res = run_ruby(&all_codes);
-        assert_eq!(dbg!(&eval_res), dbg!(&ruby_res));
+        eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());
+        assert_eq!(eval_res, ruby_res);
     }
     show_err(errs, parse_errs, code);
 }
@@ -360,8 +350,19 @@ mod test {
                     fib(x-1)+fib(x-2)
                 end
             end;
-            fib(30)
-            fib(30.0)
+            fib(32)
+            "#,
+        );
+        run_test(
+            r#"
+            def fib(x)
+                if x<3 then
+                    1
+                else
+                    fib(x-1)+fib(x-2)
+                end
+            end;
+            fib(32.0)
             "#,
         );
     }

@@ -571,33 +571,33 @@ impl McIrContext {
         self.f_reginfo.len()
     }
 
-    pub fn from_mir(&mut self, hir_func: &MirFunction) -> usize {
+    pub fn from_mir(&mut self, mir_func: &MirFunction) -> usize {
         let next_fn = self.functions.len();
-        let mut mir_func = McIrFunc::new(
+        let mut mcir_func = McIrFunc::new(
             next_fn,
-            hir_func.name.clone(),
-            hir_func.args.clone(),
-            hir_func.locals.clone(),
+            mir_func.name.clone(),
+            mir_func.args.clone(),
+            mir_func.locals.clone(),
         );
-        mir_func.blocks = hir_func
+        mcir_func.blocks = mir_func
             .basic_block
             .iter()
-            .map(|hir_bb| McIrBlock::new(hir_bb.owner_function))
+            .map(|mir_bb| McIrBlock::new(mir_bb.owner_function.to_usize()))
             .collect();
-        self.functions.push(mir_func);
+        self.functions.push(mcir_func);
         self.cur_fn = next_fn;
-        self.ssa_map = SsaMap(vec![None; hir_func.register_num()]);
+        self.ssa_map = SsaMap(vec![None; mir_func.register_num()]);
         let mut g_reg_num = 0;
         let mut f_reg_num = 0;
-        for (i, bb) in hir_func.basic_block.iter().enumerate() {
+        for (i, bb) in mir_func.basic_block.iter().enumerate() {
             self.func_mut().cur_block = i;
-            self.compile_bb(bb, hir_func);
+            self.compile_bb(bb, mir_func);
             g_reg_num = std::cmp::max(g_reg_num, self.g_reg_num());
             f_reg_num = std::cmp::max(f_reg_num, self.f_reg_num());
         }
         self.func_mut().g_regs = g_reg_num;
         self.func_mut().f_regs = f_reg_num;
-        self.func_mut().ret_ty = hir_func.ret_ty.unwrap();
+        self.func_mut().ret_ty = mir_func.ret_ty.unwrap();
         dbg!(self);
         next_fn
     }
@@ -678,18 +678,26 @@ impl McIrContext {
                     let lhs = self.ssa_map[*lhs].unwrap().as_g();
                     let rhs = self.mir_to_general_operand(rhs);
                     self[lhs].release();
-                    self.func_mut()
-                        .insts
-                        .push(McIR::ICmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
+                    self.func_mut().insts.push(McIR::ICmpJmp(
+                        *kind,
+                        lhs,
+                        rhs,
+                        then_bb.to_usize(),
+                        else_bb.to_usize(),
+                    ));
                 }
                 Mir::FCmpBr(kind, lhs, rhs, then_bb, else_bb) => {
                     let lhs = self.ssa_map[*lhs].unwrap().as_f();
                     let rhs = self.ssa_map[*rhs].unwrap().as_f();
                     self[lhs].release();
                     self[rhs].release();
-                    self.func_mut()
-                        .insts
-                        .push(McIR::FCmpJmp(*kind, lhs, rhs, *then_bb, *else_bb));
+                    self.func_mut().insts.push(McIR::FCmpJmp(
+                        *kind,
+                        lhs,
+                        rhs,
+                        then_bb.to_usize(),
+                        else_bb.to_usize(),
+                    ));
                 }
 
                 Mir::Ret(op) => match op {
@@ -787,7 +795,7 @@ impl McIrContext {
                     let ret = ret.map(|ret| self.alloc_greg(ret));
                     self.func_mut()
                         .insts
-                        .push(McIR::Call(*func_id, ret, args, g_using));
+                        .push(McIR::Call(func_id.to_usize(), ret, args, g_using));
                 }
                 Mir::Br(next_bb) => {
                     let move_list = hir_func[*next_bb]
@@ -795,7 +803,7 @@ impl McIrContext {
                         .iter()
                         .filter_map(|ir| match ir {
                             Mir::Phi(_, phi) => phi.iter().find_map(|(i, r, ty)| {
-                                if self.func_mut().cur_block == *i {
+                                if self.func_mut().cur_block == i.to_usize() {
                                     Some((r, ty))
                                 } else {
                                     None
@@ -805,8 +813,8 @@ impl McIrContext {
                         })
                         .collect::<Vec<_>>();
                     if move_list.len() == 0 {
-                        self.func_mut().insts.push(McIR::Jmp(*next_bb));
-                        let using_reg = &mut self.func_mut().blocks[*next_bb].using_reg;
+                        self.func_mut().insts.push(McIR::Jmp(next_bb.to_usize()));
+                        let using_reg = &mut self.func_mut().blocks[next_bb.to_usize()].using_reg;
                         match using_reg {
                             Some((0, 0)) => {}
                             None => *using_reg = Some((0, 0)),
@@ -832,8 +840,9 @@ impl McIrContext {
                                     g_reg += 1;
                                 }
                             }
-                            self.func_mut().insts.push(McIR::Jmp(*next_bb));
-                            let using_reg = &mut self.func_mut().blocks[*next_bb].using_reg;
+                            self.func_mut().insts.push(McIR::Jmp(next_bb.to_usize()));
+                            let using_reg =
+                                &mut self.func_mut().blocks[next_bb.to_usize()].using_reg;
                             match using_reg {
                                 Some(using) => assert!(*using == (g_reg, f_reg)),
                                 None => *using_reg = Some((g_reg, f_reg)),
@@ -843,9 +852,11 @@ impl McIrContext {
                 }
                 Mir::CondBr(cond_, then_bb, else_bb) => {
                     let cond_ = self.ssa_map[*cond_].unwrap();
-                    self.func_mut()
-                        .insts
-                        .push(McIR::CondJmp(cond_, *then_bb, *else_bb));
+                    self.func_mut().insts.push(McIR::CondJmp(
+                        cond_,
+                        then_bb.to_usize(),
+                        else_bb.to_usize(),
+                    ));
                 }
                 Mir::Phi(ret, _) => {
                     let _reg = self.alloc_reg(*ret, hir_func[*ret].ty);

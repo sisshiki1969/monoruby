@@ -63,9 +63,7 @@ impl Evaluator {
                 }
             };
         dbg!(&self.mir_context);
-        let func_id = self
-            .mcir_context
-            .from_mir(&self.mir_context.functions[mir_id]);
+        let func_id = self.mcir_context.from_mir(&self.mir_context[mir_id]);
         Some(
             self.codegen
                 .compile_func(&self.mcir_context.functions[func_id], func_id),
@@ -118,7 +116,7 @@ impl Evaluator {
             ssareg: vec![Value::Nil; register_num],
             locals,
             cur_bb: func.entry_bb,
-            prev_bb: 0,
+            prev_bb: HirBBId::default(),
             pc: 0,
         };
         loop {
@@ -268,8 +266,8 @@ impl Evaluator {
 struct FuncContext {
     ssareg: Vec<Value>,
     locals: Vec<Value>,
-    cur_bb: usize,
-    prev_bb: usize,
+    cur_bb: HirBBId,
+    prev_bb: HirBBId,
     pc: usize,
 }
 
@@ -288,7 +286,7 @@ impl std::ops::IndexMut<SsaReg> for FuncContext {
 }
 
 impl FuncContext {
-    fn goto(&mut self, bb: usize) {
+    fn goto(&mut self, bb: HirBBId) {
         self.prev_bb = self.cur_bb;
         self.cur_bb = bb;
         self.pc = 0;
