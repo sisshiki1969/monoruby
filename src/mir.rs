@@ -272,11 +272,6 @@ impl MirContext {
         }
     }
 
-    fn func(&self) -> &MirFunction {
-        let cur_fn = self.cur_fn;
-        &self.functions[cur_fn.0]
-    }
-
     fn func_mut(&mut self) -> &mut MirFunction {
         let cur_fn = self.cur_fn;
         &mut self.functions[cur_fn.0]

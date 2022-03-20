@@ -7,7 +7,7 @@ pub struct Evaluator {
     codegen: Codegen,
     mir_context: MirContext,
     mcir_context: McIrContext,
-    jit_state: HashMap<(usize, Vec<Type>), JitState>,
+    jit_state: HashMap<(HirFuncId, Vec<Type>), JitState>,
 }
 
 enum JitState {
@@ -40,10 +40,10 @@ impl Evaluator {
     fn jit_compile(
         &mut self,
         hir_context: &HirContext,
-        hir_id: usize,
+        hir_id: HirFuncId,
         args: &[Value],
     ) -> Option<(usize, DestLabel, Type)> {
-        let hir_func = &hir_context.functions[hir_id];
+        let hir_func = &hir_context[hir_id];
         let args = hir_func
             .args
             .iter()
@@ -72,13 +72,13 @@ impl Evaluator {
 
     pub fn eval_toplevel(hir_context: &HirContext) -> Value {
         let mut eval = Self::new();
-        eval.eval_function(hir_context, 0, vec![])
+        eval.eval_function(hir_context, HirFuncId::default(), vec![])
     }
 
     fn eval_function(
         &mut self,
         hir_context: &HirContext,
-        cur_fn: usize,
+        cur_fn: HirFuncId,
         args: Vec<Value>,
     ) -> Value {
         let arg_ty: Vec<_> = args.iter().map(|v| v.ty()).collect();
@@ -95,7 +95,7 @@ impl Evaluator {
                     eprintln!("call JIT");
                     return self.codegen.call_jit_func(dest, ty, &args);
                 } else {
-                    let func = &hir_context.functions[cur_fn];
+                    let func = &hir_context[cur_fn];
                     eprintln!("JIT fail: {} ({:?})", func.name, &arg_ty);
                     self.jit_state.insert((cur_fn, arg_ty), JitState::Fail);
                 }
@@ -107,7 +107,7 @@ impl Evaluator {
             }
         }
 
-        let func = &hir_context.functions[cur_fn];
+        let func = &hir_context[cur_fn];
         let locals_num = func.locals.len();
         let mut locals = vec![Value::Nil; locals_num];
         locals[0..args.len()].clone_from_slice(&args);

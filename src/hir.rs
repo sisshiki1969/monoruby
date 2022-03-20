@@ -26,7 +26,7 @@ pub enum Hir {
     Ret(HirOperand),
     LocalStore(Option<SsaReg>, usize, SsaReg), // (ret, offset, rhs)
     LocalLoad(usize, SsaReg),
-    Call(usize, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
+    Call(HirFuncId, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
 }
 
 ///
@@ -106,8 +106,8 @@ impl SsaReg {
 ///
 /// ID of HIR function.
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HirId(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct HirFuncId(usize);
 
 ///
 /// ID of HIR basic block.
@@ -122,7 +122,8 @@ pub struct HirBBId(usize);
 pub struct HirContext {
     /// Functions.
     pub functions: Vec<HirFunction>,
-    cur_fn: HirId,
+    cur_fn: HirFuncId,
+    pub func_map: HashMap<String, HirFuncId>,
 }
 
 impl std::fmt::Debug for HirContext {
@@ -164,7 +165,7 @@ impl std::fmt::Debug for HirContext {
                             format!("{:?} = ${}", lhs, ident)
                         }
                         Hir::Call(id, ret, arg) => {
-                            let name = &self.functions[*id].name;
+                            let name = &self[*id].name;
                             match ret {
                                 Some(ret) => format!("{:?} = call {} ({:?})", ret, name, arg),
                                 None => format!("%_ = call {} ({:?})", name, arg),
@@ -199,64 +200,172 @@ impl std::fmt::Debug for HirContext {
     }
 }
 
-impl std::ops::Index<HirId> for HirContext {
+impl std::ops::Deref for HirContext {
+    type Target = HirFunction;
+
+    fn deref(&self) -> &Self::Target {
+        let cur_fn = self.cur_fn;
+        &self[cur_fn]
+    }
+}
+
+impl std::ops::DerefMut for HirContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let cur_fn = self.cur_fn;
+        &mut self[cur_fn]
+    }
+}
+
+impl std::ops::Index<HirFuncId> for HirContext {
     type Output = HirFunction;
 
-    fn index(&self, i: HirId) -> &HirFunction {
+    fn index(&self, i: HirFuncId) -> &HirFunction {
         &self.functions[i.0]
     }
 }
 
-impl std::ops::IndexMut<HirId> for HirContext {
-    fn index_mut(&mut self, i: HirId) -> &mut HirFunction {
+impl std::ops::IndexMut<HirFuncId> for HirContext {
+    fn index_mut(&mut self, i: HirFuncId) -> &mut HirFunction {
         &mut self.functions[i.0]
     }
 }
 
 impl HirContext {
     pub fn new() -> Self {
-        let cur_fn = HirId(0);
+        let cur_fn = HirFuncId(0);
         let function = HirFunction::new(cur_fn, "/main".to_string(), vec![]);
         HirContext {
             functions: vec![function],
             cur_fn,
+            func_map: HashMap::default(),
         }
     }
 
-    pub fn func(&self) -> &HirFunction {
-        &self[self.cur_fn]
+    fn next_fn(&self) -> HirFuncId {
+        HirFuncId(self.functions.len())
     }
 
-    fn func_mut(&mut self) -> &mut HirFunction {
-        let cur_fn = self.cur_fn;
-        &mut self[cur_fn]
-    }
-
-    fn next_fn(&self) -> HirId {
-        HirId(self.functions.len())
-    }
-
-    fn enter_new_func(&mut self, name: String, args: Vec<String>) -> HirId {
+    fn enter_new_func(&mut self, name: String, args: Vec<String>) -> HirFuncId {
         let next_fn = self.next_fn();
-        let func = HirFunction::new(next_fn, name, args);
+        let func = HirFunction::new(next_fn, name.clone(), args);
+        self.func_map.insert(name, next_fn);
         self.functions.push(func);
         self.cur_fn = next_fn;
         next_fn
     }
 
-    fn add_assign(&mut self, hir: Hir) -> SsaReg {
-        let ret_reg = self.next_reg();
-        self.func_mut().regs += 1;
-        self.func_mut().insts.push(hir);
-        ret_reg
+    fn new_call(&mut self, name: &str, args: Vec<HirOperand>) -> Result<SsaReg> {
+        let ret = self.next_reg();
+        let id = self.get_function(&name)?;
+        Ok(self.add_assign(Hir::Call(id, Some(ret), args)))
     }
 
-    pub fn register_num(&self) -> usize {
-        self.func().regs
+    fn new_call_nouse(&mut self, name: &str, args: Vec<HirOperand>) -> Result<()> {
+        let id = self.get_function(&name)?;
+        let hir = Hir::Call(id, None, args);
+        self.insts.push(hir);
+        Ok(())
+    }
+
+    fn get_function(&mut self, name: &str) -> Result<HirFuncId> {
+        let id = self
+            .func_map
+            .get(name)
+            .ok_or(HirErr::UndefinedMethod(name.to_string()))?;
+        Ok(*id)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct HirFunction {
+    pub id: HirFuncId,
+    pub name: String,
+    pub ret: Option<SsaReg>,
+    pub locals: HashMap<String, usize>,
+    pub args: Vec<String>,
+    pub regs: usize,
+    pub ast: Vec<(Stmt, Span)>,
+    /// Basic blocks.
+    pub basic_block: Vec<HirBasicBlock>,
+    cur_bb: HirBBId,
+}
+
+impl std::ops::Deref for HirFunction {
+    type Target = HirBasicBlock;
+
+    fn deref(&self) -> &Self::Target {
+        let cur_bb = self.cur_bb;
+        &self[cur_bb]
+    }
+}
+
+impl std::ops::DerefMut for HirFunction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let cur_bb = self.cur_bb;
+        &mut self[cur_bb]
+    }
+}
+
+impl std::ops::Index<HirBBId> for HirFunction {
+    type Output = HirBasicBlock;
+
+    fn index(&self, i: HirBBId) -> &HirBasicBlock {
+        &self.basic_block[i.0]
+    }
+}
+
+impl std::ops::IndexMut<HirBBId> for HirFunction {
+    fn index_mut(&mut self, i: HirBBId) -> &mut HirBasicBlock {
+        &mut self.basic_block[i.0]
+    }
+}
+
+impl HirFunction {
+    fn new(id: HirFuncId, name: String, args: Vec<String>) -> Self {
+        let mut locals = HashMap::default();
+        let mut len = 0;
+        args.iter().for_each(|arg| {
+            locals.insert(arg.to_string(), len);
+            len += 1;
+        });
+        Self {
+            id,
+            name,
+            ret: None,
+            locals,
+            args,
+            regs: 0,
+            ast: vec![],
+            basic_block: vec![HirBasicBlock::new(id)],
+            cur_bb: HirBBId::default(),
+        }
+    }
+
+    fn add_assign(&mut self, hir: Hir) -> SsaReg {
+        let ret_reg = self.next_reg();
+        self.regs += 1;
+        self.insts.push(hir);
+        ret_reg
     }
 
     fn next_reg(&self) -> SsaReg {
         SsaReg(self.register_num())
+    }
+
+    pub fn register_num(&self) -> usize {
+        self.regs
+    }
+
+    fn next_bb(&self) -> HirBBId {
+        HirBBId(self.basic_block.len())
+    }
+
+    fn new_bb(&mut self) -> HirBBId {
+        let cur_fn = self.id;
+        let bb = HirBasicBlock::new(cur_fn);
+        let next = self.next_bb();
+        self.basic_block.push(bb);
+        next
     }
 
     fn new_integer(&mut self, i: i32) -> SsaReg {
@@ -304,92 +413,50 @@ impl HirContext {
         self.add_assign(Hir::Cmp(kind, HirBinop2 { ret, lhs, rhs }))
     }
 
-    fn new_call(&mut self, name: &str, args: Vec<HirOperand>) -> Result<SsaReg> {
-        let ret = self.next_reg();
-        let id = self.get_function(&name)?;
-        Ok(self.add_assign(Hir::Call(id, Some(ret), args)))
-    }
-
-    fn new_call_nouse(&mut self, name: &str, args: Vec<HirOperand>) -> Result<()> {
-        let id = self.get_function(&name)?;
-        let hir = Hir::Call(id, None, args);
-        self.func_mut().insts.push(hir);
+    fn new_local_store_nouse(&mut self, ident: &String, rhs: SsaReg) -> Result<()> {
+        let len = self.locals.len();
+        let info = match self.locals.get(ident) {
+            Some(info) => *info,
+            None => {
+                self.locals.insert(ident.to_string(), len);
+                len
+            }
+        };
+        let hir = Hir::LocalStore(None, info, rhs);
+        self.insts.push(hir);
         Ok(())
     }
 
-    fn get_function(&mut self, name: &str) -> Result<usize> {
-        let id = self
-            .functions
-            .iter()
-            .enumerate()
-            .find(|(_, func)| &func.name == name)
-            .ok_or(HirErr::UndefinedMethod(name.to_string()))?
-            .0;
-        Ok(id)
-    }
-
-    fn new_ret(&mut self, lhs: SsaReg) {
-        let hir = Hir::Ret(HirOperand::Reg(lhs));
-        self.func_mut().insts.push(hir);
-    }
-
-    fn new_local_store(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ident: &String,
-        rhs: SsaReg,
-    ) -> Result<SsaReg> {
-        let info = self.add_local_var_if_new(local_map, ident);
+    fn new_local_store(&mut self, ident: &String, rhs: SsaReg) -> Result<SsaReg> {
+        let info = self.add_local_var_if_new(ident);
         let ret = self.next_reg();
         self.add_assign(Hir::LocalStore(Some(ret), info, rhs));
         Ok(ret)
     }
 
-    fn add_local_var_if_new(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ident: &String,
-    ) -> usize {
-        let len = local_map.len();
-        match local_map.get(ident) {
+    fn add_local_var_if_new(&mut self, ident: &String) -> usize {
+        let len = self.locals.len();
+        match self.locals.get(ident) {
             Some(info) => *info,
             None => {
-                local_map.insert(ident.to_string(), len);
+                self.locals.insert(ident.to_string(), len);
                 len
             }
         }
     }
 
-    fn new_local_store_nouse(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ident: &String,
-        rhs: SsaReg,
-    ) -> Result<()> {
-        let len = local_map.len();
-        let info = match local_map.get(ident) {
-            Some(info) => *info,
-            None => {
-                local_map.insert(ident.to_string(), len);
-                len
-            }
-        };
-        let hir = Hir::LocalStore(None, info, rhs);
-        self.func_mut().insts.push(hir);
-        Ok(())
-    }
-
-    fn new_local_load(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ident: &String,
-    ) -> Result<SsaReg> {
-        let info = match local_map.get(ident) {
+    fn new_local_load(&mut self, ident: &String) -> Result<SsaReg> {
+        let info = match self.locals.get(ident) {
             Some(info) => info.clone(),
             None => return Err(HirErr::UndefinedLocal(ident.clone())),
         };
         let hir = Hir::LocalLoad(info, self.next_reg());
         Ok(self.add_assign(hir))
+    }
+
+    fn new_ret(&mut self, lhs: SsaReg) {
+        let hir = Hir::Ret(HirOperand::Reg(lhs));
+        self.insts.push(hir);
     }
 
     fn new_phi(&mut self, phi: Vec<(HirBBId, SsaReg)>) -> SsaReg {
@@ -399,91 +466,15 @@ impl HirContext {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct HirFunction {
-    pub id: HirId,
-    pub name: String,
-    pub ret: Option<SsaReg>,
-    pub locals: HashMap<String, usize>,
-    pub args: Vec<String>,
-    pub regs: usize,
-    pub ast: Vec<(Stmt, Span)>,
-    /// Basic blocks.
-    pub basic_block: Vec<HirBasicBlock>,
-    cur_bb: HirBBId,
-}
-
-impl std::ops::Deref for HirFunction {
-    type Target = HirBasicBlock;
-
-    fn deref(&self) -> &Self::Target {
-        let cur_bb = self.cur_bb;
-        &self[cur_bb]
-    }
-}
-
-impl std::ops::DerefMut for HirFunction {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        let cur_bb = self.cur_bb;
-        &mut self[cur_bb]
-    }
-}
-
-impl std::ops::Index<HirBBId> for HirFunction {
-    type Output = HirBasicBlock;
-
-    fn index(&self, i: HirBBId) -> &HirBasicBlock {
-        &self.basic_block[i.0]
-    }
-}
-
-impl std::ops::IndexMut<HirBBId> for HirFunction {
-    fn index_mut(&mut self, i: HirBBId) -> &mut HirBasicBlock {
-        &mut self.basic_block[i.0]
-    }
-}
-
-impl HirFunction {
-    fn new(id: HirId, name: String, args: Vec<String>) -> Self {
-        Self {
-            id,
-            name,
-            ret: None,
-            locals: HashMap::default(),
-            args,
-            regs: 0,
-            ast: vec![],
-            basic_block: vec![HirBasicBlock::new(id)],
-            cur_bb: HirBBId::default(),
-        }
-    }
-
-    pub fn register_num(&self) -> usize {
-        self.regs
-    }
-
-    fn next_bb(&self) -> HirBBId {
-        HirBBId(self.basic_block.len())
-    }
-
-    fn new_bb(&mut self) -> HirBBId {
-        let cur_fn = self.id;
-        let bb = HirBasicBlock::new(cur_fn);
-        let next = self.next_bb();
-        self.basic_block.push(bb);
-        next
-    }
-}
-
-#[derive(Clone, PartialEq)]
 pub struct HirBasicBlock {
     /// HIR instructions.
     pub insts: Vec<Hir>,
     /// The function this bb is owned.
-    pub owner_function: HirId,
+    pub owner_function: HirFuncId,
 }
 
 impl HirBasicBlock {
-    fn new(owner_function: HirId) -> Self {
+    fn new(owner_function: HirFuncId) -> Self {
         Self {
             insts: vec![],
             owner_function,
@@ -501,17 +492,15 @@ impl HirContext {
     /// Generate HIR in top level from [(Stmt, Span)].
     pub fn from_ast(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
         assert_eq!(0, self.cur_fn.0);
-        let mut local_map = HashMap::default();
         let len = ast.len();
         let ret = if len == 0 {
             self.new_nil()
         } else {
-            self.gen_stmts(&mut local_map, ast)?
+            self.gen_stmts(ast)?
         };
-        self.func_mut().locals = local_map.clone();
         self.new_ret(ret);
-        self.func_mut().ret = Some(ret);
-        self.func_mut().ast = ast.to_vec();
+        self.ret = Some(ret);
+        self.ast = ast.to_vec();
         Ok(())
     }
 
@@ -521,13 +510,10 @@ impl HirContext {
         func_name: String,
         args: Vec<String>,
         ast: &[(Expr, Span)],
-    ) -> Result<HirId> {
-        let save = (self.cur_fn, self.func().cur_bb);
-        let mut local_map = HashMap::default();
-        args.iter().for_each(|arg| {
-            self.add_local_var_if_new(&mut local_map, arg);
-        });
+    ) -> Result<HirFuncId> {
+        let save = (self.cur_fn, self.cur_bb);
         let func = self.enter_new_func(func_name, args);
+
         let len = ast.len();
         let ret = if len == 0 {
             self.new_nil()
@@ -536,76 +522,59 @@ impl HirContext {
                 .iter()
                 .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
                 .collect::<Vec<(Stmt, Span)>>();
-            self.gen_stmts(&mut local_map, &ast)?
+            self.gen_stmts(&ast)?
         };
-        self.func_mut().locals = local_map;
         self.new_ret(ret);
-        self.func_mut().ret = Some(ret);
-        self.func_mut().ast = ast
+        self.ret = Some(ret);
+        self.ast = ast
             .iter()
             .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
             .collect();
-        (self.cur_fn, self.func_mut().cur_bb) = save;
+        (self.cur_fn, self.cur_bb) = save;
         Ok(func)
     }
 
-    fn gen_operand(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        expr: &Expr,
-    ) -> Result<HirOperand> {
+    fn gen_operand(&mut self, expr: &Expr) -> Result<HirOperand> {
         let op = match expr {
             Expr::Integer(i) => HirOperand::Const(Value::Integer(*i)),
             Expr::Float(f) => HirOperand::Const(Value::Float(*f)),
-            _ => HirOperand::Reg(self.gen_expr(local_map, expr)?),
+            _ => HirOperand::Reg(self.gen_expr(expr)?),
         };
         Ok(op)
     }
 
     /// Generate HIR from [(Stmt, Span)].
-    fn gen_stmts(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ast: &[(Stmt, Span)],
-    ) -> Result<SsaReg> {
+    fn gen_stmts(&mut self, ast: &[(Stmt, Span)]) -> Result<SsaReg> {
         let len = ast.len();
         for (node, _) in &ast[..len - 1] {
             match node {
-                Stmt::Expr(expr) => self.gen_expr_nouse(local_map, &expr.0)?,
+                Stmt::Expr(expr) => self.gen_expr_nouse(&expr.0)?,
                 Stmt::Decl(decl) => self.gen_decl_nouse(&decl.0)?,
             }
         }
         match &ast[len - 1].0 {
-            Stmt::Expr(expr) => self.gen_expr(local_map, &expr.0),
+            Stmt::Expr(expr) => self.gen_expr(&expr.0),
             Stmt::Decl(decl) => self.gen_decl(&decl.0),
         }
     }
 
-    fn gen_exprs(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ast: &[(Expr, Span)],
-    ) -> Result<SsaReg> {
+    fn gen_exprs(&mut self, ast: &[(Expr, Span)]) -> Result<SsaReg> {
         let len = ast.len();
         for (expr, _) in &ast[..len - 1] {
-            self.gen_expr_nouse(local_map, &expr)?;
+            self.gen_expr_nouse(&expr)?;
         }
-        self.gen_expr(local_map, &ast[len - 1].0)
+        self.gen_expr(&ast[len - 1].0)
     }
 
-    fn gen_exprs_nouse(
-        &mut self,
-        local_map: &mut HashMap<String, usize>,
-        ast: &[(Expr, Span)],
-    ) -> Result<()> {
+    fn gen_exprs_nouse(&mut self, ast: &[(Expr, Span)]) -> Result<()> {
         for (expr, _) in ast {
-            self.gen_expr_nouse(local_map, &expr)?;
+            self.gen_expr_nouse(&expr)?;
         }
         Ok(())
     }
 
     /// Generate HIR from an *Expr*.
-    fn gen_expr(&mut self, local_map: &mut HashMap<String, usize>, ast: &Expr) -> Result<SsaReg> {
+    fn gen_expr(&mut self, ast: &Expr) -> Result<SsaReg> {
         match ast {
             Expr::Integer(i) => Ok(self.new_integer(*i)),
             Expr::Float(f) => Ok(self.new_float(*f)),
@@ -615,130 +584,130 @@ impl HirContext {
                     Expr::Float(f) => return Ok(self.new_float(-f)),
                     _ => {}
                 };
-                let lhs_i = self.gen_expr(local_map, lhs)?;
+                let lhs_i = self.gen_expr(lhs)?;
                 let ssa = self.new_neg(lhs_i);
                 Ok(ssa)
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_operand(local_map, lhs)?;
-                let rhs = self.gen_operand(local_map, rhs)?;
+                let lhs = self.gen_operand(lhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 Ok(self.new_add(lhs, rhs))
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_operand(local_map, lhs)?;
-                let rhs = self.gen_operand(local_map, rhs)?;
+                let lhs = self.gen_operand(lhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 Ok(self.new_sub(lhs, rhs))
             }
             Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_operand(local_map, lhs)?;
-                let rhs = self.gen_operand(local_map, rhs)?;
+                let lhs = self.gen_operand(lhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 Ok(self.new_cmp(*kind, lhs, rhs))
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_operand(local_map, lhs)?;
-                let rhs = self.gen_operand(local_map, rhs)?;
+                let lhs = self.gen_operand(lhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 Ok(self.new_mul(lhs, rhs))
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_operand(local_map, lhs)?;
-                let rhs = self.gen_operand(local_map, rhs)?;
+                let lhs = self.gen_operand(lhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 Ok(self.new_div(lhs, rhs))
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(local_map, rhs)?;
-                self.new_local_store(local_map, ident, rhs)
+                let rhs = self.gen_expr(rhs)?;
+                self.new_local_store(ident, rhs)
             }
-            Expr::LocalLoad(ident) => self.new_local_load(local_map, ident),
+            Expr::LocalLoad(ident) => self.new_local_load(ident),
             Expr::Call(name, args) => {
                 let mut arg_regs = vec![];
                 for arg in args {
-                    let reg = self.gen_operand(local_map, &arg.0)?;
+                    let reg = self.gen_operand(&arg.0)?;
                     arg_regs.push(reg);
                 }
                 self.new_call(name, arg_regs)
             }
             Expr::If(box (cond_, _), then_, else_) => {
-                let else_bb = self.func_mut().new_bb();
-                let then_bb = self.func_mut().new_bb();
-                let succ_bb = self.func_mut().new_bb();
-                self.gen_cond(cond_, then_bb, else_bb, local_map)?;
+                let else_bb = self.new_bb();
+                let then_bb = self.new_bb();
+                let succ_bb = self.new_bb();
+                self.gen_cond(cond_, then_bb, else_bb)?;
                 // generate bb for else clause
-                self.func_mut().cur_bb = else_bb;
+                self.cur_bb = else_bb;
                 // return value of else clause.
-                let else_reg = self.gen_exprs(local_map, else_)?;
+                let else_reg = self.gen_exprs(else_)?;
                 // terminal bb of else clause.
-                let else_bb = self.func().cur_bb;
-                self.func_mut().insts.push(Hir::Br(succ_bb));
+                let else_bb = self.cur_bb;
+                self.insts.push(Hir::Br(succ_bb));
 
                 // generate bb for then clause
-                self.func_mut().cur_bb = then_bb;
+                self.cur_bb = then_bb;
                 // return value of then clause.
-                let then_reg = self.gen_exprs(local_map, then_)?;
+                let then_reg = self.gen_exprs(then_)?;
                 // terminal bb of then clause.
-                let then_bb = self.func().cur_bb;
-                self.func_mut().insts.push(Hir::Br(succ_bb));
+                let then_bb = self.cur_bb;
+                self.insts.push(Hir::Br(succ_bb));
 
                 // generate phi on the top of successor bb.
-                self.func_mut().cur_bb = succ_bb;
+                self.cur_bb = succ_bb;
                 let ret = self.new_phi(vec![(then_bb, then_reg), (else_bb, else_reg)]);
                 Ok(ret)
             }
-            Expr::While(box (cond, _), body) => self.gen_while(cond, body, local_map),
+            Expr::While(box (cond, _), body) => self.gen_while(cond, body),
         }
     }
 
     /// Generate HIR from an *Expr*.
-    fn gen_expr_nouse(&mut self, local_map: &mut HashMap<String, usize>, ast: &Expr) -> Result<()> {
+    fn gen_expr_nouse(&mut self, ast: &Expr) -> Result<()> {
         match ast {
             Expr::Neg(box (lhs, _)) => {
                 match lhs {
                     Expr::Integer(_) | Expr::Float(_) => {}
-                    _ => self.gen_expr_nouse(local_map, lhs)?,
+                    _ => self.gen_expr_nouse(lhs)?,
                 };
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
+                self.gen_expr_nouse(lhs)?;
+                self.gen_expr_nouse(rhs)?;
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
+                self.gen_expr_nouse(lhs)?;
+                self.gen_expr_nouse(rhs)?;
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
+                self.gen_expr_nouse(lhs)?;
+                self.gen_expr_nouse(rhs)?;
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(local_map, lhs)?;
-                self.gen_expr_nouse(local_map, rhs)?;
+                self.gen_expr_nouse(lhs)?;
+                self.gen_expr_nouse(rhs)?;
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(local_map, rhs)?;
-                self.new_local_store_nouse(local_map, ident, rhs)?;
+                let rhs = self.gen_expr(rhs)?;
+                self.new_local_store_nouse(ident, rhs)?;
             }
             Expr::If(box (cond_, _), then_, else_) => {
-                let then_bb = self.func_mut().new_bb();
-                let else_bb = self.func_mut().new_bb();
-                let succ_bb = self.func_mut().new_bb();
-                self.gen_cond(cond_, then_bb, else_bb, local_map)?;
+                let then_bb = self.new_bb();
+                let else_bb = self.new_bb();
+                let succ_bb = self.new_bb();
+                self.gen_cond(cond_, then_bb, else_bb)?;
 
-                self.func_mut().cur_bb = else_bb;
-                self.gen_exprs_nouse(local_map, else_)?;
-                self.func_mut().insts.push(Hir::Br(succ_bb));
+                self.cur_bb = else_bb;
+                self.gen_exprs_nouse(else_)?;
+                self.insts.push(Hir::Br(succ_bb));
 
-                self.func_mut().cur_bb = then_bb;
-                self.gen_exprs_nouse(local_map, then_)?;
-                self.func_mut().insts.push(Hir::Br(succ_bb));
+                self.cur_bb = then_bb;
+                self.gen_exprs_nouse(then_)?;
+                self.insts.push(Hir::Br(succ_bb));
 
-                self.func_mut().cur_bb = succ_bb;
+                self.cur_bb = succ_bb;
             }
             Expr::While(box (cond, _), body) => {
-                let _ = self.gen_while(cond, body, local_map)?;
+                let _ = self.gen_while(cond, body)?;
             }
             Expr::Call(name, args) => {
                 let mut arg_regs = vec![];
                 for arg in args {
-                    let reg = self.gen_operand(local_map, &arg.0)?;
+                    let reg = self.gen_operand(&arg.0)?;
                     arg_regs.push(reg);
                 }
                 self.new_call_nouse(name, arg_regs)?;
@@ -765,18 +734,11 @@ impl HirContext {
         }
     }
 
-    fn gen_cond(
-        &mut self,
-        cond_: &Expr,
-        then_bb: HirBBId,
-        else_bb: HirBBId,
-        local_map: &mut HashMap<String, usize>,
-    ) -> Result<()> {
+    fn gen_cond(&mut self, cond_: &Expr, then_bb: HirBBId, else_bb: HirBBId) -> Result<()> {
         if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
-            let lhs = self.gen_expr(local_map, lhs)?;
-
-            let rhs = self.gen_expr(local_map, rhs)?;
-            self.func_mut().insts.push(Hir::CmpBr(
+            let lhs = self.gen_expr(lhs)?;
+            let rhs = self.gen_expr(rhs)?;
+            self.insts.push(Hir::CmpBr(
                 *kind,
                 lhs,
                 HirOperand::Reg(rhs),
@@ -784,31 +746,23 @@ impl HirContext {
                 else_bb,
             ));
         } else {
-            let cond_ = self.gen_expr(local_map, cond_)?;
-            self.func_mut()
-                .insts
-                .push(Hir::CondBr(cond_, then_bb, else_bb));
+            let cond_ = self.gen_expr(cond_)?;
+            self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
         }
         Ok(())
     }
 
-    fn gen_while(
-        &mut self,
-        cond: &Expr,
-        body: &[(Expr, Span)],
-        local_map: &mut HashMap<String, usize>,
-    ) -> Result<SsaReg> {
-        let func = self.func_mut();
-        let cond_bb = func.new_bb();
-        func.insts.push(Hir::Br(cond_bb));
-        func.cur_bb = cond_bb;
-        let body_bb = func.new_bb();
-        let succ_bb = func.new_bb();
-        self.gen_cond(cond, body_bb, succ_bb, local_map)?;
-        self.func_mut().cur_bb = body_bb;
-        self.gen_exprs_nouse(local_map, body)?;
-        self.func_mut().insts.push(Hir::Br(cond_bb));
-        self.func_mut().cur_bb = succ_bb;
+    fn gen_while(&mut self, cond: &Expr, body: &[(Expr, Span)]) -> Result<SsaReg> {
+        let cond_bb = self.new_bb();
+        self.insts.push(Hir::Br(cond_bb));
+        self.cur_bb = cond_bb;
+        let body_bb = self.new_bb();
+        let succ_bb = self.new_bb();
+        self.gen_cond(cond, body_bb, succ_bb)?;
+        self.cur_bb = body_bb;
+        self.gen_exprs_nouse(body)?;
+        self.insts.push(Hir::Br(cond_bb));
+        self.cur_bb = succ_bb;
         let ret = self.new_nil();
         Ok(ret)
     }
