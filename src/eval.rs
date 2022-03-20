@@ -115,12 +115,12 @@ impl Evaluator {
         let mut eval = FuncContext {
             ssareg: vec![Value::Nil; register_num],
             locals,
-            cur_bb: func.entry_bb,
+            cur_bb: HirBBId::default(),
             prev_bb: HirBBId::default(),
             pc: 0,
         };
         loop {
-            let bb = &hir_context[eval.cur_bb];
+            let bb = &func[eval.cur_bb];
             let op = &bb.insts[eval.pc];
             eval.pc += 1;
             if let Some(val) = self.eval(&mut eval, hir_context, op) {

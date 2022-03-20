@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use super::parse::Span;
 use super::*;
@@ -120,9 +120,6 @@ pub struct HirBBId(usize);
 ///
 #[derive(Clone, PartialEq)]
 pub struct HirContext {
-    /// Basic blocks.
-    pub basic_block: Vec<HirBasicBlock>,
-    cur_bb: HirBBId,
     /// Functions.
     pub functions: Vec<HirFunction>,
     cur_fn: HirId,
@@ -138,8 +135,7 @@ impl std::fmt::Debug for HirContext {
                 "\tFunction {} ({:?}) {:?}{{",
                 func.name, func.args, func.ast
             )?;
-            for i in func.bbs.iter() {
-                let bb = &self[*i];
+            for (i, bb) in func.basic_block.iter().enumerate() {
                 writeln!(f, "\t\tBasicBlock {:?} {{ owner:{:?}", i, bb.owner_function)?;
                 for hir in &bb.insts {
                     let s = match hir {
@@ -203,36 +199,6 @@ impl std::fmt::Debug for HirContext {
     }
 }
 
-impl std::ops::Deref for HirContext {
-    type Target = HirBasicBlock;
-
-    fn deref(&self) -> &Self::Target {
-        let cur_bb = self.cur_bb;
-        &self[cur_bb]
-    }
-}
-
-impl std::ops::DerefMut for HirContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        let cur_bb = self.cur_bb;
-        &mut self[cur_bb]
-    }
-}
-
-impl std::ops::Index<HirBBId> for HirContext {
-    type Output = HirBasicBlock;
-
-    fn index(&self, i: HirBBId) -> &HirBasicBlock {
-        &self.basic_block[i.0]
-    }
-}
-
-impl std::ops::IndexMut<HirBBId> for HirContext {
-    fn index_mut(&mut self, i: HirBBId) -> &mut HirBasicBlock {
-        &mut self.basic_block[i.0]
-    }
-}
-
 impl std::ops::Index<HirId> for HirContext {
     type Output = HirFunction;
 
@@ -249,33 +215,15 @@ impl std::ops::IndexMut<HirId> for HirContext {
 
 impl HirContext {
     pub fn new() -> Self {
-        let cur_bb = HirBBId(0);
         let cur_fn = HirId(0);
-        let basic_block = HirBasicBlock::new(cur_fn);
-        let mut function = HirFunction::new("/main".to_string(), cur_bb, vec![]);
-        function.bbs.insert(cur_bb);
+        let function = HirFunction::new(cur_fn, "/main".to_string(), vec![]);
         HirContext {
-            basic_block: vec![basic_block],
-            cur_bb,
             functions: vec![function],
             cur_fn,
         }
     }
 
-    fn next_bb(&self) -> HirBBId {
-        HirBBId(self.basic_block.len())
-    }
-
-    fn new_bb(&mut self) -> HirBBId {
-        let cur_fn = self.cur_fn;
-        let bb = HirBasicBlock::new(cur_fn);
-        let next = self.next_bb();
-        self[cur_fn].bbs.insert(next);
-        self.basic_block.push(bb);
-        next
-    }
-
-    fn func(&self) -> &HirFunction {
+    pub fn func(&self) -> &HirFunction {
         &self[self.cur_fn]
     }
 
@@ -289,25 +237,17 @@ impl HirContext {
     }
 
     fn enter_new_func(&mut self, name: String, args: Vec<String>) -> HirId {
-        let entry_bb = self.next_bb();
         let next_fn = self.next_fn();
-
-        let bb = HirBasicBlock::new(next_fn);
-        self.basic_block.push(bb);
-
-        let mut func = HirFunction::new(name, entry_bb, args);
-        func.bbs.insert(entry_bb);
+        let func = HirFunction::new(next_fn, name, args);
         self.functions.push(func);
-
         self.cur_fn = next_fn;
-        self.cur_bb = entry_bb;
         next_fn
     }
 
     fn add_assign(&mut self, hir: Hir) -> SsaReg {
         let ret_reg = self.next_reg();
         self.func_mut().regs += 1;
-        self.insts.push(hir);
+        self.func_mut().insts.push(hir);
         ret_reg
     }
 
@@ -373,7 +313,7 @@ impl HirContext {
     fn new_call_nouse(&mut self, name: &str, args: Vec<HirOperand>) -> Result<()> {
         let id = self.get_function(&name)?;
         let hir = Hir::Call(id, None, args);
-        self.insts.push(hir);
+        self.func_mut().insts.push(hir);
         Ok(())
     }
 
@@ -390,7 +330,7 @@ impl HirContext {
 
     fn new_ret(&mut self, lhs: SsaReg) {
         let hir = Hir::Ret(HirOperand::Reg(lhs));
-        self.insts.push(hir);
+        self.func_mut().insts.push(hir);
     }
 
     fn new_local_store(
@@ -435,7 +375,7 @@ impl HirContext {
             }
         };
         let hir = Hir::LocalStore(None, info, rhs);
-        self.insts.push(hir);
+        self.func_mut().insts.push(hir);
         Ok(())
     }
 
@@ -460,32 +400,77 @@ impl HirContext {
 
 #[derive(Clone, PartialEq)]
 pub struct HirFunction {
+    pub id: HirId,
     pub name: String,
-    pub entry_bb: HirBBId,
     pub ret: Option<SsaReg>,
-    pub bbs: BTreeSet<HirBBId>,
     pub locals: HashMap<String, usize>,
     pub args: Vec<String>,
     pub regs: usize,
     pub ast: Vec<(Stmt, Span)>,
+    /// Basic blocks.
+    pub basic_block: Vec<HirBasicBlock>,
+    cur_bb: HirBBId,
+}
+
+impl std::ops::Deref for HirFunction {
+    type Target = HirBasicBlock;
+
+    fn deref(&self) -> &Self::Target {
+        let cur_bb = self.cur_bb;
+        &self[cur_bb]
+    }
+}
+
+impl std::ops::DerefMut for HirFunction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let cur_bb = self.cur_bb;
+        &mut self[cur_bb]
+    }
+}
+
+impl std::ops::Index<HirBBId> for HirFunction {
+    type Output = HirBasicBlock;
+
+    fn index(&self, i: HirBBId) -> &HirBasicBlock {
+        &self.basic_block[i.0]
+    }
+}
+
+impl std::ops::IndexMut<HirBBId> for HirFunction {
+    fn index_mut(&mut self, i: HirBBId) -> &mut HirBasicBlock {
+        &mut self.basic_block[i.0]
+    }
 }
 
 impl HirFunction {
-    fn new(name: String, entry_bb: HirBBId, args: Vec<String>) -> Self {
+    fn new(id: HirId, name: String, args: Vec<String>) -> Self {
         Self {
+            id,
             name,
-            entry_bb,
             ret: None,
-            bbs: BTreeSet::default(),
             locals: HashMap::default(),
             args,
             regs: 0,
             ast: vec![],
+            basic_block: vec![HirBasicBlock::new(id)],
+            cur_bb: HirBBId::default(),
         }
     }
 
     pub fn register_num(&self) -> usize {
         self.regs
+    }
+
+    fn next_bb(&self) -> HirBBId {
+        HirBBId(self.basic_block.len())
+    }
+
+    fn new_bb(&mut self) -> HirBBId {
+        let cur_fn = self.id;
+        let bb = HirBasicBlock::new(cur_fn);
+        let next = self.next_bb();
+        self.basic_block.push(bb);
+        next
     }
 }
 
@@ -537,7 +522,7 @@ impl HirContext {
         args: Vec<String>,
         ast: &[(Expr, Span)],
     ) -> Result<HirId> {
-        let save = (self.cur_fn, self.cur_bb);
+        let save = (self.cur_fn, self.func().cur_bb);
         let mut local_map = HashMap::default();
         args.iter().for_each(|arg| {
             self.add_local_var_if_new(&mut local_map, arg);
@@ -560,7 +545,7 @@ impl HirContext {
             .iter()
             .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
             .collect();
-        (self.cur_fn, self.cur_bb) = save;
+        (self.cur_fn, self.func_mut().cur_bb) = save;
         Ok(func)
     }
 
@@ -673,28 +658,28 @@ impl HirContext {
                 self.new_call(name, arg_regs)
             }
             Expr::If(box (cond_, _), then_, else_) => {
-                let else_bb = self.new_bb();
-                let then_bb = self.new_bb();
-                let succ_bb = self.new_bb();
+                let else_bb = self.func_mut().new_bb();
+                let then_bb = self.func_mut().new_bb();
+                let succ_bb = self.func_mut().new_bb();
                 self.gen_cond(cond_, then_bb, else_bb, local_map)?;
                 // generate bb for else clause
-                self.cur_bb = else_bb;
+                self.func_mut().cur_bb = else_bb;
                 // return value of else clause.
                 let else_reg = self.gen_exprs(local_map, else_)?;
                 // terminal bb of else clause.
-                let else_bb = self.cur_bb;
-                self.insts.push(Hir::Br(succ_bb));
+                let else_bb = self.func().cur_bb;
+                self.func_mut().insts.push(Hir::Br(succ_bb));
 
                 // generate bb for then clause
-                self.cur_bb = then_bb;
+                self.func_mut().cur_bb = then_bb;
                 // return value of then clause.
                 let then_reg = self.gen_exprs(local_map, then_)?;
                 // terminal bb of then clause.
-                let then_bb = self.cur_bb;
-                self.insts.push(Hir::Br(succ_bb));
+                let then_bb = self.func().cur_bb;
+                self.func_mut().insts.push(Hir::Br(succ_bb));
 
                 // generate phi on the top of successor bb.
-                self.cur_bb = succ_bb;
+                self.func_mut().cur_bb = succ_bb;
                 let ret = self.new_phi(vec![(then_bb, then_reg), (else_bb, else_reg)]);
                 Ok(ret)
             }
@@ -732,20 +717,20 @@ impl HirContext {
                 self.new_local_store_nouse(local_map, ident, rhs)?;
             }
             Expr::If(box (cond_, _), then_, else_) => {
-                let then_bb = self.new_bb();
-                let else_bb = self.new_bb();
-                let succ_bb = self.new_bb();
+                let then_bb = self.func_mut().new_bb();
+                let else_bb = self.func_mut().new_bb();
+                let succ_bb = self.func_mut().new_bb();
                 self.gen_cond(cond_, then_bb, else_bb, local_map)?;
 
-                self.cur_bb = else_bb;
+                self.func_mut().cur_bb = else_bb;
                 self.gen_exprs_nouse(local_map, else_)?;
-                self.insts.push(Hir::Br(succ_bb));
+                self.func_mut().insts.push(Hir::Br(succ_bb));
 
-                self.cur_bb = then_bb;
+                self.func_mut().cur_bb = then_bb;
                 self.gen_exprs_nouse(local_map, then_)?;
-                self.insts.push(Hir::Br(succ_bb));
+                self.func_mut().insts.push(Hir::Br(succ_bb));
 
-                self.cur_bb = succ_bb;
+                self.func_mut().cur_bb = succ_bb;
             }
             Expr::While(box (cond, _), body) => {
                 let _ = self.gen_while(cond, body, local_map)?;
@@ -791,7 +776,7 @@ impl HirContext {
             let lhs = self.gen_expr(local_map, lhs)?;
 
             let rhs = self.gen_expr(local_map, rhs)?;
-            self.insts.push(Hir::CmpBr(
+            self.func_mut().insts.push(Hir::CmpBr(
                 *kind,
                 lhs,
                 HirOperand::Reg(rhs),
@@ -800,7 +785,9 @@ impl HirContext {
             ));
         } else {
             let cond_ = self.gen_expr(local_map, cond_)?;
-            self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));
+            self.func_mut()
+                .insts
+                .push(Hir::CondBr(cond_, then_bb, else_bb));
         }
         Ok(())
     }
@@ -811,16 +798,17 @@ impl HirContext {
         body: &[(Expr, Span)],
         local_map: &mut HashMap<String, usize>,
     ) -> Result<SsaReg> {
-        let cond_bb = self.new_bb();
-        self.insts.push(Hir::Br(cond_bb));
-        self.cur_bb = cond_bb;
-        let body_bb = self.new_bb();
-        let succ_bb = self.new_bb();
+        let func = self.func_mut();
+        let cond_bb = func.new_bb();
+        func.insts.push(Hir::Br(cond_bb));
+        func.cur_bb = cond_bb;
+        let body_bb = func.new_bb();
+        let succ_bb = func.new_bb();
         self.gen_cond(cond, body_bb, succ_bb, local_map)?;
-        self.cur_bb = body_bb;
+        self.func_mut().cur_bb = body_bb;
         self.gen_exprs_nouse(local_map, body)?;
-        self.insts.push(Hir::Br(cond_bb));
-        self.cur_bb = succ_bb;
+        self.func_mut().insts.push(Hir::Br(cond_bb));
+        self.func_mut().cur_bb = succ_bb;
         let ret = self.new_nil();
         Ok(ret)
     }
