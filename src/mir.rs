@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use crate::hir::SsaReg;
-use crate::Stmt;
+use crate::hir::{Hir, HirBBId, HirFuncId, HirFunction, HirOperand, SsaReg};
 
-use super::parse::Span;
-use super::{CmpKind, Expr, Type, Value};
+use super::{CmpKind, Type, Value};
 
 type Result<T> = std::result::Result<T, MirErr>;
 
@@ -35,7 +33,7 @@ pub enum Mir {
     ICmp(CmpKind, MirBinop2),
     FCmp(CmpKind, MirBinop),
     Ret(MirOperand),
-    LocalStore(Option<SsaReg>, (usize, Type), SsaReg), // (ret, (offset, type), rhs)
+    LocalStore(Option<SsaReg>, (usize, Type), MirOperand), // (ret, (offset, type), rhs)
     LocalLoad((usize, Type), SsaReg),
     Call(MirFuncId, Option<SsaReg>, Vec<MirOperand>), // (id, ret, arg)
 }
@@ -118,6 +116,7 @@ pub struct MirContext {
     /// Functions.
     pub functions: Vec<MirFunction>,
     cur_fn: MirFuncId,
+    func_map: HashMap<HirFuncId, MirFuncId>,
 }
 
 impl std::fmt::Debug for MirContext {
@@ -217,13 +216,13 @@ impl std::fmt::Debug for MirContext {
                         Mir::Br(dest) => format!("br {:?}", dest),
                         Mir::ICmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} {:?}, {:?}) then {:?} else {:?}",
+                                "icmp_br ({:?} {:?}, {:?}) then {:?} else {:?}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
                         Mir::FCmpBr(kind, lhs, rhs, then_, else_) => {
                             format!(
-                                "cmpbr ({:?} {:?}, {:?}) then {:?} else {:?}",
+                                "fcmp_br ({:?} {:?}, {:?}) then {:?} else {:?}",
                                 kind, lhs, rhs, then_, else_
                             )
                         }
@@ -249,6 +248,22 @@ impl std::fmt::Debug for MirContext {
     }
 }
 
+impl std::ops::Deref for MirContext {
+    type Target = MirFunction;
+
+    fn deref(&self) -> &Self::Target {
+        let cur_fn = self.cur_fn;
+        &self[cur_fn]
+    }
+}
+
+impl std::ops::DerefMut for MirContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let cur_fn = self.cur_fn;
+        &mut self[cur_fn]
+    }
+}
+
 impl std::ops::Index<MirFuncId> for MirContext {
     type Output = MirFunction;
 
@@ -263,42 +278,55 @@ impl std::ops::IndexMut<MirFuncId> for MirContext {
     }
 }
 
+impl std::ops::Index<MirBBId> for MirContext {
+    type Output = MirBasicBlock;
+
+    fn index(&self, i: MirBBId) -> &MirBasicBlock {
+        let cur_fn = self.cur_fn;
+        &self[cur_fn][i]
+    }
+}
+
+impl std::ops::IndexMut<MirBBId> for MirContext {
+    fn index_mut(&mut self, i: MirBBId) -> &mut MirBasicBlock {
+        let cur_fn = self.cur_fn;
+        &mut self[cur_fn][i]
+    }
+}
+
 impl MirContext {
     pub fn new() -> Self {
         let cur_fn = MirFuncId::default();
         MirContext {
             functions: vec![],
             cur_fn,
+            func_map: HashMap::default(),
         }
     }
 
-    fn func_mut(&mut self) -> &mut MirFunction {
+    fn func(&self) -> &MirFunction {
         let cur_fn = self.cur_fn;
-        &mut self.functions[cur_fn.0]
+        &self.functions[cur_fn.0]
     }
 
     fn next_fn(&self) -> MirFuncId {
         MirFuncId(self.functions.len())
     }
 
-    fn enter_new_func(&mut self, name: String, args: Vec<(String, Type)>) {
-        let next_fn = self.next_fn();
-        let mut func = MirFunction::new(next_fn, name, args);
-        assert_eq!(0, func.new_bb().0);
-
-        self.functions.push(func);
-        self.cur_fn = next_fn;
-    }
-
-    /// Generate MIR in new function from [(Stmt, Span)].
-    pub fn new_func_from_ast(
+    /// Generate MIR in new function from HirFunction.
+    pub fn new_func_from_hir(
         &mut self,
         func_name: String,
         args: Vec<(String, Type)>,
-        ast: &[(Stmt, Span)],
+        hir: &HirFunction,
     ) -> Result<MirFuncId> {
-        self.enter_new_func(func_name, args);
-        self.func_mut().gen_func(ast)?;
+        let next_fn = self.next_fn();
+        let func = MirFunction::new(next_fn, func_name, args, hir.locals.len());
+        //assert_eq!(0, func.new_bb().0);
+        self.functions.push(func);
+        self.cur_fn = next_fn;
+        self.func_map.insert(hir.id, next_fn);
+        self.gen_func_from_hir(hir)?;
         Ok(self.cur_fn)
     }
 
@@ -351,21 +379,27 @@ impl MirBBId {
     pub fn to_usize(&self) -> usize {
         self.0
     }
+
+    fn from(hirbb: HirBBId) -> Self {
+        Self(hirbb.to_usize())
+    }
 }
 
 #[derive(Clone, PartialEq)]
 pub struct MirFunction {
     pub id: MirFuncId,
     pub name: String,
-    pub ret: Option<SsaReg>,
+    pub ret: Vec<MirOperand>,
     pub ret_ty: Option<Type>,
     /// SSA register information.
     reginfo: Vec<SsaRegInfo>,
-    pub locals: HashMap<String, (usize, Type)>,
+    pub locals: Vec<Option<Type>>,
     pub args: Vec<(String, Type)>,
     /// Basic blocks.
     pub basic_block: Vec<MirBasicBlock>,
     cur_bb: MirBBId,
+    /// Map for relation between HirSsa and MirSsa.
+    hir_mir_map: HashMap<SsaReg, SsaReg>,
 }
 
 impl std::ops::Index<SsaReg> for MirFunction {
@@ -413,22 +447,22 @@ impl std::ops::IndexMut<MirBBId> for MirFunction {
 }
 
 impl MirFunction {
-    fn new(id: MirFuncId, name: String, args: Vec<(String, Type)>) -> Self {
-        let mut locals = HashMap::default();
-        args.iter().for_each(|(arg, ty)| {
-            let len = locals.len();
-            locals.insert(arg.to_string(), (len, *ty));
-        });
+    fn new(id: MirFuncId, name: String, args: Vec<(String, Type)>, local_len: usize) -> Self {
+        let mut locals = vec![None; local_len];
+        for (i, (_, ty)) in args.iter().enumerate() {
+            locals[i] = Some(*ty);
+        }
         Self {
             id,
             name,
-            ret: None,
+            ret: vec![],
             ret_ty: None,
             reginfo: vec![],
             locals,
             args,
             basic_block: vec![],
             cur_bb: MirBBId::default(),
+            hir_mir_map: HashMap::default(),
         }
     }
 
@@ -447,32 +481,34 @@ impl MirFunction {
         MirBBId(next)
     }
 
-    fn add_assign(&mut self, hir: Mir, ty: Type) -> SsaReg {
+    fn add_assign(&mut self, mir: Mir, ty: Type, hirssa: Option<SsaReg>) -> SsaReg {
         let ret_reg = self.next_reg();
         self.reginfo.push(SsaRegInfo::new(ty));
-        self.insts.push(hir);
+        self.insts.push(mir);
+        if let Some(hirssa) = hirssa {
+            self.hir_mir_map.insert(hirssa, ret_reg);
+        }
         ret_reg
     }
 
-    fn new_integer(&mut self, i: i32) -> SsaReg {
-        self.add_assign(Mir::Integer(self.next_reg(), i), Type::Integer)
+    fn new_integer(&mut self, i: i32, hirssa: Option<SsaReg>) -> SsaReg {
+        self.add_assign(Mir::Integer(self.next_reg(), i), Type::Integer, hirssa)
     }
 
-    fn new_float(&mut self, f: f64) -> SsaReg {
-        self.add_assign(Mir::Float(self.next_reg(), f), Type::Float)
+    fn new_float(&mut self, f: f64, hirssa: Option<SsaReg>) -> SsaReg {
+        self.add_assign(Mir::Float(self.next_reg(), f), Type::Float, hirssa)
     }
 
-    fn new_nil(&mut self) -> SsaReg {
-        self.add_assign(Mir::Nil(self.next_reg()), Type::Nil)
+    fn new_nil(&mut self, hirssa: Option<SsaReg>) -> SsaReg {
+        self.add_assign(Mir::Nil(self.next_reg()), Type::Nil, hirssa)
     }
 
-    fn new_as_float_operand(&mut self, src: MirOperand) -> MirOperand {
+    fn new_as_float_operand(&mut self, src: MirOperand, hirssa: Option<SsaReg>) -> SsaReg {
         let ret = self.next_reg();
-        let reg = self.add_assign(Mir::CastIntFloat(MirUnop { ret, src }), Type::Float);
-        MirOperand::Reg(reg)
+        self.add_assign(Mir::CastIntFloat(MirUnop { ret, src }), Type::Float, hirssa)
     }
 
-    fn new_as_float(&mut self, src: SsaReg) -> SsaReg {
+    fn new_as_float(&mut self, src: SsaReg, hirssa: Option<SsaReg>) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(
             Mir::CastIntFloat(MirUnop {
@@ -480,21 +516,11 @@ impl MirFunction {
                 src: MirOperand::Reg(src),
             }),
             Type::Float,
+            hirssa,
         )
     }
 
-    fn new_as_float_imm(&mut self, src: i32) -> SsaReg {
-        let ret = self.next_reg();
-        self.add_assign(
-            Mir::CastIntFloat(MirUnop {
-                ret,
-                src: MirOperand::Const(Value::Integer(src)),
-            }),
-            Type::Float,
-        )
-    }
-
-    fn new_ineg(&mut self, src: SsaReg) -> SsaReg {
+    fn new_ineg(&mut self, src: SsaReg, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(
             Mir::INeg(MirUnop {
@@ -502,10 +528,11 @@ impl MirFunction {
                 src: MirOperand::Reg(src),
             }),
             Type::Integer,
+            Some(hirssa),
         )
     }
 
-    fn new_fneg(&mut self, src: SsaReg) -> SsaReg {
+    fn new_fneg(&mut self, src: SsaReg, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(
             Mir::FNeg(MirUnop {
@@ -513,146 +540,203 @@ impl MirFunction {
                 src: MirOperand::Reg(src),
             }),
             Type::Float,
+            Some(hirssa),
         )
     }
 
-    fn new_iadd(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_iadd(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::IAdd(MirBinop2 { ret, lhs, rhs }), Type::Integer)
+        self.add_assign(
+            Mir::IAdd(MirBinop2 { ret, lhs, rhs }),
+            Type::Integer,
+            Some(hirssa),
+        )
     }
 
-    fn new_fadd(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_fadd(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::FAdd(MirBinop2 { ret, lhs, rhs }), Type::Float)
+        self.add_assign(
+            Mir::FAdd(MirBinop2 { ret, lhs, rhs }),
+            Type::Float,
+            Some(hirssa),
+        )
     }
 
-    fn new_isub(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_isub(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::ISub(MirBinop2 { ret, lhs, rhs }), Type::Integer)
+        self.add_assign(
+            Mir::ISub(MirBinop2 { ret, lhs, rhs }),
+            Type::Integer,
+            Some(hirssa),
+        )
     }
 
-    fn new_fsub(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_fsub(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::FSub(MirBinop2 { ret, lhs, rhs }), Type::Float)
+        self.add_assign(
+            Mir::FSub(MirBinop2 { ret, lhs, rhs }),
+            Type::Float,
+            Some(hirssa),
+        )
     }
 
-    fn new_imul(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
-        let ret = self.next_reg();
-        self.add_assign(Mir::IMul(MirBinop { ret, lhs, rhs }), Type::Integer)
+    fn operand_to_ssa_i(&mut self, op: &MirOperand) -> SsaReg {
+        match op {
+            MirOperand::Reg(reg) => *reg,
+            MirOperand::Const(v) => self.new_integer(v.as_i(), None),
+        }
     }
 
-    fn new_fmul(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
-        let ret = self.next_reg();
-        self.add_assign(Mir::FMul(MirBinop2 { ret, lhs, rhs }), Type::Float)
+    fn operand_to_ssa_f(&mut self, op: &MirOperand) -> SsaReg {
+        match op {
+            MirOperand::Reg(reg) => *reg,
+            MirOperand::Const(v) => self.new_float(v.as_f(), None),
+        }
     }
 
-    fn new_idiv(&mut self, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+    fn new_imul(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
+        let lhs = self.operand_to_ssa_i(&lhs);
+        let rhs = self.operand_to_ssa_i(&rhs);
         let ret = self.next_reg();
-        self.add_assign(Mir::IDiv(MirBinop { ret, lhs, rhs }), Type::Integer)
+        self.add_assign(
+            Mir::IMul(MirBinop { ret, lhs, rhs }),
+            Type::Integer,
+            Some(hirssa),
+        )
     }
 
-    fn new_fdiv(&mut self, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_fmul(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::FDiv(MirBinop2 { ret, lhs, rhs }), Type::Float)
+        self.add_assign(
+            Mir::FMul(MirBinop2 { ret, lhs, rhs }),
+            Type::Float,
+            Some(hirssa),
+        )
     }
 
-    fn new_icmp(&mut self, kind: CmpKind, lhs: MirOperand, rhs: MirOperand) -> SsaReg {
+    fn new_idiv(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
+        let lhs = self.operand_to_ssa_i(&lhs);
+        let rhs = self.operand_to_ssa_i(&rhs);
         let ret = self.next_reg();
-        self.add_assign(Mir::ICmp(kind, MirBinop2 { ret, lhs, rhs }), Type::Bool)
+        self.add_assign(
+            Mir::IDiv(MirBinop { ret, lhs, rhs }),
+            Type::Integer,
+            Some(hirssa),
+        )
     }
 
-    fn new_fcmp(&mut self, kind: CmpKind, lhs: SsaReg, rhs: SsaReg) -> SsaReg {
+    fn new_fdiv(&mut self, lhs: MirOperand, rhs: MirOperand, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
-        self.add_assign(Mir::FCmp(kind, MirBinop { ret, lhs, rhs }), Type::Bool)
+        self.add_assign(
+            Mir::FDiv(MirBinop2 { ret, lhs, rhs }),
+            Type::Float,
+            Some(hirssa),
+        )
     }
 
-    fn new_rec_call(&mut self, name: &str, args: Vec<MirOperand>, ty: Type) -> Result<SsaReg> {
+    fn new_icmp(
+        &mut self,
+        kind: CmpKind,
+        lhs: MirOperand,
+        rhs: MirOperand,
+        hirssa: SsaReg,
+    ) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(
+            Mir::ICmp(kind, MirBinop2 { ret, lhs, rhs }),
+            Type::Bool,
+            Some(hirssa),
+        )
+    }
+
+    fn new_fcmp(&mut self, kind: CmpKind, lhs: SsaReg, rhs: SsaReg, hirssa: SsaReg) -> SsaReg {
+        let ret = self.next_reg();
+        self.add_assign(
+            Mir::FCmp(kind, MirBinop { ret, lhs, rhs }),
+            Type::Bool,
+            Some(hirssa),
+        )
+    }
+
+    fn new_rec_call(&mut self, args: Vec<MirOperand>, ty: Type, hirssa: SsaReg) -> SsaReg {
         let ret = self.next_reg();
         let id = self.id;
-        Ok(self.add_assign(Mir::Call(id, Some(ret), args), ty))
+        self.add_assign(Mir::Call(id, Some(ret), args), ty, Some(hirssa))
     }
 
-    fn new_rec_call_nouse(&mut self, name: &str, args: Vec<MirOperand>) -> Result<()> {
+    fn new_rec_call_nouse(&mut self, args: Vec<MirOperand>) {
         let id = self.id;
         let hir = Mir::Call(id, None, args);
         self.insts.push(hir);
-        Ok(())
     }
 
-    fn new_ret(&mut self, lhs: SsaReg) {
-        let hir = Mir::Ret(MirOperand::Reg(lhs));
+    fn new_ret(&mut self, lhs: MirOperand) {
+        let hir = Mir::Ret(lhs);
         self.insts.push(hir);
     }
 
-    fn new_local_store(&mut self, ident: &String, rhs: SsaReg) -> Result<SsaReg> {
-        let ty = self[rhs].ty;
-        let info = self.add_local_var_if_new(ident, ty);
-        if ty != info.1 {
-            return Err(MirErr::TypeMismatch("local_store".to_string(), info.1, ty));
+    fn new_local_store(&mut self, index: usize, rhs: MirOperand, hirssa: SsaReg) -> Result<SsaReg> {
+        let ty = self.get_operand_ty(&rhs);
+        if let Some(ret_ty) = self.locals[index] {
+            if ret_ty != ty {
+                return Err(MirErr::TypeMismatch("local_store".to_string(), ret_ty, ty));
+            }
+        } else {
+            self.locals[index] = Some(ty);
         }
         let ret = self.next_reg();
-        self.add_assign(Mir::LocalStore(Some(ret), info, rhs), ty);
+        self.add_assign(
+            Mir::LocalStore(Some(ret), (index, ty), rhs),
+            ty,
+            Some(hirssa),
+        );
         Ok(ret)
     }
 
-    fn add_local_var_if_new(&mut self, ident: &String, ty: Type) -> (usize, Type) {
-        let len = self.locals.len();
-        match self.locals.get(ident) {
-            Some(info) => info.clone(),
-            None => {
-                let info = (len, ty);
-                self.locals.insert(ident.to_string(), info.clone());
-                info
+    fn new_local_store_nouse(&mut self, index: usize, rhs: MirOperand) -> Result<()> {
+        let ty = self.get_operand_ty(&rhs);
+        if let Some(ret_ty) = self.locals[index] {
+            if ret_ty != ty {
+                return Err(MirErr::TypeMismatch("local_store".to_string(), ret_ty, ty));
             }
+        } else {
+            self.locals[index] = Some(ty);
         }
-    }
-
-    fn new_local_store_nouse(&mut self, ident: &String, rhs: SsaReg) -> Result<()> {
-        let ty = self[rhs].ty;
-        let len = self.locals.len();
-        let info = match self.locals.get(ident) {
-            Some(info) => info.clone(),
-            None => {
-                let info = (len, ty);
-                self.locals.insert(ident.to_string(), info.clone());
-                info
-            }
-        };
-        if info.1 != ty {
-            return Err(MirErr::TypeMismatch("local_store".to_string(), info.1, ty));
-        }
-        let hir = Mir::LocalStore(None, info, rhs);
+        let hir = Mir::LocalStore(None, (index, ty), rhs);
         self.insts.push(hir);
         Ok(())
     }
 
-    fn new_local_load(&mut self, ident: &String) -> Result<SsaReg> {
-        let info = match self.locals.get(ident) {
-            Some(info) => info.clone(),
-            None => return Err(MirErr::UndefinedLocal(ident.clone())),
-        };
-        let ty = info.1;
-        let hir = Mir::LocalLoad(info, self.next_reg());
-        Ok(self.add_assign(hir, ty))
+    fn new_local_load(&mut self, index: usize, hirssa: SsaReg) -> Result<SsaReg> {
+        let ty = self.locals[index].unwrap();
+        let hir = Mir::LocalLoad((index, ty), self.next_reg());
+        Ok(self.add_assign(hir, ty, Some(hirssa)))
     }
 
-    fn new_phi(&mut self, phi: Vec<(MirBBId, SsaReg, Type)>) -> SsaReg {
+    fn new_phi(&mut self, phi: Vec<(MirBBId, SsaReg, Type)>, hirssa: SsaReg) -> SsaReg {
         let ty = phi[0].2;
         assert!(phi.iter().all(|(_, _, ty)| ty == ty));
         let ret = self.next_reg();
-        self.add_assign(Mir::Phi(ret, phi), ty)
+        self.add_assign(Mir::Phi(ret, phi), ty, Some(hirssa))
     }
 
-    fn gen_operand(&mut self, expr: &Expr) -> Result<MirOperand> {
-        let res = match expr {
-            Expr::Integer(i) => MirOperand::Const(Value::Integer(*i)),
-            Expr::Float(f) => MirOperand::Const(Value::Float(*f)),
-            _ => MirOperand::Reg(self.gen_expr(expr)?),
-        };
-        Ok(res)
+    fn gen_reg(&self, reg: SsaReg) -> (SsaReg, Type) {
+        let reg = *self.hir_mir_map.get(&reg).unwrap();
+        let ty = self[reg].ty;
+        (reg, ty)
     }
 
-    fn get_operand_ty(&self, op: &MirOperand) -> Type {
+    fn gen_operand(&self, op: &HirOperand) -> (MirOperand, Type) {
+        match op {
+            HirOperand::Reg(rhs) => {
+                let reg = *self.hir_mir_map.get(rhs).unwrap();
+                (MirOperand::Reg(reg), self[reg].ty)
+            }
+            HirOperand::Const(rhs) => (MirOperand::Const(rhs.clone()), rhs.ty()),
+        }
+    }
+
+    pub fn get_operand_ty(&self, op: &MirOperand) -> Type {
         match op {
             MirOperand::Reg(reg) => self[*reg].ty,
             MirOperand::Const(val) => val.ty(),
@@ -679,7 +763,6 @@ impl MirBasicBlock {
 
 #[derive(Debug, Clone)]
 pub enum MirErr {
-    UndefinedLocal(String),
     UndefinedMethod(String),
     TypeMismatch(String, Type, Type),
     IncompatibleOperands(String, Type, Type),
@@ -687,416 +770,239 @@ pub enum MirErr {
 }
 
 macro_rules! binary_ops {
-    ($self:ident, $lhs:ident, $rhs:ident, $i_op:ident, $f_op:ident) => {{
-        let lhs = $self.gen_operand(&$lhs.0)?;
-        let rhs = $self.gen_operand(&$rhs.0)?;
-        let lhs_ty = $self.get_operand_ty(&lhs);
-        let rhs_ty = $self.get_operand_ty(&rhs);
+    ($self:ident, $binop:ident, $i_op:ident, $f_op:ident, $name:expr) => {{
+        let (lhs, lhs_ty) = $self.gen_operand(&$binop.lhs);
+        let (rhs, rhs_ty) = $self.gen_operand(&$binop.rhs);
         match (lhs_ty, rhs_ty) {
-            (Type::Integer, Type::Integer) => Ok($self.$i_op(lhs, rhs)),
+            (Type::Float, Type::Float) => {
+                $self.$f_op(lhs, rhs, $binop.ret);
+            }
             (Type::Integer, Type::Float) => {
-                let lhs = $self.new_as_float_operand(lhs);
-                Ok($self.$f_op(lhs, rhs))
+                let lhs = $self.new_as_float_operand(lhs, None);
+                $self.$f_op(MirOperand::Reg(lhs), rhs, $binop.ret);
             }
             (Type::Float, Type::Integer) => {
-                let rhs = $self.new_as_float_operand(rhs);
-                Ok($self.$f_op(lhs, rhs))
+                let rhs = $self.new_as_float_operand(rhs, None);
+                $self.$f_op(lhs, MirOperand::Reg(rhs), $binop.ret);
             }
-            (Type::Float, Type::Float) => Ok($self.$f_op(lhs, rhs)),
-            (ty_l, ty_r) => Err(MirErr::TypeMismatch("BinOp".to_string(), ty_l, ty_r)),
+            (Type::Integer, Type::Integer) => {
+                $self.$i_op(lhs, rhs, $binop.ret);
+            }
+            _ => return Err(MirErr::TypeMismatch($name.to_string(), lhs_ty, rhs_ty)),
         }
     }};
 }
 
-impl MirFunction {
-    fn gen_func(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
-        let ret = self.gen_stmts(ast)?;
-        let ty = self[ret].ty;
-        self.new_ret(ret);
-        self.ret = Some(ret);
-        self.ret_ty = Some(ty);
-        Ok(())
-    }
-
-    fn gen_stmts(&mut self, ast: &[(Stmt, Span)]) -> Result<SsaReg> {
-        let ast: Vec<Expr> = ast
-            .iter()
-            .filter_map(|(stmt, _)| match stmt {
-                Stmt::Expr((expr, _)) => Some(expr.clone()),
-                _ => None,
-            })
-            .collect();
-        let len = ast.len();
-        if len == 0 {
-            return Ok(self.new_nil());
-        }
-        for expr in &ast[..len - 1] {
-            self.gen_expr_nouse(&expr)?;
-        }
-        self.gen_expr(&ast[len - 1])
-    }
-
-    fn gen_exprs(&mut self, ast: &[(Expr, Span)]) -> Result<SsaReg> {
-        let len = ast.len();
-        if len == 0 {
-            return Ok(self.new_nil());
-        }
-        for (expr, _) in &ast[..len - 1] {
-            self.gen_expr_nouse(&expr)?;
-        }
-        self.gen_expr(&ast[len - 1].0)
-    }
-
-    fn gen_exprs_nouse(&mut self, ast: &[(Expr, Span)]) -> Result<()> {
-        for (expr, _) in ast {
-            self.gen_expr_nouse(&expr)?;
-        }
-        Ok(())
-    }
-
-    /// Generate HIR from an *Expr*.
-    fn gen_expr(&mut self, ast: &Expr) -> Result<SsaReg> {
-        match ast {
-            Expr::Integer(i) => Ok(self.new_integer(*i)),
-            Expr::Float(f) => Ok(self.new_float(*f)),
-            Expr::Neg(box (lhs, _)) => {
-                match lhs {
-                    Expr::Integer(i) => return Ok(self.new_integer(-i)),
-                    Expr::Float(f) => return Ok(self.new_float(-f)),
-                    _ => {}
-                };
-                let lhs_i = self.gen_expr(lhs)?;
-                let ssa = match self[lhs_i].ty {
-                    Type::Integer => self.new_ineg(lhs_i),
-                    Type::Float => self.new_fneg(lhs_i),
-                    ty => return Err(MirErr::IncompatibleOperands("Neg".to_string(), ty, ty)),
-                };
-                Ok(ssa)
-            }
-            Expr::Add(box lhs, box rhs) => {
-                binary_ops!(self, lhs, rhs, new_iadd, new_fadd)
-            }
-            Expr::Sub(box lhs, box rhs) => {
-                binary_ops!(self, lhs, rhs, new_isub, new_fsub)
-            }
-            Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                let lhs_op = self.gen_operand(lhs)?;
-                let rhs_op = self.gen_operand(rhs)?;
-                let lhs_ty = self.get_operand_ty(&lhs_op);
-                let rhs_ty = self.get_operand_ty(&rhs_op);
-                match (lhs_ty, rhs_ty) {
-                    (Type::Integer, Type::Integer) => Ok(self.new_icmp(*kind, lhs_op, rhs_op)),
-                    (Type::Integer, Type::Float) => {
-                        let lhs = self.gen_expr(lhs)?;
-                        let lhs = self.new_as_float(lhs);
-                        let rhs = self.gen_expr(rhs)?;
-                        Ok(self.new_fcmp(*kind, lhs, rhs))
+impl MirContext {
+    fn gen_func_from_hir(&mut self, hir: &HirFunction) -> Result<()> {
+        for hirbb in &hir.basic_block {
+            let bbi = self.new_bb();
+            self.cur_bb = bbi;
+            for inst in &hirbb.insts {
+                match inst {
+                    Hir::Br(dest) => {
+                        self.insts.push(Mir::Br(MirBBId::from(*dest)));
                     }
-                    (Type::Float, Type::Integer) => {
-                        let lhs = self.gen_expr(lhs)?;
-                        let rhs = self.gen_expr(rhs)?;
-                        let rhs = self.new_as_float(rhs);
-                        Ok(self.new_fcmp(*kind, lhs, rhs))
-                    }
-                    (Type::Float, Type::Float) => {
-                        let lhs = self.gen_expr(lhs)?;
-                        let rhs = self.gen_expr(rhs)?;
-                        Ok(self.new_fcmp(*kind, lhs, rhs))
-                    }
-                    (ty_l, ty_r) => {
-                        Err(MirErr::IncompatibleOperands("Cmp".to_string(), ty_l, ty_r))
-                    }
-                }
-            }
-            Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_expr(lhs)?;
-                let rhs = self.gen_expr(rhs)?;
-                let lhs_ty = self[lhs].ty;
-                let rhs_ty = self[rhs].ty;
-                match (lhs_ty, rhs_ty) {
-                    (Type::Integer, Type::Integer) => Ok(self.new_imul(lhs, rhs)),
-                    (Type::Integer, Type::Float) => {
-                        let lhs = self.new_as_float(lhs);
-                        Ok(self.new_fmul(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (Type::Float, Type::Integer) => {
-                        let rhs = self.new_as_float(rhs);
-                        Ok(self.new_fmul(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (Type::Float, Type::Float) => {
-                        Ok(self.new_fmul(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (ty_l, ty_r) => {
-                        Err(MirErr::IncompatibleOperands("Mul".to_string(), ty_l, ty_r))
-                    }
-                }
-            }
-            Expr::Div(box (lhs, _), box (rhs, _)) => {
-                let lhs = self.gen_expr(lhs)?;
-                let rhs = self.gen_expr(rhs)?;
-                let lhs_ty = self[lhs].ty;
-                let rhs_ty = self[rhs].ty;
-                match (lhs_ty, rhs_ty) {
-                    (Type::Integer, Type::Integer) => Ok(self.new_idiv(lhs, rhs)),
-                    (Type::Integer, Type::Float) => {
-                        let lhs = self.new_as_float(lhs);
-                        Ok(self.new_fdiv(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (Type::Float, Type::Integer) => {
-                        let rhs = self.new_as_float(rhs);
-                        Ok(self.new_fdiv(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (Type::Float, Type::Float) => {
-                        Ok(self.new_fdiv(MirOperand::Reg(lhs), MirOperand::Reg(rhs)))
-                    }
-                    (ty_l, ty_r) => {
-                        Err(MirErr::IncompatibleOperands("Div".to_string(), ty_l, ty_r))
-                    }
-                }
-            }
-            Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(rhs)?;
-                self.new_local_store(ident, rhs)
-            }
-            Expr::LocalLoad(ident) => self.new_local_load(ident),
-            Expr::Call(name, args) => {
-                let arg_regs = self.check_args_type(name, args)?;
-                /*let ty = match self.ret_ty {
-                    Some(ty) => ty,
-                    None => Type::Nil,
-                };*/
-                let ty = if arg_regs.len() == 0 {
-                    Type::Integer
-                } else if self.get_operand_ty(&arg_regs[0]) == Type::Float {
-                    Type::Float
-                } else {
-                    Type::Integer
-                };
-                self.new_rec_call(name, arg_regs, ty)
-            }
-            Expr::If(box (cond_, _), then_, else_) => {
-                let else_bb = self.new_bb();
-                let then_bb = self.new_bb();
-                let succ_bb = self.new_bb();
-                self.gen_cond(cond_, then_bb, else_bb)?;
-                // generate bb for else clause
-                self.cur_bb = else_bb;
-                // return value of else clause.
-                let else_reg = self.gen_exprs(else_)?;
-                // terminal bb of else clause.
-                let else_bb = self.cur_bb;
-                self.insts.push(Mir::Br(succ_bb));
-
-                // generate bb for then clause
-                self.cur_bb = then_bb;
-                // return value of then clause.
-                let then_reg = self.gen_exprs(then_)?;
-                // terminal bb of then clause.
-                let then_bb = self.cur_bb;
-                self.insts.push(Mir::Br(succ_bb));
-
-                // check types of return values of then and else clause.
-                let then_ty = self[then_reg].ty;
-                let else_ty = self[else_reg].ty;
-
-                if then_ty != else_ty {
-                    return Err(MirErr::IncompatibleOperands(
-                        "If".to_string(),
-                        then_ty,
-                        else_ty,
-                    ));
-                }
-
-                // generate phi on the top of successor bb.
-                self.cur_bb = succ_bb;
-                let ret = self.new_phi(vec![
-                    (then_bb, then_reg, then_ty),
-                    (else_bb, else_reg, else_ty),
-                ]);
-                Ok(ret)
-            }
-            Expr::While(box (cond, _), body) => self.gen_while(cond, body),
-        }
-    }
-
-    /// Generate HIR from an *Expr*.
-    fn gen_expr_nouse(&mut self, ast: &Expr) -> Result<()> {
-        match ast {
-            Expr::Neg(box (lhs, _)) => {
-                match lhs {
-                    Expr::Integer(_) | Expr::Float(_) => {}
-                    _ => self.gen_expr_nouse(lhs)?,
-                };
-            }
-            Expr::Add(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(lhs)?;
-                self.gen_expr_nouse(rhs)?;
-            }
-            Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(lhs)?;
-                self.gen_expr_nouse(rhs)?;
-            }
-            Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(lhs)?;
-                self.gen_expr_nouse(rhs)?;
-            }
-            Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_expr_nouse(lhs)?;
-                self.gen_expr_nouse(rhs)?;
-            }
-            Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(rhs)?;
-                self.new_local_store_nouse(ident, rhs)?;
-            }
-            Expr::If(box (cond_, _), then_, else_) => {
-                let then_bb = self.new_bb();
-                let else_bb = self.new_bb();
-                let succ_bb = self.new_bb();
-                self.gen_cond(cond_, then_bb, else_bb)?;
-
-                self.cur_bb = else_bb;
-                self.gen_exprs_nouse(else_)?;
-                self.insts.push(Mir::Br(succ_bb));
-
-                self.cur_bb = then_bb;
-                self.gen_exprs_nouse(then_)?;
-                self.insts.push(Mir::Br(succ_bb));
-
-                self.cur_bb = succ_bb;
-            }
-            Expr::While(box (cond, _), body) => {
-                let _ = self.gen_while(cond, body)?;
-            }
-            Expr::Call(name, args) => {
-                let arg_regs = self.check_args_type(name, args)?;
-                self.new_rec_call_nouse(name, arg_regs)?;
-            }
-            Expr::Integer(_) => {}
-            Expr::Float(_) => {}
-            Expr::LocalLoad(_) => {}
-            Expr::Cmp(_, _, _) => {}
-        };
-        Ok(())
-    }
-
-    fn check_args_type(
-        &mut self,
-        name: &String,
-        args: &Vec<(Expr, Span)>,
-    ) -> Result<Vec<MirOperand>> {
-        // return if this is not a recursive method
-        if &self.name != name {
-            eprintln!("not a recursive method call.");
-            return Err(MirErr::FuncCall);
-        }
-        let mut arg_regs = vec![];
-        for arg in args {
-            let reg = self.gen_operand(&arg.0)?;
-            arg_regs.push(reg);
-        }
-        let arg_ty: Vec<_> = arg_regs.iter().map(|op| self.get_operand_ty(op)).collect();
-        if self.args.len() != arg_regs.len()
-            || !self
-                .args
-                .iter()
-                .zip(arg_ty.iter())
-                .all(|((_, lhs), rhs)| lhs == rhs)
-        {
-            eprintln!("arg type mismatch. {:?} vs {:?}", self.args, arg_ty);
-            return Err(MirErr::FuncCall);
-        }
-        Ok(arg_regs)
-    }
-
-    fn gen_cond(&mut self, cond_: &Expr, then_bb: MirBBId, else_bb: MirBBId) -> Result<()> {
-        if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
-            let lhs = self.gen_expr(lhs)?;
-            let lhs_ty = self[lhs].ty;
-            if let Expr::Integer(rhs) = rhs {
-                match lhs_ty {
-                    Type::Integer => {
-                        self.insts.push(Mir::ICmpBr(
-                            *kind,
-                            lhs,
-                            MirOperand::Const(Value::Integer(*rhs)),
-                            then_bb,
-                            else_bb,
+                    Hir::CondBr(hirreg, then_bb, else_bb) => {
+                        let (mir_ret, _) = self.gen_reg(*hirreg);
+                        self.insts.push(Mir::CondBr(
+                            mir_ret,
+                            MirBBId::from(*then_bb),
+                            MirBBId::from(*else_bb),
                         ));
                     }
-                    Type::Float => {
-                        let rhs = self.new_as_float_imm(*rhs);
-                        self.insts
-                            .push(Mir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                    Hir::CmpBr(kind, lhs, rhs, then_bb, else_bb) => {
+                        let (lhs, lhs_ty) = self.gen_reg(*lhs);
+                        let (rhs, rhs_ty) = self.gen_operand(rhs);
+                        let mir = match (lhs_ty, rhs_ty) {
+                            (Type::Float, Type::Float) => {
+                                let rhs = match rhs {
+                                    MirOperand::Const(v) => self.new_float(v.as_f(), None),
+                                    MirOperand::Reg(reg) => reg,
+                                };
+                                Mir::FCmpBr(
+                                    *kind,
+                                    lhs,
+                                    rhs,
+                                    MirBBId::from(*then_bb),
+                                    MirBBId::from(*else_bb),
+                                )
+                            }
+                            (Type::Float, Type::Integer) => {
+                                let rhs = self.new_as_float_operand(rhs, None);
+                                Mir::FCmpBr(
+                                    *kind,
+                                    lhs,
+                                    rhs,
+                                    MirBBId::from(*then_bb),
+                                    MirBBId::from(*else_bb),
+                                )
+                            }
+                            (Type::Integer, Type::Float) => {
+                                let lhs = self.new_as_float(lhs, None);
+                                let rhs = match rhs {
+                                    MirOperand::Const(v) => self.new_float(v.as_f(), None),
+                                    MirOperand::Reg(reg) => reg,
+                                };
+                                Mir::FCmpBr(
+                                    *kind,
+                                    lhs,
+                                    rhs,
+                                    MirBBId::from(*then_bb),
+                                    MirBBId::from(*else_bb),
+                                )
+                            }
+                            (Type::Integer, Type::Integer) => Mir::ICmpBr(
+                                *kind,
+                                lhs,
+                                rhs,
+                                MirBBId::from(*then_bb),
+                                MirBBId::from(*else_bb),
+                            ),
+                            _ => unimplemented!(),
+                        };
+                        self.insts.push(mir);
                     }
-                    _ => {
-                        return Err(MirErr::IncompatibleOperands(
-                            "Cmp".to_string(),
-                            lhs_ty,
-                            Type::Integer,
-                        ))
+                    Hir::Phi(ret, phi) => {
+                        let phi = phi
+                            .iter()
+                            .map(|(hirbb, hirreg)| {
+                                let bb = MirBBId::from(*hirbb);
+                                let (reg, ty) = self.gen_reg(*hirreg);
+                                (bb, reg, ty)
+                            })
+                            .collect();
+                        self.new_phi(phi, *ret);
                     }
-                };
-            } else {
-                let rhs = self.gen_expr(rhs)?;
-                let rhs_ty = self[rhs].ty;
-                match (lhs_ty, rhs_ty) {
-                    (Type::Integer, Type::Integer) => {
-                        self.insts.push(Mir::ICmpBr(
-                            *kind,
-                            lhs,
-                            MirOperand::Reg(rhs),
-                            then_bb,
-                            else_bb,
-                        ));
+                    Hir::Integer(hreg, i) => {
+                        self.new_integer(*i, Some(*hreg));
                     }
-                    (Type::Float, Type::Float) => {
-                        self.insts
-                            .push(Mir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                    Hir::Float(hreg, f) => {
+                        self.new_float(*f, Some(*hreg));
                     }
-                    (Type::Integer, Type::Float) => {
-                        let lhs = self.new_as_float(lhs);
-                        self.insts
-                            .push(Mir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                    Hir::Nil(hreg) => {
+                        self.new_nil(Some(*hreg));
                     }
-                    (Type::Float, Type::Integer) => {
-                        let rhs = self.new_as_float(rhs);
-                        self.insts
-                            .push(Mir::FCmpBr(*kind, lhs, rhs, then_bb, else_bb));
+                    Hir::Neg(op) => {
+                        match &op.src {
+                            HirOperand::Const(val) => match val {
+                                Value::Integer(i) => {
+                                    self.new_integer(*i, Some(op.ret));
+                                }
+                                Value::Float(f) => {
+                                    self.new_float(*f, Some(op.ret));
+                                }
+                                v => {
+                                    return Err(MirErr::IncompatibleOperands(
+                                        "Neg".to_string(),
+                                        v.ty(),
+                                        v.ty(),
+                                    ))
+                                }
+                            },
+                            HirOperand::Reg(hreg) => {
+                                let mreg = *self.hir_mir_map.get(hreg).unwrap();
+                                match self.func()[mreg].ty {
+                                    Type::Integer => {
+                                        self.new_ineg(mreg, op.ret);
+                                    }
+                                    Type::Float => {
+                                        self.new_fneg(mreg, op.ret);
+                                    }
+                                    ty => {
+                                        return Err(MirErr::IncompatibleOperands(
+                                            "Neg".to_string(),
+                                            ty,
+                                            ty,
+                                        ))
+                                    }
+                                }
+                            }
+                        };
                     }
-                    (ty_l, ty_r) => {
-                        return Err(MirErr::IncompatibleOperands("Cmp".to_string(), ty_l, ty_r))
+                    Hir::Ret(op) => {
+                        let (op, ty) = self.gen_operand(op);
+                        match self.ret_ty {
+                            Some(ret_ty) => {
+                                if ty != ret_ty {
+                                    return Err(MirErr::TypeMismatch(
+                                        "Ret".to_string(),
+                                        ty,
+                                        ret_ty,
+                                    ));
+                                }
+                            }
+                            None => {
+                                self.ret_ty = Some(ty);
+                            }
+                        }
+                        self.ret.push(op.clone());
+                        self.new_ret(op);
                     }
-                };
-            }
-        } else {
-            let cond_ = self.gen_expr(cond_)?;
-            match self[cond_].ty {
-                Type::Bool => {}
-                ty => {
-                    return Err(MirErr::IncompatibleOperands(
-                        "Cond".to_string(),
-                        ty,
-                        Type::Bool,
-                    ))
+                    Hir::LocalStore(ret, index, rhs) => {
+                        let (rhs, _) = self.gen_operand(rhs);
+                        match ret {
+                            Some(ret) => {
+                                self.new_local_store(*index, rhs, *ret)?;
+                            }
+                            None => {
+                                self.new_local_store_nouse(*index, rhs)?;
+                            }
+                        }
+                    }
+                    Hir::LocalLoad(index, hir_rhs) => {
+                        self.new_local_load(*index, *hir_rhs)?;
+                    }
+                    Hir::Add(binop) => binary_ops!(self, binop, new_iadd, new_fadd, "Add"),
+                    Hir::Sub(binop) => binary_ops!(self, binop, new_isub, new_fsub, "Sub"),
+                    Hir::Mul(binop) => binary_ops!(self, binop, new_imul, new_fmul, "Mul"),
+                    Hir::Div(binop) => binary_ops!(self, binop, new_idiv, new_fdiv, "Div"),
+                    Hir::Cmp(kind, binop) => {
+                        let (lhs, lhs_ty) = self.gen_operand(&binop.lhs);
+                        let (rhs, rhs_ty) = self.gen_operand(&binop.rhs);
+                        match (lhs_ty, rhs_ty) {
+                            (Type::Float, Type::Float) => {
+                                let lhs = self.operand_to_ssa_f(&lhs);
+                                let rhs = self.operand_to_ssa_f(&rhs);
+                                self.new_fcmp(*kind, lhs, rhs, binop.ret);
+                            }
+                            (Type::Integer, Type::Float) => {
+                                let lhs = self.new_as_float_operand(lhs, None);
+                                let rhs = self.operand_to_ssa_f(&rhs);
+                                self.new_fcmp(*kind, lhs, rhs, binop.ret);
+                            }
+                            (Type::Float, Type::Integer) => {
+                                let lhs = self.operand_to_ssa_f(&lhs);
+                                let rhs = self.new_as_float_operand(rhs, None);
+                                self.new_fcmp(*kind, lhs, rhs, binop.ret);
+                            }
+                            (Type::Integer, Type::Integer) => {
+                                self.new_icmp(*kind, lhs, rhs, binop.ret);
+                            }
+                            _ => {
+                                return Err(MirErr::TypeMismatch("Cmp".to_string(), lhs_ty, rhs_ty))
+                            }
+                        }
+                    }
+                    Hir::Call(hir_id, ret, args) => {
+                        match self.func_map.get(hir_id) {
+                            Some(id) if id == &self.id => {}
+                            _ => return Err(MirErr::FuncCall),
+                        };
+                        let args = args.iter().map(|hir| self.gen_operand(hir).0).collect();
+                        match ret {
+                            Some(ret) => {
+                                self.new_rec_call(args, Type::Integer, *ret);
+                            }
+                            None => {
+                                self.new_rec_call_nouse(args);
+                            }
+                        }
+                    }
                 }
-            };
-            self.insts.push(Mir::CondBr(cond_, then_bb, else_bb));
+            }
         }
-        Ok(())
-    }
 
-    fn gen_while(&mut self, cond: &Expr, body: &[(Expr, Span)]) -> Result<SsaReg> {
-        let cond_bb = self.new_bb();
-        self.insts.push(Mir::Br(cond_bb));
-        self.cur_bb = cond_bb;
-        let body_bb = self.new_bb();
-        let succ_bb = self.new_bb();
-        self.gen_cond(cond, body_bb, succ_bb)?;
-        self.cur_bb = body_bb;
-        self.gen_exprs_nouse(body)?;
-        self.insts.push(Mir::Br(cond_bb));
-        self.cur_bb = succ_bb;
-        let ret = self.new_nil();
-        Ok(ret)
+        Ok(())
     }
 }

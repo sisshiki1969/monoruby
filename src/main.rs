@@ -158,7 +158,6 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 dbg!(&mir);
         */
         let mut hir = HirContext::new();
-        //        dbg!(&ast);
         match hir.from_ast(&ast) {
             Ok(_) => {}
             Err(err) => {
@@ -167,6 +166,7 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 return;
             }
         };
+        dbg!(&hir);
         let eval_res = Evaluator::eval_toplevel(&hir);
         //eprintln!("Evaluator: {:?}", eval_res);
         /*let mcir_context = McIrContext::from_mir(&mut mir);
@@ -322,21 +322,6 @@ mod test {
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
         run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
-    }
-
-    #[test]
-    fn test_fib() {
-        run_test(
-            r#"
-            def fib(x)
-                if x<3 then
-                    1
-                else
-                    fib(x-1)+fib(x-2)
-                end
-            end;
-            fib(35)"#,
-        );
     }
 
     #[test]

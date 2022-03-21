@@ -24,7 +24,7 @@ pub enum Hir {
     Div(HirBinop2),
     Cmp(CmpKind, HirBinop2),
     Ret(HirOperand),
-    LocalStore(Option<SsaReg>, usize, SsaReg), // (ret, offset, rhs)
+    LocalStore(Option<SsaReg>, usize, HirOperand), // (ret, offset, rhs)
     LocalLoad(usize, SsaReg),
     Call(HirFuncId, Option<SsaReg>, Vec<HirOperand>), // (id, ret, arg)
 }
@@ -84,7 +84,7 @@ impl std::fmt::Debug for HirOperand {
 ///
 /// ID of SSA registers.
 ///
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SsaReg(usize);
 
 impl std::fmt::Debug for SsaReg {
@@ -114,6 +114,12 @@ pub struct HirFuncId(usize);
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct HirBBId(usize);
+
+impl HirBBId {
+    pub fn to_usize(&self) -> usize {
+        self.0
+    }
+}
 
 ///
 /// A state of Hir.
@@ -278,15 +284,23 @@ impl HirContext {
 
 #[derive(Clone, PartialEq)]
 pub struct HirFunction {
+    /// ID of this function.
     pub id: HirFuncId,
+    /// name of this function.
     pub name: String,
-    pub ret: Option<SsaReg>,
+    /// return values (SSA reg) of this function.
+    ret: Vec<SsaReg>,
+    /// local variables.
     pub locals: HashMap<String, usize>,
+    /// the name of arguments.
     pub args: Vec<String>,
-    pub regs: usize,
+    /// The number of registers.
+    regs: usize,
+    /// AST.
     pub ast: Vec<(Stmt, Span)>,
     /// Basic blocks.
     pub basic_block: Vec<HirBasicBlock>,
+    /// current BB.
     cur_bb: HirBBId,
 }
 
@@ -331,7 +345,7 @@ impl HirFunction {
         Self {
             id,
             name,
-            ret: None,
+            ret: vec![],
             locals,
             args,
             regs: 0,
@@ -413,21 +427,14 @@ impl HirFunction {
         self.add_assign(Hir::Cmp(kind, HirBinop2 { ret, lhs, rhs }))
     }
 
-    fn new_local_store_nouse(&mut self, ident: &String, rhs: SsaReg) -> Result<()> {
-        let len = self.locals.len();
-        let info = match self.locals.get(ident) {
-            Some(info) => *info,
-            None => {
-                self.locals.insert(ident.to_string(), len);
-                len
-            }
-        };
+    fn new_local_store_nouse(&mut self, ident: &String, rhs: HirOperand) -> Result<()> {
+        let info = self.add_local_var_if_new(ident);
         let hir = Hir::LocalStore(None, info, rhs);
         self.insts.push(hir);
         Ok(())
     }
 
-    fn new_local_store(&mut self, ident: &String, rhs: SsaReg) -> Result<SsaReg> {
+    fn new_local_store(&mut self, ident: &String, rhs: HirOperand) -> Result<SsaReg> {
         let info = self.add_local_var_if_new(ident);
         let ret = self.next_reg();
         self.add_assign(Hir::LocalStore(Some(ret), info, rhs));
@@ -499,7 +506,7 @@ impl HirContext {
             self.gen_stmts(ast)?
         };
         self.new_ret(ret);
-        self.ret = Some(ret);
+        self.ret.push(ret);
         self.ast = ast.to_vec();
         Ok(())
     }
@@ -525,7 +532,7 @@ impl HirContext {
             self.gen_stmts(&ast)?
         };
         self.new_ret(ret);
-        self.ret = Some(ret);
+        self.ret.push(ret);
         self.ast = ast
             .iter()
             .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
@@ -614,7 +621,7 @@ impl HirContext {
                 Ok(self.new_div(lhs, rhs))
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(rhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 self.new_local_store(ident, rhs)
             }
             Expr::LocalLoad(ident) => self.new_local_load(ident),
@@ -682,7 +689,7 @@ impl HirContext {
                 self.gen_expr_nouse(rhs)?;
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let rhs = self.gen_expr(rhs)?;
+                let rhs = self.gen_operand(rhs)?;
                 self.new_local_store_nouse(ident, rhs)?;
             }
             Expr::If(box (cond_, _), then_, else_) => {
@@ -737,14 +744,9 @@ impl HirContext {
     fn gen_cond(&mut self, cond_: &Expr, then_bb: HirBBId, else_bb: HirBBId) -> Result<()> {
         if let Expr::Cmp(kind, box (lhs, _), box (rhs, _)) = cond_ {
             let lhs = self.gen_expr(lhs)?;
-            let rhs = self.gen_expr(rhs)?;
-            self.insts.push(Hir::CmpBr(
-                *kind,
-                lhs,
-                HirOperand::Reg(rhs),
-                then_bb,
-                else_bb,
-            ));
+            let rhs = self.gen_operand(rhs)?;
+            self.insts
+                .push(Hir::CmpBr(*kind, lhs, rhs, then_bb, else_bb));
         } else {
             let cond_ = self.gen_expr(cond_)?;
             self.insts.push(Hir::CondBr(cond_, then_bb, else_bb));

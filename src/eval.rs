@@ -50,18 +50,17 @@ impl Evaluator {
             .zip(args.iter())
             .map(|(name, val)| (name.clone(), val.ty()))
             .collect();
-        let mir_id =
-            match self
-                .mir_context
-                .new_func_from_ast(hir_func.name.clone(), args, &hir_func.ast)
-            {
-                Ok(id) => id,
-                Err(err) => {
-                    dbg!(err);
-                    self.mir_context.functions.pop().unwrap();
-                    return None;
-                }
-            };
+        let mir_id = match self
+            .mir_context
+            .new_func_from_hir(hir_func.name.clone(), args, hir_func)
+        {
+            Ok(id) => id,
+            Err(err) => {
+                dbg!(err);
+                self.mir_context.functions.pop().unwrap();
+                return None;
+            }
+        };
         dbg!(&self.mir_context);
         let func_id = self.mcir_context.from_mir(&self.mir_context[mir_id]);
         Some(
@@ -225,10 +224,11 @@ impl Evaluator {
             }
             Hir::Ret(lhs) => return Some(ctx.eval_operand(lhs)),
             Hir::LocalStore(ret, ident, rhs) => {
-                ctx.locals[*ident] = ctx[*rhs].clone();
+                let v = ctx.eval_operand(rhs);
                 if let Some(ret) = ret {
-                    ctx[*ret] = ctx[*rhs].clone();
+                    ctx[*ret] = v.clone();
                 }
+                ctx.locals[*ident] = v;
             }
             Hir::LocalLoad(ident, lhs) => {
                 ctx[*lhs] = ctx.locals[*ident].clone();
