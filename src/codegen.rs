@@ -376,23 +376,23 @@ impl Codegen {
             Type::Integer => {
                 let res = match args.len() {
                     0 => unsafe { transmute::<u64, extern "C" fn() -> i32>(func)() },
-                    1 => match &args[0] {
-                        Value::Float(f) => unsafe {
-                            transmute::<u64, extern "C" fn(f64) -> i32>(func)(*f)
+                    1 => match args[0].unpack() {
+                        RV::Float(f) => unsafe {
+                            transmute::<u64, extern "C" fn(f64) -> i32>(func)(f)
                         },
                         arg0 => unsafe {
                             transmute::<u64, extern "C" fn(u64) -> i32>(func)(arg0.pack())
                         },
                     },
-                    2 => match (&args[0], &args[1]) {
-                        (Value::Float(f0), Value::Float(f2)) => unsafe {
-                            transmute::<u64, extern "C" fn(f64, f64) -> i32>(func)(*f0, *f2)
+                    2 => match (args[0].unpack(), args[1].unpack()) {
+                        (RV::Float(f0), RV::Float(f2)) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, f64) -> i32>(func)(f0, f2)
                         },
-                        (arg0, Value::Float(f1)) => unsafe {
-                            transmute::<u64, extern "C" fn(u64, f64) -> i32>(func)(arg0.pack(), *f1)
+                        (arg0, RV::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, f64) -> i32>(func)(arg0.pack(), f1)
                         },
-                        (Value::Float(f0), arg1) => unsafe {
-                            transmute::<u64, extern "C" fn(f64, u64) -> i32>(func)(*f0, arg1.pack())
+                        (RV::Float(f0), arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, u64) -> i32>(func)(f0, arg1.pack())
                         },
                         (arg0, arg1) => unsafe {
                             transmute::<u64, extern "C" fn(u64, u64) -> i32>(func)(
@@ -403,28 +403,28 @@ impl Codegen {
                     },
                     _ => unimplemented!(),
                 };
-                Value::Integer(res)
+                Value::integer(res)
             }
             Type::Float => {
                 let res = match args.len() {
                     0 => unsafe { transmute::<u64, extern "C" fn() -> f64>(func)() },
-                    1 => match &args[0] {
-                        Value::Float(f) => unsafe {
-                            transmute::<u64, extern "C" fn(f64) -> f64>(func)(*f)
+                    1 => match args[0].unpack() {
+                        RV::Float(f) => unsafe {
+                            transmute::<u64, extern "C" fn(f64) -> f64>(func)(f)
                         },
                         arg0 => unsafe {
                             transmute::<u64, extern "C" fn(u64) -> f64>(func)(arg0.pack())
                         },
                     },
-                    2 => match (&args[0], &args[1]) {
-                        (Value::Float(f0), Value::Float(f1)) => unsafe {
-                            transmute::<u64, extern "C" fn(f64, f64) -> f64>(func)(*f0, *f1)
+                    2 => match (args[0].unpack(), args[1].unpack()) {
+                        (RV::Float(f0), RV::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, f64) -> f64>(func)(f0, f1)
                         },
-                        (arg0, Value::Float(f1)) => unsafe {
-                            transmute::<u64, extern "C" fn(u64, f64) -> f64>(func)(arg0.pack(), *f1)
+                        (arg0, RV::Float(f1)) => unsafe {
+                            transmute::<u64, extern "C" fn(u64, f64) -> f64>(func)(arg0.pack(), f1)
                         },
-                        (Value::Float(f0), arg1) => unsafe {
-                            transmute::<u64, extern "C" fn(f64, u64) -> f64>(func)(*f0, arg1.pack())
+                        (RV::Float(f0), arg1) => unsafe {
+                            transmute::<u64, extern "C" fn(f64, u64) -> f64>(func)(f0, arg1.pack())
                         },
                         (arg0, arg1) => unsafe {
                             transmute::<u64, extern "C" fn(u64, u64) -> f64>(func)(
@@ -435,17 +435,17 @@ impl Codegen {
                     },
                     _ => unimplemented!(),
                 };
-                Value::Float(res)
+                Value::float(res)
             }
             Type::Bool => {
                 let func = self.jit.get_label_addr::<(), u8>(func_label);
                 let f = func(());
-                Value::Bool(f != 0)
+                Value::bool(f != 0)
             }
             Type::Nil => {
                 let func = self.jit.get_label_addr::<(), ()>(func_label);
                 func(());
-                Value::Nil
+                Value::nil()
             }
         };
 

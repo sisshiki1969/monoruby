@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::hir::{Hir, HirBBId, HirFuncId, HirFunction, HirOperand, SsaReg};
 
-use super::{CmpKind, Type, Value};
+use super::{CmpKind, Type, Value, RV};
 
 type Result<T> = std::result::Result<T, MirErr>;
 
@@ -885,18 +885,18 @@ impl MirContext {
                     }
                     Hir::Neg(op) => {
                         match &op.src {
-                            HirOperand::Const(val) => match val {
-                                Value::Integer(i) => {
-                                    self.new_integer(*i, Some(op.ret));
+                            HirOperand::Const(val) => match val.unpack() {
+                                RV::Integer(i) => {
+                                    self.new_integer(i, Some(op.ret));
                                 }
-                                Value::Float(f) => {
-                                    self.new_float(*f, Some(op.ret));
+                                RV::Float(f) => {
+                                    self.new_float(f, Some(op.ret));
                                 }
                                 v => {
                                     return Err(MirErr::IncompatibleOperands(
                                         "Neg".to_string(),
-                                        v.ty(),
-                                        v.ty(),
+                                        val.ty(),
+                                        val.ty(),
                                     ))
                                 }
                             },

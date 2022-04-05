@@ -17,11 +17,11 @@ enum JitState {
 
 macro_rules! value_op {
     ($lhs:ident, $rhs:ident, $op:ident) => {{
-        match ($lhs, $rhs) {
-            (Value::Integer($lhs), Value::Integer($rhs)) => $lhs.$op(&$rhs),
-            (Value::Integer($lhs), Value::Float($rhs)) => ($lhs as f64).$op(&$rhs),
-            (Value::Float($lhs), Value::Integer($rhs)) => $lhs.$op(&($rhs as f64)),
-            (Value::Float($lhs), Value::Float($rhs)) => $lhs.$op(&$rhs),
+        match ($lhs.unpack(), $rhs.unpack()) {
+            (RV::Integer($lhs), RV::Integer($rhs)) => $lhs.$op(&$rhs),
+            (RV::Integer($lhs), RV::Float($rhs)) => ($lhs as f64).$op(&$rhs),
+            (RV::Float($lhs), RV::Integer($rhs)) => $lhs.$op(&($rhs as f64)),
+            (RV::Float($lhs), RV::Float($rhs)) => $lhs.$op(&$rhs),
             _ => unreachable!(),
         }
     }};
@@ -43,6 +43,7 @@ impl Evaluator {
         hir_id: HirFuncId,
         args: &[Value],
     ) -> Option<(usize, DestLabel, Type)> {
+        return None;
         let hir_func = &hir_context[hir_id];
         let args = hir_func
             .args
@@ -69,9 +70,10 @@ impl Evaluator {
         )
     }
 
-    pub fn eval_toplevel(hir_context: &HirContext) -> Value {
+    pub fn eval_toplevel(hir_context: &HirContext) -> RV {
         let mut eval = Self::new();
-        eval.eval_function(hir_context, HirFuncId::default(), vec![])
+        let res = eval.eval_function(hir_context, HirFuncId::default(), vec![]);
+        res.unpack()
     }
 
     fn eval_function(
@@ -108,11 +110,11 @@ impl Evaluator {
 
         let func = &hir_context[cur_fn];
         let locals_num = func.locals.len();
-        let mut locals = vec![Value::Nil; locals_num];
+        let mut locals = vec![Value::nil(); locals_num];
         locals[0..args.len()].clone_from_slice(&args);
         let register_num = func.register_num();
         let mut eval = FuncContext {
-            ssareg: vec![Value::Nil; register_num],
+            ssareg: vec![Value::nil(); register_num],
             locals,
             cur_bb: HirBBId::default(),
             prev_bb: HirBBId::default(),
@@ -136,70 +138,70 @@ impl Evaluator {
     ) -> Option<Value> {
         match hir {
             Hir::Integer(ret, i) => {
-                ctx[*ret] = Value::Integer(*i);
+                ctx[*ret] = Value::integer(*i);
             }
             Hir::Float(ret, f) => {
-                ctx[*ret] = Value::Float(*f);
+                ctx[*ret] = Value::float(*f);
             }
             Hir::Nil(ret) => {
-                ctx[*ret] = Value::Nil;
+                ctx[*ret] = Value::nil();
             }
             Hir::Neg(op) => {
                 let src = ctx.eval_operand(&op.src);
-                ctx[op.ret] = match src {
-                    Value::Integer(i) => Value::Integer(-i),
-                    Value::Float(f) => Value::Float(-f),
+                ctx[op.ret] = match src.unpack() {
+                    RV::Integer(i) => Value::integer(-i),
+                    RV::Float(f) => Value::float(-f),
                     _ => unreachable!(),
                 };
             }
             Hir::Add(op) => {
                 let lhs = ctx.eval_operand(&op.lhs);
                 let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs, rhs) {
-                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs + rhs),
-                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 + rhs),
-                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs + rhs as f64),
-                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs + rhs),
+                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs + rhs),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 + rhs),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs + rhs as f64),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs + rhs),
                     _ => unreachable!(),
                 };
             }
             Hir::Sub(op) => {
                 let lhs = ctx.eval_operand(&op.lhs);
                 let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs, rhs) {
-                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs - rhs),
-                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 - rhs),
-                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs - rhs as f64),
-                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs - rhs),
+                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs - rhs),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 - rhs),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs - rhs as f64),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs - rhs),
                     _ => unreachable!(),
                 };
             }
             Hir::Mul(op) => {
                 let lhs = ctx.eval_operand(&op.lhs);
                 let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs, rhs) {
-                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs * rhs),
-                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 * rhs),
-                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs * rhs as f64),
-                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs * rhs),
+                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs * rhs),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 * rhs),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs * rhs as f64),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs * rhs),
                     _ => unreachable!(),
                 };
             }
             Hir::Div(op) => {
                 let lhs = ctx.eval_operand(&op.lhs);
                 let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs, rhs) {
-                    (Value::Integer(lhs), Value::Integer(rhs)) => Value::Integer(lhs / rhs),
-                    (Value::Integer(lhs), Value::Float(rhs)) => Value::Float(lhs as f64 / rhs),
-                    (Value::Float(lhs), Value::Integer(rhs)) => Value::Float(lhs / rhs as f64),
-                    (Value::Float(lhs), Value::Float(rhs)) => Value::Float(lhs / rhs),
+                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs / rhs),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 / rhs),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs / rhs as f64),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs / rhs),
                     _ => unreachable!(),
                 };
             }
             Hir::Cmp(kind, op) => {
                 let lhs = ctx.eval_operand(&op.lhs);
                 let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = Value::Bool(match kind {
+                ctx[op.ret] = Value::bool(match kind {
                     CmpKind::Eq => value_op!(lhs, rhs, eq),
                     CmpKind::Ne => value_op!(lhs, rhs, ne),
                     CmpKind::Lt => value_op!(lhs, rhs, lt),
@@ -247,7 +249,7 @@ impl Evaluator {
                 ctx.goto(*next_bb);
             }
             Hir::CondBr(cond_, then_, else_) => {
-                let next_bb = if ctx[*cond_] == Value::Bool(false) {
+                let next_bb = if ctx[*cond_] == Value::bool(false) {
                     else_
                 } else {
                     then_

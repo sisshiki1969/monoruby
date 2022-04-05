@@ -23,48 +23,31 @@ use mir::*;
 use parse::Span;
 pub use parse::*;
 
-#[derive(Clone)]
-pub enum Value {
+//const UNINITIALIZED: u64 = 0x04; // 0000_0100
+const FALSE_VALUE: u64 = 0x14; // 0001_0100
+const NIL_VALUE: u64 = 0x24; // 0010_0100
+const TRUE_VALUE: u64 = 0x1c; // 0001_1100
+                              //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
+                              //const BOOL_MASK1: u64 = 0b0011_0000;
+                              //const BOOL_MASK2: u64 = 0xffff_ffff_ffff_ffcf;
+const FLOAT_MASK1: u64 = !(0b0110u64 << 60);
+const FLOAT_MASK2: u64 = 0b0100u64 << 60;
+
+const ZERO: u64 = (0b1000 << 60) | 0b10;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Value(std::num::NonZeroU64);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RV {
+    Nil,
+    Bool(bool),
     Integer(i32),
     Float(f64),
-    Bool(bool),
-    Nil,
 }
 
-impl std::cmp::PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Value::Integer(lhs), Value::Integer(rhs)) => lhs == rhs,
-            (Value::Float(lhs), Value::Float(rhs)) => lhs == rhs,
-            (Value::Bool(lhs), Value::Bool(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-impl std::cmp::Eq for Value {}
-
-impl std::fmt::Debug for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Integer(n) => write!(f, "{}i32", n),
-            Self::Float(n) => write!(f, "{}f64", n),
-            Self::Bool(b) => write!(f, "{}", b),
-            Self::Nil => write!(f, "nil"),
-        }
-    }
-}
-
-impl Value {
-    pub fn ty(&self) -> Type {
-        match self {
-            Self::Integer(_) => Type::Integer,
-            Self::Float(_) => Type::Float,
-            Self::Bool(_) => Type::Bool,
-            Self::Nil => Type::Nil,
-        }
-    }
-
+impl RV {
     pub fn pack(&self) -> u64 {
         match self {
             Self::Integer(i) => *i as i64 as u64,
@@ -78,6 +61,163 @@ impl Value {
             }
             Self::Nil => 0,
         }
+    }
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.unpack() {
+            RV::Integer(n) => write!(f, "{}i32", n),
+            RV::Float(n) => write!(f, "{}f64", n),
+            RV::Bool(b) => write!(f, "{}", b),
+            RV::Nil => write!(f, "nil"),
+        }
+    }
+}
+
+impl Value {
+    #[inline(always)]
+    fn from(id: u64) -> Self {
+        Value(std::num::NonZeroU64::new(id).unwrap())
+    }
+
+    #[inline(always)]
+    fn get(&self) -> u64 {
+        self.0.get()
+    }
+
+    #[inline(always)]
+    const fn nil() -> Self {
+        Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
+    }
+
+    #[inline(always)]
+    const fn true_val() -> Self {
+        Value(unsafe { std::num::NonZeroU64::new_unchecked(TRUE_VALUE) })
+    }
+
+    #[inline(always)]
+    const fn false_val() -> Self {
+        Value(unsafe { std::num::NonZeroU64::new_unchecked(FALSE_VALUE) })
+    }
+
+    #[inline(always)]
+    fn bool(b: bool) -> Self {
+        if b {
+            Value::from(TRUE_VALUE)
+        } else {
+            Value::from(FALSE_VALUE)
+        }
+    }
+
+    #[inline(always)]
+    fn fixnum(num: i64) -> Self {
+        Value::from((num << 1) as u64 | 0b1)
+    }
+
+    #[inline(always)]
+    fn is_i63(num: i64) -> bool {
+        let top = (num as u64) >> 62 ^ (num as u64) >> 63;
+        top & 0b1 == 0
+    }
+
+    pub fn integer(num: i32) -> Self {
+        Value::fixnum(num as i64)
+    }
+
+    pub fn float(num: f64) -> Self {
+        if num == 0.0 {
+            return Value::from(ZERO);
+        }
+        let unum = f64::to_bits(num);
+        let exp = ((unum >> 60) & 0b111) + 1;
+        if (exp & 0b0110) == 0b0100 {
+            Value::from((unum & FLOAT_MASK1 | FLOAT_MASK2).rotate_left(3))
+        } else {
+            panic!()
+        }
+    }
+
+    pub fn unpack(&self) -> RV {
+        if !self.is_packed_value() {
+            panic!()
+        } else if let Some(i) = self.as_fixnum() {
+            RV::Integer(i)
+        } else if let Some(f) = self.as_flonum() {
+            RV::Float(f)
+        } else {
+            match self.0.get() {
+                NIL_VALUE => RV::Nil,
+                TRUE_VALUE => RV::Bool(true),
+                FALSE_VALUE => RV::Bool(false),
+                _ => unreachable!("Illegal packed value. {:x}", self.0),
+            }
+        }
+    }
+}
+
+impl Value {
+    #[inline(always)]
+    fn is_nil(&self) -> bool {
+        self.0.get() == NIL_VALUE
+    }
+
+    #[inline(always)]
+    fn is_packed_value(&self) -> bool {
+        self.0.get() & 0b0111 != 0
+    }
+
+    #[inline(always)]
+    fn as_fnum(&self) -> i64 {
+        (self.0.get() as i64) >> 1
+    }
+
+    #[inline(always)]
+    fn is_fnum(&self) -> bool {
+        self.0.get() & 0b1 == 1
+    }
+
+    #[inline(always)]
+    fn as_fixnum(&self) -> Option<i32> {
+        if self.is_fnum() {
+            Some(self.as_fnum() as i32)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn as_flonum(&self) -> Option<f64> {
+        let u = self.0.get();
+        if u & 0b11 == 2 {
+            if u == ZERO {
+                return Some(0.0);
+            }
+            let bit = 0b10 - ((u >> 63) & 0b1);
+            let num = ((u & !(0b0011u64)) | bit).rotate_right(3);
+            //eprintln!("after  unpack:{:064b}", num);
+            Some(f64::from_bits(num))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn is_packed_num(&self) -> bool {
+        self.0.get() & 0b11 != 0
+    }
+
+    pub fn ty(&self) -> Type {
+        match self.unpack() {
+            RV::Integer(_) => Type::Integer,
+            RV::Float(_) => Type::Float,
+            RV::Bool(_) => Type::Bool,
+            RV::Nil => Type::Nil,
+        }
+    }
+
+    pub fn pack(&self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -103,15 +243,15 @@ impl std::fmt::Debug for Type {
 
 impl Value {
     fn as_i(&self) -> i32 {
-        match self {
-            Value::Integer(i) => *i,
+        match self.unpack() {
+            RV::Integer(i) => i,
             _ => unreachable!("{:?}", self),
         }
     }
 
     fn as_f(&self) -> f64 {
-        match self {
-            Value::Float(f) => *f,
+        match self.unpack() {
+            RV::Float(f) => f,
             _ => unreachable!(),
         }
     }
@@ -245,7 +385,7 @@ fn show_err(errs: Vec<Cheap<char>>, parse_errs: Vec<Cheap<Token>>, code: &str) {
     });
 }
 
-fn run_ruby(code: &Vec<String>) -> Value {
+fn run_ruby(code: &Vec<String>) -> RV {
     use std::process::Command;
     let code = code
         .iter()
@@ -261,16 +401,16 @@ fn run_ruby(code: &Vec<String>) -> Value {
                 .unwrap()
                 .trim_matches('\n');
             if let Ok(n) = res.parse::<i64>() {
-                Value::Integer(n as i32)
+                RV::Integer(n as i32)
             } else if let Ok(n) = res.parse::<f64>() {
-                Value::Float(n)
+                RV::Float(n)
             } else if res == "true" {
-                Value::Bool(true)
+                RV::Bool(true)
             } else if res == "false" {
-                Value::Bool(false)
+                RV::Bool(false)
             } else {
                 eprintln!("Ruby: {:?}", res);
-                Value::Bool(false)
+                RV::Bool(false)
             }
         }
         Err(err) => {

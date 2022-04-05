@@ -288,9 +288,9 @@ impl McIrContext {
                     McOperand::Float(McFloatOperand::Reg(reg))
                 }
             },
-            MirOperand::Const(rhs) => match rhs {
-                Value::Integer(i) => McOperand::General(McGeneralOperand::Integer(*i)),
-                Value::Float(f) => McOperand::Float(McFloatOperand::Float(*f)),
+            MirOperand::Const(rhs) => match rhs.unpack() {
+                RV::Integer(i) => McOperand::General(McGeneralOperand::Integer(i)),
+                RV::Float(f) => McOperand::Float(McFloatOperand::Float(f)),
                 _ => unreachable!(),
             },
         }
@@ -335,9 +335,9 @@ impl McIrContext {
                     }
                 }
             }
-            MirOperand::Const(rhs) => match rhs {
-                Value::Integer(i) => {
-                    let op = McOperand::General(McGeneralOperand::Integer(*i));
+            MirOperand::Const(rhs) => match rhs.unpack() {
+                RV::Integer(i) => {
+                    let op = McOperand::General(McGeneralOperand::Integer(i));
                     match ret {
                         None => (op, None),
                         Some(ret) => {
@@ -346,8 +346,8 @@ impl McIrContext {
                         }
                     }
                 }
-                Value::Float(f) => {
-                    let op = McOperand::Float(McFloatOperand::Float(*f));
+                RV::Float(f) => {
+                    let op = McOperand::Float(McFloatOperand::Float(f));
                     match ret {
                         None => (op, None),
                         Some(ret) => {
@@ -780,22 +780,22 @@ impl McIrContext {
                             }
                         }
                     }
-                    MirOperand::Const(c) => match c {
-                        Value::Integer(i) => self
+                    MirOperand::Const(c) => match c.unpack() {
+                        RV::Integer(i) => self
                             .func_mut()
                             .insts
-                            .push(McIR::IRet(McGeneralOperand::Integer(*i), Type::Integer)),
-                        Value::Float(f) => self
+                            .push(McIR::IRet(McGeneralOperand::Integer(i), Type::Integer)),
+                        RV::Float(f) => self
                             .func_mut()
                             .insts
-                            .push(McIR::FRet(McFloatOperand::Float(*f))),
-                        Value::Bool(b) => {
-                            let b = if *b { 1 } else { 0 };
+                            .push(McIR::FRet(McFloatOperand::Float(f))),
+                        RV::Bool(b) => {
+                            let b = if b { 1 } else { 0 };
                             self.func_mut()
                                 .insts
                                 .push(McIR::IRet(McGeneralOperand::Integer(b), Type::Bool))
                         }
-                        Value::Nil => self
+                        RV::Nil => self
                             .func_mut()
                             .insts
                             .push(McIR::IRet(McGeneralOperand::Integer(0), Type::Nil)),

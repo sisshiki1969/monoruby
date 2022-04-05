@@ -543,8 +543,8 @@ impl HirContext {
 
     fn gen_operand(&mut self, expr: &Expr) -> Result<HirOperand> {
         let op = match expr {
-            Expr::Integer(i) => HirOperand::Const(Value::Integer(*i)),
-            Expr::Float(f) => HirOperand::Const(Value::Float(*f)),
+            Expr::Integer(i) => HirOperand::Const(Value::integer(*i)),
+            Expr::Float(f) => HirOperand::Const(Value::float(*f)),
             _ => HirOperand::Reg(self.gen_expr(expr)?),
         };
         Ok(op)
