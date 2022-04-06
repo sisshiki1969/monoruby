@@ -15,6 +15,7 @@ struct Stack {
     stack: Vec<Value>,
     bp: usize,
     ssa_base: usize,
+    args_len: usize,
 }
 
 impl std::ops::Index<SsaReg> for Stack {
@@ -36,6 +37,7 @@ impl Stack {
             stack: vec![],
             bp: 0,
             ssa_base: 0,
+            args_len: 0,
         }
     }
 
@@ -47,11 +49,24 @@ impl Stack {
         self.stack[self.bp + index] = value;
     }
 
-    fn push_frame(&mut self, args: &[Value], local_num: usize, reg_num: usize) {
+    fn args_len(&self) -> usize {
+        self.args_len
+    }
+
+    fn args(&self) -> &[Value] {
+        &self.stack[self.bp..self.bp + self.args_len]
+    }
+
+    fn push_frame(&mut self, args: &[Value], hir_func: &HirFunction) {
+        let local_num = hir_func.locals.len();
+        let reg_num = hir_func.register_num();
+        let args_len = args.len();
+        self.stack.push(Value::from_unchecked(self.args_len as u64));
         self.stack.push(Value::from_unchecked(self.ssa_base as u64));
         self.stack.push(Value::from_unchecked(self.bp as u64));
         self.bp = self.stack.len();
         self.ssa_base = self.bp + local_num;
+        self.args_len = args_len;
         let new_len = self.stack.len() + local_num + reg_num;
         self.stack.extend(args);
         self.stack.resize(new_len, Value::nil());
@@ -62,9 +77,10 @@ impl Stack {
         if old_bp == 0 {
             return;
         }
+        self.args_len = self.stack[old_bp - 3].get() as usize;
         self.ssa_base = self.stack[old_bp - 2].get() as usize;
         self.bp = self.stack[old_bp - 1].get() as usize;
-        self.stack.truncate(old_bp - 2);
+        self.stack.truncate(old_bp - 3);
     }
 }
 
@@ -116,16 +132,12 @@ impl Evaluator {
         }
     }
 
-    fn jit_compile(
-        &mut self,
-        hir_func: &HirFunction,
-        args: &[Value],
-    ) -> Option<(usize, DestLabel, Type)> {
+    fn jit_compile(&mut self, hir_func: &HirFunction) -> Option<(usize, DestLabel, Type)> {
         return None;
         let args = hir_func
             .args
             .iter()
-            .zip(args.iter())
+            .zip(self.call_stack.args())
             .map(|(name, val)| (name.clone(), val.ty()))
             .collect();
         let mir_id = match self
@@ -149,24 +161,19 @@ impl Evaluator {
 
     pub fn eval_toplevel(hir_context: &HirContext) -> RV {
         let mut eval = Self::new();
-        let res = eval.eval_function(hir_context, HirFuncId::default(), vec![]);
+        let hir_func = &hir_context[HirFuncId::default()];
+        let args: Vec<Value> = vec![];
+        eval.call_stack.push_frame(&args, hir_func);
+        let res = eval.eval_function(hir_context, HirFuncId::default());
         res.unpack()
     }
 
-    fn eval_function(
-        &mut self,
-        hir_context: &HirContext,
-        cur_fn: HirFuncId,
-        args: Vec<Value>,
-    ) -> Value {
-        let func = &hir_context[cur_fn];
-        let locals_num = func.locals.len();
-        let register_num = func.register_num();
-        self.call_stack.push_frame(&args, locals_num, register_num);
-        let arg_ty: Vec<_> = args.iter().map(|v| v.ty()).collect();
+    fn eval_function(&mut self, hir_context: &HirContext, cur_fn: HirFuncId) -> Value {
+        let hir_func = &hir_context[cur_fn];
+        let arg_ty: Vec<_> = self.call_stack.args().iter().map(|v| v.ty()).collect();
         match self.jit_state.get(&(cur_fn, arg_ty.clone())) {
             None => {
-                if let Some((func_id, dest, ty)) = self.jit_compile(func, &args) {
+                if let Some((func_id, dest, ty)) = self.jit_compile(hir_func) {
                     let func = &self.mir_context.functions[func_id];
                     eprintln!(
                         "JIT success: {} ({:?})->{:?}",
@@ -175,31 +182,32 @@ impl Evaluator {
                     self.jit_state
                         .insert((cur_fn, arg_ty), JitState::Success(dest, ty));
                     eprintln!("call JIT");
-                    let res = self.codegen.call_jit_func(dest, ty, &args);
+                    let res = self.codegen.call_jit_func(dest, ty, self.call_stack.args());
                     self.call_stack.pop_frame();
                     return res;
                 } else {
-                    eprintln!("JIT fail: {} ({:?})", func.name, &arg_ty);
+                    eprintln!("JIT fail: {} ({:?})", hir_func.name, &arg_ty);
                     self.jit_state.insert((cur_fn, arg_ty), JitState::Fail);
                 }
             }
             Some(JitState::Fail) => {}
             Some(JitState::Success(dest, ty)) => {
                 eprintln!("call JIT");
-                let res = self.codegen.call_jit_func(*dest, *ty, &args);
+                let res = self
+                    .codegen
+                    .call_jit_func(*dest, *ty, self.call_stack.args());
                 self.call_stack.pop_frame();
                 return res;
             }
         }
 
         let mut eval = FuncContext {
-            //ssareg: vec![Value::nil(); register_num],
             cur_bb: HirBBId::default(),
             prev_bb: HirBBId::default(),
             pc: 0,
         };
         loop {
-            let bb = &func[eval.cur_bb];
+            let bb = &hir_func[eval.cur_bb];
             let op = &bb.insts[eval.pc];
             eval.pc += 1;
             if let Some(val) = self.eval(&mut eval, hir_context, op) {
@@ -315,11 +323,10 @@ impl Evaluator {
                 self[*lhs] = self.call_stack.get_local(*ident);
             }
             Hir::Call(id, ret, args) => {
-                let args = args
-                    .iter()
-                    .map(|op| self.eval_operand(op))
-                    .collect::<Vec<Value>>();
-                let res = self.eval_function(hir_context, *id, args);
+                let args: Vec<_> = args.iter().map(|op| self.eval_operand(op)).collect();
+                let hir_func = &hir_context[*id];
+                self.call_stack.push_frame(&args, hir_func);
+                let res = self.eval_function(hir_context, *id);
                 if let Some(ret) = *ret {
                     self[ret] = res;
                 }
