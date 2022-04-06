@@ -454,7 +454,7 @@ impl HirFunction {
 
     fn new_local_load(&mut self, ident: &String) -> Result<SsaReg> {
         let info = match self.locals.get(ident) {
-            Some(info) => info.clone(),
+            Some(info) => *info,
             None => return Err(HirErr::UndefinedLocal(ident.clone())),
         };
         let hir = Hir::LocalLoad(info, self.next_reg());

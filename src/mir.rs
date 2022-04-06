@@ -732,7 +732,7 @@ impl MirFunction {
                 let reg = *self.hir_mir_map.get(rhs).unwrap();
                 (MirOperand::Reg(reg), self[reg].ty)
             }
-            HirOperand::Const(rhs) => (MirOperand::Const(rhs.clone()), rhs.ty()),
+            HirOperand::Const(rhs) => (MirOperand::Const(*rhs), rhs.ty()),
         }
     }
 
@@ -892,7 +892,7 @@ impl MirContext {
                                 RV::Float(f) => {
                                     self.new_float(f, Some(op.ret));
                                 }
-                                v => {
+                                _ => {
                                     return Err(MirErr::IncompatibleOperands(
                                         "Neg".to_string(),
                                         val.ty(),

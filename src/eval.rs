@@ -8,6 +8,64 @@ pub struct Evaluator {
     mir_context: MirContext,
     mcir_context: McIrContext,
     jit_state: HashMap<(HirFuncId, Vec<Type>), JitState>,
+    call_stack: Stack,
+}
+
+struct Stack {
+    stack: Vec<Value>,
+    bp: usize,
+    ssa_base: usize,
+}
+
+impl std::ops::Index<SsaReg> for Stack {
+    type Output = Value;
+    fn index(&self, index: SsaReg) -> &Value {
+        &self.stack[self.ssa_base + index.to_usize()]
+    }
+}
+
+impl std::ops::IndexMut<SsaReg> for Stack {
+    fn index_mut(&mut self, index: SsaReg) -> &mut Value {
+        &mut self.stack[self.ssa_base + index.to_usize()]
+    }
+}
+
+impl Stack {
+    fn new() -> Self {
+        Self {
+            stack: vec![],
+            bp: 0,
+            ssa_base: 0,
+        }
+    }
+
+    fn get_local(&self, index: usize) -> Value {
+        self.stack[self.bp + index]
+    }
+
+    fn set_local(&mut self, index: usize, value: Value) {
+        self.stack[self.bp + index] = value;
+    }
+
+    fn push_frame(&mut self, args: &[Value], local_num: usize, reg_num: usize) {
+        self.stack.push(Value::from_unchecked(self.ssa_base as u64));
+        self.stack.push(Value::from_unchecked(self.bp as u64));
+        self.bp = self.stack.len();
+        self.ssa_base = self.bp + local_num;
+        let new_len = self.stack.len() + local_num + reg_num;
+        self.stack.extend(args);
+        self.stack.resize(new_len, Value::nil());
+    }
+
+    fn pop_frame(&mut self) {
+        let old_bp = self.bp;
+        if old_bp == 0 {
+            return;
+        }
+        self.ssa_base = self.stack[old_bp - 2].get() as usize;
+        self.bp = self.stack[old_bp - 1].get() as usize;
+        self.stack.truncate(old_bp - 2);
+    }
 }
 
 enum JitState {
@@ -27,6 +85,19 @@ macro_rules! value_op {
     }};
 }
 
+impl std::ops::Index<SsaReg> for Evaluator {
+    type Output = Value;
+    fn index(&self, index: SsaReg) -> &Value {
+        &self.call_stack[index]
+    }
+}
+
+impl std::ops::IndexMut<SsaReg> for Evaluator {
+    fn index_mut(&mut self, index: SsaReg) -> &mut Value {
+        &mut self.call_stack[index]
+    }
+}
+
 impl Evaluator {
     fn new() -> Self {
         Self {
@@ -34,17 +105,23 @@ impl Evaluator {
             mir_context: MirContext::new(),
             mcir_context: McIrContext::new(),
             jit_state: HashMap::default(),
+            call_stack: Stack::new(),
+        }
+    }
+
+    fn eval_operand(&self, op: &HirOperand) -> Value {
+        match op {
+            HirOperand::Const(c) => *c,
+            HirOperand::Reg(r) => self[*r],
         }
     }
 
     fn jit_compile(
         &mut self,
-        hir_context: &HirContext,
-        hir_id: HirFuncId,
+        hir_func: &HirFunction,
         args: &[Value],
     ) -> Option<(usize, DestLabel, Type)> {
         return None;
-        let hir_func = &hir_context[hir_id];
         let args = hir_func
             .args
             .iter()
@@ -82,10 +159,14 @@ impl Evaluator {
         cur_fn: HirFuncId,
         args: Vec<Value>,
     ) -> Value {
+        let func = &hir_context[cur_fn];
+        let locals_num = func.locals.len();
+        let register_num = func.register_num();
+        self.call_stack.push_frame(&args, locals_num, register_num);
         let arg_ty: Vec<_> = args.iter().map(|v| v.ty()).collect();
         match self.jit_state.get(&(cur_fn, arg_ty.clone())) {
             None => {
-                if let Some((func_id, dest, ty)) = self.jit_compile(hir_context, cur_fn, &args) {
+                if let Some((func_id, dest, ty)) = self.jit_compile(func, &args) {
                     let func = &self.mir_context.functions[func_id];
                     eprintln!(
                         "JIT success: {} ({:?})->{:?}",
@@ -94,9 +175,10 @@ impl Evaluator {
                     self.jit_state
                         .insert((cur_fn, arg_ty), JitState::Success(dest, ty));
                     eprintln!("call JIT");
-                    return self.codegen.call_jit_func(dest, ty, &args);
+                    let res = self.codegen.call_jit_func(dest, ty, &args);
+                    self.call_stack.pop_frame();
+                    return res;
                 } else {
-                    let func = &hir_context[cur_fn];
                     eprintln!("JIT fail: {} ({:?})", func.name, &arg_ty);
                     self.jit_state.insert((cur_fn, arg_ty), JitState::Fail);
                 }
@@ -104,18 +186,14 @@ impl Evaluator {
             Some(JitState::Fail) => {}
             Some(JitState::Success(dest, ty)) => {
                 eprintln!("call JIT");
-                return self.codegen.call_jit_func(*dest, *ty, &args);
+                let res = self.codegen.call_jit_func(*dest, *ty, &args);
+                self.call_stack.pop_frame();
+                return res;
             }
         }
 
-        let func = &hir_context[cur_fn];
-        let locals_num = func.locals.len();
-        let mut locals = vec![Value::nil(); locals_num];
-        locals[0..args.len()].clone_from_slice(&args);
-        let register_num = func.register_num();
         let mut eval = FuncContext {
-            ssareg: vec![Value::nil(); register_num],
-            locals,
+            //ssareg: vec![Value::nil(); register_num],
             cur_bb: HirBBId::default(),
             prev_bb: HirBBId::default(),
             pc: 0,
@@ -125,6 +203,7 @@ impl Evaluator {
             let op = &bb.insts[eval.pc];
             eval.pc += 1;
             if let Some(val) = self.eval(&mut eval, hir_context, op) {
+                self.call_stack.pop_frame();
                 return val;
             }
         }
@@ -138,26 +217,26 @@ impl Evaluator {
     ) -> Option<Value> {
         match hir {
             Hir::Integer(ret, i) => {
-                ctx[*ret] = Value::integer(*i);
+                self[*ret] = Value::integer(*i);
             }
             Hir::Float(ret, f) => {
-                ctx[*ret] = Value::float(*f);
+                self[*ret] = Value::float(*f);
             }
             Hir::Nil(ret) => {
-                ctx[*ret] = Value::nil();
+                self[*ret] = Value::nil();
             }
             Hir::Neg(op) => {
-                let src = ctx.eval_operand(&op.src);
-                ctx[op.ret] = match src.unpack() {
+                let src = self.eval_operand(&op.src);
+                self[op.ret] = match src.unpack() {
                     RV::Integer(i) => Value::integer(-i),
                     RV::Float(f) => Value::float(-f),
                     _ => unreachable!(),
                 };
             }
             Hir::Add(op) => {
-                let lhs = ctx.eval_operand(&op.lhs);
-                let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs + rhs),
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 + rhs),
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs + rhs as f64),
@@ -166,9 +245,9 @@ impl Evaluator {
                 };
             }
             Hir::Sub(op) => {
-                let lhs = ctx.eval_operand(&op.lhs);
-                let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs - rhs),
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 - rhs),
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs - rhs as f64),
@@ -177,9 +256,9 @@ impl Evaluator {
                 };
             }
             Hir::Mul(op) => {
-                let lhs = ctx.eval_operand(&op.lhs);
-                let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs * rhs),
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 * rhs),
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs * rhs as f64),
@@ -188,9 +267,9 @@ impl Evaluator {
                 };
             }
             Hir::Div(op) => {
-                let lhs = ctx.eval_operand(&op.lhs);
-                let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = match (lhs.unpack(), rhs.unpack()) {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs / rhs),
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 / rhs),
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs / rhs as f64),
@@ -199,9 +278,9 @@ impl Evaluator {
                 };
             }
             Hir::Cmp(kind, op) => {
-                let lhs = ctx.eval_operand(&op.lhs);
-                let rhs = ctx.eval_operand(&op.rhs);
-                ctx[op.ret] = Value::bool(match kind {
+                let lhs = self.eval_operand(&op.lhs);
+                let rhs = self.eval_operand(&op.rhs);
+                self[op.ret] = Value::bool(match kind {
                     CmpKind::Eq => value_op!(lhs, rhs, eq),
                     CmpKind::Ne => value_op!(lhs, rhs, ne),
                     CmpKind::Lt => value_op!(lhs, rhs, lt),
@@ -211,8 +290,8 @@ impl Evaluator {
                 });
             }
             Hir::CmpBr(kind, lhs, rhs, then_, else_) => {
-                let lhs = ctx[*lhs].clone();
-                let rhs = ctx.eval_operand(rhs);
+                let lhs = self[*lhs];
+                let rhs = self.eval_operand(rhs);
                 let b = match kind {
                     CmpKind::Eq => value_op!(lhs, rhs, eq),
                     CmpKind::Ne => value_op!(lhs, rhs, ne),
@@ -224,32 +303,32 @@ impl Evaluator {
                 let next_bb = if b { then_ } else { else_ };
                 ctx.goto(*next_bb);
             }
-            Hir::Ret(lhs) => return Some(ctx.eval_operand(lhs)),
+            Hir::Ret(lhs) => return Some(self.eval_operand(lhs)),
             Hir::LocalStore(ret, ident, rhs) => {
-                let v = ctx.eval_operand(rhs);
+                let v = self.eval_operand(rhs);
                 if let Some(ret) = ret {
-                    ctx[*ret] = v.clone();
+                    self[*ret] = v;
                 }
-                ctx.locals[*ident] = v;
+                self.call_stack.set_local(*ident, v);
             }
             Hir::LocalLoad(ident, lhs) => {
-                ctx[*lhs] = ctx.locals[*ident].clone();
+                self[*lhs] = self.call_stack.get_local(*ident);
             }
             Hir::Call(id, ret, args) => {
                 let args = args
                     .iter()
-                    .map(|op| ctx.eval_operand(op))
+                    .map(|op| self.eval_operand(op))
                     .collect::<Vec<Value>>();
                 let res = self.eval_function(hir_context, *id, args);
                 if let Some(ret) = *ret {
-                    ctx[ret] = res;
+                    self[ret] = res;
                 }
             }
             Hir::Br(next_bb) => {
                 ctx.goto(*next_bb);
             }
             Hir::CondBr(cond_, then_, else_) => {
-                let next_bb = if ctx[*cond_] == Value::bool(false) {
+                let next_bb = if self[*cond_] == Value::bool(false) {
                     else_
                 } else {
                     then_
@@ -258,7 +337,7 @@ impl Evaluator {
             }
             Hir::Phi(ret, phi) => {
                 let reg = phi.iter().find(|(bb, _)| ctx.prev_bb == *bb).unwrap().1;
-                ctx[*ret] = ctx[reg].clone();
+                self[*ret] = self[reg];
             }
         }
         None
@@ -266,14 +345,14 @@ impl Evaluator {
 }
 
 struct FuncContext {
-    ssareg: Vec<Value>,
-    locals: Vec<Value>,
+    //ssareg: Vec<Value>,
+    //locals: Vec<Value>,
     cur_bb: HirBBId,
     prev_bb: HirBBId,
     pc: usize,
 }
 
-impl std::ops::Index<SsaReg> for FuncContext {
+/*impl std::ops::Index<SsaReg> for FuncContext {
     type Output = Value;
 
     fn index(&self, i: SsaReg) -> &Value {
@@ -285,19 +364,12 @@ impl std::ops::IndexMut<SsaReg> for FuncContext {
     fn index_mut(&mut self, i: SsaReg) -> &mut Value {
         &mut self.ssareg[i.to_usize()]
     }
-}
+}*/
 
 impl FuncContext {
     fn goto(&mut self, bb: HirBBId) {
         self.prev_bb = self.cur_bb;
         self.cur_bb = bb;
         self.pc = 0;
-    }
-
-    fn eval_operand(&self, op: &HirOperand) -> Value {
-        match op {
-            HirOperand::Const(c) => c.clone(),
-            HirOperand::Reg(r) => self[*r].clone(),
-        }
     }
 }

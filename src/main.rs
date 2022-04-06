@@ -82,6 +82,11 @@ impl Value {
     }
 
     #[inline(always)]
+    fn from_unchecked(id: u64) -> Self {
+        unsafe { Value(std::num::NonZeroU64::new_unchecked(id)) }
+    }
+
+    #[inline(always)]
     fn get(&self) -> u64 {
         self.0.get()
     }
@@ -115,11 +120,11 @@ impl Value {
         Value::from((num << 1) as u64 | 0b1)
     }
 
-    #[inline(always)]
+    /*#[inline(always)]
     fn is_i63(num: i64) -> bool {
         let top = (num as u64) >> 62 ^ (num as u64) >> 63;
         top & 0b1 == 0
-    }
+    }*/
 
     pub fn integer(num: i32) -> Self {
         Value::fixnum(num as i64)
