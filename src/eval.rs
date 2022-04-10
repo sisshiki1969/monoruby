@@ -49,9 +49,9 @@ impl Stack {
         self.stack[self.bp + index] = value;
     }
 
-    fn args_len(&self) -> usize {
+    /*fn args_len(&self) -> usize {
         self.args_len
-    }
+    }*/
 
     fn args(&self) -> &[Value] {
         &self.stack[self.bp..self.bp + self.args_len]
@@ -133,7 +133,7 @@ impl Evaluator {
     }
 
     fn jit_compile(&mut self, hir_func: &HirFunction) -> Option<(usize, DestLabel, Type)> {
-        return None;
+        //return None;
         let args = hir_func
             .args
             .iter()
@@ -151,7 +151,7 @@ impl Evaluator {
                 return None;
             }
         };
-        dbg!(&self.mir_context);
+        //dbg!(&self.mir_context);
         let func_id = self.mcir_context.from_mir(&self.mir_context[mir_id]);
         Some(
             self.codegen

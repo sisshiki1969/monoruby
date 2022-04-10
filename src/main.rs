@@ -11,6 +11,7 @@ mod ast;
 mod codegen;
 mod eval;
 mod hir;
+mod interp;
 mod mcir;
 mod mir;
 mod parse;
@@ -18,6 +19,7 @@ pub use ast::*;
 use codegen::*;
 use eval::*;
 use hir::*;
+use interp::*;
 use mcir::*;
 use mir::*;
 use parse::Span;
@@ -51,7 +53,7 @@ impl RV {
     pub fn pack(&self) -> u64 {
         match self {
             Self::Integer(i) => *i as i64 as u64,
-            Self::Float(f) => u64::from_ne_bytes(f.to_ne_bytes()),
+            Self::Float(f) => f64::to_bits(*f),
             Self::Bool(b) => {
                 if *b {
                     1
@@ -96,7 +98,7 @@ impl Value {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }
 
-    #[inline(always)]
+    /*#[inline(always)]
     const fn true_val() -> Self {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(TRUE_VALUE) })
     }
@@ -104,7 +106,7 @@ impl Value {
     #[inline(always)]
     const fn false_val() -> Self {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(FALSE_VALUE) })
-    }
+    }*/
 
     #[inline(always)]
     fn bool(b: bool) -> Self {
@@ -113,6 +115,10 @@ impl Value {
         } else {
             Value::from(FALSE_VALUE)
         }
+    }
+
+    pub fn bool_fromu64(num: u64) -> Self {
+        Value::bool(num as u8 != 0)
     }
 
     #[inline(always)]
@@ -130,6 +136,10 @@ impl Value {
         Value::fixnum(num as i64)
     }
 
+    pub fn integer_fromu64(num: u64) -> Self {
+        Value::fixnum(num as i64)
+    }
+
     pub fn float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(ZERO);
@@ -141,6 +151,10 @@ impl Value {
         } else {
             panic!()
         }
+    }
+
+    pub fn float_fromu64(num: u64) -> Self {
+        Value::float(f64::from_bits(num))
     }
 
     pub fn unpack(&self) -> RV {
@@ -159,13 +173,30 @@ impl Value {
             }
         }
     }
+
+    pub fn pack(&self) -> u64 {
+        if !self.is_packed_value() {
+            panic!()
+        } else if let Some(i) = self.as_fixnum() {
+            i as i64 as u64
+        } else if let Some(f) = self.as_flonum() {
+            f64::to_bits(f)
+        } else {
+            match self.0.get() {
+                NIL_VALUE => 0,
+                TRUE_VALUE => 1,
+                FALSE_VALUE => 0,
+                _ => unreachable!("Illegal packed value. {:x}", self.0),
+            }
+        }
+    }
 }
 
 impl Value {
-    #[inline(always)]
+    /*#[inline(always)]
     fn is_nil(&self) -> bool {
         self.0.get() == NIL_VALUE
-    }
+    }*/
 
     #[inline(always)]
     fn is_packed_value(&self) -> bool {
@@ -207,10 +238,10 @@ impl Value {
         }
     }
 
-    #[inline(always)]
+    /*#[inline(always)]
     fn is_packed_num(&self) -> bool {
         self.0.get() & 0b11 != 0
-    }
+    }*/
 
     pub fn ty(&self) -> Type {
         match self.unpack() {
@@ -221,9 +252,9 @@ impl Value {
         }
     }
 
-    pub fn pack(&self) -> u64 {
+    /*pub fn pack(&self) -> u64 {
         self.0.get()
-    }
+    }*/
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -290,18 +321,19 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
     let (ast, errs, parse_errs) = parse(&all_codes.join(";"));
     if let Some(ast) = ast {
-        /*let mut mir = MirContext::new();
-                match mir.from_ast(&ast) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        eprintln!("Error in compiling AST. {:?}", err);
-                        all_codes.pop();
-                        return;
-                    }
-                };
-                #[cfg(debug_assertions)]
-                dbg!(&mir);
-        */
+        let gen = match BcGen::new_bc(&ast) {
+            Ok(gen) => gen,
+            Err(err) => {
+                eprintln!("Error in compiling AST. {:?}", err);
+                all_codes.pop();
+                return;
+            }
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&gen);
+        let interp_val = Interp::eval_toplevel(&gen);
+        eprintln!("Interp: {:?}", interp_val);
+
         let mut hir = HirContext::new();
         match hir.from_ast(&ast) {
             Ok(_) => {}
@@ -312,17 +344,6 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
             }
         };
         dbg!(&hir);
-        let eval_res = Evaluator::eval_toplevel(&hir);
-        //eprintln!("Evaluator: {:?}", eval_res);
-        /*let mcir_context = McIrContext::from_mir(&mut mir);
-        let mut codegen = Codegen::new();
-        #[cfg(debug_assertions)]
-        dbg!(&mcir_context);
-        let (func, ty) = codegen.compile(&mcir_context);
-        let jit_res = codegen.run(func, ty);
-        eprintln!("JIT: {:?}", jit_res);*/
-        eprintln!("Evaluator: {:?}", eval_res);
-        //eprintln!("Ruby output: {:?}", run_ruby(all_codes));
     } else {
         all_codes.pop();
     }
@@ -330,24 +351,39 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
 }
 
 pub fn run_test(code: &str) {
+    dbg!(code);
     let all_codes = vec![code.to_string()];
     let (ast, errs, parse_errs) = parse(code);
     if let Some(stmt) = ast {
+        let gen = match BcGen::new_bc(&stmt) {
+            Ok(gen) => gen,
+            Err(err) => {
+                eprintln!("Error in compiling AST. {:?}", err);
+                return;
+            }
+        };
+        //#[cfg(debug_assertions)]
+        //dbg!(&gen);
+        let now = Instant::now();
+        let interp_val = Interp::eval_toplevel(&gen);
+        eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
+
         //dbg!(&stmt);
         let mut hir = HirContext::new();
         match hir.from_ast(&stmt) {
             Ok(_) => {}
             Err(err) => panic!("Error in compiling AST. {:?}", err),
         };
-        #[cfg(debug_assertions)]
-        dbg!(&hir);
+        //#[cfg(debug_assertions)]
+        //dbg!(&hir);
         let now = Instant::now();
         let eval_res = Evaluator::eval_toplevel(&hir);
         eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
+
         let now = Instant::now();
         let ruby_res = run_ruby(&all_codes);
         eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());
-        assert_eq!(eval_res, ruby_res);
+        assert_eq!(interp_val.unpack(), ruby_res);
     }
     show_err(errs, parse_errs, code);
 }

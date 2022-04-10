@@ -763,7 +763,7 @@ impl MirBasicBlock {
 
 #[derive(Debug, Clone)]
 pub enum MirErr {
-    UndefinedMethod(String),
+    //UndefinedMethod(String),
     TypeMismatch(String, Type, Type),
     IncompatibleOperands(String, Type, Type),
     FuncCall,

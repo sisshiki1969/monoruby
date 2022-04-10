@@ -262,12 +262,13 @@ impl McIrContext {
     fn func_mut(&mut self) -> &mut McIrFunc {
         &mut self.functions[self.cur_fn]
     }
-    fn invalidate(&mut self, reg: McReg) {
+
+    /*fn invalidate(&mut self, reg: McReg) {
         match reg {
             McReg::FReg(f) => self[f].release(),
             McReg::GReg(g) => self[g].release(),
         }
-    }
+    }*/
 
     fn alloc_reg(&mut self, ssareg: SsaReg, ty: Type) -> McReg {
         match ty {
@@ -658,7 +659,7 @@ impl McIrContext {
         self.func_mut().g_regs = g_reg_num;
         self.func_mut().f_regs = f_reg_num;
         self.func_mut().ret_ty = mir_func.ret_ty.unwrap();
-        dbg!(self);
+        //dbg!(self);
         next_fn
     }
 
