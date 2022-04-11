@@ -158,12 +158,12 @@ impl Value {
     }
 
     pub fn unpack(&self) -> RV {
-        if !self.is_packed_value() {
-            panic!()
-        } else if let Some(i) = self.as_fixnum() {
+        if let Some(i) = self.as_fixnum() {
             RV::Integer(i)
         } else if let Some(f) = self.as_flonum() {
             RV::Float(f)
+        } else if !self.is_packed_value() {
+            panic!()
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,

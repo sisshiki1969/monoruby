@@ -599,14 +599,22 @@ impl Stack {
         &self.stack[self.bp..self.bp + self.args_len]
     }
 
-    fn reg_slice(&self, reg: Reg, len: usize) -> &[Value] {
-        &self.stack[self.reg_base + reg.0 as usize..self.reg_base + reg.0 as usize + len]
+    fn reg_slice(&self, reg: Reg, len: usize) -> std::ops::Range<usize> {
+        let start = self.reg_base + reg.0 as usize;
+        start..start + len
     }
 
-    fn push_frame(&mut self, args: &[Value], bc_func: &BcFunc, cur_fn: BcFuncId, pc: usize) {
+    fn push_frame(
+        &mut self,
+        args: Reg,
+        args_len: usize,
+        bc_func: &BcFunc,
+        cur_fn: BcFuncId,
+        pc: usize,
+    ) {
+        let args = self.reg_slice(args, args_len);
         let local_num = bc_func.locals.len();
         let reg_num = bc_func.reg_num;
-        let args_len = args.len();
         self.stack.push(Value::from_unchecked(cur_fn.0 as u64));
         self.stack.push(Value::from_unchecked(pc as u64));
         self.stack.push(Value::from_unchecked(self.args_len as u64));
@@ -616,7 +624,7 @@ impl Stack {
         self.reg_base = self.bp + local_num;
         self.args_len = args_len;
         let new_len = self.stack.len() + local_num + reg_num as usize;
-        self.stack.extend(args);
+        self.stack.extend_from_within(args);
         self.stack.resize(new_len, Value::nil());
     }
 
@@ -641,9 +649,9 @@ impl Interp {
         }
     }
 
-    fn push_frame(&mut self, args: &[Value], bc_func: &BcFunc) {
+    fn push_frame(&mut self, args: Reg, len: usize, bc_func: &BcFunc) {
         self.call_stack
-            .push_frame(args, bc_func, self.cur_fn, self.pc);
+            .push_frame(args, len, bc_func, self.cur_fn, self.pc);
     }
 
     fn pop_frame(&mut self) -> bool {
@@ -656,8 +664,7 @@ impl Interp {
     pub fn eval_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new();
         let hir_func = &bc_context[BcFuncId(0)];
-        let args: Vec<Value> = vec![];
-        eval.push_frame(&args, hir_func);
+        eval.push_frame(Reg(0), 0, hir_func);
         eval.eval_function(bc_context)
     }
 
@@ -766,9 +773,8 @@ impl Interp {
                 self[*dst] = self[*local];
             }
             Inst::Call(id, ret, args, len) => {
-                let args: Vec<_> = self.call_stack.reg_slice(*args, *len).to_vec();
                 let bc_func = &bc_context[*id];
-                self.push_frame(&args, bc_func);
+                self.push_frame(*args, *len, bc_func);
                 self.cur_fn = *id;
                 let res = self.eval_function(bc_context);
                 if let Some(ret) = *ret {
