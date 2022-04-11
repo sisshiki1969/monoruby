@@ -329,8 +329,8 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 return;
             }
         };
-        #[cfg(debug_assertions)]
-        dbg!(&gen);
+        //#[cfg(debug_assertions)]
+        //dbg!(&gen);
         let interp_val = Interp::eval_toplevel(&gen);
         eprintln!("Interp: {:?}", interp_val);
 
@@ -343,7 +343,7 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
                 return;
             }
         };
-        dbg!(&hir);
+        //dbg!(&hir);
     } else {
         all_codes.pop();
     }

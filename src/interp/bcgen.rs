@@ -156,12 +156,12 @@ impl BcFunc {
         self.labels[label] = Some(pos);
     }
 
-    fn next_reg(&self) -> Reg {
-        Reg(self.temp)
+    fn next_reg(&self) -> Temp {
+        Temp(self.temp)
     }
 
-    fn push(&mut self) -> Reg {
-        let reg = Reg(self.temp);
+    fn push(&mut self) -> Temp {
+        let reg = Temp(self.temp);
         self.temp += 1;
         if self.temp > self.reg_num {
             self.reg_num = self.temp;
@@ -169,9 +169,9 @@ impl BcFunc {
         reg
     }
 
-    fn pop(&mut self) -> Reg {
+    fn pop(&mut self) -> Temp {
         self.temp -= 1;
-        Reg(self.temp)
+        Temp(self.temp)
     }
 
     fn find_local(&mut self, ident: &String) -> Local {
@@ -189,7 +189,7 @@ impl BcFunc {
 
     fn gen_integer(&mut self, i: i32) {
         let reg = self.push();
-        self.insts.push(Inst::Integer(reg, i));
+        self.insts.push(Inst::Integer(reg.into(), i));
     }
 
     fn gen_float(&mut self, f: f64) {
@@ -313,8 +313,8 @@ impl BcGen {
         Ok(())
     }
     /// Generate bytecode from an *Expr*.
-    fn gen_expr(&mut self, ast: &Expr) -> Result<()> {
-        match ast {
+    fn gen_expr(&mut self, expr: &Expr) -> Result<()> {
+        match expr {
             Expr::Integer(i) => Ok(self.gen_integer(*i)),
             Expr::Float(f) => Ok(self.gen_float(*f)),
             Expr::Neg(box (lhs, _)) => {
@@ -352,11 +352,10 @@ impl BcGen {
                 self.gen_div()
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
+                let ret = self.next_reg();
                 self.gen_expr(rhs)?;
-                let rhs = self.pop();
-                let ret = self.push();
                 let local = self.find_local(ident);
-                self.insts.push(Inst::LocalStore(Some(ret), local, rhs));
+                self.insts.push(Inst::Mov(local.into(), ret.into()));
                 Ok(())
             }
             Expr::LocalLoad(ident) => {
@@ -365,7 +364,7 @@ impl BcGen {
                     None => return Err(BcErr::UndefinedLocal(ident.to_owned())),
                 };
                 let lhs = self.push();
-                self.insts.push(Inst::LocalLoad(local, lhs));
+                self.insts.push(Inst::Mov(lhs.into(), local.into()));
                 Ok(())
             }
             Expr::Call(name, args) => {
@@ -386,24 +385,15 @@ impl BcGen {
                 let cond = self.pop();
                 let inst = Inst::CondBr(cond, then_pos);
                 self.insts.push(inst);
-                // generate bb for else clause
-                // return value of else clause.
                 self.gen_exprs(else_)?;
-                // terminal bb of else clause.
                 self.insts.push(Inst::Br(succ_pos));
                 self.pop();
-                // generate bb for then clause
-                // return value of then clause.
                 self.apply_label(then_pos);
                 self.gen_exprs(then_)?;
-                // terminal bb of then clause.
-                //self.insts.push(Inst::Br(succ_pos));
-
                 self.apply_label(succ_pos);
                 Ok(())
             }
-            /*Expr::While(box (cond, _), body) => self.gen_while(cond, body),*/
-            _ => unreachable!(),
+            Expr::While(box (cond, _), body) => self.gen_while(cond, body),
         }
     }
 
@@ -439,10 +429,16 @@ impl BcGen {
                 Ok(())
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                self.gen_expr(rhs)?;
-                let rhs = self.pop();
-                let local = self.find_local(ident);
-                self.insts.push(Inst::LocalStore(None, local, rhs));
+                let local = self.find_local(ident).into();
+                let inst = match rhs {
+                    Expr::Integer(i) => Inst::Integer(local, *i),
+                    rhs => {
+                        self.gen_expr(rhs)?;
+                        let rhs = self.pop();
+                        Inst::Mov(local, rhs.into())
+                    }
+                };
+                self.insts.push(inst);
                 Ok(())
             }
             Expr::LocalLoad(ident) => match self.locals.get(ident) {
@@ -481,8 +477,11 @@ impl BcGen {
                 self.apply_label(succ_pos);
                 Ok(())
             }
-            Expr::While(box (cond, _), body) => self.gen_while(cond, body),
-            //_ => unreachable!(),
+            Expr::While(box (cond, _), body) => {
+                self.gen_while(cond, body)?;
+                self.gen_nil();
+                Ok(())
+            } //_ => unreachable!(),
         }
     }
 }
@@ -499,7 +498,6 @@ impl BcGen {
         self.gen_exprs_no(body)?;
         self.insts.push(Inst::Br(cond_pos));
         self.apply_label(succ_pos);
-        self.gen_nil();
         Ok(())
     }
 }

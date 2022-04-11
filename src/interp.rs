@@ -19,10 +19,10 @@ pub enum BcErr {
 struct InstId(pub usize);
 
 ///
-/// ID of register.
+/// ID of temporary register.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct Reg(pub usize);
+struct Temp(pub usize);
 
 ///
 /// ID of local variable.
@@ -36,15 +36,15 @@ pub struct Interp {
     call_stack: Stack,
 }
 
-impl std::ops::Index<Reg> for Interp {
+impl std::ops::Index<Temp> for Interp {
     type Output = Value;
-    fn index(&self, index: Reg) -> &Value {
+    fn index(&self, index: Temp) -> &Value {
         &self.call_stack[index]
     }
 }
 
-impl std::ops::IndexMut<Reg> for Interp {
-    fn index_mut(&mut self, index: Reg) -> &mut Value {
+impl std::ops::IndexMut<Temp> for Interp {
+    fn index_mut(&mut self, index: Temp) -> &mut Value {
         &mut self.call_stack[index]
     }
 }
@@ -62,6 +62,19 @@ impl std::ops::IndexMut<Local> for Interp {
     }
 }
 
+impl std::ops::Index<Reg> for Interp {
+    type Output = Value;
+    fn index(&self, index: Reg) -> &Value {
+        &self.call_stack[index]
+    }
+}
+
+impl std::ops::IndexMut<Reg> for Interp {
+    fn index_mut(&mut self, index: Reg) -> &mut Value {
+        &mut self.call_stack[index]
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Stack {
     stack: Vec<Value>,
@@ -70,15 +83,15 @@ struct Stack {
     args_len: usize,
 }
 
-impl std::ops::Index<Reg> for Stack {
+impl std::ops::Index<Temp> for Stack {
     type Output = Value;
-    fn index(&self, index: Reg) -> &Value {
+    fn index(&self, index: Temp) -> &Value {
         &self.stack[self.reg_base + index.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<Reg> for Stack {
-    fn index_mut(&mut self, index: Reg) -> &mut Value {
+impl std::ops::IndexMut<Temp> for Stack {
+    fn index_mut(&mut self, index: Temp) -> &mut Value {
         &mut self.stack[self.reg_base + index.0 as usize]
     }
 }
@@ -96,6 +109,21 @@ impl std::ops::IndexMut<Local> for Stack {
     }
 }
 
+impl std::ops::Index<Reg> for Stack {
+    type Output = Value;
+    fn index(&self, reg: Reg) -> &Value {
+        let i = self.get_index(reg);
+        &self.stack[i]
+    }
+}
+
+impl std::ops::IndexMut<Reg> for Stack {
+    fn index_mut(&mut self, reg: Reg) -> &mut Value {
+        let i = self.get_index(reg);
+        &mut self.stack[i]
+    }
+}
+
 impl Stack {
     fn new() -> Self {
         Self {
@@ -106,18 +134,25 @@ impl Stack {
         }
     }
 
+    fn get_index(&self, reg: Reg) -> usize {
+        match reg {
+            Reg::Temp(i) => self.reg_base + i.0 as usize,
+            Reg::Local(i) => self.bp + i.0 as usize,
+        }
+    }
+
     fn args(&self) -> &[Value] {
         &self.stack[self.bp..self.bp + self.args_len]
     }
 
-    fn reg_slice(&self, reg: Reg, len: usize) -> std::ops::Range<usize> {
+    fn reg_slice(&self, reg: Temp, len: usize) -> std::ops::Range<usize> {
         let start = self.reg_base + reg.0 as usize;
         start..start + len
     }
 
     fn push_frame(
         &mut self,
-        args: Reg,
+        args: Temp,
         args_len: usize,
         bc_func: &BcFunc,
         cur_fn: BcFuncId,
@@ -160,7 +195,7 @@ impl Interp {
         }
     }
 
-    fn push_frame(&mut self, args: Reg, len: usize, bc_func: &BcFunc) {
+    fn push_frame(&mut self, args: Temp, len: usize, bc_func: &BcFunc) {
         self.call_stack
             .push_frame(args, len, bc_func, self.cur_fn, self.pc);
     }
@@ -175,7 +210,7 @@ impl Interp {
     pub fn eval_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new();
         let hir_func = &bc_context[BcFuncId(0)];
-        eval.push_frame(Reg(0), 0, hir_func);
+        eval.push_frame(Temp(0), 0, hir_func);
         eval.eval_function(bc_context)
     }
 
@@ -273,14 +308,7 @@ impl Interp {
                 });
             }
             Inst::Ret(lhs) => return Some(self[*lhs]),
-            Inst::LocalStore(ret, local, src) => {
-                let v = self[*src];
-                self[*local] = v;
-                if let Some(ret) = ret {
-                    self[*ret] = v;
-                }
-            }
-            Inst::LocalLoad(local, dst) => {
+            Inst::Mov(dst, local) => {
                 self[*dst] = self[*local];
             }
             Inst::Call(id, ret, args, len) => {
