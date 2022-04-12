@@ -127,7 +127,7 @@ impl std::ops::IndexMut<Reg> for Stack {
 impl Stack {
     fn new() -> Self {
         Self {
-            stack: vec![],
+            stack: Vec::with_capacity(4096),
             bp: 0,
             reg_base: 0,
             args_len: 0,
@@ -141,9 +141,9 @@ impl Stack {
         }
     }
 
-    fn args(&self) -> &[Value] {
+    /*fn args(&self) -> &[Value] {
         &self.stack[self.bp..self.bp + self.args_len]
-    }
+    }*/
 
     fn reg_slice(&self, reg: Temp, len: usize) -> std::ops::Range<usize> {
         let start = self.reg_base + reg.0 as usize;
