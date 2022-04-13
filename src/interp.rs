@@ -21,14 +21,26 @@ struct InstId(pub usize);
 ///
 /// ID of temporary register.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Temp(pub usize);
+
+impl std::fmt::Debug for Temp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
 
 ///
 /// ID of local variable.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Local(pub usize);
+
+impl std::fmt::Debug for Local {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "L{}", self.0)
+    }
+}
 
 pub struct Interp {
     cur_fn: BcFuncId,

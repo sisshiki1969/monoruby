@@ -48,3 +48,13 @@ pub enum CmpKind {
     Le,
     Lt,
 }
+
+impl Expr {
+    pub fn is_local(&self) -> Option<String> {
+        if let Self::LocalLoad(ident) = self {
+            Some(ident.to_owned())
+        } else {
+            None
+        }
+    }
+}
