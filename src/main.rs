@@ -449,6 +449,8 @@ fn run_ruby(code: &Vec<String>) -> RV {
                 RV::Bool(true)
             } else if res == "false" {
                 RV::Bool(false)
+            } else if res == "nil" {
+                RV::Nil
             } else {
                 eprintln!("Ruby: {:?}", res);
                 RV::Bool(false)
@@ -465,6 +467,7 @@ mod test {
     use super::*;
     #[test]
     fn test() {
+        run_test("");
         run_test("4 * (2.9 + 7 / (1.15 - 6))");
         run_test("-4 * (2.9 + 7 / (-1.15 - 6))");
         run_test("1.5 + (2.0 + 3) + 1.1");
@@ -503,6 +506,7 @@ mod test {
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
         run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
+        run_test("def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a");
     }
 
     #[test]
@@ -555,7 +559,7 @@ mod test {
         run_test(
             r#"
             a=1
-            while a<25 do
+            b=while a<25 do
                 a=a+1
             end
             a
