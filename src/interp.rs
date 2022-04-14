@@ -48,32 +48,6 @@ pub struct Interp {
     call_stack: Stack,
 }
 
-impl std::ops::Index<Temp> for Interp {
-    type Output = Value;
-    fn index(&self, index: Temp) -> &Value {
-        &self.call_stack[index]
-    }
-}
-
-impl std::ops::IndexMut<Temp> for Interp {
-    fn index_mut(&mut self, index: Temp) -> &mut Value {
-        &mut self.call_stack[index]
-    }
-}
-
-impl std::ops::Index<Local> for Interp {
-    type Output = Value;
-    fn index(&self, index: Local) -> &Value {
-        &self.call_stack[index]
-    }
-}
-
-impl std::ops::IndexMut<Local> for Interp {
-    fn index_mut(&mut self, index: Local) -> &mut Value {
-        &mut self.call_stack[index]
-    }
-}
-
 impl std::ops::Index<Reg> for Interp {
     type Output = Value;
     fn index(&self, index: Reg) -> &Value {
@@ -93,32 +67,6 @@ struct Stack {
     bp: usize,
     reg_base: usize,
     args_len: usize,
-}
-
-impl std::ops::Index<Temp> for Stack {
-    type Output = Value;
-    fn index(&self, index: Temp) -> &Value {
-        &self.stack[self.reg_base + index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<Temp> for Stack {
-    fn index_mut(&mut self, index: Temp) -> &mut Value {
-        &mut self.stack[self.reg_base + index.0 as usize]
-    }
-}
-
-impl std::ops::Index<Local> for Stack {
-    type Output = Value;
-    fn index(&self, index: Local) -> &Value {
-        &self.stack[self.bp + index.0]
-    }
-}
-
-impl std::ops::IndexMut<Local> for Stack {
-    fn index_mut(&mut self, index: Local) -> &mut Value {
-        &mut self.stack[self.bp + index.0]
-    }
 }
 
 impl std::ops::Index<Reg> for Stack {

@@ -194,29 +194,43 @@ impl BcFunc {
         Local(local)
     }
 
-    fn gen_integer(&mut self, i: i32) {
-        let reg = self.push();
-        self.insts.push(Inst::Integer(reg.into(), i));
+    fn gen_integer(&mut self, dst: Option<Local>, i: i32) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => self.push().into(),
+        };
+        self.insts.push(Inst::Integer(reg, i));
     }
 
-    fn gen_float(&mut self, f: f64) {
-        let reg = self.push();
+    fn gen_float(&mut self, dst: Option<Local>, f: f64) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => self.push().into(),
+        };
         self.insts.push(Inst::Float(reg, f));
     }
 
     fn gen_nil(&mut self) {
-        let reg = self.push();
+        let reg = self.push().into();
         self.insts.push(Inst::Nil(reg));
     }
 
-    fn gen_neg(&mut self) {
-        let src = self.pop();
-        let dst = self.push();
-        self.insts.push(Inst::Neg(dst, src));
+    fn gen_neg(&mut self, local: Option<Local>) {
+        match local {
+            Some(local) => {
+                let local = local.into();
+                self.insts.push(Inst::Neg(local, local));
+            }
+            None => {
+                let src = self.pop().into();
+                let dst = self.push().into();
+                self.insts.push(Inst::Neg(dst, src));
+            }
+        };
     }
 
     fn gen_ret(&mut self) -> Result<()> {
-        let ret = self.pop();
+        let ret = self.pop().into();
         assert_eq!(0, self.temp);
         self.insts.push(Inst::Ret(ret));
         Ok(())
@@ -298,18 +312,18 @@ impl BcGen {
     fn gen_expr(&mut self, expr: &Expr, use_value: bool) -> Result<()> {
         match expr {
             Expr::Integer(i) => {
-                self.gen_integer(*i);
+                self.gen_integer(None, *i);
             }
             Expr::Float(f) => {
-                self.gen_float(*f);
+                self.gen_float(None, *f);
             }
-            Expr::Neg(box (lhs, _)) => {
-                match lhs {
-                    Expr::Integer(i) => self.gen_integer(-i),
-                    Expr::Float(f) => self.gen_float(-f),
+            Expr::Neg(box (rhs, _)) => {
+                match rhs {
+                    Expr::Integer(i) => self.gen_integer(None, -i),
+                    Expr::Float(f) => self.gen_float(None, -f),
                     _ => {
-                        self.gen_expr(lhs, true)?;
-                        self.gen_neg();
+                        self.gen_expr(rhs, true)?;
+                        self.gen_neg(None);
                     }
                 };
             }
@@ -319,23 +333,22 @@ impl BcGen {
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
                 self.gen_sub(None, lhs, rhs)?;
             }
-            Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                self.gen_cmp(None, *kind, lhs, rhs)?;
-            }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 self.gen_mul(None, lhs, rhs)?;
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
                 self.gen_div(None, lhs, rhs)?;
             }
+            Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
+                self.gen_cmp(None, *kind, lhs, rhs)?;
+            }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                return self.gen_store_expr(ident, rhs, use_value);
+                let local2 = self.find_local(ident);
+                return self.gen_store_expr(local2, rhs, use_value);
             }
             Expr::LocalLoad(ident) => {
-                let local = self.load_local(ident)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
+                let local2 = self.load_local(ident)?;
+                self.gen_temp_mov(local2.into());
             }
             Expr::Call(name, args) => {
                 let func = *self.func_map.get(name).unwrap();
@@ -353,7 +366,7 @@ impl BcGen {
             Expr::If(box (cond_, _), then_, else_) => {
                 let then_pos = self.new_label();
                 let succ_pos = self.new_label();
-                let cond = self.gen_temp_expr(cond_)?;
+                let cond = self.gen_temp_expr(cond_)?.into();
                 let inst = Inst::CondBr(cond, then_pos);
                 self.insts.push(inst);
                 self.gen_exprs(else_, use_value)?;
@@ -457,44 +470,47 @@ impl BcGen {
         Ok(())
     }
 
-    fn gen_store_expr(&mut self, ident: &String, rhs: &Expr, use_value: bool) -> Result<()> {
-        let local = self.find_local(ident);
+    fn gen_store_expr(&mut self, local: Local, rhs: &Expr, use_value: bool) -> Result<()> {
         match rhs {
             Expr::Integer(i) => {
-                self.insts.push(Inst::Integer(local.into(), *i));
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
+                self.gen_integer(Some(local), *i);
+            }
+            Expr::Float(f) => {
+                self.gen_float(Some(local), *f);
+            }
+            Expr::Neg(box (rhs, _)) => {
+                match rhs {
+                    Expr::Integer(i) => self.gen_integer(Some(local), -i),
+                    Expr::Float(f) => self.gen_float(Some(local), -f),
+                    _ => {
+                        self.gen_store_expr(local, rhs, false)?;
+                        self.gen_neg(Some(local));
+                    }
+                };
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
                 self.gen_add(Some(local), lhs, rhs)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
                 self.gen_sub(Some(local), lhs, rhs)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
                 self.gen_mul(Some(local), lhs, rhs)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
                 self.gen_div(Some(local), lhs, rhs)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
             }
             Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
                 self.gen_cmp(Some(local), *kind, lhs, rhs)?;
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
+            }
+            Expr::LocalStore(ident, box (rhs, _)) => {
+                let local2 = self.find_local(ident);
+                self.gen_store_expr(local2, rhs, false)?;
+                self.gen_mov(local.into(), local2.into());
+            }
+            Expr::LocalLoad(ident) => {
+                let local2 = self.load_local(ident)?;
+                self.gen_mov(local.into(), local2.into());
             }
             Expr::Call(name, args) => {
                 let func = *self.func_map.get(name).unwrap();
@@ -502,9 +518,6 @@ impl BcGen {
                 self.temp -= args.len();
                 let inst = Inst::Call(func, Some(local.into()), arg, args.len());
                 self.insts.push(inst);
-                if use_value {
-                    self.gen_temp_mov(local.into());
-                }
             }
             rhs => {
                 let ret = self.next_reg();
@@ -513,8 +526,12 @@ impl BcGen {
                 if !use_value {
                     self.pop();
                 }
+                return Ok(());
             }
         };
+        if use_value {
+            self.gen_temp_mov(local.into());
+        }
         Ok(())
     }
 
@@ -522,7 +539,7 @@ impl BcGen {
         let cond_pos = self.new_label();
         let succ_pos = self.new_label();
         self.apply_label(cond_pos);
-        let cond = self.gen_temp_expr(cond)?;
+        let cond = self.gen_temp_expr(cond)?.into();
         let inst = Inst::CondNotBr(cond, succ_pos);
         self.insts.push(inst);
         self.gen_exprs(body, false)?;

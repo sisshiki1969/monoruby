@@ -3,18 +3,18 @@ use super::*;
 #[derive(Clone, PartialEq)]
 pub(super) enum Inst {
     Br(usize),
-    CondBr(Temp, usize),
-    CondNotBr(Temp, usize),
+    CondBr(Reg, usize),
+    CondNotBr(Reg, usize),
     Integer(Reg, i32),
-    Float(Temp, f64),
-    Nil(Temp),
-    Neg(Temp, Temp),             // ret, src
+    Float(Reg, f64),
+    Nil(Reg),
+    Neg(Reg, Reg),               // ret, src
     Add(Reg, Reg, Reg),          // ret, lhs, rhs
     Sub(Reg, Reg, Reg),          // ret, lhs, rhs
     Mul(Reg, Reg, Reg),          // ret, lhs, rhs
     Div(Reg, Reg, Reg),          // ret, lhs, rhs
     Cmp(CmpKind, Reg, Reg, Reg), // kind, lhs, rhs
-    Ret(Temp),
+    Ret(Reg),
     Mov(Reg, Reg),                            // dst, offset
     Call(BcFuncId, Option<Reg>, Temp, usize), // (id, ret, args, args_len)
 }
@@ -55,8 +55,8 @@ pub(super) enum Reg {
 impl std::fmt::Debug for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Local(local) => write!(f, "L{:?}", local.0),
-            Self::Temp(temp) => write!(f, "#{:?}", temp.0),
+            Self::Local(local) => write!(f, "{:?}", local),
+            Self::Temp(temp) => write!(f, "{:?}", temp),
         }
     }
 }
