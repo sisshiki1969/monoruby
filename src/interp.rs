@@ -173,10 +173,10 @@ impl Stack {
         let args = self.reg_slice(args, args_len);
         let local_num = bc_func.local_num();
         let reg_num = bc_func.reg_num;
-        self.stack.push(Value::from_unchecked(cur_fn.0 as u64));
-        self.stack.push(Value::from_unchecked(pc as u64));
+        self.stack.push(Value::from_unchecked(
+            (cur_fn.0 << 32) as u64 | (pc as u32 as u64),
+        ));
         self.stack.push(Value::from_unchecked(self.args_len as u64));
-        self.stack.push(Value::from_unchecked(self.reg_base as u64));
         self.stack.push(Value::from_unchecked(self.bp as u64));
         self.bp = self.stack.len();
         self.reg_base = self.bp + local_num;
@@ -188,12 +188,12 @@ impl Stack {
 
     fn pop_frame(&mut self) -> (bool, BcFuncId, usize) {
         let old_bp = self.bp;
-        let cur_fn = self.stack[old_bp - 5].get() as usize;
-        let pc = self.stack[old_bp - 4].get() as usize;
-        self.args_len = self.stack[old_bp - 3].get() as usize;
-        self.reg_base = self.stack[old_bp - 2].get() as usize;
+        let fn_pc = self.stack[old_bp - 3].get() as usize;
+        let cur_fn = fn_pc >> 32;
+        let pc = fn_pc as u32 as usize;
+        self.args_len = self.stack[old_bp - 2].get() as usize;
         self.bp = self.stack[old_bp - 1].get() as usize;
-        self.stack.truncate(old_bp - 5);
+        self.stack.truncate(old_bp - 3);
         (self.bp == 0, BcFuncId(cur_fn), pc)
     }
 }
@@ -212,9 +212,10 @@ impl Interp {
             .push_frame(args, len, bc_func, self.cur_fn, self.pc);
     }
 
-    fn pop_frame(&mut self) -> bool {
+    fn pop_frame(&mut self, bc_context: &BcGen) -> bool {
         let (b, func, pc) = self.call_stack.pop_frame();
         self.cur_fn = func;
+        self.call_stack.reg_base = self.call_stack.bp + bc_context[func].local_num();
         self.pc = pc;
         b
     }
@@ -233,7 +234,7 @@ impl Interp {
             //eprintln!("{:?}", &inst);
             self.pc += 1;
             if let Some(val) = self.eval(bc_context, inst) {
-                let _ = self.pop_frame();
+                let _ = self.pop_frame(bc_context);
                 return val;
             }
         }

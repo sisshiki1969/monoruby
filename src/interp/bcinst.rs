@@ -15,8 +15,8 @@ pub(super) enum Inst {
     Div(Reg, Reg, Reg),          // ret, lhs, rhs
     Cmp(CmpKind, Reg, Reg, Reg), // kind, lhs, rhs
     Ret(Temp),
-    Mov(Reg, Reg),                             // dst, offset
-    Call(BcFuncId, Option<Temp>, Temp, usize), // (id, ret, args, args_len)
+    Mov(Reg, Reg),                            // dst, offset
+    Call(BcFuncId, Option<Reg>, Temp, usize), // (id, ret, args, args_len)
 }
 
 impl std::fmt::Debug for Inst {

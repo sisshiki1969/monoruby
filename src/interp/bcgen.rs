@@ -174,6 +174,13 @@ impl BcFunc {
         Temp(self.temp)
     }
 
+    fn load_local(&mut self, ident: &String) -> Result<Local> {
+        match self.locals.get(ident) {
+            Some(local) => Ok(Local(*local)),
+            None => Err(BcErr::UndefinedLocal(ident.to_owned())),
+        }
+    }
+
     fn find_local(&mut self, ident: &String) -> Local {
         match self.locals.get(ident) {
             Some(local) => Local(*local),
@@ -217,6 +224,12 @@ impl BcFunc {
 
     fn gen_mov(&mut self, dst: Reg, src: Reg) {
         self.insts.push(Inst::Mov(dst, src));
+    }
+
+    fn gen_temp_mov(&mut self, rhs: Reg) -> Reg {
+        let lhs = self.push();
+        self.gen_mov(lhs.into(), rhs);
+        lhs.into()
     }
 }
 
@@ -307,36 +320,29 @@ impl BcGen {
                 self.gen_sub(None, lhs, rhs)?;
             }
             Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                self.gen_cmp(*kind, lhs, rhs)?;
+                self.gen_cmp(None, *kind, lhs, rhs)?;
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_mul(lhs, rhs)?;
+                self.gen_mul(None, lhs, rhs)?;
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_div(lhs, rhs)?;
+                self.gen_div(None, lhs, rhs)?;
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
                 return self.gen_store_expr(ident, rhs, use_value);
             }
             Expr::LocalLoad(ident) => {
-                let local = match self.locals.get(ident) {
-                    Some(local) => Local(*local),
-                    None => return Err(BcErr::UndefinedLocal(ident.to_owned())),
-                };
+                let local = self.load_local(ident)?;
                 if use_value {
-                    let lhs = self.push();
-                    self.gen_mov(lhs.into(), local.into());
+                    self.gen_temp_mov(local.into());
                 }
             }
             Expr::Call(name, args) => {
                 let func = *self.func_map.get(name).unwrap();
-                let arg = self.next_reg();
-                for arg in args {
-                    self.gen_expr(&arg.0, true)?;
-                }
+                let arg = self.gen_args(args)?;
                 self.temp -= args.len();
                 let inst = if use_value {
-                    let ret = self.push();
+                    let ret = self.push().into();
                     Inst::Call(func, Some(ret), arg, args.len())
                 } else {
                     Inst::Call(func, None, arg, args.len())
@@ -376,6 +382,14 @@ impl BcGen {
 }
 
 impl BcGen {
+    fn gen_args(&mut self, args: &[(Expr, std::ops::Range<usize>)]) -> Result<Temp> {
+        let arg = self.next_reg();
+        for arg in args {
+            self.gen_expr(&arg.0, true)?;
+        }
+        Ok(arg)
+    }
+
     fn gen_binary(
         &mut self,
         dst: Option<Local>,
@@ -425,20 +439,20 @@ impl BcGen {
         Ok(())
     }
 
-    fn gen_mul(&mut self, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(None, lhs, rhs)?;
+    fn gen_mul(&mut self, dst: Option<Local>, lhs: &Expr, rhs: &Expr) -> Result<()> {
+        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
         self.insts.push(Inst::Mul(dst, lhs, rhs));
         Ok(())
     }
 
-    fn gen_div(&mut self, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(None, lhs, rhs)?;
+    fn gen_div(&mut self, dst: Option<Local>, lhs: &Expr, rhs: &Expr) -> Result<()> {
+        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
         self.insts.push(Inst::Div(dst, lhs, rhs));
         Ok(())
     }
 
-    fn gen_cmp(&mut self, kind: CmpKind, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(None, lhs, rhs)?;
+    fn gen_cmp(&mut self, dst: Option<Local>, kind: CmpKind, lhs: &Expr, rhs: &Expr) -> Result<()> {
+        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
         self.insts.push(Inst::Cmp(kind, dst, lhs, rhs));
         Ok(())
     }
@@ -449,22 +463,47 @@ impl BcGen {
             Expr::Integer(i) => {
                 self.insts.push(Inst::Integer(local.into(), *i));
                 if use_value {
-                    let lhs = self.push();
-                    self.gen_mov(lhs.into(), local.into());
+                    self.gen_temp_mov(local.into());
                 }
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
                 self.gen_add(Some(local), lhs, rhs)?;
                 if use_value {
-                    let ret = self.push();
-                    self.gen_mov(ret.into(), local.into());
+                    self.gen_temp_mov(local.into());
                 }
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
                 self.gen_sub(Some(local), lhs, rhs)?;
                 if use_value {
-                    let ret = self.push();
-                    self.gen_mov(ret.into(), local.into());
+                    self.gen_temp_mov(local.into());
+                }
+            }
+            Expr::Mul(box (lhs, _), box (rhs, _)) => {
+                self.gen_mul(Some(local), lhs, rhs)?;
+                if use_value {
+                    self.gen_temp_mov(local.into());
+                }
+            }
+            Expr::Div(box (lhs, _), box (rhs, _)) => {
+                self.gen_div(Some(local), lhs, rhs)?;
+                if use_value {
+                    self.gen_temp_mov(local.into());
+                }
+            }
+            Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
+                self.gen_cmp(Some(local), *kind, lhs, rhs)?;
+                if use_value {
+                    self.gen_temp_mov(local.into());
+                }
+            }
+            Expr::Call(name, args) => {
+                let func = *self.func_map.get(name).unwrap();
+                let arg = self.gen_args(args)?;
+                self.temp -= args.len();
+                let inst = Inst::Call(func, Some(local.into()), arg, args.len());
+                self.insts.push(inst);
+                if use_value {
+                    self.gen_temp_mov(local.into());
                 }
             }
             rhs => {
