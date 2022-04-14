@@ -169,10 +169,16 @@ impl Stack {
         bc_func: &BcFunc,
         cur_fn: BcFuncId,
         pc: usize,
+        ret: Option<Reg>,
     ) {
         let args = self.reg_slice(args, args_len);
         let local_num = bc_func.local_num();
         let reg_num = bc_func.reg_num;
+        let ret = match ret {
+            Some(r) => self.get_index(r) + 1,
+            None => 0,
+        };
+        self.stack.push(Value::from_unchecked(ret as u64));
         self.stack.push(Value::from_unchecked(
             (cur_fn.0 << 32) as u64 | (pc as u32 as u64),
         ));
@@ -186,15 +192,19 @@ impl Stack {
         self.stack.resize(new_len, Value::nil());
     }
 
-    fn pop_frame(&mut self) -> (bool, BcFuncId, usize) {
+    fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<usize>) {
         let old_bp = self.bp;
+        let ret = match self.stack[old_bp - 4].get() as usize {
+            0 => None,
+            r => Some(r - 1),
+        };
         let fn_pc = self.stack[old_bp - 3].get() as usize;
         let cur_fn = fn_pc >> 32;
         let pc = fn_pc as u32 as usize;
         self.args_len = self.stack[old_bp - 2].get() as usize;
         self.bp = self.stack[old_bp - 1].get() as usize;
-        self.stack.truncate(old_bp - 3);
-        (self.bp == 0, BcFuncId(cur_fn), pc)
+        self.stack.truncate(old_bp - 4);
+        (self.bp == 0, BcFuncId(cur_fn), pc, ret)
     }
 }
 
@@ -207,34 +217,40 @@ impl Interp {
         }
     }
 
-    fn push_frame(&mut self, args: Temp, len: usize, bc_func: &BcFunc) {
+    fn push_frame(&mut self, args: Temp, len: usize, bc_func: &BcFunc, ret: Option<Reg>) {
         self.call_stack
-            .push_frame(args, len, bc_func, self.cur_fn, self.pc);
+            .push_frame(args, len, bc_func, self.cur_fn, self.pc, ret);
+        self.pc = 0;
+        self.cur_fn = bc_func.id;
     }
 
-    fn pop_frame(&mut self, bc_context: &BcGen) -> bool {
-        let (b, func, pc) = self.call_stack.pop_frame();
+    fn pop_frame(&mut self, bc_context: &BcGen, val: Value) -> bool {
+        let (b, func, pc, ret) = self.call_stack.pop_frame();
+        if b {
+            return true;
+        };
         self.cur_fn = func;
-        self.call_stack.reg_base = self.call_stack.bp + bc_context[func].local_num();
         self.pc = pc;
-        b
+        self.call_stack.reg_base = self.call_stack.bp + bc_context[func].local_num();
+        if let Some(ret) = ret {
+            self.call_stack.stack[ret] = val;
+        }
+        false
     }
 
     pub fn eval_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new();
         let hir_func = &bc_context[BcFuncId(0)];
-        eval.push_frame(Temp(0), 0, hir_func);
-        eval.eval_function(bc_context)
+        eval.push_frame(Temp(0), 0, hir_func, None);
+        eval.eval_loop(bc_context)
     }
 
-    fn eval_function(&mut self, bc_context: &BcGen) -> Value {
-        self.pc = 0;
+    fn eval_loop(&mut self, bc_context: &BcGen) -> Value {
         loop {
             let inst = &bc_context[self.cur_fn].insts()[self.pc];
             //eprintln!("{:?}", &inst);
             self.pc += 1;
             if let Some(val) = self.eval(bc_context, inst) {
-                let _ = self.pop_frame(bc_context);
                 return val;
             }
         }
@@ -320,18 +336,18 @@ impl Interp {
                     CmpKind::Ge => value_op!(lhs, rhs, ge),
                 });
             }
-            Inst::Ret(lhs) => return Some(self[*lhs]),
+            Inst::Ret(lhs) => {
+                let val = self[*lhs];
+                if self.pop_frame(bc_context, val) {
+                    return Some(val);
+                };
+            }
             Inst::Mov(dst, local) => {
                 self[*dst] = self[*local];
             }
             Inst::Call(id, ret, args, len) => {
                 let bc_func = &bc_context[*id];
-                self.push_frame(*args, *len, bc_func);
-                self.cur_fn = *id;
-                let res = self.eval_function(bc_context);
-                if let Some(ret) = *ret {
-                    self[ret] = res;
-                }
+                self.push_frame(*args, *len, bc_func, *ret);
             }
             Inst::Br(next_pc) => {
                 self.pc = bc_context[self.cur_fn].labels()[*next_pc].unwrap().0;

@@ -68,7 +68,7 @@ impl BcGen {
     fn new_func(&mut self, name: String, args: Vec<String>) -> Result<BcFuncId> {
         let id = BcFuncId(self.functions.len());
         self.func_map.insert(name.clone(), id);
-        self.functions.push(BcFunc::new(name, args.clone()));
+        self.functions.push(BcFunc::new(id, name, args.clone()));
         self.cur_fn = id;
         args.iter().for_each(|name| {
             self.add_local(name);
@@ -100,7 +100,7 @@ pub struct BcFuncId(pub usize);
 #[derive(Debug, Clone, PartialEq)]
 pub struct BcFunc {
     /// ID of this function.
-    id: usize,
+    pub id: BcFuncId,
     /// name of this function.
     name: String,
     /// the name of arguments.
@@ -120,9 +120,9 @@ pub struct BcFunc {
 }
 
 impl BcFunc {
-    fn new(name: String, args: Vec<String>) -> Self {
+    fn new(id: BcFuncId, name: String, args: Vec<String>) -> Self {
         Self {
-            id: 0,
+            id,
             name,
             args,
             locals: HashMap::default(),
