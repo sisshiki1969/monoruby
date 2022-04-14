@@ -507,6 +507,7 @@ mod test {
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
         run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
         run_test("def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a");
+        run_test("a=42; b=-a");
     }
 
     #[test]
