@@ -5,12 +5,23 @@ pub type Result<T> = std::result::Result<T, BcErr>;
 ///
 /// A state of Bytecode generator.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct BcGen {
     /// Functions.
     functions: Vec<BcFunc>,
     func_map: HashMap<String, BcFuncId>,
     cur_fn: BcFuncId,
+}
+
+impl std::fmt::Debug for BcGen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Func name:{}", self.name)?;
+        for inst in &self.insts {
+            writeln!(f, "{:?}", inst)?;
+        }
+        writeln!(f, "-------------------------")?;
+        Ok(())
+    }
 }
 
 impl std::ops::Index<BcFuncId> for BcGen {
@@ -53,15 +64,9 @@ impl BcGen {
     pub fn new_bc(ast: &[(Stmt, Span)]) -> Result<Self> {
         let mut gen = Self::new();
         let _func = gen.new_func("main".to_string(), vec![])?;
-        let len = ast.len();
-        if len == 0 {
-            gen.gen_nil()
-        } else {
-            gen.gen_stmts(ast)?;
-        };
-        gen.gen_ret()?;
+        gen.gen_stmts(ast)?;
         gen.ast = ast.to_vec();
-        eprintln!("{:?}", &gen.insts);
+        eprintln!("{:?}", &gen);
         Ok(gen)
     }
 
@@ -78,15 +83,22 @@ impl BcGen {
 
     fn gen_stmts(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
         let len = ast.len();
-        for (node, _) in &ast[..len - 1] {
-            match node {
-                Stmt::Expr(expr) => self.gen_expr(&expr.0, false)?,
-                Stmt::Decl(decl) => self.gen_decl_no(&decl.0)?,
-            }
+        for node in &ast[..len - 1] {
+            self.gen_stmt(node, false)?;
         }
-        match &ast[len - 1].0 {
-            Stmt::Expr(expr) => self.gen_expr(&expr.0, true),
-            Stmt::Decl(decl) => self.gen_decl(&decl.0),
+        self.gen_stmt(&ast[len - 1], true)
+    }
+
+    fn gen_stmt(&mut self, ast: &(Stmt, Span), use_value: bool) -> Result<()> {
+        match &ast.0 {
+            Stmt::Expr(expr) => self.gen_expr(&expr.0, use_value),
+            Stmt::Decl(decl) => {
+                if use_value {
+                    self.gen_decl(&decl.0)
+                } else {
+                    self.gen_decl_no(&decl.0)
+                }
+            }
         }
     }
 }
@@ -210,8 +222,11 @@ impl BcFunc {
         self.insts.push(Inst::Float(reg, f));
     }
 
-    fn gen_nil(&mut self) {
-        let reg = self.push().into();
+    fn gen_nil(&mut self, dst: Option<Local>) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => self.push().into(),
+        };
         self.insts.push(Inst::Nil(reg));
     }
 
@@ -257,26 +272,19 @@ impl BcGen {
     ) -> Result<BcFuncId> {
         let save = self.cur_fn;
         let func = self.new_func(func_name, args)?;
-
-        let len = ast.len();
-        if len == 0 {
-            self.gen_nil()
-        } else {
-            self.gen_exprs(ast, true)?;
-        };
-        self.gen_ret()?;
+        self.gen_exprs(ast, true)?;
         self.ast = ast
             .iter()
             .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
             .collect();
-        eprintln!("{:?}", &self.insts);
+        eprintln!("{:?}", &self);
         self.cur_fn = save;
         Ok(func)
     }
 
     fn gen_decl(&mut self, decl: &Decl) -> Result<()> {
         self.gen_decl_no(decl)?;
-        self.gen_nil();
+        self.gen_nil(None);
         Ok(())
     }
 
@@ -291,12 +299,7 @@ impl BcGen {
 
     fn gen_exprs(&mut self, ast: &[(Expr, Span)], use_value: bool) -> Result<()> {
         let len = ast.len();
-        if len == 0 {
-            if use_value {
-                self.gen_nil();
-            }
-            return Ok(());
-        }
+        assert!(len != 0);
         for (expr, _) in &ast[..len - 1] {
             self.gen_expr(&expr, false)?;
         }
@@ -311,6 +314,9 @@ impl BcGen {
     /// Generate bytecode from an *Expr*.
     fn gen_expr(&mut self, expr: &Expr, use_value: bool) -> Result<()> {
         match expr {
+            Expr::Nil => {
+                self.gen_nil(None);
+            }
             Expr::Integer(i) => {
                 self.gen_integer(None, *i);
             }
@@ -382,8 +388,13 @@ impl BcGen {
             Expr::While(box (cond, _), body) => {
                 self.gen_while(cond, body)?;
                 if use_value {
-                    self.gen_nil();
+                    self.gen_nil(None);
                 }
+                return Ok(());
+            }
+            Expr::Return(box stmt) => {
+                self.gen_stmt(stmt, true)?;
+                self.gen_ret()?;
                 return Ok(());
             }
         }
@@ -472,6 +483,9 @@ impl BcGen {
 
     fn gen_store_expr(&mut self, local: Local, rhs: &Expr, use_value: bool) -> Result<()> {
         match rhs {
+            Expr::Nil => {
+                self.gen_nil(Some(local));
+            }
             Expr::Integer(i) => {
                 self.gen_integer(Some(local), *i);
             }
@@ -519,6 +533,7 @@ impl BcGen {
                 let inst = Inst::Call(func, Some(local.into()), arg, args.len());
                 self.insts.push(inst);
             }
+            Expr::Return(_) => unreachable!(),
             rhs => {
                 let ret = self.next_reg();
                 self.gen_expr(rhs, true)?;

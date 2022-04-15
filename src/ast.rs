@@ -9,6 +9,19 @@ pub enum Stmt {
     Decl(Spanned<Decl>),
 }
 
+impl Default for Stmt {
+    fn default() -> Self {
+        Stmt::Expr((Expr::Nil, Span::default()))
+    }
+}
+
+impl Stmt {
+    pub fn expr(expr: Spanned<Expr>) -> Spanned<Stmt> {
+        let span = expr.1.clone();
+        (Self::Expr(expr), span)
+    }
+}
+
 ///
 /// AST for expression.
 ///
@@ -35,9 +48,16 @@ pub enum Expr {
 
     Integer(i32),
     Float(f64),
+    Nil,
     LocalStore(String, Box<Spanned<Expr>>),
     LocalLoad(String),
-    //Retrun(Box<Spanned<Expr>>),
+    Return(Box<Spanned<Stmt>>),
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Expr::Nil
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,5 +77,9 @@ impl Expr {
         } else {
             None
         }
+    }
+
+    pub fn ret(stmt: Spanned<Stmt>) -> Self {
+        Self::Return(Box::new(stmt))
     }
 }

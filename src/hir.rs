@@ -553,15 +553,23 @@ impl HirContext {
     /// Generate HIR from [(Stmt, Span)].
     fn gen_stmts(&mut self, ast: &[(Stmt, Span)]) -> Result<SsaReg> {
         let len = ast.len();
-        for (node, _) in &ast[..len - 1] {
-            match node {
-                Stmt::Expr(expr) => self.gen_expr_nouse(&expr.0)?,
-                Stmt::Decl(decl) => self.gen_decl_nouse(&decl.0)?,
-            }
+        for node in &ast[..len - 1] {
+            self.gen_stmt_nouse(node)?;
         }
-        match &ast[len - 1].0 {
+        self.gen_stmt(&ast[len - 1])
+    }
+
+    fn gen_stmt(&mut self, ast: &(Stmt, Span)) -> Result<SsaReg> {
+        match &ast.0 {
             Stmt::Expr(expr) => self.gen_expr(&expr.0),
             Stmt::Decl(decl) => self.gen_decl(&decl.0),
+        }
+    }
+
+    fn gen_stmt_nouse(&mut self, ast: &(Stmt, Span)) -> Result<()> {
+        match &ast.0 {
+            Stmt::Expr(expr) => self.gen_expr_nouse(&expr.0),
+            Stmt::Decl(decl) => self.gen_decl_nouse(&decl.0),
         }
     }
 
@@ -583,6 +591,7 @@ impl HirContext {
     /// Generate HIR from an *Expr*.
     fn gen_expr(&mut self, ast: &Expr) -> Result<SsaReg> {
         match ast {
+            Expr::Nil => Ok(self.new_nil()),
             Expr::Integer(i) => Ok(self.new_integer(*i)),
             Expr::Float(f) => Ok(self.new_float(*f)),
             Expr::Neg(box (lhs, _)) => {
@@ -660,6 +669,11 @@ impl HirContext {
                 Ok(ret)
             }
             Expr::While(box (cond, _), body) => self.gen_while(cond, body),
+            Expr::Return(box stmt) => {
+                let ret = self.gen_stmt(stmt)?;
+                self.new_ret(ret);
+                Ok(ret)
+            }
         }
     }
 
@@ -719,10 +733,15 @@ impl HirContext {
                 }
                 self.new_call_nouse(name, arg_regs)?;
             }
+            Expr::Nil => {}
             Expr::Integer(_) => {}
             Expr::Float(_) => {}
             Expr::LocalLoad(_) => {}
             Expr::Cmp(_, _, _) => {}
+            Expr::Return(box stmt) => {
+                let ret = self.gen_stmt(stmt)?;
+                self.new_ret(ret);
+            }
         };
         Ok(())
     }

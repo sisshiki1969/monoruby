@@ -320,33 +320,29 @@ fn main() {
 fn run(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
     let (ast, errs, parse_errs) = parse(&all_codes.join(";"));
-    if let Some(ast) = ast {
-        let gen = match BcGen::new_bc(&ast) {
-            Ok(gen) => gen,
-            Err(err) => {
-                eprintln!("Error in compiling AST. {:?}", err);
-                all_codes.pop();
-                return;
-            }
-        };
-        //#[cfg(debug_assertions)]
-        //dbg!(&gen);
-        let interp_val = Interp::eval_toplevel(&gen);
-        eprintln!("Interp: {:?}", interp_val);
+    let gen = match BcGen::new_bc(&ast) {
+        Ok(gen) => gen,
+        Err(err) => {
+            eprintln!("Error in compiling AST. {:?}", err);
+            all_codes.pop();
+            return;
+        }
+    };
+    //#[cfg(debug_assertions)]
+    //dbg!(&gen);
+    let interp_val = Interp::eval_toplevel(&gen);
+    eprintln!("Interp: {:?}", interp_val);
 
-        let mut hir = HirContext::new();
-        match hir.from_ast(&ast) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Error in compiling AST. {:?}", err);
-                all_codes.pop();
-                return;
-            }
-        };
-        //dbg!(&hir);
-    } else {
-        all_codes.pop();
-    }
+    let mut hir = HirContext::new();
+    match hir.from_ast(&ast) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("Error in compiling AST. {:?}", err);
+            all_codes.pop();
+            return;
+        }
+    };
+    //dbg!(&hir);
     show_err(errs, parse_errs, code);
 }
 
@@ -354,56 +350,78 @@ pub fn run_test(code: &str) {
     dbg!(code);
     let all_codes = vec![code.to_string()];
     let (ast, errs, parse_errs) = parse(code);
-    if let Some(stmt) = ast {
-        let gen = match BcGen::new_bc(&stmt) {
-            Ok(gen) => gen,
-            Err(err) => {
-                eprintln!("Error in compiling AST. {:?}", err);
-                return;
-            }
-        };
-        //#[cfg(debug_assertions)]
-        //dbg!(&gen);
-        let now = Instant::now();
-        let interp_val = Interp::eval_toplevel(&gen);
-        eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
+    let gen = match BcGen::new_bc(&ast) {
+        Ok(gen) => gen,
+        Err(err) => {
+            eprintln!("Error in compiling AST. {:?}", err);
+            return;
+        }
+    };
+    //#[cfg(debug_assertions)]
+    //dbg!(&gen);
+    let now = Instant::now();
+    let interp_val = Interp::eval_toplevel(&gen);
+    eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
 
-        //dbg!(&stmt);
-        let mut hir = HirContext::new();
-        match hir.from_ast(&stmt) {
-            Ok(_) => {}
-            Err(err) => panic!("Error in compiling AST. {:?}", err),
-        };
-        //#[cfg(debug_assertions)]
-        //dbg!(&hir);
-        let now = Instant::now();
-        let eval_res = Evaluator::eval_toplevel(&hir);
-        eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
+    //dbg!(&stmt);
+    let mut hir = HirContext::new();
+    match hir.from_ast(&ast) {
+        Ok(_) => {}
+        Err(err) => panic!("Error in compiling AST. {:?}", err),
+    };
+    //#[cfg(debug_assertions)]
+    //dbg!(&hir);
+    let now = Instant::now();
+    let eval_res = Evaluator::eval_toplevel(&hir);
+    eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
 
-        let now = Instant::now();
-        let ruby_res = run_ruby(&all_codes);
-        eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());
-        assert_eq!(interp_val.unpack(), ruby_res);
-    }
+    let now = Instant::now();
+    let ruby_res = run_ruby(&all_codes);
+    eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());
+    assert_eq!(interp_val.unpack(), ruby_res);
     show_err(errs, parse_errs, code);
 }
 
-fn parse(
-    code: &str,
-) -> (
-    Option<Vec<(Stmt, Span)>>,
-    Vec<Cheap<char>>,
-    Vec<Cheap<Token>>,
-) {
+fn parse(code: &str) -> (Vec<Spanned<Stmt>>, Vec<Cheap<char>>, Vec<Cheap<Token>>) {
     let len = code.len();
     let (tokens, errs) = lexer().parse_recovery(code);
     //dbg!(&tokens);
-    let (ast, parse_errs) = if let Some(tokens) = tokens {
-        parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()))
+    let (mut ast, parse_errs) = if let Some(tokens) = tokens {
+        let (ast, parse_err) =
+            parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+        (ast.map_or(vec![], |ast| ast), parse_err)
     } else {
-        (None, vec![])
+        (vec![], vec![])
     };
+    add_return(&mut ast);
     (ast, errs, parse_errs)
+}
+
+fn add_return(ast: &mut Vec<Spanned<Stmt>>) {
+    for (stmt, _) in ast.iter_mut() {
+        match stmt {
+            Stmt::Decl((Decl::MethodDef(_, _, ref mut body), _)) => {
+                let len = body.len();
+                assert!(len != 0);
+                let (expr, span) = std::mem::take(&mut body[len - 1]);
+                body[len - 1].0 = Expr::ret(Stmt::expr((expr, span)));
+            }
+            _ => {}
+        }
+    }
+    let len = ast.len();
+    if len == 0 {
+        let span = Span::default();
+        let nil = Stmt::expr((Expr::Nil, span.clone()));
+        let ret = Stmt::expr((Expr::Return(Box::new(nil)), span));
+        ast.push(ret);
+    } else {
+        let (stmt, span) = std::mem::take(&mut ast[len - 1]);
+        ast[len - 1] = (
+            Stmt::Expr((Expr::ret((stmt, span.clone())), span.clone())),
+            span,
+        );
+    }
 }
 
 fn show_err(errs: Vec<Cheap<char>>, parse_errs: Vec<Cheap<Token>>, code: &str) {

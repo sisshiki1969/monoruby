@@ -21,7 +21,6 @@ pub(super) enum Inst {
 
 impl std::fmt::Debug for Inst {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f)?;
         match self {
             Self::Br(dst) => write!(f, "br\t{}", dst),
             Self::CondBr(reg, dst) => write!(f, "condbr\t{:?}\t{}", reg, dst),
