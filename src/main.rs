@@ -48,24 +48,7 @@ fn main() {
             let mut file = File::open(file).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            let ast = match MonorubyParser::parse(&code) {
-                Ok(ast) => ast,
-                Err(_) => {
-                    eprintln!("Parse error.");
-                    return;
-                }
-            };
-            let gen = match BcGen::new_bc(&ast) {
-                Ok(gen) => gen,
-                Err(err) => {
-                    eprintln!("Error in compiling AST. {:?}", err);
-                    return;
-                }
-            };
-            //#[cfg(debug_assertions)]
-            //dbg!(&gen);
-            let interp_val = Interp::eval_toplevel(&gen);
-            eprintln!("Interp: {:?}", interp_val);
+            let _ = exec(&code);
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -75,7 +58,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run(&code, &mut all_codes);
+                        run_repl(&code, &mut all_codes);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -93,22 +76,19 @@ fn main() {
     }
 }
 
-fn run(code: &str, all_codes: &mut Vec<String>) {
-    all_codes.push(code.to_string());
-    let ast = match MonorubyParser::parse(&all_codes.join(";")) {
+fn exec(code: &str) -> Result<(), ()> {
+    let ast = match MonorubyParser::parse(code) {
         Ok(ast) => ast,
         Err(_) => {
             eprintln!("Parse error.");
-            all_codes.pop();
-            return;
+            return Err(());
         }
     };
     let gen = match BcGen::new_bc(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
-            all_codes.pop();
-            return;
+            return Err(());
         }
     };
     //#[cfg(debug_assertions)]
@@ -121,11 +101,18 @@ fn run(code: &str, all_codes: &mut Vec<String>) {
         Ok(_) => {}
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
-            all_codes.pop();
-            return;
+            return Err(());
         }
     };
     //dbg!(&hir);
+    Ok(())
+}
+
+fn run_repl(code: &str, all_codes: &mut Vec<String>) {
+    all_codes.push(code.to_string());
+    if let Err(_) = exec(&all_codes.join(";")) {
+        all_codes.pop();
+    };
 }
 
 pub fn run_test(code: &str) {
