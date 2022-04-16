@@ -1,5 +1,7 @@
 use super::*;
 
+use ariadne::*;
+use chumsky::{error::Cheap, prelude::*, Stream};
 pub type Span = std::ops::Range<usize>;
 pub type Spanned<T> = (T, Span);
 
@@ -63,6 +65,78 @@ impl std::fmt::Display for Token {
             Self::Ident(s) => write!(f, "{}", s),
             Self::Separator => write!(f, ";"),
         }
+    }
+}
+
+pub struct MonorubyParser {}
+
+impl MonorubyParser {
+    pub fn parse(code: &str) -> Result<Vec<Spanned<Stmt>>, ()> {
+        let len = code.len();
+        let (tokens, errs) = lexer().parse_recovery(code);
+        //dbg!(&tokens);
+        let (mut ast, parse_errs) = if let Some(tokens) = tokens {
+            let (ast, parse_err) =
+                parser().parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
+            (ast.map_or(vec![], |ast| ast), parse_err)
+        } else {
+            (vec![], vec![])
+        };
+        add_return(&mut ast);
+        if !errs.is_empty() || !parse_errs.is_empty() {
+            Self::show_err(errs, parse_errs, code);
+            Err(())
+        } else {
+            Ok(ast)
+        }
+    }
+
+    fn show_err(errs: Vec<Cheap<char>>, parse_errs: Vec<Cheap<Token>>, code: &str) {
+        errs.into_iter().for_each(|e| {
+            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+            rep = rep.with_label(
+                Label::new(e.span()).with_message(format!("unexpected:{:?}", e.label())),
+            );
+            rep.finish().eprint(Source::from(code)).unwrap();
+        });
+        parse_errs.into_iter().for_each(|e| {
+            let mut rep = Report::build(ReportKind::Error, (), e.span().start);
+            rep = rep.with_label(Label::new(e.span()).with_message(format!(
+                "unexpected:{}",
+                match e.label() {
+                    Some(s) => s,
+                    None => "",
+                }
+            )));
+            rep.finish().eprint(Source::from(code)).unwrap();
+        });
+    }
+}
+
+fn add_return(ast: &mut Vec<Spanned<Stmt>>) {
+    for (stmt, _) in ast.iter_mut() {
+        match stmt {
+            Stmt::Decl((Decl::MethodDef(_, _, ref mut body), _)) => {
+                let len = body.len();
+                assert!(len != 0);
+                let (expr, span) = std::mem::take(&mut body[len - 1]);
+                body[len - 1].0 = Expr::ret(Stmt::expr((expr, span)));
+            }
+            _ => {}
+        }
+    }
+    let len = ast.len();
+    if len == 0 {
+        let span = Span::default();
+        let nil = Stmt::expr((Expr::Nil, span.clone()));
+        let ret = Stmt::expr((Expr::Return(Box::new(nil)), span));
+        ast.push(ret);
+    } else {
+        let (stmt, span) = std::mem::take(&mut ast[len - 1]);
+        ast[len - 1] = (
+            Stmt::Expr((Expr::ret((stmt, span.clone())), span.clone())),
+            span,
+        );
     }
 }
 

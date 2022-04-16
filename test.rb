@@ -1,3 +1,8 @@
-b = binding
-b.local_variable_set(:a, 100)
-puts a
+def fib(x)
+    if x < 3
+        1
+    else
+        fib(x-1) + fib(x-2)
+    end
+end
+fib(10)

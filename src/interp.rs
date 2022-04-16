@@ -2,9 +2,11 @@ use super::*;
 
 mod bcgen;
 mod bcinst;
+mod stack;
 pub use bcgen::BcGen;
 use bcgen::*;
 use bcinst::*;
+use stack::*;
 
 #[derive(Debug, Clone)]
 pub enum BcErr {
@@ -15,16 +17,52 @@ pub enum BcErr {
 ///
 /// ID of instruction.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct InstId(pub usize);
+
+impl std::fmt::Debug for InstId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":{:05}", self.0)
+    }
+}
+
+///
+/// ID of register.
+///
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BcReg {
+    Local(BcLocal),
+    Temp(BcTemp),
+}
+
+impl std::fmt::Debug for BcReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(local) => write!(f, "{:?}", local),
+            Self::Temp(temp) => write!(f, "{:?}", temp),
+        }
+    }
+}
+
+impl std::convert::From<BcLocal> for BcReg {
+    fn from(local: BcLocal) -> Self {
+        BcReg::Local(local)
+    }
+}
+
+impl std::convert::From<BcTemp> for BcReg {
+    fn from(temp: BcTemp) -> Self {
+        BcReg::Temp(temp)
+    }
+}
 
 ///
 /// ID of temporary register.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct Temp(pub usize);
+struct BcTemp(pub usize);
 
-impl std::fmt::Debug for Temp {
+impl std::fmt::Debug for BcTemp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "#{}", self.0)
     }
@@ -34,125 +72,33 @@ impl std::fmt::Debug for Temp {
 /// ID of local variable.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct Local(pub usize);
+struct BcLocal(pub usize);
 
-impl std::fmt::Debug for Local {
+impl std::fmt::Debug for BcLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "L{}", self.0)
     }
 }
 
+///
+/// Bytecode interpreter.
+///
 pub struct Interp {
     cur_fn: BcFuncId,
     pc: usize,
     call_stack: Stack,
 }
 
-impl std::ops::Index<Reg> for Interp {
+impl std::ops::Index<BcReg> for Interp {
     type Output = Value;
-    fn index(&self, index: Reg) -> &Value {
+    fn index(&self, index: BcReg) -> &Value {
         &self.call_stack[index]
     }
 }
 
-impl std::ops::IndexMut<Reg> for Interp {
-    fn index_mut(&mut self, index: Reg) -> &mut Value {
+impl std::ops::IndexMut<BcReg> for Interp {
+    fn index_mut(&mut self, index: BcReg) -> &mut Value {
         &mut self.call_stack[index]
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Stack {
-    stack: Vec<Value>,
-    bp: usize,
-    reg_base: usize,
-    args_len: usize,
-}
-
-impl std::ops::Index<Reg> for Stack {
-    type Output = Value;
-    fn index(&self, reg: Reg) -> &Value {
-        let i = self.get_index(reg);
-        &self.stack[i]
-    }
-}
-
-impl std::ops::IndexMut<Reg> for Stack {
-    fn index_mut(&mut self, reg: Reg) -> &mut Value {
-        let i = self.get_index(reg);
-        &mut self.stack[i]
-    }
-}
-
-impl Stack {
-    fn new() -> Self {
-        Self {
-            stack: Vec::with_capacity(4096),
-            bp: 0,
-            reg_base: 0,
-            args_len: 0,
-        }
-    }
-
-    fn get_index(&self, reg: Reg) -> usize {
-        match reg {
-            Reg::Temp(i) => self.reg_base + i.0 as usize,
-            Reg::Local(i) => self.bp + i.0 as usize,
-        }
-    }
-
-    /*fn args(&self) -> &[Value] {
-        &self.stack[self.bp..self.bp + self.args_len]
-    }*/
-
-    fn reg_slice(&self, reg: Temp, len: usize) -> std::ops::Range<usize> {
-        let start = self.reg_base + reg.0 as usize;
-        start..start + len
-    }
-
-    fn push_frame(
-        &mut self,
-        args: Temp,
-        args_len: usize,
-        bc_func: &BcFunc,
-        cur_fn: BcFuncId,
-        pc: usize,
-        ret: Option<Reg>,
-    ) {
-        let args = self.reg_slice(args, args_len);
-        let local_num = bc_func.local_num();
-        let reg_num = bc_func.reg_num;
-        let ret = match ret {
-            Some(r) => self.get_index(r) + 1,
-            None => 0,
-        };
-        self.stack.push(Value::from_unchecked(ret as u64));
-        self.stack.push(Value::from_unchecked(
-            (cur_fn.0 << 32) as u64 | (pc as u32 as u64),
-        ));
-        self.stack.push(Value::from_unchecked(self.args_len as u64));
-        self.stack.push(Value::from_unchecked(self.bp as u64));
-        self.bp = self.stack.len();
-        self.reg_base = self.bp + local_num;
-        self.args_len = args_len;
-        let new_len = self.stack.len() + local_num + reg_num as usize;
-        self.stack.extend_from_within(args);
-        self.stack.resize(new_len, Value::nil());
-    }
-
-    fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<usize>) {
-        let old_bp = self.bp;
-        let ret = match self.stack[old_bp - 4].get() as usize {
-            0 => None,
-            r => Some(r - 1),
-        };
-        let fn_pc = self.stack[old_bp - 3].get() as usize;
-        let cur_fn = fn_pc >> 32;
-        let pc = fn_pc as u32 as usize;
-        self.args_len = self.stack[old_bp - 2].get() as usize;
-        self.bp = self.stack[old_bp - 1].get() as usize;
-        self.stack.truncate(old_bp - 4);
-        (self.bp == 0, BcFuncId(cur_fn), pc, ret)
     }
 }
 
@@ -165,7 +111,7 @@ impl Interp {
         }
     }
 
-    fn push_frame(&mut self, args: Temp, len: usize, bc_func: &BcFunc, ret: Option<Reg>) {
+    fn push_frame(&mut self, args: BcTemp, len: usize, bc_func: &BcFunc, ret: Option<BcReg>) {
         self.call_stack
             .push_frame(args, len, bc_func, self.cur_fn, self.pc, ret);
         self.pc = 0;
@@ -179,9 +125,9 @@ impl Interp {
         };
         self.cur_fn = func;
         self.pc = pc;
-        self.call_stack.reg_base = self.call_stack.bp + bc_context[func].local_num();
+        self.call_stack.set_reg_base(bc_context[func].local_num());
         if let Some(ret) = ret {
-            self.call_stack.stack[ret] = val;
+            self.call_stack[ret] = val;
         }
         false
     }
@@ -189,7 +135,7 @@ impl Interp {
     pub fn eval_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new();
         let hir_func = &bc_context[BcFuncId(0)];
-        eval.push_frame(Temp(0), 0, hir_func, None);
+        eval.push_frame(BcTemp(0), 0, hir_func, None);
         eval.eval_loop(bc_context)
     }
 
