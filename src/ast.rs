@@ -60,6 +60,29 @@ impl Default for Expr {
     }
 }
 
+impl Expr {
+    pub fn is_local(&self) -> Option<String> {
+        if let Self::LocalLoad(ident) = self {
+            Some(ident.to_owned())
+        } else {
+            None
+        }
+    }
+
+    pub fn is_smi(&self) -> Option<i16> {
+        if let Self::Integer(i) = self {
+            if *i == *i as i16 as i32 {
+                return Some(*i as i16);
+            }
+        }
+        None
+    }
+
+    pub fn ret(stmt: Spanned<Stmt>) -> Self {
+        Self::Return(Box::new(stmt))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpKind {
     Eq,
@@ -80,19 +103,5 @@ impl std::fmt::Debug for CmpKind {
             Self::Le => write!(f, "<="),
             Self::Lt => write!(f, "<"),
         }
-    }
-}
-
-impl Expr {
-    pub fn is_local(&self) -> Option<String> {
-        if let Self::LocalLoad(ident) = self {
-            Some(ident.to_owned())
-        } else {
-            None
-        }
-    }
-
-    pub fn ret(stmt: Spanned<Stmt>) -> Self {
-        Self::Return(Box::new(stmt))
     }
 }

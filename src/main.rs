@@ -84,7 +84,7 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let gen = match BcGen::new_bc(&ast) {
+    let gen = match BcGen::new_bytecode(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
@@ -122,7 +122,7 @@ pub fn run_test(code: &str) {
         Ok(ast) => ast,
         Err(_) => panic!("Parse error."),
     };
-    let gen = match BcGen::new_bc(&ast) {
+    let gen = match BcGen::new_bytecode(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             panic!("Error in compiling AST. {:?}", err);

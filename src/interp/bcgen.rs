@@ -61,12 +61,15 @@ impl BcGen {
         }
     }
 
-    pub fn new_bc(ast: &[(Stmt, Span)]) -> Result<Self> {
+    pub fn new_bytecode(ast: &[(Stmt, Span)]) -> Result<Self> {
         let mut gen = Self::new();
-        let _func = gen.new_func("main".to_string(), vec![])?;
+        let _func = gen.new_func("/main".to_string(), vec![])?;
         gen.gen_stmts(ast)?;
         gen.ast = ast.to_vec();
-        gen.dump_insts();
+        gen.dump_bcir();
+        for func in gen.functions.iter_mut() {
+            func.gen_bc_from_inst();
+        }
         Ok(gen)
     }
 
@@ -102,40 +105,48 @@ impl BcGen {
         }
     }
 
-    fn dump_insts(&self) {
+    fn dump_bcir(&self) {
         eprintln!("{:?} name:{} args:{:?}", self.id, self.name, self.args);
         for (i, inst) in self.insts.iter().enumerate() {
             eprint!(":{:05} ", i);
             match inst {
-                Inst::Br(dst) => {
+                BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap();
                     eprintln!("br =>{:?}", dst);
                 }
-                Inst::CondBr(reg, dst) => {
+                BcIr::CondBr(reg, dst) => {
                     let dst = self.labels[*dst].unwrap();
                     eprintln!("condbr {:?} =>{:?}", reg, dst);
                 }
-                Inst::CondNotBr(reg, dst) => {
+                BcIr::CondNotBr(reg, dst) => {
                     let dst = self.labels[*dst].unwrap();
                     eprintln!("condnbr {:?} =>{:?}", reg, dst);
                 }
-                Inst::Integer(reg, num) => eprintln!("{:?} = {}", reg, num),
-                Inst::Float(reg, num) => eprintln!("{:?} = {}", reg, num),
-                Inst::Nil(reg) => eprintln!("{:?} = nil", reg),
-                Inst::Neg(dst, src) => eprintln!("{:?} = neg {:?}", dst, src),
-                Inst::Add(dst, lhs, rhs) => eprintln!("{:?} = {:?} + {:?}", dst, lhs, rhs),
-                Inst::Sub(dst, lhs, rhs) => eprintln!("{:?} = {:?} - {:?}", dst, lhs, rhs),
-                Inst::Mul(dst, lhs, rhs) => eprintln!("{:?} = {:?} * {:?}", dst, lhs, rhs),
-                Inst::Div(dst, lhs, rhs) => eprintln!("{:?} = {:?} / {:?}", dst, lhs, rhs),
-                Inst::Cmp(kind, dst, lhs, rhs) => {
+                BcIr::Integer(reg, num) => eprintln!("{:?} = {}", reg, num),
+                BcIr::Float(reg, num) => eprintln!("{:?} = {}", reg, num),
+                BcIr::Nil(reg) => eprintln!("{:?} = nil", reg),
+                BcIr::Neg(dst, src) => eprintln!("{:?} = neg {:?}", dst, src),
+                BcIr::Add(dst, lhs, rhs) => eprintln!("{:?} = {:?} + {:?}", dst, lhs, rhs),
+                BcIr::Addri(dst, lhs, rhs) => eprintln!("{:?} = {:?} + {}:i16", dst, lhs, rhs),
+                BcIr::Sub(dst, lhs, rhs) => eprintln!("{:?} = {:?} - {:?}", dst, lhs, rhs),
+                BcIr::Subri(dst, lhs, rhs) => eprintln!("{:?} = {:?} - {}:i16", dst, lhs, rhs),
+                BcIr::Mul(dst, lhs, rhs) => eprintln!("{:?} = {:?} * {:?}", dst, lhs, rhs),
+                BcIr::Div(dst, lhs, rhs) => eprintln!("{:?} = {:?} / {:?}", dst, lhs, rhs),
+                BcIr::Cmp(kind, dst, lhs, rhs) => {
                     eprintln!("{:?} = {:?} {:?} {:?}", dst, lhs, kind, rhs)
                 }
-                Inst::Ret(reg) => eprintln!("ret {:?}", reg),
-                Inst::Mov(dst, src) => eprintln!("{:?} = {:?}", dst, src),
-                Inst::Call(id, ret, arg, len) => match ret {
-                    Some(ret) => eprintln!("{:?} = call {:?} ({:?}: {})", ret, id, arg, len),
-                    None => eprintln!("_ = call {:?} ({:?}: {})", id, arg, len),
-                },
+                BcIr::Cmpri(kind, dst, lhs, rhs) => {
+                    eprintln!("{:?} = {:?} {:?} {}:i16", dst, lhs, kind, rhs)
+                }
+                BcIr::Ret(reg) => eprintln!("ret {:?}", reg),
+                BcIr::Mov(dst, src) => eprintln!("{:?} = {:?}", dst, src),
+                BcIr::Call(id, ret, arg, len) => {
+                    let name = self[*id].name.clone();
+                    match ret {
+                        Some(ret) => eprintln!("{:?} = call {}({:?}; {})", ret, name, arg, len),
+                        None => eprintln!("_ = call {}({:?}; {})", name, arg, len),
+                    }
+                }
             }
         }
         eprintln!("------------------------------------")
@@ -157,17 +168,19 @@ pub struct BcFunc {
     /// the name of arguments.
     args: Vec<String>,
     /// local variables.
-    locals: HashMap<String, usize>,
+    locals: HashMap<String, u16>,
     /// The number of registers.
-    temp: usize,
+    temp: u16,
     /// The number of registers.
-    pub reg_num: usize,
+    pub reg_num: u16,
     /// AST.
     ast: Vec<(Stmt, Span)>,
     /// Bytecode.
-    insts: Vec<Inst>,
+    insts: Vec<BcIr>,
     /// Labels.
-    pub(super) labels: Vec<Option<InstId>>,
+    labels: Vec<Option<InstId>>,
+    /// Bytecode.
+    pub(super) bc: Vec<BcOp>,
 }
 
 impl BcFunc {
@@ -182,18 +195,11 @@ impl BcFunc {
             ast: vec![],
             insts: vec![],
             labels: vec![],
+            bc: vec![],
         }
     }
     pub(super) fn local_num(&self) -> usize {
         self.locals.len()
-    }
-
-    pub(super) fn insts(&self) -> &[Inst] {
-        &self.insts
-    }
-
-    pub(super) fn labels(&self) -> &[Option<InstId>] {
-        &self.labels
     }
 
     fn new_label(&mut self) -> usize {
@@ -240,7 +246,7 @@ impl BcFunc {
     }
 
     fn add_local(&mut self, ident: &String) -> BcLocal {
-        let local = self.locals.len();
+        let local = self.locals.len() as u16;
         self.locals.insert(ident.to_owned(), local);
         BcLocal(local)
     }
@@ -250,7 +256,7 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(Inst::Integer(reg, i));
+        self.insts.push(BcIr::Integer(reg, i));
     }
 
     fn gen_float(&mut self, dst: Option<BcLocal>, f: f64) {
@@ -258,7 +264,7 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(Inst::Float(reg, f));
+        self.insts.push(BcIr::Float(reg, f));
     }
 
     fn gen_nil(&mut self, dst: Option<BcLocal>) {
@@ -266,19 +272,19 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(Inst::Nil(reg));
+        self.insts.push(BcIr::Nil(reg));
     }
 
     fn gen_neg(&mut self, local: Option<BcLocal>) {
         match local {
             Some(local) => {
                 let local = local.into();
-                self.insts.push(Inst::Neg(local, local));
+                self.insts.push(BcIr::Neg(local, local));
             }
             None => {
                 let src = self.pop().into();
                 let dst = self.push().into();
-                self.insts.push(Inst::Neg(dst, src));
+                self.insts.push(BcIr::Neg(dst, src));
             }
         };
     }
@@ -286,12 +292,12 @@ impl BcFunc {
     fn gen_ret(&mut self) -> Result<()> {
         let ret = self.pop().into();
         assert_eq!(0, self.temp);
-        self.insts.push(Inst::Ret(ret));
+        self.insts.push(BcIr::Ret(ret));
         Ok(())
     }
 
     fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
-        self.insts.push(Inst::Mov(dst, src));
+        self.insts.push(BcIr::Mov(dst, src));
     }
 
     fn gen_temp_mov(&mut self, rhs: BcReg) -> BcReg {
@@ -316,7 +322,7 @@ impl BcGen {
             .iter()
             .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
             .collect();
-        self.dump_insts();
+        self.dump_bcir();
         self.cur_fn = save;
         Ok(func)
     }
@@ -398,24 +404,23 @@ impl BcGen {
             Expr::Call(name, args) => {
                 let func = *self.func_map.get(name).unwrap();
                 let arg = self.gen_args(args)?;
-                self.temp -= args.len();
-                let inst = if use_value {
-                    let ret = self.push().into();
-                    Inst::Call(func, Some(ret), arg, args.len())
+                self.temp -= args.len() as u16;
+                let ret = if use_value {
+                    Some(self.push().into())
                 } else {
-                    Inst::Call(func, None, arg, args.len())
+                    None
                 };
-                self.insts.push(inst);
+                self.insts.push(BcIr::Call(func, ret, arg, args.len()));
                 return Ok(());
             }
             Expr::If(box (cond_, _), then_, else_) => {
                 let then_pos = self.new_label();
                 let succ_pos = self.new_label();
                 let cond = self.gen_temp_expr(cond_)?.into();
-                let inst = Inst::CondBr(cond, then_pos);
+                let inst = BcIr::CondBr(cond, then_pos);
                 self.insts.push(inst);
                 self.gen_exprs(else_, use_value)?;
-                self.insts.push(Inst::Br(succ_pos));
+                self.insts.push(BcIr::Br(succ_pos));
                 if use_value {
                     self.pop();
                 }
@@ -490,27 +495,49 @@ impl BcGen {
         Ok((dst, lhs, rhs))
     }
 
+    fn gen_singular(&mut self, dst: Option<BcLocal>, lhs: &Expr) -> Result<(BcReg, BcReg)> {
+        let lhs = match lhs.is_local() {
+            Some(lhs) => self.find_local(&lhs).into(),
+            None => self.gen_temp_expr(lhs)?.into(),
+        };
+        let dst = match dst {
+            None => self.push().into(),
+            Some(local) => local.into(),
+        };
+        Ok((dst, lhs))
+    }
+
     fn gen_add(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(Inst::Add(dst, lhs, rhs));
+        if let Some(i) = rhs.is_smi() {
+            let (dst, lhs) = self.gen_singular(dst, lhs)?;
+            self.insts.push(BcIr::Addri(dst, lhs, i));
+        } else {
+            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
+            self.insts.push(BcIr::Add(dst, lhs, rhs));
+        }
         Ok(())
     }
 
     fn gen_sub(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(Inst::Sub(dst, lhs, rhs));
+        if let Some(i) = rhs.is_smi() {
+            let (dst, lhs) = self.gen_singular(dst, lhs)?;
+            self.insts.push(BcIr::Subri(dst, lhs, i));
+        } else {
+            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
+            self.insts.push(BcIr::Sub(dst, lhs, rhs));
+        }
         Ok(())
     }
 
     fn gen_mul(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(Inst::Mul(dst, lhs, rhs));
+        self.insts.push(BcIr::Mul(dst, lhs, rhs));
         Ok(())
     }
 
     fn gen_div(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(Inst::Div(dst, lhs, rhs));
+        self.insts.push(BcIr::Div(dst, lhs, rhs));
         Ok(())
     }
 
@@ -521,8 +548,13 @@ impl BcGen {
         lhs: &Expr,
         rhs: &Expr,
     ) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(Inst::Cmp(kind, dst, lhs, rhs));
+        if let Some(i) = rhs.is_smi() {
+            let (dst, lhs) = self.gen_singular(dst, lhs)?;
+            self.insts.push(BcIr::Cmpri(kind, dst, lhs, i));
+        } else {
+            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
+            self.insts.push(BcIr::Cmp(kind, dst, lhs, rhs));
+        }
         Ok(())
     }
 
@@ -574,8 +606,8 @@ impl BcGen {
             Expr::Call(name, args) => {
                 let func = *self.func_map.get(name).unwrap();
                 let arg = self.gen_args(args)?;
-                self.temp -= args.len();
-                let inst = Inst::Call(func, Some(local.into()), arg, args.len());
+                self.temp -= args.len() as u16;
+                let inst = BcIr::Call(func, Some(local.into()), arg, args.len());
                 self.insts.push(inst);
             }
             Expr::Return(_) => unreachable!(),
@@ -600,11 +632,111 @@ impl BcGen {
         let succ_pos = self.new_label();
         self.apply_label(cond_pos);
         let cond = self.gen_temp_expr(cond)?.into();
-        let inst = Inst::CondNotBr(cond, succ_pos);
+        let inst = BcIr::CondNotBr(cond, succ_pos);
         self.insts.push(inst);
         self.gen_exprs(body, false)?;
-        self.insts.push(Inst::Br(cond_pos));
+        self.insts.push(BcIr::Br(cond_pos));
         self.apply_label(succ_pos);
         Ok(())
     }
+}
+
+impl BcFunc {
+    fn get_index(&self, reg: &BcReg) -> u16 {
+        match reg {
+            BcReg::Temp(i) => self.locals.len() as u16 + i.0,
+            BcReg::Local(i) => i.0,
+        }
+    }
+
+    fn gen_bc_from_inst(&mut self) {
+        let mut ops = vec![];
+        for inst in &self.insts {
+            let op = match inst {
+                BcIr::Br(dst) => {
+                    let dst = self.labels[*dst].unwrap();
+                    BcOp::Br(dst)
+                }
+                BcIr::CondBr(reg, dst) => {
+                    let dst = self.labels[*dst].unwrap();
+                    BcOp::CondBr(self.get_index(reg), dst)
+                }
+                BcIr::CondNotBr(reg, dst) => {
+                    let dst = self.labels[*dst].unwrap();
+                    BcOp::CondNotBr(self.get_index(reg), dst)
+                }
+                BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
+                BcIr::Float(reg, num) => BcOp::Float(self.get_index(reg), *num),
+                BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
+                BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
+                BcIr::Add(dst, lhs, rhs) => BcOp::Add(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Addri(dst, lhs, rhs) => {
+                    BcOp::Addri(self.get_index(dst), self.get_index(lhs), *rhs)
+                }
+                BcIr::Sub(dst, lhs, rhs) => BcOp::Sub(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Subri(dst, lhs, rhs) => {
+                    BcOp::Subri(self.get_index(dst), self.get_index(lhs), *rhs)
+                }
+                BcIr::Mul(dst, lhs, rhs) => BcOp::Mul(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Div(dst, lhs, rhs) => BcOp::Div(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Cmp(kind, dst, lhs, rhs) => BcOp::Cmp(
+                    *kind,
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Cmpri(kind, dst, lhs, rhs) => {
+                    BcOp::Cmpri(*kind, self.get_index(dst), self.get_index(lhs), *rhs)
+                }
+                BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
+                BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
+                BcIr::Call(id, ret, arg, len) => BcOp::Call(
+                    *id,
+                    ret.map(|r| self.get_index(&r)),
+                    self.get_index(&BcReg::from(*arg)),
+                    *len,
+                ),
+            };
+            ops.push(op);
+        }
+        self.bc = ops;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum BcOp {
+    Br(InstId),
+    CondBr(u16, InstId),
+    CondNotBr(u16, InstId),
+    Integer(u16, i32),
+    Float(u16, f64),
+    Nil(u16),
+    Neg(u16, u16),                 // ret, src
+    Add(u16, u16, u16),            // ret, lhs, rhs
+    Addri(u16, u16, i16),          // ret, lhs, rhs
+    Sub(u16, u16, u16),            // ret, lhs, rhs
+    Subri(u16, u16, i16),          // ret, lhs, rhs
+    Mul(u16, u16, u16),            // ret, lhs, rhs
+    Div(u16, u16, u16),            // ret, lhs, rhs
+    Cmp(CmpKind, u16, u16, u16),   // kind, lhs, rhs
+    Cmpri(CmpKind, u16, u16, i16), // kind, lhs, rhs
+    Ret(u16),
+    Mov(u16, u16),                           // dst, offset
+    Call(BcFuncId, Option<u16>, u16, usize), // (id, ret, args, args_len)
 }

@@ -97,7 +97,7 @@ impl Value {
     }
 
     #[inline(always)]
-    fn fixnum(num: i64) -> Self {
+    pub fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
     }
 
@@ -179,12 +179,12 @@ impl Value {
     }
 
     #[inline(always)]
-    fn as_fnum(&self) -> i64 {
+    pub fn as_fnum(&self) -> i64 {
         (self.0.get() as i64) >> 1
     }
 
     #[inline(always)]
-    fn is_fnum(&self) -> bool {
+    pub fn is_fnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 

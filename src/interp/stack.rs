@@ -10,21 +10,20 @@ use super::*;
 pub struct Stack {
     stack: Vec<Value>,
     bp: usize,
-    reg_base: usize,
     args_len: usize,
 }
 
-impl std::ops::Index<BcReg> for Stack {
+impl std::ops::Index<u16> for Stack {
     type Output = Value;
-    fn index(&self, reg: BcReg) -> &Value {
-        let i = self.get_index(reg);
+    fn index(&self, reg: u16) -> &Value {
+        let i = reg as usize + self.bp;
         &self.stack[i]
     }
 }
 
-impl std::ops::IndexMut<BcReg> for Stack {
-    fn index_mut(&mut self, reg: BcReg) -> &mut Value {
-        let i = self.get_index(reg);
+impl std::ops::IndexMut<u16> for Stack {
+    fn index_mut(&mut self, reg: u16) -> &mut Value {
+        let i = reg as usize + self.bp;
         &mut self.stack[i]
     }
 }
@@ -47,15 +46,7 @@ impl Stack {
         Self {
             stack: Vec::with_capacity(4096),
             bp: 0,
-            reg_base: 0,
             args_len: 0,
-        }
-    }
-
-    fn get_index(&self, reg: BcReg) -> usize {
-        match reg {
-            BcReg::Temp(i) => self.reg_base + i.0 as usize,
-            BcReg::Local(i) => self.bp + i.0 as usize,
         }
     }
 
@@ -68,33 +59,25 @@ impl Stack {
             .push(Value::from_unchecked((v1 as u64) << 32 | (v2 as u64)));
     }
 
-    /*fn args(&self) -> &[Value] {
-        &self.stack[self.bp..self.bp + self.args_len]
-    }*/
-
-    fn reg_slice(&self, reg: BcTemp, len: usize) -> std::ops::Range<usize> {
-        let start = self.reg_base + reg.0 as usize;
+    fn reg_slice(&self, reg: u16, len: usize) -> std::ops::Range<usize> {
+        let start = self.bp + reg as usize;
         start..start + len
-    }
-
-    pub(super) fn set_reg_base(&mut self, local_num: usize) {
-        self.reg_base = self.bp + local_num;
     }
 
     pub(super) fn push_frame(
         &mut self,
-        args: BcTemp,
+        args: u16,
         args_len: usize,
         bc_func: &BcFunc,
         cur_fn: BcFuncId,
         pc: usize,
-        ret: Option<BcReg>,
+        ret: Option<u16>,
     ) {
         let args = self.reg_slice(args, args_len);
         let local_num = bc_func.local_num();
         let reg_num = bc_func.reg_num;
         let ret = match ret {
-            Some(r) => self.get_index(r) + 1,
+            Some(r) => r + 1,
             None => 0,
         };
         self.push_u64(ret as u64);
@@ -102,16 +85,15 @@ impl Stack {
         self.push_u64(self.args_len as u64);
         self.push_u64(self.bp as u64);
         self.bp = self.stack.len();
-        self.reg_base = self.bp + local_num;
         self.args_len = args_len;
         let new_len = self.stack.len() + local_num + reg_num as usize;
         self.stack.extend_from_within(args);
         self.stack.resize(new_len, Value::nil());
     }
 
-    pub(super) fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<usize>) {
+    pub(super) fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<u16>) {
         let old_bp = self.bp;
-        let ret = match self.stack[old_bp - 4].get() as usize {
+        let ret = match self.stack[old_bp - 4].get() as u16 {
             0 => None,
             r => Some(r - 1),
         };
