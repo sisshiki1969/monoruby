@@ -177,8 +177,8 @@ impl Interp {
             BcOp::Integer(ret, i) => {
                 self[*ret] = Value::integer(*i);
             }
-            BcOp::Float(ret, f) => {
-                self[*ret] = Value::float(*f);
+            BcOp::Const(ret, f) => {
+                self[*ret] = *f;
             }
             BcOp::Nil(ret) => {
                 self[*ret] = Value::nil();
