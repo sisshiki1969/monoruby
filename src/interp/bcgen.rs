@@ -666,7 +666,7 @@ impl BcFunc {
                     BcOp::CondNotBr(self.get_index(reg), dst)
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
-                BcIr::Float(reg, num) => BcOp::Float(self.get_index(reg), *num),
+                BcIr::Float(reg, num) => BcOp::Const(self.get_index(reg), Value::float(*num)),
                 BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
                 BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
                 BcIr::Add(dst, lhs, rhs) => BcOp::Add(
@@ -725,7 +725,7 @@ pub(super) enum BcOp {
     CondBr(u16, InstId),
     CondNotBr(u16, InstId),
     Integer(u16, i32),
-    Float(u16, f64),
+    Const(u16, Value),
     Nil(u16),
     Neg(u16, u16),                 // ret, src
     Add(u16, u16, u16),            // ret, lhs, rhs
