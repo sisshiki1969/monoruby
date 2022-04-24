@@ -18,7 +18,7 @@ pub enum BcErr {
 /// ID of instruction.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct InstId(pub usize);
+struct InstId(pub u32);
 
 impl std::fmt::Debug for InstId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -81,11 +81,67 @@ impl std::fmt::Debug for BcLocal {
 }
 
 ///
+/// Program counter base.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BcPcBase(*const BcOp);
+
+impl std::ops::Add<usize> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: usize) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs as isize) })
+    }
+}
+
+impl std::ops::Add<InstId> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: InstId) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs.0 as isize) })
+    }
+}
+
+impl BcPcBase {
+    fn new(func: &BcFunc) -> Self {
+        BcPcBase(&func.bc[0] as *const _)
+    }
+}
+
+///
+/// Program counter
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BcPc(*const BcOp);
+
+impl std::ops::Sub<BcPcBase> for BcPc {
+    type Output = usize;
+    fn sub(self, rhs: BcPcBase) -> usize {
+        let offset = unsafe { self.0.offset_from(rhs.0) };
+        assert!(offset >= 0);
+        offset as usize
+    }
+}
+
+impl std::ops::AddAssign<usize> for BcPc {
+    fn add_assign(&mut self, offset: usize) {
+        unsafe {
+            *self = BcPc(self.0.add(offset));
+        }
+    }
+}
+
+impl BcPc {
+    fn get(&self) -> BcOp {
+        unsafe { (*(self.0)).clone() }
+    }
+}
+
+///
 /// Bytecode interpreter.
 ///
 pub struct Interp {
     cur_fn: BcFuncId,
-    pc: usize,
+    pc: BcPc,
+    pc_top: BcPcBase,
     call_stack: Stack,
 }
 
@@ -117,36 +173,49 @@ macro_rules! cmp_op {
 macro_rules! cmp_op_ri {
     ($lhs:ident, $rhs:ident, $op:ident) => {{
         match $lhs.unpack() {
-            RV::Integer($lhs) => $lhs.$op(&(*$rhs as i32)),
-            RV::Float($lhs) => $lhs.$op(&(*$rhs as f64)),
+            RV::Integer($lhs) => $lhs.$op(&($rhs as i32)),
+            RV::Float($lhs) => $lhs.$op(&($rhs as f64)),
             _ => unreachable!(),
         }
     }};
 }
 
 impl Interp {
-    fn new() -> Self {
+    fn new(bc_context: &BcGen) -> Self {
+        let cur_fn = BcFuncId(0);
+        let pc_top = BcPcBase::new(&bc_context[cur_fn]);
         Self {
-            cur_fn: BcFuncId(0),
-            pc: 0,
+            cur_fn,
+            pc: pc_top + 0,
+            pc_top,
             call_stack: Stack::new(),
         }
     }
 
-    fn push_frame(&mut self, args: u16, len: usize, bc_func: &BcFunc, ret: Option<u16>) {
+    fn get_op(&mut self) -> BcOp {
+        let op = self.pc.get();
+        self.pc += 1;
+        op
+    }
+
+    fn push_frame(&mut self, args: u16, len: u16, bc_func: &BcFunc, ret: Option<u16>) {
+        let pc = self.pc - self.pc_top;
         self.call_stack
-            .push_frame(args, len, bc_func, self.cur_fn, self.pc, ret);
-        self.pc = 0;
+            .push_frame(args, len, bc_func, self.cur_fn, pc, ret);
+        let pc = BcPcBase::new(bc_func);
+        self.pc_top = pc;
+        self.pc = pc + 0;
         self.cur_fn = bc_func.id;
     }
 
-    fn pop_frame(&mut self, val: Value) -> bool {
+    fn pop_frame(&mut self, val: Value, bc_context: &BcGen) -> bool {
         let (b, func, pc, ret) = self.call_stack.pop_frame();
         if b {
             return true;
         };
         self.cur_fn = func;
-        self.pc = pc;
+        self.pc_top = BcPcBase::new(&bc_context[func]);
+        self.pc = self.pc_top + pc;
         if let Some(ret) = ret {
             self[ret] = val;
         }
@@ -154,7 +223,7 @@ impl Interp {
     }
 
     pub fn eval_toplevel(bc_context: &BcGen) -> Value {
-        let mut eval = Self::new();
+        let mut eval = Self::new(bc_context);
         let hir_func = &bc_context[BcFuncId(0)];
         eval.push_frame(0, 0, hir_func, None);
         eval.eval_loop(bc_context)
@@ -162,29 +231,28 @@ impl Interp {
 
     fn eval_loop(&mut self, bc_context: &BcGen) -> Value {
         loop {
-            let op = &bc_context[self.cur_fn].bc[self.pc];
-            self.pc += 1;
+            let op = self.get_op();
             match op {
                 BcOp::Integer(ret, i) => {
-                    self[*ret] = Value::integer(*i);
+                    self[ret] = Value::integer(i);
                 }
-                BcOp::Const(ret, v) => {
-                    self[*ret] = *v;
+                BcOp::Const(ret, id) => {
+                    self[ret] = bc_context[self.cur_fn].get_constant(id);
                 }
                 BcOp::Nil(ret) => {
-                    self[*ret] = Value::nil();
+                    self[ret] = Value::nil();
                 }
                 BcOp::Neg(dst, src) => {
-                    self[*dst] = match self[*src].unpack() {
+                    self[dst] = match self[src].unpack() {
                         RV::Integer(i) => Value::integer(-i),
                         RV::Float(f) => Value::float(-f),
                         _ => unreachable!(),
                     };
                 }
                 BcOp::Add(ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    let rhs = self[*rhs];
-                    self[*ret] = if lhs.is_fnum() && rhs.is_fnum() {
+                    let lhs = self[lhs];
+                    let rhs = self[rhs];
+                    self[ret] = if lhs.is_fnum() && rhs.is_fnum() {
                         Value::fixnum(lhs.as_fnum() + rhs.as_fnum())
                     } else {
                         match (lhs.unpack(), rhs.unpack()) {
@@ -197,21 +265,21 @@ impl Interp {
                     };
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    self[*ret] = if lhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() + *rhs as i64)
+                    let lhs = self[lhs];
+                    self[ret] = if lhs.is_fnum() {
+                        Value::fixnum(lhs.as_fnum() + rhs as i64)
                     } else {
                         match lhs.unpack() {
-                            RV::Integer(lhs) => Value::integer(lhs + *rhs as i32),
-                            RV::Float(lhs) => Value::float(lhs + *rhs as f64),
+                            RV::Integer(lhs) => Value::integer(lhs + rhs as i32),
+                            RV::Float(lhs) => Value::float(lhs + rhs as f64),
                             _ => unreachable!(),
                         }
                     };
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    let rhs = self[*rhs];
-                    self[*ret] = if lhs.is_fnum() && rhs.is_fnum() {
+                    let lhs = self[lhs];
+                    let rhs = self[rhs];
+                    self[ret] = if lhs.is_fnum() && rhs.is_fnum() {
                         Value::fixnum(lhs.as_fnum() - rhs.as_fnum())
                     } else {
                         match (lhs.unpack(), rhs.unpack()) {
@@ -224,19 +292,19 @@ impl Interp {
                     };
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    self[*ret] = if lhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() - *rhs as i64)
+                    let lhs = self[lhs];
+                    self[ret] = if lhs.is_fnum() {
+                        Value::fixnum(lhs.as_fnum() - rhs as i64)
                     } else {
                         match lhs.unpack() {
-                            RV::Integer(lhs) => Value::integer(lhs - *rhs as i32),
-                            RV::Float(lhs) => Value::float(lhs - *rhs as f64),
+                            RV::Integer(lhs) => Value::integer(lhs - rhs as i32),
+                            RV::Float(lhs) => Value::float(lhs - rhs as f64),
                             _ => unreachable!(),
                         }
                     };
                 }
                 BcOp::Mul(ret, lhs, rhs) => {
-                    self[*ret] = match (self[*lhs].unpack(), self[*rhs].unpack()) {
+                    self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
                         (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs * rhs),
                         (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 * rhs),
                         (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs * rhs as f64),
@@ -245,7 +313,7 @@ impl Interp {
                     };
                 }
                 BcOp::Div(ret, lhs, rhs) => {
-                    self[*ret] = match (self[*lhs].unpack(), self[*rhs].unpack()) {
+                    self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
                         (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs / rhs),
                         (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 / rhs),
                         (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs / rhs as f64),
@@ -254,9 +322,9 @@ impl Interp {
                     };
                 }
                 BcOp::Cmp(kind, ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    let rhs = self[*rhs];
-                    self[*ret] = Value::bool(match kind {
+                    let lhs = self[lhs];
+                    let rhs = self[rhs];
+                    self[ret] = Value::bool(match kind {
                         CmpKind::Eq => cmp_op!(lhs, rhs, eq),
                         CmpKind::Ne => cmp_op!(lhs, rhs, ne),
                         CmpKind::Lt => cmp_op!(lhs, rhs, lt),
@@ -266,8 +334,8 @@ impl Interp {
                     });
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
-                    let lhs = self[*lhs];
-                    self[*ret] = Value::bool(match kind {
+                    let lhs = self[lhs];
+                    self[ret] = Value::bool(match kind {
                         CmpKind::Eq => cmp_op_ri!(lhs, rhs, eq),
                         CmpKind::Ne => cmp_op_ri!(lhs, rhs, ne),
                         CmpKind::Lt => cmp_op_ri!(lhs, rhs, lt),
@@ -277,29 +345,30 @@ impl Interp {
                     });
                 }
                 BcOp::Ret(lhs) => {
-                    let val = self[*lhs];
-                    if self.pop_frame(val) {
+                    let val = self[lhs];
+                    if self.pop_frame(val, bc_context) {
                         return val;
                     };
                 }
                 BcOp::Mov(dst, local) => {
-                    self[*dst] = self[*local];
+                    self[dst] = self[local];
                 }
                 BcOp::Call(id, ret, args, len) => {
-                    let bc_func = &bc_context[*id];
-                    self.push_frame(*args, *len, bc_func, *ret);
+                    let bc_func = &bc_context[id];
+                    let ret = if ret == u16::MAX { None } else { Some(ret) };
+                    self.push_frame(args, len, bc_func, ret);
                 }
                 BcOp::Br(next_pc) => {
-                    self.pc = next_pc.0;
+                    self.pc = self.pc_top + next_pc;
                 }
                 BcOp::CondBr(cond_, then_) => {
-                    if self[*cond_] != Value::bool(false) {
-                        self.pc = then_.0;
+                    if self[cond_] != Value::bool(false) {
+                        self.pc = self.pc_top + then_;
                     };
                 }
                 BcOp::CondNotBr(cond_, else_) => {
-                    if self[*cond_] == Value::bool(false) {
-                        self.pc = else_.0;
+                    if self[cond_] == Value::bool(false) {
+                        self.pc = self.pc_top + else_;
                     };
                 }
             }

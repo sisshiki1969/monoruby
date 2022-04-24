@@ -27,13 +27,13 @@ impl std::fmt::Debug for BcGen {
 impl std::ops::Index<BcFuncId> for BcGen {
     type Output = BcFunc;
     fn index(&self, index: BcFuncId) -> &BcFunc {
-        &self.functions[index.0]
+        &self.functions[index.0 as usize]
     }
 }
 
 impl std::ops::IndexMut<BcFuncId> for BcGen {
     fn index_mut(&mut self, index: BcFuncId) -> &mut BcFunc {
-        &mut self.functions[index.0]
+        &mut self.functions[index.0 as usize]
     }
 }
 
@@ -54,6 +54,7 @@ impl std::ops::DerefMut for BcGen {
 
 impl BcGen {
     fn new() -> Self {
+        eprintln!("BcOp:{}", std::mem::size_of::<BcOp>());
         Self {
             functions: vec![],
             func_map: HashMap::default(),
@@ -74,7 +75,7 @@ impl BcGen {
     }
 
     fn new_func(&mut self, name: String, args: Vec<String>) -> Result<BcFuncId> {
-        let id = BcFuncId(self.functions.len());
+        let id = BcFuncId(self.functions.len() as u32);
         self.func_map.insert(name.clone(), id);
         self.functions.push(BcFunc::new(id, name, args.clone()));
         self.cur_fn = id;
@@ -107,7 +108,9 @@ impl BcGen {
 
     fn dump_bcir(&self) {
         eprintln!("{:?} name:{} args:{:?}", self.id, self.name, self.args);
-        for (i, inst) in self.insts.iter().enumerate() {
+        let mut i = 0;
+        let mut iter = self.insts.iter();
+        while let Some(inst) = iter.next() {
             eprint!(":{:05} ", i);
             match inst {
                 BcIr::Br(dst) => {
@@ -123,7 +126,7 @@ impl BcGen {
                     eprintln!("condnbr {:?} =>{:?}", reg, dst);
                 }
                 BcIr::Integer(reg, num) => eprintln!("{:?} = {}", reg, num),
-                BcIr::Float(reg, num) => eprintln!("{:?} = {}", reg, num),
+                BcIr::Const(reg, id) => eprintln!("{:?} = constants[{}]", reg, id),
                 BcIr::Nil(reg) => eprintln!("{:?} = nil", reg),
                 BcIr::Neg(dst, src) => eprintln!("{:?} = neg {:?}", dst, src),
                 BcIr::Add(dst, lhs, rhs) => eprintln!("{:?} = {:?} + {:?}", dst, lhs, rhs),
@@ -148,6 +151,7 @@ impl BcGen {
                     }
                 }
             }
+            i += 1;
         }
         eprintln!("------------------------------------")
     }
@@ -157,7 +161,7 @@ impl BcGen {
 /// ID of function.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct BcFuncId(pub usize);
+pub struct BcFuncId(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BcFunc {
@@ -181,6 +185,8 @@ pub struct BcFunc {
     labels: Vec<Option<InstId>>,
     /// Bytecode.
     pub(super) bc: Vec<BcOp>,
+    /// Literal values.
+    constants: Vec<Value>,
 }
 
 impl BcFunc {
@@ -196,6 +202,7 @@ impl BcFunc {
             insts: vec![],
             labels: vec![],
             bc: vec![],
+            constants: vec![],
         }
     }
     pub(super) fn local_num(&self) -> usize {
@@ -209,8 +216,18 @@ impl BcFunc {
     }
 
     fn apply_label(&mut self, label: usize) {
-        let pos = InstId(self.insts.len());
+        let pos = InstId(self.insts.len() as u32);
         self.labels[label] = Some(pos);
+    }
+
+    fn new_constant(&mut self, val: Value) -> u32 {
+        let constants = self.constants.len();
+        self.constants.push(val);
+        constants as u32
+    }
+
+    pub(super) fn get_constant(&self, id: u32) -> Value {
+        self.constants[id as usize]
     }
 
     fn next_reg(&self) -> BcTemp {
@@ -264,7 +281,8 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(BcIr::Float(reg, f));
+        let id = self.new_constant(Value::float(f));
+        self.insts.push(BcIr::Const(reg, id));
     }
 
     fn gen_nil(&mut self, dst: Option<BcLocal>) {
@@ -666,7 +684,7 @@ impl BcFunc {
                     BcOp::CondNotBr(self.get_index(reg), dst)
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
-                BcIr::Float(reg, num) => BcOp::Const(self.get_index(reg), Value::float(*num)),
+                BcIr::Const(reg, num) => BcOp::Const(self.get_index(reg), *num),
                 BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
                 BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
                 BcIr::Add(dst, lhs, rhs) => BcOp::Add(
@@ -708,9 +726,12 @@ impl BcFunc {
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
                 BcIr::Call(id, ret, arg, len) => BcOp::Call(
                     *id,
-                    ret.map(|r| self.get_index(&r)),
+                    match ret {
+                        Some(ret) => self.get_index(ret),
+                        None => u16::MAX,
+                    },
                     self.get_index(&BcReg::from(*arg)),
-                    *len,
+                    *len as u16,
                 ),
             };
             ops.push(op);
@@ -725,7 +746,7 @@ pub(super) enum BcOp {
     CondBr(u16, InstId),
     CondNotBr(u16, InstId),
     Integer(u16, i32),
-    Const(u16, Value),
+    Const(u16, u32), // ret, constants_id
     Nil(u16),
     Neg(u16, u16),                 // ret, src
     Add(u16, u16, u16),            // ret, lhs, rhs
@@ -734,9 +755,9 @@ pub(super) enum BcOp {
     Subri(u16, u16, i16),          // ret, lhs, rhs
     Mul(u16, u16, u16),            // ret, lhs, rhs
     Div(u16, u16, u16),            // ret, lhs, rhs
-    Cmp(CmpKind, u16, u16, u16),   // kind, lhs, rhs
-    Cmpri(CmpKind, u16, u16, i16), // kind, lhs, rhs
+    Cmp(CmpKind, u16, u16, u16),   // kind, ret, lhs, rhs
+    Cmpri(CmpKind, u16, u16, i16), // kind, ret, lhs, rhs
     Ret(u16),
-    Mov(u16, u16),                           // dst, offset
-    Call(BcFuncId, Option<u16>, u16, usize), // (id, ret, args, args_len)
+    Mov(u16, u16),                 // dst, src
+    Call(BcFuncId, u16, u16, u16), // (id, ret, args, args_len)
 }

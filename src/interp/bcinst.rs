@@ -6,7 +6,7 @@ pub(super) enum BcIr {
     CondBr(BcReg, usize),
     CondNotBr(BcReg, usize),
     Integer(BcReg, i32),
-    Float(BcReg, f64),
+    Const(BcReg, u32),
     Nil(BcReg),
     Neg(BcReg, BcReg),                 // ret, src
     Add(BcReg, BcReg, BcReg),          // ret, lhs, rhs
@@ -29,7 +29,7 @@ impl std::fmt::Debug for BcIr {
             Self::CondBr(reg, dst) => write!(f, "condbr {:?} =>{}", reg, dst),
             Self::CondNotBr(reg, dst) => write!(f, "condnbr {:?} =>{}", reg, dst),
             Self::Integer(reg, num) => write!(f, "{:?} = {}", reg, num),
-            Self::Float(reg, num) => write!(f, "{:?} = {}", reg, num),
+            Self::Const(reg, id) => write!(f, "{:?} = const[{}]", reg, id),
             Self::Nil(reg) => write!(f, "{:?} = nil", reg),
             Self::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
             Self::Add(dst, lhs, rhs) => write!(f, "{:?} = {:?} + {:?}", dst, lhs, rhs),
@@ -47,7 +47,7 @@ impl std::fmt::Debug for BcIr {
             Self::Ret(reg) => write!(f, "ret {:?}", reg),
             Self::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
             Self::Call(id, ret, arg, len) => match ret {
-                Some(ret) => write!(f, "{:?} = call {:?} ({:?}: {})", ret, id, arg, len),
+                Some(ret) => write!(f, "{:?} = call {:?} ({:?}: {})", id, ret, arg, len),
                 None => write!(f, "_ = call {:?} ({:?}: {})", id, arg, len),
             },
         }

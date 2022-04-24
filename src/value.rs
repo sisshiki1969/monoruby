@@ -69,6 +69,14 @@ impl Value {
     }
 
     #[inline(always)]
+    pub fn get_u32(&self) -> (u32, u32) {
+        let val = self.0.get();
+        let v1 = (val >> 32) as u32;
+        let v2 = val as u32;
+        (v1, v2)
+    }
+
+    #[inline(always)]
     pub const fn nil() -> Self {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }

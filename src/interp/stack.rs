@@ -67,25 +67,24 @@ impl Stack {
     pub(super) fn push_frame(
         &mut self,
         args: u16,
-        args_len: usize,
+        args_len: u16,
         bc_func: &BcFunc,
         cur_fn: BcFuncId,
         pc: usize,
         ret: Option<u16>,
     ) {
-        let args = self.reg_slice(args, args_len);
+        let args = self.reg_slice(args, args_len as usize);
         let local_num = bc_func.local_num();
         let reg_num = bc_func.reg_num;
         let ret = match ret {
             Some(r) => r + 1,
             None => 0,
         };
-        self.push_u64(ret as u64);
         self.push_u32(cur_fn.0 as u32, pc as u32);
-        self.push_u64(self.args_len as u64);
+        self.push_u32(ret as u32, self.args_len as u32);
         self.push_u64(self.bp as u64);
         self.bp = self.stack.len();
-        self.args_len = args_len;
+        self.args_len = args_len as usize;
         let new_len = self.stack.len() + local_num + reg_num as usize;
         self.stack.extend_from_within(args);
         self.stack.resize(new_len, Value::nil());
@@ -93,16 +92,15 @@ impl Stack {
 
     pub(super) fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<u16>) {
         let old_bp = self.bp;
-        let ret = match self.stack[old_bp - 4].get() as u16 {
+        let (cur_fn, pc) = self.stack[old_bp - 3].get_u32();
+        let (ret, args_len) = self.stack[old_bp - 2].get_u32();
+        self.args_len = args_len as usize;
+        let ret = match ret as u16 {
             0 => None,
             r => Some(r - 1),
         };
-        let fn_pc = self.stack[old_bp - 3].get() as usize;
-        let cur_fn = fn_pc >> 32;
-        let pc = fn_pc as u32 as usize;
-        self.args_len = self.stack[old_bp - 2].get() as usize;
         self.bp = self.stack[old_bp - 1].get() as usize;
-        self.stack.truncate(old_bp - 4);
-        (self.bp == 0, BcFuncId(cur_fn), pc, ret)
+        self.stack.truncate(old_bp - 3);
+        (self.bp == 0, BcFuncId(cur_fn), pc as usize, ret)
     }
 }
