@@ -1,8 +1,10 @@
 use super::*;
 
+mod bccomp;
 mod bcgen;
 mod bcinst;
 mod stack;
+pub use bccomp::*;
 pub use bcgen::BcGen;
 use bcgen::*;
 use bcinst::*;

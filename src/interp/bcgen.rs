@@ -739,25 +739,3 @@ impl BcFunc {
         self.bc = ops;
     }
 }
-
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum BcOp {
-    Br(InstId),
-    CondBr(u16, InstId),
-    CondNotBr(u16, InstId),
-    Integer(u16, i32),
-    Const(u16, u32), // ret, constants_id
-    Nil(u16),
-    Neg(u16, u16),                 // ret, src
-    Add(u16, u16, u16),            // ret, lhs, rhs
-    Addri(u16, u16, i16),          // ret, lhs, rhs
-    Sub(u16, u16, u16),            // ret, lhs, rhs
-    Subri(u16, u16, i16),          // ret, lhs, rhs
-    Mul(u16, u16, u16),            // ret, lhs, rhs
-    Div(u16, u16, u16),            // ret, lhs, rhs
-    Cmp(CmpKind, u16, u16, u16),   // kind, ret, lhs, rhs
-    Cmpri(CmpKind, u16, u16, i16), // kind, ret, lhs, rhs
-    Ret(u16),
-    Mov(u16, u16),                 // dst, src
-    Call(BcFuncId, u16, u16, u16), // (id, ret, args, args_len)
-}

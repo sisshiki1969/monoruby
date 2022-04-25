@@ -96,6 +96,9 @@ fn exec(code: &str) -> Result<(), ()> {
     let interp_val = Interp::eval_toplevel(&gen);
     eprintln!("Interp: {:?}", interp_val);
 
+    let bccomp_val = BcComp::exec_toplevel(&gen);
+    eprintln!("bccomp: {:?}", bccomp_val);
+
     let mut hir = HirContext::new();
     match hir.from_ast(&ast) {
         Ok(_) => {}
