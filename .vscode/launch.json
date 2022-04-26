@@ -1,0 +1,45 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'monoruby'",
+      "cargo": {
+        "args": [
+          "run",
+          "--bin=monoruby",
+          "--package=monoruby",
+        ],
+        "filter": {
+          "name": "monoruby",
+          "kind": "bin"
+        }
+      },
+      "args": ["test.rb"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'monoruby'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=monoruby",
+          "--package=monoruby"
+        ],
+        "filter": {
+          "name": "monoruby",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

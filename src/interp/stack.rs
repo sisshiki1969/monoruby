@@ -50,6 +50,11 @@ impl Stack {
         }
     }
 
+    pub(super) fn get_bp(&mut self) -> *mut Value {
+        let top = self.stack.as_mut_ptr();
+        unsafe { top.add(self.bp) }
+    }
+
     fn push_u64(&mut self, v: u64) {
         self.stack.push(Value::from_unchecked(v));
     }
@@ -87,6 +92,7 @@ impl Stack {
         self.args_len = args_len as usize;
         let new_len = self.stack.len() + local_num + reg_num as usize;
         self.stack.extend_from_within(args);
+        //eprintln!("push {:?}", &self.stack[self.bp..self.stack.len()]);
         self.stack.resize(new_len, Value::nil());
     }
 

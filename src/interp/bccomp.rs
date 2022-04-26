@@ -32,6 +32,25 @@ impl std::ops::IndexMut<u16> for BcComp {
     }
 }
 
+extern "C" fn unwind_call(eval: &mut BcComp, val: Value, bc_context: &BcGen) -> *mut Value {
+    let _ = eval.pop_frame(val, bc_context);
+    eval.call_stack.get_bp()
+}
+
+extern "C" fn prepare_call(
+    eval: &mut BcComp,
+    bc_context: &BcGen,
+    id: BcFuncId,
+    ret: u16,
+    args: u16,
+    len: u16,
+) -> *mut Value {
+    let bc_func = &bc_context[id];
+    let ret = if ret == u16::MAX { None } else { Some(ret) };
+    eval.push_frame(args, len, bc_func, ret);
+    eval.call_stack.get_bp()
+}
+
 impl BcComp {
     pub fn new(bcgen: &BcGen) -> Self {
         let cur_fn = BcFuncId(0);
@@ -70,25 +89,6 @@ impl BcComp {
         false
     }
 
-    extern "C" fn unwind_call(&mut self, val: Value, bc_context: &BcGen) -> *mut Value {
-        let _ = self.pop_frame(val, bc_context);
-        &mut self[0] as _
-    }
-
-    extern "C" fn prepare_call(
-        &mut self,
-        bc_context: &BcGen,
-        id: BcFuncId,
-        ret: u16,
-        args: u16,
-        len: u16,
-    ) -> *mut Value {
-        let bc_func = &bc_context[id];
-        let ret = if ret == u16::MAX { None } else { Some(ret) };
-        self.push_frame(args, len, bc_func, ret);
-        &mut self[0] as _
-    }
-
     pub fn exec_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new(bc_context);
         for _ in &bc_context.functions {
@@ -112,12 +112,10 @@ impl BcComp {
           pushq rbx;
           pushq r12;
           pushq r13;
-          pushq r14;
           movq rbx, rdi;
           movq r12, rsi;
           movq r13, rdx;
           call main;
-          popq r14;
           popq r13;
           popq r12;
           popq rbx;
@@ -125,8 +123,9 @@ impl BcComp {
         );
         eval.jit.finalize();
         let entry_pount: EntryPtr = unsafe { std::mem::transmute(eval.jit.get_label_u64(entry)) };
-        eval.prepare_call(bc_context, BcFuncId(0), u16::MAX, 0, 0);
-        let v = entry_pount(&mut eval[0u16], &mut eval, bc_context);
+        prepare_call(&mut eval, bc_context, BcFuncId(0), u16::MAX, 0, 0);
+        let bp = eval.call_stack.get_bp();
+        let v = entry_pount(bp, &mut eval, bc_context);
         //assert!(eval.pop_frame(v, bc_context));
         v
     }
@@ -137,6 +136,9 @@ impl BcComp {
         for _ in &func.bc {
             labels.push(self.jit.label());
         }
+        monoasm!(self.jit,
+          pushq rbp;
+        );
         for (idx, op) in func.bc.iter().enumerate() {
             self.jit.bind_label(labels[idx]);
             match op {
@@ -286,25 +288,20 @@ impl BcComp {
                         movq [rbx + (ret)], rax;
                     );
                 }
-                BcOp::Ret(lhs) => {
-                    let lhs = *lhs as u64 * 8;
-                    monoasm!(self.jit,
-                        movq rdi, r12;
-                        movq rsi, [rbx + (lhs)];
-                        movq rdx, r13;
-                        movq rax, (Self::unwind_call);
-                        call rax;
-                        movq rbx, rax;
-                        movq rax, [rbx + (lhs)];
-                        ret;
-                    );
-                }
                 BcOp::Mov(dst, local) => {
                     let dst = *dst as u64 * 8;
                     let local = *local as u64 * 8;
                     monoasm!(self.jit,
                       movq rax, [rbx + (local)];
                       movq [rbx + (dst)], rax;
+                    );
+                }
+                BcOp::Ret(lhs) => {
+                    let lhs = *lhs as u64 * 8;
+                    monoasm!(self.jit,
+                        movq rax, [rbx + (lhs)];
+                        popq rbp;
+                        ret;
                     );
                 }
                 BcOp::Call(id, ret, args, len) => {
@@ -316,10 +313,16 @@ impl BcComp {
                       movq rcx, (*ret);
                       movq r8, (*args);
                       movq r9, (*len);
-                      movq rax, (Self::prepare_call);
+                      movq rax, (prepare_call);
                       call rax;
                       movq rbx, rax;
                       call func_ptr;
+                      movq rdi, r12;
+                      movq rsi, rax;
+                      movq rdx, r13;
+                      movq rax, (unwind_call);
+                      call rax;
+                      movq rbx, rax;
                     );
                 }
                 BcOp::Br(next_pc) => {
@@ -346,10 +349,7 @@ impl BcComp {
                       jeq dest;
                     );
                 }
-                _ => unimplemented!(),
             }
         }
-        // self.jit.finalize();
-        // self.jit.get_label_addr(fn_start)
     }
 }
