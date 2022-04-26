@@ -32,12 +32,20 @@ impl std::ops::IndexMut<u16> for BcComp {
     }
 }
 
-extern "C" fn unwind_call(eval: &mut BcComp, val: Value, bc_context: &BcGen) -> *mut Value {
-    let _ = eval.pop_frame(val, bc_context);
+extern "C" fn pop_frame(eval: &mut BcComp, val: Value, bc_context: &BcGen) -> *mut Value {
+    let (b, func, pc, ret) = eval.call_stack.pop_frame();
+    if !b {
+        eval.cur_fn = func;
+        eval.pc_top = BcPcBase::new(&bc_context[func]);
+        eval.pc = eval.pc_top + pc;
+        if let Some(ret) = ret {
+            eval[ret] = val;
+        }
+    }
     eval.call_stack.get_bp()
 }
 
-extern "C" fn prepare_call(
+extern "C" fn push_frame(
     eval: &mut BcComp,
     bc_context: &BcGen,
     id: BcFuncId,
@@ -47,7 +55,15 @@ extern "C" fn prepare_call(
 ) -> *mut Value {
     let bc_func = &bc_context[id];
     let ret = if ret == u16::MAX { None } else { Some(ret) };
-    eval.push_frame(args, len, bc_func, ret);
+
+    let pc = eval.pc - eval.pc_top;
+    eval.call_stack
+        .push_frame(args, len, bc_func, eval.cur_fn, pc, ret);
+    let pc = BcPcBase::new(bc_func);
+    eval.pc_top = pc;
+    eval.pc = pc + 0;
+    eval.cur_fn = bc_func.id;
+
     eval.call_stack.get_bp()
 }
 
@@ -63,30 +79,6 @@ impl BcComp {
             call_stack: Stack::new(),
             method_label: vec![],
         }
-    }
-
-    fn push_frame(&mut self, args: u16, len: u16, bc_func: &BcFunc, ret: Option<u16>) {
-        let pc = self.pc - self.pc_top;
-        self.call_stack
-            .push_frame(args, len, bc_func, self.cur_fn, pc, ret);
-        let pc = BcPcBase::new(bc_func);
-        self.pc_top = pc;
-        self.pc = pc + 0;
-        self.cur_fn = bc_func.id;
-    }
-
-    fn pop_frame(&mut self, val: Value, bc_context: &BcGen) -> bool {
-        let (b, func, pc, ret) = self.call_stack.pop_frame();
-        if b {
-            return true;
-        };
-        self.cur_fn = func;
-        self.pc_top = BcPcBase::new(&bc_context[func]);
-        self.pc = self.pc_top + pc;
-        if let Some(ret) = ret {
-            self[ret] = val;
-        }
-        false
     }
 
     pub fn exec_toplevel(bc_context: &BcGen) -> Value {
@@ -123,7 +115,7 @@ impl BcComp {
         );
         eval.jit.finalize();
         let entry_pount: EntryPtr = unsafe { std::mem::transmute(eval.jit.get_label_u64(entry)) };
-        prepare_call(&mut eval, bc_context, BcFuncId(0), u16::MAX, 0, 0);
+        push_frame(&mut eval, bc_context, BcFuncId(0), u16::MAX, 0, 0);
         let bp = eval.call_stack.get_bp();
         let v = entry_pount(bp, &mut eval, bc_context);
         //assert!(eval.pop_frame(v, bc_context));
@@ -190,11 +182,10 @@ impl BcComp {
                 BcOp::Addri(ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
-                    let rhs = Value::integer(*rhs as i32).get();
                     monoasm!(self.jit,
                       movq rdi, [rbx + (lhs)];
-                      movq rsi, (rhs);
-                      movq rax, (add_values);
+                      movq rsi, (*rhs as i64);
+                      movq rax, (add_ri_values);
                       call rax;
                       movq [rbx + (ret)], rax;
                     );
@@ -214,11 +205,10 @@ impl BcComp {
                 BcOp::Subri(ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
-                    let rhs = Value::integer(*rhs as i32).get();
                     monoasm!(self.jit,
                       movq rdi, [rbx + (lhs)];
-                      movq rsi, (rhs);
-                      movq rax, (sub_values);
+                      movq rsi, (*rhs as i64);
+                      movq rax, (sub_ri_values);
                       call rax;
                       movq [rbx + (ret)], rax;
                     );
@@ -271,18 +261,17 @@ impl BcComp {
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
-                    let rhs = Value::integer(*rhs as i32).get();
                     let func = match kind {
-                        CmpKind::Eq => cmp_eq_values,
-                        CmpKind::Ne => cmp_ne_values,
-                        CmpKind::Lt => cmp_lt_values,
-                        CmpKind::Gt => cmp_gt_values,
-                        CmpKind::Le => cmp_le_values,
-                        CmpKind::Ge => cmp_ge_values,
+                        CmpKind::Eq => cmp_eq_ri_values,
+                        CmpKind::Ne => cmp_ne_ri_values,
+                        CmpKind::Lt => cmp_lt_ri_values,
+                        CmpKind::Gt => cmp_gt_ri_values,
+                        CmpKind::Le => cmp_le_ri_values,
+                        CmpKind::Ge => cmp_ge_ri_values,
                     };
                     monoasm!(self.jit,
                         movq rdi, [rbx + (lhs)];
-                        movq rsi, (rhs);
+                        movq rsi, (*rhs as i64);
                         movq rax, (func);
                         call rax;
                         movq [rbx + (ret)], rax;
@@ -313,14 +302,14 @@ impl BcComp {
                       movq rcx, (*ret);
                       movq r8, (*args);
                       movq r9, (*len);
-                      movq rax, (prepare_call);
+                      movq rax, (push_frame);
                       call rax;
                       movq rbx, rax;
                       call func_ptr;
                       movq rdi, r12;
                       movq rsi, rax;
                       movq rdx, r13;
-                      movq rax, (unwind_call);
+                      movq rax, (pop_frame);
                       call rax;
                       movq rbx, rax;
                     );
