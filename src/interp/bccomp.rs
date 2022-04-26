@@ -3,6 +3,8 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+type EntryPtr = extern "C" fn(*mut Value, *mut BcComp, *const BcGen) -> Value;
+
 ///
 /// Code generator
 ///
@@ -14,6 +16,7 @@ pub struct BcComp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
+    method_label: Vec<DestLabel>,
 }
 
 impl std::ops::Index<u16> for BcComp {
@@ -29,63 +32,6 @@ impl std::ops::IndexMut<u16> for BcComp {
     }
 }
 
-extern "C" fn add_values(lhs: Value, rhs: Value) -> Value {
-    if lhs.is_fnum() && rhs.is_fnum() {
-        Value::fixnum(lhs.as_fnum() + rhs.as_fnum())
-    } else {
-        match (lhs.unpack(), rhs.unpack()) {
-            (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs + rhs),
-            (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 + rhs),
-            (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs + rhs as f64),
-            (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs + rhs),
-            _ => unreachable!(),
-        }
-    }
-}
-
-extern "C" fn sub_values(lhs: Value, rhs: Value) -> Value {
-    if lhs.is_fnum() && rhs.is_fnum() {
-        Value::fixnum(lhs.as_fnum() - rhs.as_fnum())
-    } else {
-        match (lhs.unpack(), rhs.unpack()) {
-            (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs - rhs),
-            (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 - rhs),
-            (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs - rhs as f64),
-            (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs - rhs),
-            _ => unreachable!(),
-        }
-    }
-}
-
-use paste::paste;
-
-macro_rules! cmp_values {
-    ($op:ident) => {
-        paste! {
-          extern "C" fn [<cmp_ $op _values>](lhs: Value, rhs: Value) -> Value {
-              let b = if lhs.is_fnum() && rhs.is_fnum() {
-                  lhs.as_fnum().$op(&rhs.as_fnum())
-              } else {
-                  match (lhs.unpack(), rhs.unpack()) {
-                      (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
-                      (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
-                      (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
-                      (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                      _ => unreachable!(),
-                  }
-              };
-              Value::bool(b)
-          }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_values!($op1);
-        cmp_values!($($op2),+);
-    };
-}
-
-cmp_values!(eq, ne, ge, gt, le, lt);
-
 impl BcComp {
     pub fn new(bcgen: &BcGen) -> Self {
         let cur_fn = BcFuncId(0);
@@ -96,6 +42,7 @@ impl BcComp {
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
+            method_label: vec![],
         }
     }
 
@@ -123,22 +70,69 @@ impl BcComp {
         false
     }
 
+    extern "C" fn unwind_call(&mut self, val: Value, bc_context: &BcGen) -> *mut Value {
+        let _ = self.pop_frame(val, bc_context);
+        &mut self[0] as _
+    }
+
+    extern "C" fn prepare_call(
+        &mut self,
+        bc_context: &BcGen,
+        id: BcFuncId,
+        ret: u16,
+        args: u16,
+        len: u16,
+    ) -> *mut Value {
+        let bc_func = &bc_context[id];
+        let ret = if ret == u16::MAX { None } else { Some(ret) };
+        self.push_frame(args, len, bc_func, ret);
+        &mut self[0] as _
+    }
+
     pub fn exec_toplevel(bc_context: &BcGen) -> Value {
         let mut eval = Self::new(bc_context);
-        let func = &bc_context[BcFuncId(0)];
-        eval.push_frame(0, 0, func, None);
-        let v = eval.compile_bc(func)(&mut eval[0u16]);
-        assert!(eval.pop_frame(v, bc_context));
+        for _ in &bc_context.functions {
+            eval.method_label.push(eval.jit.label());
+        }
+        for func in &bc_context.functions {
+            eval.compile_func_bc(func);
+        }
+        let entry = eval.jit.label();
+        eval.jit.bind_label(entry);
+        let main = eval.method_label[0];
+        // arguments
+        // RDI <- bp: &mut Value
+        // RSI <- self: &mut BcComp
+        // RDX <- bc_context: &BcGen
+        // callee save registers
+        // RBX <- bp: &mut Value
+        // R12 <- self: &mut BcComp
+        // R13 <- bc_context: &BcGen
+        monoasm!(eval.jit,
+          pushq rbx;
+          pushq r12;
+          pushq r13;
+          pushq r14;
+          movq rbx, rdi;
+          movq r12, rsi;
+          movq r13, rdx;
+          call main;
+          popq r14;
+          popq r13;
+          popq r12;
+          popq rbx;
+          ret;
+        );
+        eval.jit.finalize();
+        let entry_pount: EntryPtr = unsafe { std::mem::transmute(eval.jit.get_label_u64(entry)) };
+        eval.prepare_call(bc_context, BcFuncId(0), u16::MAX, 0, 0);
+        let v = entry_pount(&mut eval[0u16], &mut eval, bc_context);
+        //assert!(eval.pop_frame(v, bc_context));
         v
     }
 
-    fn compile_bc(&mut self, func: &BcFunc) -> extern "C" fn(*mut Value) -> Value {
-        let fn_start = self.jit.label();
-        self.jit.bind_label(fn_start);
-        monoasm!(self.jit,
-          pushq rbx;
-          movq rbx, rdi;
-        );
+    fn compile_func_bc(&mut self, func: &BcFunc) {
+        self.jit.bind_label(self.method_label[func.id.0 as usize]);
         let mut labels = vec![];
         for _ in &func.bc {
             labels.push(self.jit.label());
@@ -169,14 +163,16 @@ impl BcComp {
                       movq [rbx + (ret)], rax;
                     );
                 }
-                /*
                 BcOp::Neg(dst, src) => {
-                    /*self[dst] = match self[src].unpack() {
-                        RV::Integer(i) => Value::integer(-i),
-                        RV::Float(f) => Value::float(-f),
-                        _ => unreachable!(),
-                    };*/
-                }*/
+                    let dst = *dst as u64 * 8;
+                    let src = *src as u64 * 8;
+                    monoasm!(self.jit,
+                      movq rdi, [rbx + (src)];
+                      movq rax, (neg_value);
+                      call rax;
+                      movq [rbx + (dst)], rax;
+                    );
+                }
                 BcOp::Add(ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
@@ -225,26 +221,31 @@ impl BcComp {
                       movq [rbx + (ret)], rax;
                     );
                 }
-                /*
+
                 BcOp::Mul(ret, lhs, rhs) => {
-                    /*self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
-                        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs * rhs),
-                        (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 * rhs),
-                        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs * rhs as f64),
-                        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs * rhs),
-                        _ => unreachable!(),
-                    };*/
+                    let ret = *ret as u64 * 8;
+                    let lhs = *lhs as u64 * 8;
+                    let rhs = *rhs as u64 * 8;
+                    monoasm!(self.jit,
+                      movq rdi, [rbx + (lhs)];
+                      movq rsi, [rbx + (rhs)];
+                      movq rax, (mul_values);
+                      call rax;
+                      movq [rbx + (ret)], rax;
+                    );
                 }
                 BcOp::Div(ret, lhs, rhs) => {
-                    /*self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
-                        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs / rhs),
-                        (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 / rhs),
-                        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs / rhs as f64),
-                        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs / rhs),
-                        _ => unreachable!(),
-                    };*/
-                  }
-                  */
+                    let ret = *ret as u64 * 8;
+                    let lhs = *lhs as u64 * 8;
+                    let rhs = *rhs as u64 * 8;
+                    monoasm!(self.jit,
+                      movq rdi, [rbx + (lhs)];
+                      movq rsi, [rbx + (rhs)];
+                      movq rax, (div_values);
+                      call rax;
+                      movq [rbx + (ret)], rax;
+                    );
+                }
                 BcOp::Cmp(kind, ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
@@ -278,19 +279,24 @@ impl BcComp {
                         CmpKind::Ge => cmp_ge_values,
                     };
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, (rhs);
-                      movq rax, (func);
-                      call rax;
-                      movq [rbx + (ret)], rax;
+                        movq rdi, [rbx + (lhs)];
+                        movq rsi, (rhs);
+                        movq rax, (func);
+                        call rax;
+                        movq [rbx + (ret)], rax;
                     );
                 }
                 BcOp::Ret(lhs) => {
                     let lhs = *lhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rax, [rbx + (lhs)];
-                      popq rbx;
-                      ret;
+                        movq rdi, r12;
+                        movq rsi, [rbx + (lhs)];
+                        movq rdx, r13;
+                        movq rax, (Self::unwind_call);
+                        call rax;
+                        movq rbx, rax;
+                        movq rax, [rbx + (lhs)];
+                        ret;
                     );
                 }
                 BcOp::Mov(dst, local) => {
@@ -301,13 +307,21 @@ impl BcComp {
                       movq [rbx + (dst)], rax;
                     );
                 }
-                /*
                 BcOp::Call(id, ret, args, len) => {
-                    /*let bc_func = &bc_context[id];
-                    let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    self.push_frame(args, len, bc_func, ret);*/
+                    let func_ptr = self.method_label[id.0 as usize];
+                    monoasm!(self.jit,
+                      movq rdi, r12;
+                      movq rsi, r13;
+                      movq rdx, (id.0);
+                      movq rcx, (*ret);
+                      movq r8, (*args);
+                      movq r9, (*len);
+                      movq rax, (Self::prepare_call);
+                      call rax;
+                      movq rbx, rax;
+                      call func_ptr;
+                    );
                 }
-                */
                 BcOp::Br(next_pc) => {
                     let dest = labels[next_pc.0 as usize];
                     monoasm!(self.jit,
@@ -335,7 +349,7 @@ impl BcComp {
                 _ => unimplemented!(),
             }
         }
-        self.jit.finalize();
-        self.jit.get_label_addr(fn_start)
+        // self.jit.finalize();
+        // self.jit.get_label_addr(fn_start)
     }
 }

@@ -3,11 +3,13 @@ use super::*;
 mod bccomp;
 mod bcgen;
 mod bcinst;
+mod op;
 mod stack;
 pub use bccomp::*;
 pub use bcgen::BcGen;
 use bcgen::*;
 use bcinst::*;
+use op::*;
 use stack::*;
 
 #[derive(Debug, Clone)]
@@ -160,18 +162,6 @@ impl std::ops::IndexMut<u16> for Interp {
     }
 }
 
-macro_rules! cmp_op {
-    ($lhs:ident, $rhs:ident, $op:ident) => {{
-        match ($lhs.unpack(), $rhs.unpack()) {
-            (RV::Integer($lhs), RV::Integer($rhs)) => $lhs.$op(&$rhs),
-            (RV::Integer($lhs), RV::Float($rhs)) => ($lhs as f64).$op(&$rhs),
-            (RV::Float($lhs), RV::Integer($rhs)) => $lhs.$op(&($rhs as f64)),
-            (RV::Float($lhs), RV::Float($rhs)) => $lhs.$op(&$rhs),
-            _ => unreachable!(),
-        }
-    }};
-}
-
 macro_rules! cmp_op_ri {
     ($lhs:ident, $rhs:ident, $op:ident) => {{
         match $lhs.unpack() {
@@ -254,17 +244,8 @@ impl Interp {
                 BcOp::Add(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    self[ret] = if lhs.is_fnum() && rhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() + rhs.as_fnum())
-                    } else {
-                        match (lhs.unpack(), rhs.unpack()) {
-                            (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs + rhs),
-                            (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 + rhs),
-                            (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs + rhs as f64),
-                            (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs + rhs),
-                            _ => unreachable!(),
-                        }
-                    };
+                    let v = add_values(lhs, rhs);
+                    self[ret] = v;
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let lhs = self[lhs];
@@ -281,17 +262,8 @@ impl Interp {
                 BcOp::Sub(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    self[ret] = if lhs.is_fnum() && rhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() - rhs.as_fnum())
-                    } else {
-                        match (lhs.unpack(), rhs.unpack()) {
-                            (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs - rhs),
-                            (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 - rhs),
-                            (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs - rhs as f64),
-                            (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs - rhs),
-                            _ => unreachable!(),
-                        }
-                    };
+                    let v = sub_values(lhs, rhs);
+                    self[ret] = v;
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let lhs = self[lhs];
@@ -306,34 +278,28 @@ impl Interp {
                     };
                 }
                 BcOp::Mul(ret, lhs, rhs) => {
-                    self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
-                        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs * rhs),
-                        (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 * rhs),
-                        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs * rhs as f64),
-                        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs * rhs),
-                        _ => unreachable!(),
-                    };
+                    let lhs = self[lhs];
+                    let rhs = self[rhs];
+                    let v = mul_values(lhs, rhs);
+                    self[ret] = v;
                 }
                 BcOp::Div(ret, lhs, rhs) => {
-                    self[ret] = match (self[lhs].unpack(), self[rhs].unpack()) {
-                        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs / rhs),
-                        (RV::Integer(lhs), RV::Float(rhs)) => Value::float(lhs as f64 / rhs),
-                        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs / rhs as f64),
-                        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs / rhs),
-                        _ => unreachable!(),
-                    };
+                    let lhs = self[lhs];
+                    let rhs = self[rhs];
+                    let v = div_values(lhs, rhs);
+                    self[ret] = v;
                 }
                 BcOp::Cmp(kind, ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    self[ret] = Value::bool(match kind {
-                        CmpKind::Eq => cmp_op!(lhs, rhs, eq),
-                        CmpKind::Ne => cmp_op!(lhs, rhs, ne),
-                        CmpKind::Lt => cmp_op!(lhs, rhs, lt),
-                        CmpKind::Gt => cmp_op!(lhs, rhs, gt),
-                        CmpKind::Le => cmp_op!(lhs, rhs, le),
-                        CmpKind::Ge => cmp_op!(lhs, rhs, ge),
-                    });
+                    self[ret] = match kind {
+                        CmpKind::Eq => cmp_eq_values(lhs, rhs),
+                        CmpKind::Ne => cmp_ne_values(lhs, rhs),
+                        CmpKind::Lt => cmp_lt_values(lhs, rhs),
+                        CmpKind::Gt => cmp_gt_values(lhs, rhs),
+                        CmpKind::Le => cmp_le_values(lhs, rhs),
+                        CmpKind::Ge => cmp_ge_values(lhs, rhs),
+                    };
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
                     let lhs = self[lhs];

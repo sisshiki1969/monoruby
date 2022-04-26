@@ -8,7 +8,7 @@ pub type Result<T> = std::result::Result<T, BcErr>;
 #[derive(Clone, PartialEq)]
 pub struct BcGen {
     /// Functions.
-    functions: Vec<BcFunc>,
+    pub functions: Vec<BcFunc>,
     func_map: HashMap<String, BcFuncId>,
     cur_fn: BcFuncId,
 }
@@ -161,6 +161,7 @@ impl BcGen {
 /// ID of function.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
 pub struct BcFuncId(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]

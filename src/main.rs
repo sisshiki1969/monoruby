@@ -137,6 +137,12 @@ pub fn run_test(code: &str) {
     let interp_val = Interp::eval_toplevel(&gen);
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
 
+    let now = Instant::now();
+    let bccomp_val = BcComp::exec_toplevel(&gen);
+    eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
+
+    assert_eq!(interp_val, bccomp_val);
+
     //dbg!(&stmt);
     let mut hir = HirContext::new();
     match hir.from_ast(&ast) {
@@ -290,7 +296,7 @@ mod test {
         run_test(
             r#"
             a=1
-            b=while a<25 do
+            b=while a<25000000 do
                 a=a+1
             end
             a
