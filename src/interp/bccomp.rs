@@ -76,24 +76,24 @@ impl BcCompiler {
         eval.jit.bind_label(entry);
         let main = eval.method_label[0];
         // arguments
-        // RDI <- bp: &mut Value
-        // RSI <- self: &mut BcCompiler
-        // RDX <- fn_store: &FuncStore
+        // rdi <- bp: &mut Value
+        // rsi <- self: &mut BcCompiler
+        // rdx <- fn_store: &FuncStore
         // callee save registers
-        // RBX <- bp: &mut Value
-        // R12 <- self: &mut BcCompiler
-        // R13 <- fn_store: &FuncStore
+        // rbp <- bp: &mut Value
+        // r12 <- self: &mut BcCompiler
+        // r13 <- fn_store: &FuncStore
         monoasm!(eval.jit,
-          pushq rbx;
+          pushq rbp;
           pushq r12;
           pushq r13;
-          movq rbx, rdi;
+          movq rbp, rdi;
           movq r12, rsi;
           movq r13, rdx;
           call main;
           popq r13;
           popq r12;
-          popq rbx;
+          popq rbp;
           ret;
         );
         eval.jit.finalize();
@@ -121,7 +121,7 @@ impl BcCompiler {
                     let i = Value::integer(*i).get();
                     let ret = *ret as u64 * 8;
                     monoasm!(self.jit,
-                      movq [rbx + (ret)], (i);
+                      movq [rbp + (ret)], (i);
                     );
                 }
                 BcOp::Const(ret, id) => {
@@ -129,7 +129,7 @@ impl BcCompiler {
                     let v = func.get_constant(*id).get();
                     monoasm!(self.jit,
                       movq rax, (v);
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Nil(ret) => {
@@ -137,17 +137,17 @@ impl BcCompiler {
                     let v = Value::nil().get();
                     monoasm!(self.jit,
                       movq rax, (v);
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Neg(dst, src) => {
                     let dst = *dst as u64 * 8;
                     let src = *src as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (src)];
+                      movq rdi, [rbp + (src)];
                       movq rax, (neg_value);
                       call rax;
-                      movq [rbx + (dst)], rax;
+                      movq [rbp + (dst)], rax;
                     );
                 }
                 BcOp::Add(ret, lhs, rhs) => {
@@ -155,22 +155,22 @@ impl BcCompiler {
                     let lhs = *lhs as u64 * 8;
                     let rhs = *rhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, [rbx + (rhs)];
+                      movq rdi, [rbp + (lhs)];
+                      movq rsi, [rbp + (rhs)];
                       movq rax, (add_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
+                      movq rdi, [rbp + (lhs)];
                       movq rsi, (*rhs as i64);
                       movq rax, (add_ri_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
@@ -178,22 +178,22 @@ impl BcCompiler {
                     let lhs = *lhs as u64 * 8;
                     let rhs = *rhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, [rbx + (rhs)];
+                      movq rdi, [rbp + (lhs)];
+                      movq rsi, [rbp + (rhs)];
                       movq rax, (sub_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let ret = *ret as u64 * 8;
                     let lhs = *lhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
+                      movq rdi, [rbp + (lhs)];
                       movq rsi, (*rhs as i64);
                       movq rax, (sub_ri_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
 
@@ -202,11 +202,11 @@ impl BcCompiler {
                     let lhs = *lhs as u64 * 8;
                     let rhs = *rhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, [rbx + (rhs)];
+                      movq rdi, [rbp + (lhs)];
+                      movq rsi, [rbp + (rhs)];
                       movq rax, (mul_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Div(ret, lhs, rhs) => {
@@ -214,11 +214,11 @@ impl BcCompiler {
                     let lhs = *lhs as u64 * 8;
                     let rhs = *rhs as u64 * 8;
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, [rbx + (rhs)];
+                      movq rdi, [rbp + (lhs)];
+                      movq rsi, [rbp + (rhs)];
                       movq rax, (div_values);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Cmp(kind, ret, lhs, rhs) => {
@@ -234,11 +234,11 @@ impl BcCompiler {
                         CmpKind::Ge => cmp_ge_values,
                     };
                     monoasm!(self.jit,
-                      movq rdi, [rbx + (lhs)];
-                      movq rsi, [rbx + (rhs)];
+                      movq rdi, [rbp + (lhs)];
+                      movq rsi, [rbp + (rhs)];
                       movq rax, (func);
                       call rax;
-                      movq [rbx + (ret)], rax;
+                      movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
@@ -253,25 +253,25 @@ impl BcCompiler {
                         CmpKind::Ge => cmp_ge_ri_values,
                     };
                     monoasm!(self.jit,
-                        movq rdi, [rbx + (lhs)];
+                        movq rdi, [rbp + (lhs)];
                         movq rsi, (*rhs as i64);
                         movq rax, (func);
                         call rax;
-                        movq [rbx + (ret)], rax;
+                        movq [rbp + (ret)], rax;
                     );
                 }
                 BcOp::Mov(dst, local) => {
                     let dst = *dst as u64 * 8;
                     let local = *local as u64 * 8;
                     monoasm!(self.jit,
-                      movq rax, [rbx + (local)];
-                      movq [rbx + (dst)], rax;
+                      movq rax, [rbp + (local)];
+                      movq [rbp + (dst)], rax;
                     );
                 }
                 BcOp::Ret(lhs) => {
                     let lhs = *lhs as u64 * 8;
                     monoasm!(self.jit,
-                        movq rax, [rbx + (lhs)];
+                        movq rax, [rbp + (lhs)];
                         popq rbp;
                         ret;
                     );
@@ -287,13 +287,13 @@ impl BcCompiler {
                       movq r9, (*len);
                       movq rax, (push_frame);
                       call rax;
-                      movq rbx, rax;
+                      movq rbp, rax;
                       call dest;
                       movq rdi, r12;
                       movq rsi, rax;
                       movq rax, (pop_frame);
                       call rax;
-                      movq rbx, rax;
+                      movq rbp, rax;
                     );
                 }
                 BcOp::Br(next_pc) => {
@@ -307,7 +307,7 @@ impl BcCompiler {
                     let dest = labels[then_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,
-                      cmpq [rbx + (cond_)], (false_val);
+                      cmpq [rbp + (cond_)], (false_val);
                       jne dest;
                     );
                 }
@@ -316,7 +316,7 @@ impl BcCompiler {
                     let dest = labels[else_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,
-                      cmpq [rbx + (cond_)], (false_val);
+                      cmpq [rbp + (cond_)], (false_val);
                       jeq dest;
                     );
                 }
