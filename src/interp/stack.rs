@@ -73,8 +73,8 @@ impl Stack {
         &mut self,
         args: u16,
         args_len: u16,
-        bc_func: &BcFunc,
-        cur_fn: BcFuncId,
+        bc_func: &FuncInfo,
+        cur_fn: FuncId,
         pc: usize,
         ret: Option<u16>,
     ) {
@@ -96,7 +96,7 @@ impl Stack {
         self.stack.resize(new_len, Value::nil());
     }
 
-    pub(super) fn pop_frame(&mut self) -> (bool, BcFuncId, usize, Option<u16>) {
+    pub(super) fn pop_frame(&mut self) -> (bool, FuncId, usize, Option<u16>) {
         let old_bp = self.bp;
         let (cur_fn, pc) = self.stack[old_bp - 3].get_u32();
         let (ret, args_len) = self.stack[old_bp - 2].get_u32();
@@ -107,6 +107,6 @@ impl Stack {
         };
         self.bp = self.stack[old_bp - 1].get() as usize;
         self.stack.truncate(old_bp - 3);
-        (self.bp == 0, BcFuncId(cur_fn), pc as usize, ret)
+        (self.bp == 0, FuncId(cur_fn), pc as usize, ret)
     }
 }

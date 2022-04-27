@@ -3,20 +3,27 @@ use super::*;
 pub type Result<T> = std::result::Result<T, BcErr>;
 
 ///
-/// A state of Bytecode generator.
+/// ID of function.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(transparent)]
+pub struct FuncId(pub u32);
+
+///
+/// A store of functions.
 ///
 #[derive(Clone, PartialEq)]
-pub struct BcGen {
+pub struct FuncStore {
     /// Functions.
-    pub functions: Vec<BcFunc>,
-    func_map: HashMap<String, BcFuncId>,
-    cur_fn: BcFuncId,
+    pub functions: Vec<FuncInfo>,
+    func_map: HashMap<String, FuncId>,
+    cur_fn: FuncId,
 }
 
-impl std::fmt::Debug for BcGen {
+impl std::fmt::Debug for FuncStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Func name:{}", self.name)?;
-        for inst in &self.insts {
+        for inst in &self.bc_ir {
             writeln!(f, "{:?}", inst)?;
         }
         writeln!(f, "-------------------------")?;
@@ -24,60 +31,56 @@ impl std::fmt::Debug for BcGen {
     }
 }
 
-impl std::ops::Index<BcFuncId> for BcGen {
-    type Output = BcFunc;
-    fn index(&self, index: BcFuncId) -> &BcFunc {
+impl std::ops::Index<FuncId> for FuncStore {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
         &self.functions[index.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<BcFuncId> for BcGen {
-    fn index_mut(&mut self, index: BcFuncId) -> &mut BcFunc {
+impl std::ops::IndexMut<FuncId> for FuncStore {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.functions[index.0 as usize]
     }
 }
 
-impl std::ops::Deref for BcGen {
-    type Target = BcFunc;
-    fn deref(&self) -> &BcFunc {
+impl std::ops::Deref for FuncStore {
+    type Target = FuncInfo;
+    fn deref(&self) -> &FuncInfo {
         let func = self.cur_fn;
         &self[func]
     }
 }
 
-impl std::ops::DerefMut for BcGen {
-    fn deref_mut(&mut self) -> &mut BcFunc {
+impl std::ops::DerefMut for FuncStore {
+    fn deref_mut(&mut self) -> &mut FuncInfo {
         let func = self.cur_fn;
         &mut self[func]
     }
 }
 
-impl BcGen {
-    fn new() -> Self {
+impl FuncStore {
+    pub fn new(ast: &[(Stmt, Span)]) -> Result<Self> {
         eprintln!("BcOp:{}", std::mem::size_of::<BcOp>());
-        Self {
+        let mut store = Self {
             functions: vec![],
             func_map: HashMap::default(),
-            cur_fn: BcFuncId(0),
+            cur_fn: FuncId(0),
+        };
+        let _func = store.init_new_func("/main".to_string(), vec![])?;
+        store.gen_stmts(ast)?;
+        store.ast = ast.to_vec();
+        store.dump_bcir();
+        for func in store.functions.iter_mut() {
+            func.gen_bytecode_from_ir();
         }
+        Ok(store)
     }
 
-    pub fn new_bytecode(ast: &[(Stmt, Span)]) -> Result<Self> {
-        let mut gen = Self::new();
-        let _func = gen.new_func("/main".to_string(), vec![])?;
-        gen.gen_stmts(ast)?;
-        gen.ast = ast.to_vec();
-        gen.dump_bcir();
-        for func in gen.functions.iter_mut() {
-            func.gen_bc_from_inst();
-        }
-        Ok(gen)
-    }
-
-    fn new_func(&mut self, name: String, args: Vec<String>) -> Result<BcFuncId> {
-        let id = BcFuncId(self.functions.len() as u32);
+    fn init_new_func(&mut self, name: String, args: Vec<String>) -> Result<FuncId> {
+        let id = FuncId(self.functions.len() as u32);
         self.func_map.insert(name.clone(), id);
-        self.functions.push(BcFunc::new(id, name, args.clone()));
+        self.functions.push(FuncInfo::new(id, name, args.clone()));
         self.cur_fn = id;
         args.iter().for_each(|name| {
             self.add_local(name);
@@ -109,7 +112,7 @@ impl BcGen {
     fn dump_bcir(&self) {
         eprintln!("{:?} name:{} args:{:?}", self.id, self.name, self.args);
         let mut i = 0;
-        let mut iter = self.insts.iter();
+        let mut iter = self.bc_ir.iter();
         while let Some(inst) = iter.next() {
             eprint!(":{:05} ", i);
             match inst {
@@ -157,80 +160,80 @@ impl BcGen {
     }
 }
 
-///
-/// ID of function.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(transparent)]
-pub struct BcFuncId(pub u32);
-
 #[derive(Debug, Clone, PartialEq)]
-pub struct BcFunc {
+pub struct FuncInfo {
     /// ID of this function.
-    pub id: BcFuncId,
+    pub id: FuncId,
+    /// Bytecode.
+    pub(super) bc: Vec<BcOp>,
     /// name of this function.
     name: String,
     /// the name of arguments.
     args: Vec<String>,
     /// local variables.
     locals: HashMap<String, u16>,
-    /// The number of registers.
+    /// The current register id.
     temp: u16,
     /// The number of registers.
     pub reg_num: u16,
-    /// AST.
+    /// corresponding AST.
     ast: Vec<(Stmt, Span)>,
-    /// Bytecode.
-    insts: Vec<BcIr>,
-    /// Labels.
+    /// corresponding bytecode ir.
+    bc_ir: Vec<BcIr>,
+    /// destination labels.
     labels: Vec<Option<InstId>>,
-    /// Bytecode.
-    pub(super) bc: Vec<BcOp>,
-    /// Literal values.
+    /// literal values.
     constants: Vec<Value>,
 }
 
-impl BcFunc {
-    fn new(id: BcFuncId, name: String, args: Vec<String>) -> Self {
+impl FuncInfo {
+    fn new(id: FuncId, name: String, args: Vec<String>) -> Self {
         Self {
             id,
+            bc: vec![],
             name,
             args,
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
             ast: vec![],
-            insts: vec![],
+            bc_ir: vec![],
             labels: vec![],
-            bc: vec![],
             constants: vec![],
         }
     }
+
+    /// get a number of local variables of the function.
     pub(super) fn local_num(&self) -> usize {
         self.locals.len()
     }
 
+    /// get new destination label.
     fn new_label(&mut self) -> usize {
         let label = self.labels.len();
         self.labels.push(None);
         label
     }
 
+    /// apply current instruction pointer to the destination label.
     fn apply_label(&mut self, label: usize) {
-        let pos = InstId(self.insts.len() as u32);
+        let pos = InstId(self.bc_ir.len() as u32);
         self.labels[label] = Some(pos);
     }
 
+    /// register a new constant.
     fn new_constant(&mut self, val: Value) -> u32 {
         let constants = self.constants.len();
         self.constants.push(val);
         constants as u32
     }
 
+    /// get a constant.
     pub(super) fn get_constant(&self, id: u32) -> Value {
         self.constants[id as usize]
     }
 
+    /// get the next register id.
     fn next_reg(&self) -> BcTemp {
         BcTemp(self.temp)
     }
@@ -274,7 +277,7 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(BcIr::Integer(reg, i));
+        self.bc_ir.push(BcIr::Integer(reg, i));
     }
 
     fn gen_float(&mut self, dst: Option<BcLocal>, f: f64) {
@@ -283,7 +286,7 @@ impl BcFunc {
             None => self.push().into(),
         };
         let id = self.new_constant(Value::float(f));
-        self.insts.push(BcIr::Const(reg, id));
+        self.bc_ir.push(BcIr::Const(reg, id));
     }
 
     fn gen_nil(&mut self, dst: Option<BcLocal>) {
@@ -291,19 +294,19 @@ impl BcFunc {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        self.insts.push(BcIr::Nil(reg));
+        self.bc_ir.push(BcIr::Nil(reg));
     }
 
     fn gen_neg(&mut self, local: Option<BcLocal>) {
         match local {
             Some(local) => {
                 let local = local.into();
-                self.insts.push(BcIr::Neg(local, local));
+                self.bc_ir.push(BcIr::Neg(local, local));
             }
             None => {
                 let src = self.pop().into();
                 let dst = self.push().into();
-                self.insts.push(BcIr::Neg(dst, src));
+                self.bc_ir.push(BcIr::Neg(dst, src));
             }
         };
     }
@@ -311,12 +314,12 @@ impl BcFunc {
     fn gen_ret(&mut self) -> Result<()> {
         let ret = self.pop().into();
         assert_eq!(0, self.temp);
-        self.insts.push(BcIr::Ret(ret));
+        self.bc_ir.push(BcIr::Ret(ret));
         Ok(())
     }
 
     fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
-        self.insts.push(BcIr::Mov(dst, src));
+        self.bc_ir.push(BcIr::Mov(dst, src));
     }
 
     fn gen_temp_mov(&mut self, rhs: BcReg) -> BcReg {
@@ -326,16 +329,16 @@ impl BcFunc {
     }
 }
 
-impl BcGen {
-    /// Generate HIR in new function from [(Stmt, Span)].
+impl FuncStore {
+    /// Generate bytecode Ir in a new function from [(Stmt, Span)].
     fn decl_func(
         &mut self,
         func_name: String,
         args: Vec<String>,
         ast: &[(Expr, Span)],
-    ) -> Result<BcFuncId> {
+    ) -> Result<FuncId> {
         let save = self.cur_fn;
-        let func = self.new_func(func_name, args)?;
+        let func = self.init_new_func(func_name, args)?;
         self.gen_exprs(ast, true)?;
         self.ast = ast
             .iter()
@@ -375,7 +378,7 @@ impl BcGen {
         Ok(self.pop())
     }
 
-    /// Generate bytecode from an *Expr*.
+    /// Generate bytecode Ir from an *Expr*.
     fn gen_expr(&mut self, expr: &Expr, use_value: bool) -> Result<()> {
         match expr {
             Expr::Nil => {
@@ -429,7 +432,7 @@ impl BcGen {
                 } else {
                     None
                 };
-                self.insts.push(BcIr::Call(func, ret, arg, args.len()));
+                self.bc_ir.push(BcIr::Call(func, ret, arg, args.len()));
                 return Ok(());
             }
             Expr::If(box (cond_, _), then_, else_) => {
@@ -437,9 +440,9 @@ impl BcGen {
                 let succ_pos = self.new_label();
                 let cond = self.gen_temp_expr(cond_)?.into();
                 let inst = BcIr::CondBr(cond, then_pos);
-                self.insts.push(inst);
+                self.bc_ir.push(inst);
                 self.gen_exprs(else_, use_value)?;
-                self.insts.push(BcIr::Br(succ_pos));
+                self.bc_ir.push(BcIr::Br(succ_pos));
                 if use_value {
                     self.pop();
                 }
@@ -468,7 +471,7 @@ impl BcGen {
     }
 }
 
-impl BcGen {
+impl FuncStore {
     fn gen_args(&mut self, args: &[(Expr, std::ops::Range<usize>)]) -> Result<BcTemp> {
         let arg = self.next_reg();
         for arg in args {
@@ -529,10 +532,10 @@ impl BcGen {
     fn gen_add(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
             let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.insts.push(BcIr::Addri(dst, lhs, i));
+            self.bc_ir.push(BcIr::Addri(dst, lhs, i));
         } else {
             let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.insts.push(BcIr::Add(dst, lhs, rhs));
+            self.bc_ir.push(BcIr::Add(dst, lhs, rhs));
         }
         Ok(())
     }
@@ -540,23 +543,23 @@ impl BcGen {
     fn gen_sub(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
             let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.insts.push(BcIr::Subri(dst, lhs, i));
+            self.bc_ir.push(BcIr::Subri(dst, lhs, i));
         } else {
             let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.insts.push(BcIr::Sub(dst, lhs, rhs));
+            self.bc_ir.push(BcIr::Sub(dst, lhs, rhs));
         }
         Ok(())
     }
 
     fn gen_mul(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(BcIr::Mul(dst, lhs, rhs));
+        self.bc_ir.push(BcIr::Mul(dst, lhs, rhs));
         Ok(())
     }
 
     fn gen_div(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
         let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.insts.push(BcIr::Div(dst, lhs, rhs));
+        self.bc_ir.push(BcIr::Div(dst, lhs, rhs));
         Ok(())
     }
 
@@ -569,10 +572,10 @@ impl BcGen {
     ) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
             let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.insts.push(BcIr::Cmpri(kind, dst, lhs, i));
+            self.bc_ir.push(BcIr::Cmpri(kind, dst, lhs, i));
         } else {
             let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.insts.push(BcIr::Cmp(kind, dst, lhs, rhs));
+            self.bc_ir.push(BcIr::Cmp(kind, dst, lhs, rhs));
         }
         Ok(())
     }
@@ -627,7 +630,7 @@ impl BcGen {
                 let arg = self.gen_args(args)?;
                 self.temp -= args.len() as u16;
                 let inst = BcIr::Call(func, Some(local.into()), arg, args.len());
-                self.insts.push(inst);
+                self.bc_ir.push(inst);
             }
             Expr::Return(_) => unreachable!(),
             rhs => {
@@ -652,15 +655,15 @@ impl BcGen {
         self.apply_label(cond_pos);
         let cond = self.gen_temp_expr(cond)?.into();
         let inst = BcIr::CondNotBr(cond, succ_pos);
-        self.insts.push(inst);
+        self.bc_ir.push(inst);
         self.gen_exprs(body, false)?;
-        self.insts.push(BcIr::Br(cond_pos));
+        self.bc_ir.push(BcIr::Br(cond_pos));
         self.apply_label(succ_pos);
         Ok(())
     }
 }
 
-impl BcFunc {
+impl FuncInfo {
     fn get_index(&self, reg: &BcReg) -> u16 {
         match reg {
             BcReg::Temp(i) => self.locals.len() as u16 + i.0,
@@ -668,9 +671,9 @@ impl BcFunc {
         }
     }
 
-    fn gen_bc_from_inst(&mut self) {
+    fn gen_bytecode_from_ir(&mut self) {
         let mut ops = vec![];
-        for inst in &self.insts {
+        for inst in &self.bc_ir {
             let op = match inst {
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap();

@@ -6,7 +6,7 @@ mod bcinst;
 mod op;
 mod stack;
 pub use bccomp::*;
-pub use bcgen::BcGen;
+pub use bcgen::FuncStore;
 use bcgen::*;
 use bcinst::*;
 use op::*;
@@ -105,7 +105,7 @@ impl std::ops::Add<InstId> for BcPcBase {
 }
 
 impl BcPcBase {
-    fn new(func: &BcFunc) -> Self {
+    fn new(func: &FuncInfo) -> Self {
         BcPcBase(&func.bc[0] as *const _)
     }
 }
@@ -143,7 +143,7 @@ impl BcPc {
 /// Bytecode interpreter.
 ///
 pub struct Interp {
-    cur_fn: BcFuncId,
+    cur_fn: FuncId,
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
@@ -173,8 +173,8 @@ macro_rules! cmp_op_ri {
 }
 
 impl Interp {
-    fn new(bc_context: &BcGen) -> Self {
-        let cur_fn = BcFuncId(0);
+    fn new(bc_context: &FuncStore) -> Self {
+        let cur_fn = FuncId(0);
         let pc_top = BcPcBase::new(&bc_context[cur_fn]);
         Self {
             cur_fn,
@@ -190,7 +190,7 @@ impl Interp {
         op
     }
 
-    fn push_frame(&mut self, args: u16, len: u16, bc_func: &BcFunc, ret: Option<u16>) {
+    fn push_frame(&mut self, args: u16, len: u16, bc_func: &FuncInfo, ret: Option<u16>) {
         let pc = self.pc - self.pc_top;
         self.call_stack
             .push_frame(args, len, bc_func, self.cur_fn, pc, ret);
@@ -200,7 +200,7 @@ impl Interp {
         self.cur_fn = bc_func.id;
     }
 
-    fn pop_frame(&mut self, val: Value, bc_context: &BcGen) -> bool {
+    fn pop_frame(&mut self, val: Value, bc_context: &FuncStore) -> bool {
         let (b, func, pc, ret) = self.call_stack.pop_frame();
         if b {
             return true;
@@ -214,14 +214,14 @@ impl Interp {
         false
     }
 
-    pub fn eval_toplevel(bc_context: &BcGen) -> Value {
+    pub fn eval_toplevel(bc_context: &FuncStore) -> Value {
         let mut eval = Self::new(bc_context);
-        let hir_func = &bc_context[BcFuncId(0)];
+        let hir_func = &bc_context[FuncId(0)];
         eval.push_frame(0, 0, hir_func, None);
         eval.eval_loop(bc_context)
     }
 
-    fn eval_loop(&mut self, bc_context: &BcGen) -> Value {
+    fn eval_loop(&mut self, bc_context: &FuncStore) -> Value {
         loop {
             let op = self.get_op();
             match op {

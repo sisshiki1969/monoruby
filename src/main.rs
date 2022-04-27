@@ -84,7 +84,7 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let gen = match BcGen::new_bytecode(&ast) {
+    let gen = match FuncStore::new(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
@@ -96,7 +96,7 @@ fn exec(code: &str) -> Result<(), ()> {
     let interp_val = Interp::eval_toplevel(&gen);
     eprintln!("Interp: {:?}", interp_val);
 
-    let bccomp_val = BcComp::exec_toplevel(&gen);
+    let bccomp_val = BcCompiler::exec_toplevel(&gen);
     eprintln!("bccomp: {:?}", bccomp_val);
 
     let mut hir = HirContext::new();
@@ -125,7 +125,7 @@ pub fn run_test(code: &str) {
         Ok(ast) => ast,
         Err(_) => panic!("Parse error."),
     };
-    let gen = match BcGen::new_bytecode(&ast) {
+    let gen = match FuncStore::new(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             panic!("Error in compiling AST. {:?}", err);
@@ -138,7 +138,7 @@ pub fn run_test(code: &str) {
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
 
     let now = Instant::now();
-    let bccomp_val = BcComp::exec_toplevel(&gen);
+    let bccomp_val = BcCompiler::exec_toplevel(&gen);
     eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
 
     assert_eq!(interp_val, bccomp_val);

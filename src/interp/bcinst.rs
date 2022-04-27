@@ -1,5 +1,8 @@
 use super::*;
 
+///
+/// bytecode Ir.
+///
 #[derive(Clone, PartialEq)]
 pub(super) enum BcIr {
     Br(usize),
@@ -18,8 +21,8 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, lhs, rhs
     Ret(BcReg),
-    Mov(BcReg, BcReg),                            // dst, offset
-    Call(BcFuncId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
+    Mov(BcReg, BcReg),                          // dst, offset
+    Call(FuncId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
 }
 
 impl std::fmt::Debug for BcIr {
@@ -54,6 +57,9 @@ impl std::fmt::Debug for BcIr {
     }
 }
 
+///
+/// bytecode.
+///
 #[derive(Clone, PartialEq)]
 pub(super) enum BcOp {
     Br(InstId),
@@ -72,8 +78,8 @@ pub(super) enum BcOp {
     Cmp(CmpKind, u16, u16, u16),   // kind, ret, lhs, rhs
     Cmpri(CmpKind, u16, u16, i16), // kind, ret, lhs, rhs
     Ret(u16),
-    Mov(u16, u16),                 // dst, src
-    Call(BcFuncId, u16, u16, u16), // (id, ret, args, args_len)
+    Mov(u16, u16),               // dst, src
+    Call(FuncId, u16, u16, u16), // (id, ret, args, args_len)
 }
 
 impl std::fmt::Debug for BcOp {
