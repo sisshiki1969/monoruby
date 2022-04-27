@@ -29,10 +29,10 @@ impl std::ops::IndexMut<u16> for BcCompiler {
     }
 }
 
-extern "C" fn pop_frame(eval: &mut BcCompiler, val: Value) -> *mut Value {
-    let (b, _func, _pc, ret) = eval.call_stack.pop_frame();
+extern "C" fn pop_frame(eval: &mut BcCompiler, val: Value, ret: u16) -> *mut Value {
+    let (b, _func, _pc, _ret) = eval.call_stack.pop_frame();
     if !b {
-        if let Some(ret) = ret {
+        if ret != u16::MAX {
             eval[ret] = val;
         }
     }
@@ -43,15 +43,13 @@ extern "C" fn push_frame(
     eval: &mut BcCompiler,
     bc_context: &FuncStore,
     id: FuncId,
-    ret: u16,
     args: u16,
     len: u16,
 ) -> *mut Value {
     let bc_func = &bc_context[id];
-    let ret = if ret == u16::MAX { None } else { Some(ret) };
     let pc = 0;
     eval.call_stack
-        .push_frame(args, len, bc_func, FuncId(0), pc, ret);
+        .push_frame(args, len, bc_func, FuncId(0), pc, None);
     eval.call_stack.get_bp()
 }
 
@@ -98,7 +96,7 @@ impl BcCompiler {
         );
         eval.jit.finalize();
         let entry_pount: EntryPtr = unsafe { std::mem::transmute(eval.jit.get_label_u64(entry)) };
-        push_frame(&mut eval, fn_store, FuncId(0), u16::MAX, 0, 0);
+        push_frame(&mut eval, fn_store, FuncId(0), 0, 0);
         let bp = eval.call_stack.get_bp();
         let v = entry_pount(bp, &mut eval, fn_store);
         //assert!(eval.pop_frame(v, bc_context));
@@ -112,7 +110,7 @@ impl BcCompiler {
             labels.push(self.jit.label());
         }
         monoasm!(self.jit,
-          pushq rbp;
+          subq rsp, (8);
         );
         for (idx, op) in func.bc.iter().enumerate() {
             self.jit.bind_label(labels[idx]);
@@ -272,7 +270,7 @@ impl BcCompiler {
                     let lhs = *lhs as u64 * 8;
                     monoasm!(self.jit,
                         movq rax, [rbp + (lhs)];
-                        popq rbp;
+                        addq rsp, (8);
                         ret;
                     );
                 }
@@ -282,16 +280,18 @@ impl BcCompiler {
                       movq rdi, r12;
                       movq rsi, r13;
                       movq rdx, (id.0);
-                      movq rcx, (*ret);
-                      movq r8, (*args);
-                      movq r9, (*len);
+                      movq rcx, (*args);
+                      movq r8, (*len);
                       movq rax, (push_frame);
+                      // push_frame(&mut BcCompiler, &FuncStore, FuncId, args: u16, len: u16) -> *mut Value
                       call rax;
                       movq rbp, rax;
                       call dest;
                       movq rdi, r12;
                       movq rsi, rax;
+                      movq rdx, (*ret);
                       movq rax, (pop_frame);
+                      // pop_frame(&mut BcCompiler, val: Value, ret: u16) -> *mut Value
                       call rax;
                       movq rbp, rax;
                     );
