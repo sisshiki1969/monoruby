@@ -91,6 +91,26 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
+    let bccomp_val = BcCompiler::exec_toplevel(&gen);
+    eprintln!("bccomp: {:?}", bccomp_val);
+    Ok(())
+}
+
+fn repl_exec(code: &str) -> Result<(), ()> {
+    let ast = match MonorubyParser::parse(code) {
+        Ok(ast) => ast,
+        Err(_) => {
+            eprintln!("Parse error.");
+            return Err(());
+        }
+    };
+    let gen = match FuncStore::new(&ast) {
+        Ok(gen) => gen,
+        Err(err) => {
+            eprintln!("Error in compiling AST. {:?}", err);
+            return Err(());
+        }
+    };
     //#[cfg(debug_assertions)]
     //dbg!(&gen);
     let interp_val = Interp::eval_toplevel(&gen);
@@ -113,7 +133,7 @@ fn exec(code: &str) -> Result<(), ()> {
 
 fn run_repl(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
-    if let Err(_) = exec(&all_codes.join(";")) {
+    if let Err(_) = repl_exec(&all_codes.join(";")) {
         all_codes.pop();
     };
 }
