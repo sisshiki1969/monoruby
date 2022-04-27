@@ -50,11 +50,6 @@ impl Stack {
         }
     }
 
-    pub(super) fn get_bp(&mut self) -> *mut Value {
-        let top = self.stack.as_mut_ptr();
-        unsafe { top.add(self.bp) }
-    }
-
     fn push_u64(&mut self, v: u64) {
         self.stack.push(Value::from_unchecked(v));
     }
