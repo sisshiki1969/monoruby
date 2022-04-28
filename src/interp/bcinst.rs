@@ -21,8 +21,8 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, lhs, rhs
     Ret(BcReg),
-    Mov(BcReg, BcReg),                          // dst, offset
-    Call(FuncId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
+    Mov(BcReg, BcReg),                             // dst, offset
+    FnCall(IdentId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
 }
 
 impl std::fmt::Debug for BcIr {
@@ -49,7 +49,7 @@ impl std::fmt::Debug for BcIr {
             }
             Self::Ret(reg) => write!(f, "ret {:?}", reg),
             Self::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
-            Self::Call(id, ret, arg, len) => match ret {
+            Self::FnCall(id, ret, arg, len) => match ret {
                 Some(ret) => write!(f, "{:?} = call {:?} ({:?}: {})", id, ret, arg, len),
                 None => write!(f, "_ = call {:?} ({:?}: {})", id, arg, len),
             },
@@ -58,28 +58,46 @@ impl std::fmt::Debug for BcIr {
 }
 
 ///
-/// bytecode.
+/// Bytecode instructions.
 ///
 #[derive(Clone, PartialEq)]
 pub(super) enum BcOp {
+    /// branch(dest)
     Br(InstId),
+    /// conditional branch(%reg, dest)  : branch when reg was true.
     CondBr(u16, InstId),
+    /// conditional branch(%reg, dest)  : branch when reg was false.
     CondNotBr(u16, InstId),
+    /// integer(%reg, i32)
     Integer(u16, i32),
-    Const(u16, u32), // ret, constants_id
+    /// constant(%ret, constant_id)
+    Const(u16, u32),
+    /// nil(%reg)
     Nil(u16),
-    Neg(u16, u16),                 // ret, src
-    Add(u16, u16, u16),            // ret, lhs, rhs
-    Addri(u16, u16, i16),          // ret, lhs, rhs
-    Sub(u16, u16, u16),            // ret, lhs, rhs
-    Subri(u16, u16, i16),          // ret, lhs, rhs
-    Mul(u16, u16, u16),            // ret, lhs, rhs
-    Div(u16, u16, u16),            // ret, lhs, rhs
-    Cmp(CmpKind, u16, u16, u16),   // kind, ret, lhs, rhs
-    Cmpri(CmpKind, u16, u16, i16), // kind, ret, lhs, rhs
+    /// negate(%ret, %src)
+    Neg(u16, u16),
+    /// add(%ret, %lhs, %rhs)
+    Add(u16, u16, u16),
+    /// add with small integer(%ret, %lhs, rhs:i16)
+    Addri(u16, u16, i16),
+    /// sub(%ret, %lhs, %rhs)
+    Sub(u16, u16, u16),
+    /// sub with small integer(%ret, %lhs, rhs:i16)
+    Subri(u16, u16, i16),
+    /// mul(%ret, %lhs, %rhs)
+    Mul(u16, u16, u16),
+    /// div(%ret, %lhs, %rhs)
+    Div(u16, u16, u16),
+    /// compare(cmp_kind, %ret, %lhs, %rhs)
+    Cmp(CmpKind, u16, u16, u16),
+    /// compare to small integer(cmp_kind, %ret, %lhs, rhs:i16)
+    Cmpri(CmpKind, u16, u16, i16),
+    /// return(%ret)
     Ret(u16),
-    Mov(u16, u16),               // dst, src
-    Call(FuncId, u16, u16, u16), // (id, ret, args, args_len)
+    /// move(%dst, %src)
+    Mov(u16, u16),
+    /// func call(func_id, %ret, %args, args_len)
+    FnCall(FuncId, u16, u16, u16),
 }
 
 impl std::fmt::Debug for BcOp {
@@ -106,7 +124,7 @@ impl std::fmt::Debug for BcOp {
             }
             Self::Ret(reg) => write!(f, "ret {:?}", reg),
             Self::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
-            Self::Call(id, ret, arg, len) => {
+            Self::FnCall(id, ret, arg, len) => {
                 if *ret == u16::MAX {
                     write!(f, "_ = call {:?} ({:?}: {})", id, arg, len)
                 } else {

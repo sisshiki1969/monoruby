@@ -41,6 +41,24 @@ impl BcCompiler {
         );
     }
 
+    fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
+        monoasm!(self.jit,
+            // check whether lhs is fixnum.
+            movq rax, rdi;
+            andq rax, 0x1;
+            jeq generic;
+        );
+    }
+
+    fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
+        monoasm!(self.jit,
+            // check whether rhs is fixnum.
+            movq rax, rsi;
+            andq rax, 0x1;
+            jeq generic;
+        );
+    }
+
     pub fn exec_toplevel(fn_store: &FuncStore) -> Value {
         let mut eval = Self::new();
         for _ in &fn_store.functions {
@@ -102,21 +120,23 @@ impl BcCompiler {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
                         movq rsi, [rbp - (conv(*rhs))];
-                        movq rax, rdi;
-                        andq rax, 0x1;
-                        jeq generic;
-                        movq rax, rsi;
-                        andq rax, 0x1;
-                        jeq generic;
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    monoasm!(self.jit,
+                        // fastpath
                         subq rdi, 1;
                         addq rdi, rsi;
-                        movq rax, rdi;
+                        // store the result to return reg.
+                        movq [rbp - (conv(*ret))], rdi;
                         jmp exit;
                     generic:
+                        // generic path
                         movq rax, (add_values);
                         call rax;
-                    exit:
+                        // store the result to return reg.
                         movq [rbp - (conv(*ret))], rax;
+                    exit:
                     );
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
@@ -125,18 +145,20 @@ impl BcCompiler {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
                         movq rsi, (*rhs as i64);
-                        movq rax, rdi;
-                        andq rax, 0x1;
-                        jeq generic;
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    monoasm!(self.jit,
+                        // fastpath
                         shlq rsi, 1;
                         addq rdi, rsi;
-                        movq rax, rdi;
+                        movq [rbp - (conv(*ret))], rdi;
                         jmp exit;
                     generic:
+                        // generic path
                         movq rax, (add_ri_values);
                         call rax;
-                    exit:
                         movq [rbp - (conv(*ret))], rax;
+                    exit:
                     );
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
@@ -145,21 +167,21 @@ impl BcCompiler {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
                         movq rsi, [rbp - (conv(*rhs))];
-                        movq rax, rdi;
-                        andq rax, 0x1;
-                        jeq generic;
-                        movq rax, rsi;
-                        andq rax, 0x1;
-                        jeq generic;
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    monoasm!(self.jit,
+                        // fastpath
                         subq rdi, rsi;
                         addq rdi, 1;
-                        movq rax, rdi;
+                        movq [rbp - (conv(*ret))], rdi;
                         jmp exit;
                     generic:
+                        // generic path
                         movq rax, (sub_values);
                         call rax;
-                    exit:
                         movq [rbp - (conv(*ret))], rax;
+                    exit:
                     );
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
@@ -168,18 +190,20 @@ impl BcCompiler {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
                         movq rsi, (*rhs as i64);
-                        movq rax, rdi;
-                        andq rax, 0x1;
-                        jeq generic;
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    monoasm!(self.jit,
+                        // fastpath
                         shlq rsi, 1;
                         subq rdi, rsi;
-                        movq rax, rdi;
+                        movq [rbp - (conv(*ret))], rdi;
                         jmp exit;
                     generic:
+                        // generic path
                         movq rax, (sub_ri_values);
                         call rax;
-                    exit:
                         movq [rbp - (conv(*ret))], rax;
+                    exit:
                     );
                 }
 
@@ -219,6 +243,8 @@ impl BcCompiler {
                     );
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
                     let func = match kind {
                         CmpKind::Eq => cmp_eq_ri_values,
                         CmpKind::Ne => cmp_ne_ri_values,
@@ -229,9 +255,43 @@ impl BcCompiler {
                     };
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    monoasm!(self.jit,
+                        movq rax, (Value::bool(false).get());
+                        movq rsi, (Value::integer(*rhs as i32).get());
+                        cmpq rdi, rsi;
+                    );
+                    match kind {
+                        CmpKind::Eq => {
+                            monoasm!(self.jit, seteq rdi; );
+                        }
+                        CmpKind::Ne => {
+                            monoasm!(self.jit, setne rdi; );
+                        }
+                        CmpKind::Lt => {
+                            monoasm!(self.jit, setlt rdi; );
+                        }
+                        CmpKind::Gt => {
+                            monoasm!(self.jit, setgt rdi; );
+                        }
+                        CmpKind::Le => {
+                            monoasm!(self.jit, setle rdi; );
+                        }
+                        CmpKind::Ge => {
+                            monoasm!(self.jit, setge rdi; );
+                        }
+                    }
+                    monoasm!(self.jit,
+                        andq rdi, 0xff;
+                        shlq rdi, 3;
+                        orq rax, rdi;
+                        jmp exit;
+                    generic:
                         movq rsi, (*rhs as i64);
                         movq rax, (func);
                         call rax;
+                    exit:
                         movq [rbp - (conv(*ret))], rax;
                     );
                 }
@@ -248,7 +308,7 @@ impl BcCompiler {
                     );
                     self.epilogue();
                 }
-                BcOp::Call(id, ret, args, len) => {
+                BcOp::FnCall(id, ret, args, len) => {
                     match &fn_store[*id].kind {
                         FuncKind::Normal(info) => {
                             let arity = info.arity();

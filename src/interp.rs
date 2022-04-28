@@ -321,7 +321,7 @@ impl Interp {
                 BcOp::Mov(dst, local) => {
                     self[dst] = self[local];
                 }
-                BcOp::Call(id, ret, args, len) => {
+                BcOp::FnCall(id, ret, args, len) => {
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
                     match &fn_store[id].kind {
                         FuncKind::Normal(info) => {
