@@ -47,7 +47,10 @@ impl BcCompiler {
             eval.method_label.push(eval.jit.label());
         }
         for func in &fn_store.functions {
-            eval.compile_func_bc(func);
+            match &func.kind {
+                FuncKind::Normal(info) => eval.compile_func_bc(info, fn_store),
+                _ => {}
+            }
         }
         let main = eval.method_label[0];
         eval.jit.finalize();
@@ -55,14 +58,14 @@ impl BcCompiler {
         entry_point(())
     }
 
-    fn compile_func_bc(&mut self, func: &FuncInfo) {
+    fn compile_func_bc(&mut self, func: &NormalFuncInfo, fn_store: &FuncStore) {
         self.jit.bind_label(self.method_label[func.id.0 as usize]);
         let mut labels = vec![];
-        for _ in &func.bc {
+        for _ in func.bytecode() {
             labels.push(self.jit.label());
         }
-        self.prologue(func.local_num() + func.reg_num as usize);
-        for (idx, op) in func.bc.iter().enumerate() {
+        self.prologue(func.total_reg_num());
+        for (idx, op) in func.bytecode().iter().enumerate() {
             self.jit.bind_label(labels[idx]);
             match op {
                 BcOp::Integer(ret, i) => {
@@ -246,19 +249,71 @@ impl BcCompiler {
                     self.epilogue();
                 }
                 BcOp::Call(id, ret, args, len) => {
-                    let dest = self.method_label[id.0 as usize];
-                    let args = *args as i64 * 8 + 8;
-                    // set arguments to a callee stack.
-                    for i in 0..*len {
-                        let offset = i as i64 * 8;
-                        monoasm!(self.jit,
-                            movq rax, [rbp - (args + offset)];
-                            movq [rsp - (offset + 24)], rax;
-                        );
+                    match &fn_store[*id].kind {
+                        FuncKind::Normal(info) => {
+                            let arity = info.arity();
+                            if arity != *len as usize {
+                                panic!(
+                                    "number of arguments mismatch. expected:{} actual:{}",
+                                    arity, len
+                                );
+                            }
+                            let dest = self.method_label[id.0 as usize];
+                            let args = *args as i64 * 8 + 8;
+                            // set arguments to a callee stack.
+                            //
+                            //       +-------------+
+                            // +0x00 |             | <- rsp
+                            //       +-------------+
+                            // +0x08 | return addr |
+                            //       +-------------+
+                            // +0x10 |   old rbp   |
+                            //       +-------------+
+                            // +0x18 |    arg 0    |
+                            //       +-------------+
+                            // +0x20 |    arg 1    |
+                            //       +-------------+
+                            // +0x28 |      :      |
+                            //
+                            for i in 0..*len {
+                                let offset = i as i64 * 8;
+                                monoasm!(self.jit,
+                                    movq rax, [rbp - (args + offset)];
+                                    movq [rsp - (offset + 24)], rax;
+                                );
+                            }
+                            monoasm!(self.jit,
+                                call dest;
+                            );
+                        }
+                        FuncKind::Builtin { address, arity } => {
+                            if *arity != *len as usize {
+                                panic!(
+                                    "number of arguments mismatch. expected:{} actual:{}",
+                                    arity, len
+                                );
+                            }
+                            match *arity {
+                                0 => {}
+                                1 => {
+                                    monoasm!(self.jit,
+                                        movq rdi, [rbp - 8];
+                                    );
+                                }
+                                2 => {
+                                    monoasm!(self.jit,
+                                        movq rdi, [rbp - 8];
+                                        movq rsi, [rbp - 16];
+                                    );
+                                }
+                                _ => unimplemented!(),
+                            }
+                            monoasm!(self.jit,
+                                movq rax, (*address);
+                                call rax;
+                            );
+                        }
                     }
-                    monoasm!(self.jit,
-                        call dest;
-                    );
                     if *ret != u16::MAX {
                         let ret = *ret as i64 * 8 + 8;
                         monoasm!(self.jit,

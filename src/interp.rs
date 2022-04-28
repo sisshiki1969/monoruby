@@ -105,8 +105,8 @@ impl std::ops::Add<InstId> for BcPcBase {
 }
 
 impl BcPcBase {
-    fn new(func: &FuncInfo) -> Self {
-        BcPcBase(&func.bc[0] as *const _)
+    fn new(func: &NormalFuncInfo) -> Self {
+        BcPcBase(&func.bytecode()[0] as *const _)
     }
 }
 
@@ -173,9 +173,9 @@ macro_rules! cmp_op_ri {
 }
 
 impl Interp {
-    fn new(bc_context: &FuncStore) -> Self {
+    fn new(fn_store: &FuncStore) -> Self {
         let cur_fn = FuncId(0);
-        let pc_top = BcPcBase::new(&bc_context[cur_fn]);
+        let pc_top = BcPcBase::new(&fn_store[cur_fn].as_normal_ref());
         Self {
             cur_fn,
             pc: pc_top + 0,
@@ -190,23 +190,23 @@ impl Interp {
         op
     }
 
-    fn push_frame(&mut self, args: u16, len: u16, bc_func: &FuncInfo, ret: Option<u16>) {
+    fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
         let pc = self.pc - self.pc_top;
         self.call_stack
-            .push_frame(args, len, bc_func, self.cur_fn, pc, ret);
-        let pc = BcPcBase::new(bc_func);
+            .push_frame(args, len, func, self.cur_fn, pc, ret);
+        let pc = BcPcBase::new(func);
         self.pc_top = pc;
         self.pc = pc + 0;
-        self.cur_fn = bc_func.id;
+        self.cur_fn = func.id;
     }
 
-    fn pop_frame(&mut self, val: Value, bc_context: &FuncStore) -> bool {
+    fn pop_frame(&mut self, val: Value, fn_store: &FuncStore) -> bool {
         let (b, func, pc, ret) = self.call_stack.pop_frame();
         if b {
             return true;
         };
         self.cur_fn = func;
-        self.pc_top = BcPcBase::new(&bc_context[func]);
+        self.pc_top = BcPcBase::new(&fn_store[func].as_normal_ref());
         self.pc = self.pc_top + pc;
         if let Some(ret) = ret {
             self[ret] = val;
@@ -214,14 +214,14 @@ impl Interp {
         false
     }
 
-    pub fn eval_toplevel(bc_context: &FuncStore) -> Value {
-        let mut eval = Self::new(bc_context);
-        let hir_func = &bc_context[FuncId(0)];
+    pub fn eval_toplevel(fn_store: &FuncStore) -> Value {
+        let mut eval = Self::new(fn_store);
+        let hir_func = &fn_store[FuncId(0)].as_normal_ref();
         eval.push_frame(0, 0, hir_func, None);
-        eval.eval_loop(bc_context)
+        eval.eval_loop(fn_store)
     }
 
-    fn eval_loop(&mut self, bc_context: &FuncStore) -> Value {
+    fn eval_loop(&mut self, fn_store: &FuncStore) -> Value {
         loop {
             let op = self.get_op();
             match op {
@@ -229,7 +229,7 @@ impl Interp {
                     self[ret] = Value::integer(i);
                 }
                 BcOp::Const(ret, id) => {
-                    self[ret] = bc_context[self.cur_fn].get_constant(id);
+                    self[ret] = fn_store[self.cur_fn].as_normal_ref().get_constant(id);
                 }
                 BcOp::Nil(ret) => {
                     self[ret] = Value::nil();
@@ -314,7 +314,7 @@ impl Interp {
                 }
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];
-                    if self.pop_frame(val, bc_context) {
+                    if self.pop_frame(val, fn_store) {
                         return val;
                     };
                 }
@@ -322,9 +322,49 @@ impl Interp {
                     self[dst] = self[local];
                 }
                 BcOp::Call(id, ret, args, len) => {
-                    let bc_func = &bc_context[id];
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    self.push_frame(args, len, bc_func, ret);
+                    match &fn_store[id].kind {
+                        FuncKind::Normal(info) => {
+                            if info.arity() != len as usize {
+                                panic!(
+                                    "number of arguments mismatch. expected:{} actual:{}",
+                                    info.arity(),
+                                    len
+                                );
+                            }
+                            self.push_frame(args, len, info, ret);
+                        }
+                        FuncKind::Builtin { address, arity } => {
+                            if *arity != len as usize {
+                                panic!(
+                                    "number of arguments mismatch. expected:{} actual:{}",
+                                    arity, len
+                                );
+                            }
+                            let v = match len {
+                                0 => unsafe {
+                                    std::mem::transmute::<u64, extern "C" fn() -> Value>(*address)()
+                                },
+                                1 => unsafe {
+                                    std::mem::transmute::<u64, extern "C" fn(Value) -> Value>(
+                                        *address,
+                                    )(self[args])
+                                },
+                                2 => unsafe {
+                                    std::mem::transmute::<u64, extern "C" fn(Value, Value) -> Value>(
+                                        *address,
+                                    )(self[args], self[args + 1])
+                                },
+                                _ => unimplemented!(),
+                            };
+                            match ret {
+                                None => {}
+                                Some(ret) => {
+                                    self[ret] = v;
+                                }
+                            }
+                        }
+                    }
                 }
                 BcOp::Br(next_pc) => {
                     self.pc = self.pc_top + next_pc;

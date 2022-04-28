@@ -111,23 +111,13 @@ fn repl_exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    //#[cfg(debug_assertions)]
-    //dbg!(&gen);
+
     let interp_val = Interp::eval_toplevel(&gen);
     eprintln!("Interp: {:?}", interp_val);
 
     let bccomp_val = BcCompiler::exec_toplevel(&gen);
     eprintln!("bccomp: {:?}", bccomp_val);
 
-    let mut hir = HirContext::new();
-    match hir.from_ast(&ast) {
-        Ok(_) => {}
-        Err(err) => {
-            eprintln!("Error in compiling AST. {:?}", err);
-            return Err(());
-        }
-    };
-    //dbg!(&hir);
     Ok(())
 }
 

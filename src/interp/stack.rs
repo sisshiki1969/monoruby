@@ -68,14 +68,13 @@ impl Stack {
         &mut self,
         args: u16,
         args_len: u16,
-        bc_func: &FuncInfo,
+        bc_func: &NormalFuncInfo,
         cur_fn: FuncId,
         pc: usize,
         ret: Option<u16>,
     ) {
         let args = self.reg_slice(args, args_len as usize);
-        let local_num = bc_func.local_num();
-        let reg_num = bc_func.reg_num;
+        let total_reg_num = bc_func.total_reg_num();
         let ret = match ret {
             Some(r) => r + 1,
             None => 0,
@@ -85,7 +84,7 @@ impl Stack {
         self.push_u64(self.bp as u64);
         self.bp = self.stack.len();
         self.args_len = args_len as usize;
-        let new_len = self.stack.len() + local_num + reg_num as usize;
+        let new_len = self.stack.len() + total_reg_num;
         self.stack.extend_from_within(args);
         //eprintln!("push {:?}", &self.stack[self.bp..self.stack.len()]);
         self.stack.resize(new_len, Value::nil());

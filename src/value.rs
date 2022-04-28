@@ -52,6 +52,17 @@ impl std::fmt::Debug for Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.unpack() {
+            RV::Integer(n) => write!(f, "{}", n),
+            RV::Float(n) => write!(f, "{}", n),
+            RV::Bool(b) => write!(f, "{:?}", b),
+            RV::Nil => write!(f, "nil"),
+        }
+    }
+}
+
 impl Value {
     #[inline(always)]
     pub fn from(id: u64) -> Self {
