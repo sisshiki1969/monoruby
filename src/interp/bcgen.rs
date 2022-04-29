@@ -25,6 +25,7 @@ pub struct FuncStore {
     pub functions: Vec<FuncInfo>,
     func_map: HashMap<IdentId, FuncId>,
     id_map: HashMap<String, IdentId>,
+    id_names: Vec<String>,
     cur_fn: FuncId,
 }
 
@@ -32,7 +33,10 @@ impl std::fmt::Debug for FuncStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Func name:{}", self.name)?;
         match &self.kind {
-            FuncKind::Builtin { address, arity } => {
+            FuncKind::Builtin {
+                abs_address: address,
+                arity,
+            } => {
                 writeln!(f, "Builtin func {:8x} {}", address, arity)
             }
             FuncKind::Normal(info) => {
@@ -74,22 +78,49 @@ impl std::ops::DerefMut for FuncStore {
     }
 }
 
-fn puts(arg1: Value) -> Value {
+//
+// Builtin methods.
+//
+
+extern "C" fn puts(arg1: Value) -> Value {
     println!("{}", arg1);
     Value::nil()
 }
 
+extern "C" fn assert(expected: Value, actual: Value) -> Value {
+    assert_eq!(expected, actual);
+    Value::nil()
+}
+
+//
+// Runtime functions.
+//
+
 impl FuncStore {
-    pub fn new(ast: &[(Stmt, Span)]) -> Result<Self> {
-        //eprintln!("BcOp:{}", std::mem::size_of::<BcOp>());
-        let mut store = Self {
+    pub extern "C" fn find_method_or_panic(&self, name: IdentId) -> FuncId {
+        *self
+            .get_method(name)
+            .unwrap_or_else(|| panic!("undefined method {:?}.", self.get_ident_name(name)))
+    }
+}
+
+impl FuncStore {
+    fn new() -> Self {
+        Self {
             functions: vec![],
             func_map: HashMap::default(),
             id_map: HashMap::default(),
+            id_names: vec![],
             cur_fn: FuncId(0),
-        };
+        }
+    }
+
+    pub fn from(ast: &[(Stmt, Span)]) -> Result<Self> {
+        //eprintln!("BcOp:{}", std::mem::size_of::<BcOp>());
+        let mut store = Self::new();
         let _func = store.init_new_func("/main".to_string(), vec![]);
         store.add_builtin_func("puts".to_string(), puts as *const u8 as u64, 1);
+        store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
         store.gen_stmts(ast)?;
         store.as_normal().ast = ast.to_vec();
         #[cfg(debug_assertions)]
@@ -100,11 +131,15 @@ impl FuncStore {
             match &mut func.kind {
                 FuncKind::Builtin { .. } => {}
                 FuncKind::Normal(ref mut info) => {
-                    info.gen_bytecode_from_ir(&store.func_map);
+                    info.gen_bytecode_from_ir();
                 }
             }
         }
         Ok(store)
+    }
+
+    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
+        self.func_map.get(&name)
     }
 
     fn get_ident_id(&mut self, ident: &str) -> IdentId {
@@ -116,6 +151,10 @@ impl FuncStore {
                 id
             }
         }
+    }
+
+    fn get_ident_name(&self, id: IdentId) -> &String {
+        &self.id_names[id.0 as usize]
     }
 
     fn init_new_func(&mut self, name: String, args: Vec<String>) -> FuncId {
@@ -241,7 +280,7 @@ pub struct FuncInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FuncKind {
     Normal(NormalFuncInfo),
-    Builtin { address: u64, arity: usize },
+    Builtin { abs_address: u64, arity: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -428,7 +467,10 @@ impl FuncInfo {
         Self {
             id,
             name,
-            kind: FuncKind::Builtin { address, arity },
+            kind: FuncKind::Builtin {
+                abs_address: address,
+                arity,
+            },
         }
     }
 
@@ -790,7 +832,7 @@ impl NormalFuncInfo {
         }
     }
 
-    fn gen_bytecode_from_ir(&mut self, func_map: &HashMap<IdentId, FuncId>) {
+    fn gen_bytecode_from_ir(&mut self) {
         let mut ops = vec![];
         for inst in &self.bc_ir {
             let op = match inst {
@@ -847,21 +889,15 @@ impl NormalFuncInfo {
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
-                BcIr::FnCall(id, ret, arg, len) => {
-                    let id = match func_map.get(id) {
-                        Some(id) => id,
-                        None => panic!("undefined method {:?}.", id),
-                    };
-                    BcOp::FnCall(
-                        *id,
-                        match ret {
-                            Some(ret) => self.get_index(ret),
-                            None => u16::MAX,
-                        },
-                        self.get_index(&BcReg::from(*arg)),
-                        *len as u16,
-                    )
-                }
+                BcIr::FnCall(id, ret, arg, len) => BcOp::FnCall(
+                    *id,
+                    match ret {
+                        Some(ret) => self.get_index(ret),
+                        None => u16::MAX,
+                    },
+                    self.get_index(&BcReg::from(*arg)),
+                    *len as u16,
+                ),
             };
             ops.push(op);
         }

@@ -84,7 +84,7 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let gen = match FuncStore::new(&ast) {
+    let gen = match FuncStore::from(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
@@ -104,7 +104,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let gen = match FuncStore::new(&ast) {
+    let gen = match FuncStore::from(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
@@ -113,7 +113,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
     };
 
     let interp_val = Interp::eval_toplevel(&gen);
-    eprintln!("Interp: {:?}", interp_val);
+    eprintln!("interp: {:?}", interp_val);
 
     let bccomp_val = BcCompiler::exec_toplevel(&gen);
     eprintln!("bccomp: {:?}", bccomp_val);
@@ -135,7 +135,7 @@ pub fn run_test(code: &str) {
         Ok(ast) => ast,
         Err(_) => panic!("Parse error."),
     };
-    let gen = match FuncStore::new(&ast) {
+    let gen = match FuncStore::from(&ast) {
         Ok(gen) => gen,
         Err(err) => {
             panic!("Error in compiling AST. {:?}", err);

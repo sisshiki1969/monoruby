@@ -323,7 +323,8 @@ impl Interp {
                 }
                 BcOp::FnCall(id, ret, args, len) => {
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    match &fn_store[id].kind {
+                    let func_id = fn_store.find_method_or_panic(id);
+                    match &fn_store[func_id].kind {
                         FuncKind::Normal(info) => {
                             if info.arity() != len as usize {
                                 panic!(
@@ -334,7 +335,10 @@ impl Interp {
                             }
                             self.push_frame(args, len, info, ret);
                         }
-                        FuncKind::Builtin { address, arity } => {
+                        FuncKind::Builtin {
+                            abs_address: address,
+                            arity,
+                        } => {
                             if *arity != len as usize {
                                 panic!(
                                     "number of arguments mismatch. expected:{} actual:{}",

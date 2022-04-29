@@ -309,7 +309,11 @@ impl BcCompiler {
                     self.epilogue();
                 }
                 BcOp::FnCall(id, ret, args, len) => {
-                    match &fn_store[*id].kind {
+                    let func_id = match fn_store.get_method(*id) {
+                        Some(fid) => *fid,
+                        None => panic!("undefined method {:?}.", id),
+                    };
+                    match &fn_store[func_id].kind {
                         FuncKind::Normal(info) => {
                             let arity = info.arity();
                             if arity != *len as usize {
@@ -346,7 +350,10 @@ impl BcCompiler {
                                 call dest;
                             );
                         }
-                        FuncKind::Builtin { address, arity } => {
+                        FuncKind::Builtin {
+                            abs_address: address,
+                            arity,
+                        } => {
                             if *arity != *len as usize {
                                 panic!(
                                     "number of arguments mismatch. expected:{} actual:{}",

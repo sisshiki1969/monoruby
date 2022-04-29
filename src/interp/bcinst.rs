@@ -97,7 +97,7 @@ pub(super) enum BcOp {
     /// move(%dst, %src)
     Mov(u16, u16),
     /// func call(func_id, %ret, %args, args_len)
-    FnCall(FuncId, u16, u16, u16),
+    FnCall(IdentId, u16, u16, u16),
 }
 
 impl std::fmt::Debug for BcOp {
