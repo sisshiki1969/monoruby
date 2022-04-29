@@ -10,18 +10,66 @@ use super::*;
 ///
 pub struct BcCompiler {
     jit: JitMemory,
-    method_label: Vec<DestLabel>,
+    method_label: MethodDestTable,
+}
+
+struct MethodDestTable(Vec<DestLabel>);
+
+impl MethodDestTable {
+    fn new() -> Self {
+        Self(vec![])
+    }
+
+    fn push(&mut self, dest: DestLabel) {
+        self.0.push(dest);
+    }
+}
+
+impl std::ops::Index<FuncId> for MethodDestTable {
+    type Output = DestLabel;
+    fn index(&self, index: FuncId) -> &DestLabel {
+        &self.0[index.0 as usize]
+    }
 }
 
 fn conv(reg: u16) -> i64 {
     reg as i64 * 8 + 8
 }
 
+//
+// Runtime functions.
+//
+
+extern "C" fn get_func_absolute_address(
+    bc_comp: &mut BcCompiler,
+    fn_store: &FuncStore,
+    func_name: IdentId,
+    args_len: usize,
+) -> *const u8 {
+    let func_id = match fn_store.get_method(func_name) {
+        Some(fid) => *fid,
+        None => panic!("undefined method {:?}.", func_name),
+    };
+
+    let arity = fn_store[func_id].arity();
+    if arity != args_len {
+        panic!(
+            "number of arguments mismatch. expected:{} actual:{}",
+            arity, args_len
+        );
+    }
+
+    let dest = bc_comp.method_label[func_id];
+    #[cfg(debug_assertions)]
+    eprintln!("method {:?} resolved.", fn_store.get_ident_name(func_name));
+    bc_comp.jit.get_label_absolute_address(dest)
+}
+
 impl BcCompiler {
     pub fn new() -> Self {
         Self {
             jit: JitMemory::new(),
-            method_label: vec![],
+            method_label: MethodDestTable::new(),
         }
     }
 
@@ -38,6 +86,13 @@ impl BcCompiler {
             movq rsp, rbp;
             popq rbp;
             ret;
+        );
+    }
+
+    fn load_binary_args(&mut self, lhs: u16, rhs: u16) {
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(lhs))];
+            movq rsi, [rbp - (conv(rhs))];
         );
     }
 
@@ -60,24 +115,81 @@ impl BcCompiler {
     }
 
     pub fn exec_toplevel(fn_store: &FuncStore) -> Value {
+        let now = Instant::now();
         let mut eval = Self::new();
         for _ in &fn_store.functions {
             eval.method_label.push(eval.jit.label());
         }
         for func in &fn_store.functions {
+            eval.jit.bind_label(eval.method_label[func.id]);
             match &func.kind {
-                FuncKind::Normal(info) => eval.compile_func_bc(info, fn_store),
-                _ => {}
+                FuncKind::Normal(info) => eval.compile_func_bc(info),
+                FuncKind::Builtin { abs_address, arity } => {
+                    eval.compile_builtin_func(*abs_address, *arity)
+                }
             }
         }
-        let main = eval.method_label[0];
+        let main = eval.method_label[FuncId(0)];
+        let entry = eval.jit.label();
+        let bccomp_ptr = &eval as *const _;
+        let funcstore_ptr = fn_store as *const _;
+        monoasm!(eval.jit,
+        entry:
+            pushq rbp;
+            pushq rbx;
+            pushq r12;
+            movq rbx, (bccomp_ptr);
+            movq r12, (funcstore_ptr);
+            call main;
+            popq r12;
+            popq rbx;
+            popq rbp;
+            ret;
+        );
         eval.jit.finalize();
-        let entry_point: extern "C" fn(()) -> Value = eval.jit.get_label_addr(main);
+        let entry_point: extern "C" fn(()) -> Value = eval.jit.get_label_addr(entry);
+        eprintln!("jit compile elapsed:{:?}", now.elapsed());
         entry_point(())
     }
 
-    fn compile_func_bc(&mut self, func: &NormalFuncInfo, fn_store: &FuncStore) {
-        self.jit.bind_label(self.method_label[func.id.0 as usize]);
+    fn compile_builtin_func(&mut self, abs_address: u64, arity: usize) {
+        //
+        // generate a wrapper for a builtin function which has C ABI.
+        // stack layout at the point of just after execution of call instruction.
+        //
+        //       +-------------+
+        // +0x00 | return addr | <- rsp
+        //       +-------------+
+        // +0x08 |             |
+        //       +-------------+
+        // +0x10 |    arg 0    |
+        //       +-------------+
+        // +0x18 |    arg 1    |
+        //       +-------------+
+        // +0x20 |      :      |
+        //
+        match arity {
+            0 => {}
+            1 => {
+                monoasm!(self.jit,
+                    movq rdi, [rsp - 16];
+                );
+            }
+            2 => {
+                monoasm!(self.jit,
+                    movq rdi, [rsp - 16];
+                    movq rsi, [rsp - 24];
+                );
+            }
+            _ => unimplemented!(),
+        }
+        monoasm!(self.jit,
+            movq rax, (abs_address);
+            jmp rax;
+        );
+    }
+
+    fn compile_func_bc(&mut self, func: &NormalFuncInfo) {
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
@@ -117,10 +229,7 @@ impl BcCompiler {
                 BcOp::Add(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
-                        movq rsi, [rbp - (conv(*rhs))];
-                    );
+                    self.load_binary_args(*lhs, *rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
                     monoasm!(self.jit,
@@ -164,10 +273,7 @@ impl BcCompiler {
                 BcOp::Sub(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
-                        movq rsi, [rbp - (conv(*rhs))];
-                    );
+                    self.load_binary_args(*lhs, *rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
                     monoasm!(self.jit,
@@ -208,18 +314,16 @@ impl BcCompiler {
                 }
 
                 BcOp::Mul(ret, lhs, rhs) => {
+                    self.load_binary_args(*lhs, *rhs);
                     monoasm!(self.jit,
-                      movq rdi, [rbp - (conv(*lhs))];
-                      movq rsi, [rbp - (conv(*rhs))];
                       movq rax, (mul_values);
                       call rax;
                       movq [rbp - (conv(*ret))], rax;
                     );
                 }
                 BcOp::Div(ret, lhs, rhs) => {
+                    self.load_binary_args(*lhs, *rhs);
                     monoasm!(self.jit,
-                      movq rdi, [rbp - (conv(*lhs))];
-                      movq rsi, [rbp - (conv(*rhs))];
                       movq rax, (div_values);
                       call rax;
                       movq [rbp - (conv(*ret))], rax;
@@ -234,9 +338,8 @@ impl BcCompiler {
                         CmpKind::Le => cmp_le_values,
                         CmpKind::Ge => cmp_ge_values,
                     };
+                    self.load_binary_args(*lhs, *rhs);
                     monoasm!(self.jit,
-                      movq rdi, [rbp - (conv(*lhs))];
-                      movq rsi, [rbp - (conv(*rhs))];
                       movq rax, (func);
                       call rax;
                       movq [rbp - (conv(*ret))], rax;
@@ -309,78 +412,58 @@ impl BcCompiler {
                     self.epilogue();
                 }
                 BcOp::FnCall(id, ret, args, len) => {
-                    let func_id = match fn_store.get_method(*id) {
-                        Some(fid) => *fid,
-                        None => panic!("undefined method {:?}.", id),
-                    };
-                    match &fn_store[func_id].kind {
-                        FuncKind::Normal(info) => {
-                            let arity = info.arity();
-                            if arity != *len as usize {
-                                panic!(
-                                    "number of arguments mismatch. expected:{} actual:{}",
-                                    arity, len
-                                );
-                            }
-                            let dest = self.method_label[id.0 as usize];
-                            let args = *args as i64 * 8 + 8;
-                            // set arguments to a callee stack.
-                            //
-                            //       +-------------+
-                            // +0x00 |             | <- rsp
-                            //       +-------------+
-                            // +0x08 | return addr |
-                            //       +-------------+
-                            // +0x10 |   old rbp   |
-                            //       +-------------+
-                            // +0x18 |    arg 0    |
-                            //       +-------------+
-                            // +0x20 |    arg 1    |
-                            //       +-------------+
-                            // +0x28 |      :      |
-                            //
-                            for i in 0..*len {
-                                let offset = i as i64 * 8;
-                                monoasm!(self.jit,
-                                    movq rax, [rbp - (args + offset)];
-                                    movq [rsp - (offset + 24)], rax;
-                                );
-                            }
-                            monoasm!(self.jit,
-                                call dest;
-                            );
-                        }
-                        FuncKind::Builtin {
-                            abs_address: address,
-                            arity,
-                        } => {
-                            if *arity != *len as usize {
-                                panic!(
-                                    "number of arguments mismatch. expected:{} actual:{}",
-                                    arity, len
-                                );
-                            }
-                            match *arity {
-                                0 => {}
-                                1 => {
-                                    monoasm!(self.jit,
-                                        movq rdi, [rbp - 8];
-                                    );
-                                }
-                                2 => {
-                                    monoasm!(self.jit,
-                                        movq rdi, [rbp - 8];
-                                        movq rsi, [rbp - 16];
-                                    );
-                                }
-                                _ => unimplemented!(),
-                            }
-                            monoasm!(self.jit,
-                                movq rax, (*address);
-                                call rax;
-                            );
-                        }
+                    let args = *args as i64 * 8 + 8;
+                    // set arguments to a callee stack.
+                    //
+                    //       +-------------+
+                    // +0x00 |             | <- rsp
+                    //       +-------------+
+                    // +0x08 | return addr |
+                    //       +-------------+
+                    // +0x10 |   old rbp   |
+                    //       +-------------+
+                    // +0x18 |    arg 0    |
+                    //       +-------------+
+                    // +0x20 |    arg 1    |
+                    //       +-------------+
+                    // +0x28 |      :      |
+                    //
+                    for i in 0..*len {
+                        let offset = i as i64 * 8;
+                        monoasm!(self.jit,
+                            movq rax, [rbp - (args + offset)];
+                            movq [rsp - (offset + 24)], rax;
+                        );
                     }
+                    let func = self.jit.label();
+                    let l1 = self.jit.label();
+                    monoasm!(self.jit,
+                        jmp l1;
+                    func:
+                        // call site stub code.
+                        // push down sp to avoid destroying arguments area.
+                        subq rsp, 168;
+                        movq rdi, rbx; // &mut BcCmpiler
+                        movq rsi, r12; // &FuncStore
+                        movq rdx, (id.0 as u64); // IdentId
+                        movq rcx, (*len as usize); // args_len: usize
+                        movq rax, (get_func_absolute_address);
+                        call rax;
+                        addq rsp, 168;
+                        // absolute address was returned to rax.
+                        // set patch point address (= return address - 4) to rdi.
+                        movq rdi, [rsp];
+                        subq rdi, 4;
+                        // calculate a new displacement to a function address.
+                        movq rsi, rax;
+                        subq rsi, [rsp];
+                        // apply patch.
+                        movl [rdi], rsi;
+                        jmp rax;
+                    l1:
+                        // patch point
+                        call func;
+                    );
                     if *ret != u16::MAX {
                         let ret = *ret as i64 * 8 + 8;
                         monoasm!(self.jit,

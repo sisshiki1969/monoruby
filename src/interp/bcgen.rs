@@ -148,12 +148,13 @@ impl FuncStore {
             None => {
                 let id = IdentId(self.id_map.len() as u32);
                 self.id_map.insert(ident.to_string(), id);
+                self.id_names.push(ident.to_string());
                 id
             }
         }
     }
 
-    fn get_ident_name(&self, id: IdentId) -> &String {
+    pub fn get_ident_name(&self, id: IdentId) -> &String {
         &self.id_names[id.0 as usize]
     }
 
@@ -266,15 +267,6 @@ impl FuncStore {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FuncInfo {
-    /// ID of this function.
-    pub id: FuncId,
-    /// name of this function.
-    name: String,
-    pub(super) kind: FuncKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -443,6 +435,15 @@ impl NormalFuncInfo {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncInfo {
+    /// ID of this function.
+    pub id: FuncId,
+    /// name of this function.
+    name: String,
+    pub(super) kind: FuncKind,
+}
+
 impl FuncInfo {
     fn new_normal(id: FuncId, name: String, args: Vec<String>) -> Self {
         Self {
@@ -471,6 +472,13 @@ impl FuncInfo {
                 abs_address: address,
                 arity,
             },
+        }
+    }
+
+    pub(super) fn arity(&self) -> usize {
+        match &self.kind {
+            FuncKind::Normal(info) => info.arity(),
+            FuncKind::Builtin { arity, .. } => *arity,
         }
     }
 

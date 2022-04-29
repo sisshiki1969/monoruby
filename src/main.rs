@@ -129,6 +129,7 @@ fn run_repl(code: &str, all_codes: &mut Vec<String>) {
 }
 
 pub fn run_test(code: &str) {
+    #[cfg(debug_assertions)]
     dbg!(code);
     let all_codes = vec![code.to_string()];
     let ast = match MonorubyParser::parse(code) {
@@ -159,8 +160,6 @@ pub fn run_test(code: &str) {
         Ok(_) => {}
         Err(err) => panic!("Error in compiling AST. {:?}", err),
     };
-    //#[cfg(debug_assertions)]
-    //dbg!(&hir);
     let now = Instant::now();
     let eval_res = Evaluator::eval_toplevel(&hir);
     eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
