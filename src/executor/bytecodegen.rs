@@ -17,7 +17,7 @@ pub struct FuncId(pub u32);
 pub struct IdentId(pub u32);
 
 ///
-/// A store of functions.
+/// Store of functions.
 ///
 #[derive(Clone, PartialEq)]
 pub struct FuncStore {
@@ -37,16 +37,15 @@ impl std::fmt::Debug for FuncStore {
                 abs_address: address,
                 arity,
             } => {
-                writeln!(f, "Builtin func {:8x} {}", address, arity)
+                writeln!(f, "Builtin func {:8x} params:{}", address, arity)?;
             }
             FuncKind::Normal(info) => {
                 for inst in &info.bc_ir {
                     writeln!(f, "{:?}", inst)?;
                 }
-                writeln!(f, "-------------------------")?;
-                Ok(())
             }
         }
+        writeln!(f, "-------------------------")
     }
 }
 

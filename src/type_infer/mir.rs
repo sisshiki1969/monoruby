@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::hir::{Hir, HirBBId, HirFuncId, HirFunction, HirOperand, SsaReg};
+use super::*;
 
 use super::{CmpKind, Type, Value, RV};
 

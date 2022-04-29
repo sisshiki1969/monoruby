@@ -1,7 +1,16 @@
 use monoasm::DestLabel;
 
-use super::hir::SsaReg;
 use super::*;
+
+mod codegen;
+mod hir;
+mod mcir;
+mod mir;
+use codegen::*;
+pub use hir::HirContext;
+use hir::*;
+use mcir::*;
+use mir::*;
 
 pub struct Evaluator {
     codegen: Codegen,

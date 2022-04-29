@@ -3,9 +3,6 @@ use super::*;
 ///
 /// Call stack.
 ///
-///                                            bp
-/// | ret_reg | prev_pc | args_len | prev_bp | arg0 |..| local0 |..| temp0 |..
-///
 #[derive(Debug, Clone)]
 pub struct Stack {
     stack: Vec<Value>,

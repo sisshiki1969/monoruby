@@ -8,24 +8,16 @@ use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
 mod ast;
-mod codegen;
-mod eval;
-mod hir;
-mod interp;
-mod mcir;
-mod mir;
+mod executor;
 mod parse;
+mod type_infer;
 mod types;
 mod value;
 pub use ast::*;
-use codegen::*;
-use eval::*;
-use hir::*;
-use interp::*;
-use mcir::*;
-use mir::*;
+use executor::*;
 use parse::Span;
 pub use parse::*;
+use type_infer::*;
 use types::*;
 use value::*;
 

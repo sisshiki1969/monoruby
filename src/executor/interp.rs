@@ -1,144 +1,5 @@
 use super::*;
 
-mod bccomp;
-mod bcgen;
-mod bcinst;
-mod op;
-mod stack;
-pub use bccomp::*;
-pub use bcgen::FuncStore;
-use bcgen::*;
-use bcinst::*;
-use op::*;
-use stack::*;
-
-#[derive(Debug, Clone)]
-pub enum BcErr {
-    UndefinedLocal(String),
-    //UndefinedMethod(String),
-}
-
-///
-/// ID of instruction.
-///
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct InstId(pub u32);
-
-impl std::fmt::Debug for InstId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, ":{:05}", self.0)
-    }
-}
-
-///
-/// ID of register.
-///
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BcReg {
-    Local(BcLocal),
-    Temp(BcTemp),
-}
-
-impl std::fmt::Debug for BcReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local(local) => write!(f, "{:?}", local),
-            Self::Temp(temp) => write!(f, "{:?}", temp),
-        }
-    }
-}
-
-impl std::convert::From<BcLocal> for BcReg {
-    fn from(local: BcLocal) -> Self {
-        BcReg::Local(local)
-    }
-}
-
-impl std::convert::From<BcTemp> for BcReg {
-    fn from(temp: BcTemp) -> Self {
-        BcReg::Temp(temp)
-    }
-}
-
-///
-/// ID of temporary register.
-///
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct BcTemp(pub u16);
-
-impl std::fmt::Debug for BcTemp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{}", self.0)
-    }
-}
-
-///
-/// ID of local variable.
-///
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct BcLocal(pub u16);
-
-impl std::fmt::Debug for BcLocal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "L{}", self.0)
-    }
-}
-
-///
-/// Program counter base.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct BcPcBase(*const BcOp);
-
-impl std::ops::Add<usize> for BcPcBase {
-    type Output = BcPc;
-    fn add(self, rhs: usize) -> BcPc {
-        BcPc(unsafe { self.0.offset(rhs as isize) })
-    }
-}
-
-impl std::ops::Add<InstId> for BcPcBase {
-    type Output = BcPc;
-    fn add(self, rhs: InstId) -> BcPc {
-        BcPc(unsafe { self.0.offset(rhs.0 as isize) })
-    }
-}
-
-impl BcPcBase {
-    fn new(func: &NormalFuncInfo) -> Self {
-        BcPcBase(&func.bytecode()[0] as *const _)
-    }
-}
-
-///
-/// Program counter
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct BcPc(*const BcOp);
-
-impl std::ops::Sub<BcPcBase> for BcPc {
-    type Output = usize;
-    fn sub(self, rhs: BcPcBase) -> usize {
-        let offset = unsafe { self.0.offset_from(rhs.0) };
-        assert!(offset >= 0);
-        offset as usize
-    }
-}
-
-impl std::ops::AddAssign<usize> for BcPc {
-    fn add_assign(&mut self, offset: usize) {
-        unsafe {
-            *self = BcPc(self.0.add(offset));
-        }
-    }
-}
-
-impl BcPc {
-    fn get(&self) -> BcOp {
-        unsafe { (*(self.0)).clone() }
-    }
-}
-
 ///
 /// Bytecode interpreter.
 ///
@@ -162,17 +23,14 @@ impl std::ops::IndexMut<u16> for Interp {
     }
 }
 
-macro_rules! cmp_op_ri {
-    ($lhs:ident, $rhs:ident, $op:ident) => {{
-        match $lhs.unpack() {
-            RV::Integer($lhs) => $lhs.$op(&($rhs as i32)),
-            RV::Float($lhs) => $lhs.$op(&($rhs as f64)),
-            _ => unreachable!(),
-        }
-    }};
-}
-
 impl Interp {
+    pub fn eval_toplevel(fn_store: &FuncStore) -> Value {
+        let mut eval = Self::new(fn_store);
+        let hir_func = &fn_store[FuncId(0)].as_normal_ref();
+        eval.push_frame(0, 0, hir_func, None);
+        eval.eval_loop(fn_store)
+    }
+
     fn new(fn_store: &FuncStore) -> Self {
         let cur_fn = FuncId(0);
         let pc_top = BcPcBase::new(&fn_store[cur_fn].as_normal_ref());
@@ -212,13 +70,6 @@ impl Interp {
             self[ret] = val;
         }
         false
-    }
-
-    pub fn eval_toplevel(fn_store: &FuncStore) -> Value {
-        let mut eval = Self::new(fn_store);
-        let hir_func = &fn_store[FuncId(0)].as_normal_ref();
-        eval.push_frame(0, 0, hir_func, None);
-        eval.eval_loop(fn_store)
     }
 
     fn eval_loop(&mut self, fn_store: &FuncStore) -> Value {
@@ -303,14 +154,15 @@ impl Interp {
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => {
                     let lhs = self[lhs];
-                    self[ret] = Value::bool(match kind {
-                        CmpKind::Eq => cmp_op_ri!(lhs, rhs, eq),
-                        CmpKind::Ne => cmp_op_ri!(lhs, rhs, ne),
-                        CmpKind::Lt => cmp_op_ri!(lhs, rhs, lt),
-                        CmpKind::Gt => cmp_op_ri!(lhs, rhs, gt),
-                        CmpKind::Le => cmp_op_ri!(lhs, rhs, le),
-                        CmpKind::Ge => cmp_op_ri!(lhs, rhs, ge),
-                    });
+                    let rhs = rhs as i64;
+                    self[ret] = match kind {
+                        CmpKind::Eq => cmp_eq_ri_values(lhs, rhs),
+                        CmpKind::Ne => cmp_ne_ri_values(lhs, rhs),
+                        CmpKind::Lt => cmp_lt_ri_values(lhs, rhs),
+                        CmpKind::Gt => cmp_gt_ri_values(lhs, rhs),
+                        CmpKind::Le => cmp_le_ri_values(lhs, rhs),
+                        CmpKind::Ge => cmp_ge_ri_values(lhs, rhs),
+                    };
                 }
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];
@@ -322,29 +174,26 @@ impl Interp {
                     self[dst] = self[local];
                 }
                 BcOp::FnCall(id, ret, args, len) => {
+                    fn check_arity(arity: usize, len: u16) {
+                        if arity != len as usize {
+                            panic!(
+                                "number of arguments mismatch. expected:{} actual:{}",
+                                arity, len
+                            );
+                        }
+                    }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
                     let func_id = fn_store.find_method_or_panic(id);
                     match &fn_store[func_id].kind {
                         FuncKind::Normal(info) => {
-                            if info.arity() != len as usize {
-                                panic!(
-                                    "number of arguments mismatch. expected:{} actual:{}",
-                                    info.arity(),
-                                    len
-                                );
-                            }
+                            check_arity(info.arity(), len);
                             self.push_frame(args, len, info, ret);
                         }
                         FuncKind::Builtin {
                             abs_address: address,
                             arity,
                         } => {
-                            if *arity != len as usize {
-                                panic!(
-                                    "number of arguments mismatch. expected:{} actual:{}",
-                                    arity, len
-                                );
-                            }
+                            check_arity(*arity, len);
                             let v = match len {
                                 0 => unsafe {
                                     std::mem::transmute::<u64, extern "C" fn() -> Value>(*address)()
