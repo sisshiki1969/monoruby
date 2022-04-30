@@ -204,16 +204,15 @@ impl Interp {
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
                     let func_id = fn_store.find_method_or_panic(id);
-                    match &fn_store[func_id].kind {
+                    let info = &fn_store[func_id];
+                    check_arity(info.arity(), len);
+                    match &info.kind {
                         FuncKind::Normal(info) => {
-                            check_arity(info.arity(), len);
                             self.push_frame(args, len, info, ret);
                         }
                         FuncKind::Builtin {
                             abs_address: address,
-                            arity,
                         } => {
-                            check_arity(*arity, len);
                             let v = match len {
                                 0 => unsafe {
                                     std::mem::transmute::<u64, extern "C" fn() -> Value>(*address)()

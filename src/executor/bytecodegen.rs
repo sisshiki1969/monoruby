@@ -35,9 +35,8 @@ impl std::fmt::Debug for FuncStore {
         match &self.kind {
             FuncKind::Builtin {
                 abs_address: address,
-                arity,
             } => {
-                writeln!(f, "Builtin func {:8x} params:{}", address, arity)?;
+                writeln!(f, "Builtin func {:8x}", address)?;
             }
             FuncKind::Normal(info) => {
                 for inst in &info.bc_ir {
@@ -271,7 +270,7 @@ impl FuncStore {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FuncKind {
     Normal(NormalFuncInfo),
-    Builtin { abs_address: u64, arity: usize },
+    Builtin { abs_address: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,10 +301,6 @@ impl NormalFuncInfo {
     /// get a number of arguments.
     pub(super) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.reg_num as usize
-    }
-
-    pub(super) fn arity(&self) -> usize {
-        self.args.len()
     }
 
     /// get bytecode.
@@ -440,6 +435,8 @@ pub struct FuncInfo {
     pub id: FuncId,
     /// name of this function.
     name: String,
+    /// arity of this function.
+    arity: usize,
     pub(super) kind: FuncKind,
 }
 
@@ -448,6 +445,7 @@ impl FuncInfo {
         Self {
             id,
             name,
+            arity: args.len(),
             kind: FuncKind::Normal(NormalFuncInfo {
                 id,
                 bc: vec![],
@@ -467,18 +465,15 @@ impl FuncInfo {
         Self {
             id,
             name,
+            arity,
             kind: FuncKind::Builtin {
                 abs_address: address,
-                arity,
             },
         }
     }
 
     pub(super) fn arity(&self) -> usize {
-        match &self.kind {
-            FuncKind::Normal(info) => info.arity(),
-            FuncKind::Builtin { arity, .. } => *arity,
-        }
+        self.arity
     }
 
     pub(super) fn as_normal(&mut self) -> &mut NormalFuncInfo {

@@ -177,8 +177,8 @@ impl BcCompiler {
             eval.jit.bind_label(eval.method_label[func.id]);
             match &func.kind {
                 FuncKind::Normal(info) => eval.compile_func_bc(info),
-                FuncKind::Builtin { abs_address, arity } => {
-                    eval.compile_builtin_func(*abs_address, *arity)
+                FuncKind::Builtin { abs_address } => {
+                    eval.compile_builtin_func(*abs_address, func.arity())
                 }
             }
         }
