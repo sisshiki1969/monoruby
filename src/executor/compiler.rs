@@ -46,10 +46,7 @@ extern "C" fn get_func_absolute_address(
     func_name: IdentId,
     args_len: usize,
 ) -> *const u8 {
-    let func_id = match fn_store.get_method(func_name) {
-        Some(fid) => *fid,
-        None => panic!("undefined method {:?}.", func_name),
-    };
+    let func_id = fn_store.get_method_or_panic(func_name);
 
     let arity = fn_store[func_id].arity();
     if arity != args_len {

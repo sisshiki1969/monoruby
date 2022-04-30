@@ -203,7 +203,7 @@ impl Interp {
                         }
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    let func_id = fn_store.find_method_or_panic(id);
+                    let func_id = fn_store.get_method_or_panic(id);
                     let info = &fn_store[func_id];
                     check_arity(info.arity(), len);
                     match &info.kind {

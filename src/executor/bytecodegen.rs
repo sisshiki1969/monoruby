@@ -16,6 +16,37 @@ pub struct FuncId(pub u32);
 #[repr(transparent)]
 pub struct IdentId(pub u32);
 
+#[derive(Clone, PartialEq)]
+struct IdStore {
+    id_map: HashMap<String, IdentId>,
+    id_names: Vec<String>,
+}
+
+impl IdStore {
+    fn new() -> Self {
+        Self {
+            id_map: HashMap::default(),
+            id_names: vec![],
+        }
+    }
+
+    fn get_ident_id(&mut self, ident: &str) -> IdentId {
+        match self.id_map.get(ident) {
+            Some(id) => *id,
+            None => {
+                let id = IdentId(self.id_map.len() as u32);
+                self.id_map.insert(ident.to_string(), id);
+                self.id_names.push(ident.to_string());
+                id
+            }
+        }
+    }
+
+    fn get_ident_name(&self, id: IdentId) -> &String {
+        &self.id_names[id.0 as usize]
+    }
+}
+
 ///
 /// Store of functions.
 ///
@@ -24,8 +55,7 @@ pub struct FuncStore {
     /// Functions.
     pub functions: Vec<FuncInfo>,
     func_map: HashMap<IdentId, FuncId>,
-    id_map: HashMap<String, IdentId>,
-    id_names: Vec<String>,
+    id_store: IdStore,
     cur_fn: FuncId,
 }
 
@@ -90,25 +120,12 @@ extern "C" fn assert(expected: Value, actual: Value) -> Value {
     Value::nil()
 }
 
-//
-// Runtime functions.
-//
-
-impl FuncStore {
-    pub extern "C" fn find_method_or_panic(&self, name: IdentId) -> FuncId {
-        *self
-            .get_method(name)
-            .unwrap_or_else(|| panic!("undefined method {:?}.", self.get_ident_name(name)))
-    }
-}
-
 impl FuncStore {
     fn new() -> Self {
         Self {
             functions: vec![],
             func_map: HashMap::default(),
-            id_map: HashMap::default(),
-            id_names: vec![],
+            id_store: IdStore::new(),
             cur_fn: FuncId(0),
         }
     }
@@ -136,29 +153,27 @@ impl FuncStore {
         Ok(store)
     }
 
+    fn get_ident_id(&mut self, ident: &str) -> IdentId {
+        self.id_store.get_ident_id(ident)
+    }
+
+    pub fn get_ident_name(&self, id: IdentId) -> &String {
+        self.id_store.get_ident_name(id)
+    }
+
     pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
         self.func_map.get(&name)
     }
 
-    fn get_ident_id(&mut self, ident: &str) -> IdentId {
-        match self.id_map.get(ident) {
-            Some(id) => *id,
-            None => {
-                let id = IdentId(self.id_map.len() as u32);
-                self.id_map.insert(ident.to_string(), id);
-                self.id_names.push(ident.to_string());
-                id
-            }
-        }
-    }
-
-    pub fn get_ident_name(&self, id: IdentId) -> &String {
-        &self.id_names[id.0 as usize]
+    pub fn get_method_or_panic(&self, name: IdentId) -> FuncId {
+        *self
+            .get_method(name)
+            .unwrap_or_else(|| panic!("undefined method {:?}.", self.id_store.get_ident_name(name)))
     }
 
     fn init_new_func(&mut self, name: String, args: Vec<String>) -> FuncId {
         let id = FuncId(self.functions.len() as u32);
-        let name_id = self.get_ident_id(&name);
+        let name_id = self.id_store.get_ident_id(&name);
         self.func_map.insert(name_id, id);
         self.functions
             .push(FuncInfo::new_normal(id, name, args.clone()));
@@ -172,7 +187,7 @@ impl FuncStore {
 
     fn add_builtin_func(&mut self, name: String, address: u64, arity: usize) -> FuncId {
         let id = FuncId(self.functions.len() as u32);
-        let name_id = self.get_ident_id(&name);
+        let name_id = self.id_store.get_ident_id(&name);
         self.func_map.insert(name_id, id);
         self.functions
             .push(FuncInfo::new_builtin(id, name, address, arity));
