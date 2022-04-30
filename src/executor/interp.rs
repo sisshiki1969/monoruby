@@ -95,7 +95,11 @@ impl Interp {
                 BcOp::Add(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    let v = add_values(lhs, rhs);
+                    let v = if lhs.is_fnum() && rhs.is_fnum() {
+                        Value::fixnum(lhs.as_fnum() + rhs.as_fnum())
+                    } else {
+                        add_values(lhs, rhs)
+                    };
                     self[ret] = v;
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
@@ -113,7 +117,11 @@ impl Interp {
                 BcOp::Sub(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    let v = sub_values(lhs, rhs);
+                    let v = if lhs.is_fnum() && rhs.is_fnum() {
+                        Value::fixnum(lhs.as_fnum() - rhs.as_fnum())
+                    } else {
+                        sub_values(lhs, rhs)
+                    };
                     self[ret] = v;
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
@@ -140,29 +148,41 @@ impl Interp {
                     let v = div_values(lhs, rhs);
                     self[ret] = v;
                 }
-                BcOp::Cmp(kind, ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = self[rhs];
-                    self[ret] = match kind {
-                        CmpKind::Eq => cmp_eq_values(lhs, rhs),
-                        CmpKind::Ne => cmp_ne_values(lhs, rhs),
-                        CmpKind::Lt => cmp_lt_values(lhs, rhs),
-                        CmpKind::Gt => cmp_gt_values(lhs, rhs),
-                        CmpKind::Le => cmp_le_values(lhs, rhs),
-                        CmpKind::Ge => cmp_ge_values(lhs, rhs),
-                    };
+                BcOp::Eq(ret, lhs, rhs) => {
+                    self[ret] = cmp_eq_values(self[lhs], self[rhs]);
                 }
-                BcOp::Cmpri(kind, ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = rhs as i64;
-                    self[ret] = match kind {
-                        CmpKind::Eq => cmp_eq_ri_values(lhs, rhs),
-                        CmpKind::Ne => cmp_ne_ri_values(lhs, rhs),
-                        CmpKind::Lt => cmp_lt_ri_values(lhs, rhs),
-                        CmpKind::Gt => cmp_gt_ri_values(lhs, rhs),
-                        CmpKind::Le => cmp_le_ri_values(lhs, rhs),
-                        CmpKind::Ge => cmp_ge_ri_values(lhs, rhs),
-                    };
+                BcOp::Ne(ret, lhs, rhs) => {
+                    self[ret] = cmp_ne_values(self[lhs], self[rhs]);
+                }
+                BcOp::Ge(ret, lhs, rhs) => {
+                    self[ret] = cmp_ge_values(self[lhs], self[rhs]);
+                }
+                BcOp::Gt(ret, lhs, rhs) => {
+                    self[ret] = cmp_gt_values(self[lhs], self[rhs]);
+                }
+                BcOp::Le(ret, lhs, rhs) => {
+                    self[ret] = cmp_le_values(self[lhs], self[rhs]);
+                }
+                BcOp::Lt(ret, lhs, rhs) => {
+                    self[ret] = cmp_lt_values(self[lhs], self[rhs]);
+                }
+                BcOp::Eqri(ret, lhs, rhs) => {
+                    self[ret] = cmp_eq_ri_values(self[lhs], rhs as i64);
+                }
+                BcOp::Neri(ret, lhs, rhs) => {
+                    self[ret] = cmp_ne_ri_values(self[lhs], rhs as i64);
+                }
+                BcOp::Geri(ret, lhs, rhs) => {
+                    self[ret] = cmp_ge_ri_values(self[lhs], rhs as i64);
+                }
+                BcOp::Gtri(ret, lhs, rhs) => {
+                    self[ret] = cmp_gt_ri_values(self[lhs], rhs as i64);
+                }
+                BcOp::Leri(ret, lhs, rhs) => {
+                    self[ret] = cmp_le_ri_values(self[lhs], rhs as i64);
+                }
+                BcOp::Ltri(ret, lhs, rhs) => {
+                    self[ret] = cmp_lt_ri_values(self[lhs], rhs as i64);
                 }
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];

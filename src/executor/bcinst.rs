@@ -88,10 +88,30 @@ pub(super) enum BcOp {
     Mul(u16, u16, u16),
     /// div(%ret, %lhs, %rhs)
     Div(u16, u16, u16),
-    /// compare(cmp_kind, %ret, %lhs, %rhs)
-    Cmp(CmpKind, u16, u16, u16),
-    /// compare to small integer(cmp_kind, %ret, %lhs, rhs:i16)
-    Cmpri(CmpKind, u16, u16, i16),
+    /// eq(%ret, %lhs, %rhs)
+    Eq(u16, u16, u16),
+    /// ne(%ret, %lhs, %rhs)
+    Ne(u16, u16, u16),
+    /// lt(%ret, %lhs, %rhs)
+    Lt(u16, u16, u16),
+    /// le(%ret, %lhs, %rhs)
+    Le(u16, u16, u16),
+    /// gt(%ret, %lhs, %rhs)
+    Gt(u16, u16, u16),
+    /// ge(%ret, %lhs, %rhs)
+    Ge(u16, u16, u16),
+    /// eqri(%ret, %lhs, rhs: i16)
+    Eqri(u16, u16, i16),
+    /// neri(%ret, %lhs, rhs: i16)
+    Neri(u16, u16, i16),
+    /// ltri(%ret, %lhs, rhs: i16)
+    Ltri(u16, u16, i16),
+    /// leri(%ret, %lhs, rhs: i16)
+    Leri(u16, u16, i16),
+    /// gtri(%ret, %lhs, rhs: i16)
+    Gtri(u16, u16, i16),
+    /// geri(%ret, %lhs, rhs: i16)
+    Geri(u16, u16, i16),
     /// return(%ret)
     Ret(u16),
     /// move(%dst, %src)
@@ -116,11 +136,41 @@ impl std::fmt::Debug for BcOp {
             Self::Subri(dst, lhs, rhs) => write!(f, "{:?} = {:?} - {}:i16", dst, lhs, rhs),
             Self::Mul(dst, lhs, rhs) => write!(f, "{:?} = {:?} * {:?}", dst, lhs, rhs),
             Self::Div(dst, lhs, rhs) => write!(f, "{:?} = {:?} / {:?}", dst, lhs, rhs),
-            Self::Cmp(kind, dst, lhs, rhs) => {
-                write!(f, "{:?} = {:?} {:?} {:?}", dst, lhs, kind, rhs)
+            Self::Eq(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} == {:?}", dst, lhs, rhs)
             }
-            Self::Cmpri(kind, dst, lhs, rhs) => {
-                write!(f, "{:?} = {:?} {:?} {}:i16", dst, lhs, kind, rhs)
+            Self::Ne(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} != {:?}", dst, lhs, rhs)
+            }
+            Self::Ge(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} >= {:?}", dst, lhs, rhs)
+            }
+            Self::Gt(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} > {:?}", dst, lhs, rhs)
+            }
+            Self::Le(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} <= {:?}", dst, lhs, rhs)
+            }
+            Self::Lt(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} < {:?}", dst, lhs, rhs)
+            }
+            Self::Eqri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} == {}: i16", dst, lhs, rhs)
+            }
+            Self::Neri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} != {}: i16", dst, lhs, rhs)
+            }
+            Self::Geri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} >= {}: i16", dst, lhs, rhs)
+            }
+            Self::Gtri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} > {}: i16", dst, lhs, rhs)
+            }
+            Self::Leri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} <= {}: i16", dst, lhs, rhs)
+            }
+            Self::Ltri(dst, lhs, rhs) => {
+                write!(f, "{:?} = {:?} < {}: i16", dst, lhs, rhs)
             }
             Self::Ret(reg) => write!(f, "ret {:?}", reg),
             Self::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
