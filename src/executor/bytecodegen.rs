@@ -301,7 +301,7 @@ pub struct NormalFuncInfo {
 impl NormalFuncInfo {
     /// get a number of arguments.
     pub(super) fn total_reg_num(&self) -> usize {
-        self.locals.len() + self.reg_num as usize
+        1 + self.locals.len() + self.reg_num as usize
     }
 
     pub(super) fn arity(&self) -> usize {
@@ -834,8 +834,8 @@ impl FuncStore {
 impl NormalFuncInfo {
     fn get_index(&self, reg: &BcReg) -> u16 {
         match reg {
-            BcReg::Temp(i) => self.locals.len() as u16 + i.0,
-            BcReg::Local(i) => i.0,
+            BcReg::Temp(i) => 1 + self.locals.len() as u16 + i.0,
+            BcReg::Local(i) => 1 + i.0,
         }
     }
 

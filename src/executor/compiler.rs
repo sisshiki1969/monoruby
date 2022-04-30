@@ -33,7 +33,7 @@ impl std::ops::Index<FuncId> for MethodDestTable {
 }
 
 fn conv(reg: u16) -> i64 {
-    reg as i64 * 8 + 8
+    reg as i64 * 8 + 16
 }
 
 //
@@ -73,11 +73,11 @@ impl BcCompiler {
         }
     }
 
-    fn prologue(&mut self, locals: usize) {
+    fn prologue(&mut self, regs: usize) {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, ((locals + locals % 2) * 8);
+            subq rsp, ((regs + regs % 2) * 8);
         );
     }
 
@@ -120,7 +120,7 @@ impl BcCompiler {
         );
         self.guard_rdi_fixnum(generic);
         monoasm!(self.jit,
-            movq rax, (Value::bool(false).get());
+            xorq rax, rax;
             movq rsi, (Value::integer(rhs as i32).get());
             cmpq rdi, rsi;
         );
@@ -135,9 +135,8 @@ impl BcCompiler {
         exit: DestLabel,
     ) {
         monoasm!(self.jit,
-            andq rdi, 0xff;
-            shlq rdi, 3;
-            orq rax, rdi;
+            shlq rax, 3;
+            orq rax, (Value::bool(false).get());
             jmp exit;
         generic:
             movq rsi, (rhs as i64);
@@ -147,6 +146,26 @@ impl BcCompiler {
             movq [rbp - (conv(ret))], rax;
         );
     }
+
+    //
+    // stack layout for jit-ed code.
+    //
+    //       +-------------+
+    // +0x08 | return addr |
+    //       +-------------+
+    //  0x00 |  prev rbp   | <- rbp
+    //       +-------------+
+    // -0x08 |    meta     |
+    //       +-------------+
+    // -0x10 |     %0      |
+    //       +-------------+
+    // -0x18 |     %1      |
+    //       +-------------+
+    //       |      :      |
+    //       +-------------+
+    // -0xxx |    %(n-1)   | <- rsp
+    //       +-------------+
+    //
 
     pub fn exec_toplevel(fn_store: &FuncStore) -> Value {
         let now = Instant::now();
@@ -192,27 +211,28 @@ impl BcCompiler {
         // stack layout at the point of just after execution of call instruction.
         //
         //       +-------------+
-        // +0x00 | return addr | <- rsp
+        //  0x00 | return addr | <- rsp
         //       +-------------+
-        // +0x08 |             |
+        // -0x08 |             |
         //       +-------------+
-        // +0x10 |    arg 0    |
+        // -0x10 |    meta     |
         //       +-------------+
-        // +0x18 |    arg 1    |
+        // -0x18 |  %0 (self)  |
         //       +-------------+
-        // +0x20 |      :      |
+        // -0x20 | %1(1st arg) |
+        //       +-------------+
         //
         match arity {
             0 => {}
             1 => {
                 monoasm!(self.jit,
-                    movq rdi, [rsp - 16];
+                    movq rdi, [rsp - 0x20];
                 );
             }
             2 => {
                 monoasm!(self.jit,
-                    movq rdi, [rsp - 16];
-                    movq rsi, [rsp - 24];
+                    movq rdi, [rsp - 0x20];
+                    movq rsi, [rsp - 0x28];
                 );
             }
             _ => unimplemented!(),
@@ -416,7 +436,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_eq_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, seteq rdi; );
+                    monoasm!(self.jit, seteq rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Neri(ret, lhs, rhs) => {
@@ -424,7 +444,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_ne_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, setne rdi; );
+                    monoasm!(self.jit, setne rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Geri(ret, lhs, rhs) => {
@@ -432,7 +452,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_ge_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, setge rdi; );
+                    monoasm!(self.jit, setge rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Gtri(ret, lhs, rhs) => {
@@ -440,7 +460,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_gt_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, setgt rdi; );
+                    monoasm!(self.jit, setgt rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Leri(ret, lhs, rhs) => {
@@ -448,7 +468,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_le_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, setle rdi; );
+                    monoasm!(self.jit, setle rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Ltri(ret, lhs, rhs) => {
@@ -456,7 +476,7 @@ impl BcCompiler {
                     let exit = self.jit.label();
                     let func = cmp_lt_ri_values;
                     self.compri_pre(*lhs, *rhs, generic);
-                    monoasm!(self.jit, setlt rdi; );
+                    monoasm!(self.jit, setlt rax; );
                     self.compri_post(func, *ret, *rhs, generic, exit);
                 }
                 BcOp::Mov(dst, src) => {
@@ -466,34 +486,35 @@ impl BcCompiler {
                     );
                 }
                 BcOp::Ret(lhs) => {
-                    let lhs = *lhs as i64 * 8 + 8;
+                    let lhs = conv(*lhs);
                     monoasm!(self.jit,
                         movq rax, [rbp - (lhs)];
                     );
                     self.epilogue();
                 }
                 BcOp::FnCall(id, ret, args, len) => {
-                    let args = *args as i64 * 8 + 8;
                     // set arguments to a callee stack.
                     //
                     //       +-------------+
-                    // +0x00 |             | <- rsp
+                    //  0x00 |             | <- rsp
                     //       +-------------+
-                    // +0x08 | return addr |
+                    // -0x08 | return addr |
                     //       +-------------+
-                    // +0x10 |   old rbp   |
+                    // -0x10 |   old rbp   |
                     //       +-------------+
-                    // +0x18 |    arg 0    |
+                    // -0x18 |    meta     |
                     //       +-------------+
-                    // +0x20 |    arg 1    |
+                    // -0x20 |     %0      |
                     //       +-------------+
-                    // +0x28 |      :      |
+                    // -0x28 | %1(1st arg) |
+                    //       +-------------+
+                    //       |             |
                     //
                     for i in 0..*len {
-                        let offset = i as i64 * 8;
+                        let reg = *args + i;
                         monoasm!(self.jit,
-                            movq rax, [rbp - (args + offset)];
-                            movq [rsp - (offset + 24)], rax;
+                            movq rax, [rbp - (conv(reg))];
+                            movq [rsp - ((0x28 + i * 8) as i64)], rax;
                         );
                     }
                     let func = self.jit.label();
@@ -526,9 +547,8 @@ impl BcCompiler {
                         call func;
                     );
                     if *ret != u16::MAX {
-                        let ret = *ret as i64 * 8 + 8;
                         monoasm!(self.jit,
-                            movq [rbp - (ret)], rax;
+                            movq [rbp - (conv(*ret))], rax;
                         );
                     }
                 }
@@ -539,7 +559,7 @@ impl BcCompiler {
                     );
                 }
                 BcOp::CondBr(cond_, then_) => {
-                    let cond_ = *cond_ as i64 * 8 + 8;
+                    let cond_ = conv(*cond_);
                     let dest = labels[then_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,
@@ -548,7 +568,7 @@ impl BcCompiler {
                     );
                 }
                 BcOp::CondNotBr(cond_, else_) => {
-                    let cond_ = *cond_ as i64 * 8 + 8;
+                    let cond_ = conv(*cond_);
                     let dest = labels[else_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,

@@ -80,6 +80,7 @@ impl Stack {
         self.push_u32(ret as u32, self.args_len as u32);
         self.push_u64(self.bp as u64);
         self.bp = self.stack.len();
+        self.stack.push(Value::nil());
         self.args_len = args_len as usize;
         let new_len = self.stack.len() + total_reg_num;
         self.stack.extend_from_within(args);
