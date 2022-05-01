@@ -1,6 +1,22 @@
+use std::hash::Hash;
+
 use super::*;
 
 pub type Result<T> = std::result::Result<T, BcErr>;
+
+//
+// Builtin methods.
+//
+
+extern "C" fn puts(arg1: Value) -> Value {
+    println!("{}", arg1);
+    Value::nil()
+}
+
+extern "C" fn assert(expected: Value, actual: Value) -> Value {
+    assert_eq!(expected, actual);
+    Value::nil()
+}
 
 ///
 /// ID of function.
@@ -47,6 +63,13 @@ impl IdStore {
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct TempInfo {
+    name: String,
+    args: Vec<String>,
+    ast: Vec<(Stmt, Span)>,
+}
+
 ///
 /// Store of functions.
 ///
@@ -56,26 +79,8 @@ pub struct FuncStore {
     pub functions: Vec<FuncInfo>,
     func_map: HashMap<IdentId, FuncId>,
     id_store: IdStore,
-    cur_fn: FuncId,
-}
-
-impl std::fmt::Debug for FuncStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Func name:{}", self.name)?;
-        match &self.kind {
-            FuncKind::Builtin {
-                abs_address: address,
-            } => {
-                writeln!(f, "Builtin func {:8x}", address)?;
-            }
-            FuncKind::Normal(info) => {
-                for inst in &info.bc_ir {
-                    writeln!(f, "{:?}", inst)?;
-                }
-            }
-        }
-        writeln!(f, "-------------------------")
-    }
+    /// remaining functions to be compiled.
+    remaining: Vec<TempInfo>,
 }
 
 impl std::ops::Index<FuncId> for FuncStore {
@@ -91,53 +96,28 @@ impl std::ops::IndexMut<FuncId> for FuncStore {
     }
 }
 
-impl std::ops::Deref for FuncStore {
-    type Target = FuncInfo;
-    fn deref(&self) -> &FuncInfo {
-        let func = self.cur_fn;
-        &self[func]
-    }
-}
-
-impl std::ops::DerefMut for FuncStore {
-    fn deref_mut(&mut self) -> &mut FuncInfo {
-        let func = self.cur_fn;
-        &mut self[func]
-    }
-}
-
-//
-// Builtin methods.
-//
-
-extern "C" fn puts(arg1: Value) -> Value {
-    println!("{}", arg1);
-    Value::nil()
-}
-
-extern "C" fn assert(expected: Value, actual: Value) -> Value {
-    assert_eq!(expected, actual);
-    Value::nil()
-}
-
 impl FuncStore {
     fn new() -> Self {
         Self {
             functions: vec![],
             func_map: HashMap::default(),
             id_store: IdStore::new(),
-            cur_fn: FuncId(0),
+            remaining: vec![],
         }
     }
 
-    pub fn from(ast: &[(Stmt, Span)]) -> Result<Self> {
-        //eprintln!("BcOp:{}", std::mem::size_of::<BcOp>());
+    pub fn from_ast(ast: Vec<(Stmt, Span)>) -> Result<Self> {
         let mut store = Self::new();
-        let _func = store.init_new_func("/main".to_string(), vec![]);
+        store.remaining.push(TempInfo {
+            name: "/main".to_string(),
+            args: vec![],
+            ast: ast,
+        });
         store.add_builtin_func("puts".to_string(), puts as *const u8 as u64, 1);
         store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
-        store.gen_stmts(ast)?;
-        store.as_normal().ast = ast.to_vec();
+        while let Some(TempInfo { name, args, ast }) = store.remaining.pop() {
+            store.compile_func(name, args, ast)?;
+        }
         #[cfg(debug_assertions)]
         for func in &store.functions {
             store.dump_bcir(func.id);
@@ -153,15 +133,17 @@ impl FuncStore {
         Ok(store)
     }
 
-    fn get_ident_id(&mut self, ident: &str) -> IdentId {
-        self.id_store.get_ident_id(ident)
+    /// Get *FuncId* of the toplevel function.
+    pub fn get_main_func(&self) -> FuncId {
+        let id = *self.id_store.id_map.get("/main").unwrap();
+        self.get_method_or_panic(id)
     }
 
     pub fn get_ident_name(&self, id: IdentId) -> &String {
         self.id_store.get_ident_name(id)
     }
 
-    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
+    fn get_method(&self, name: IdentId) -> Option<&FuncId> {
         self.func_map.get(&name)
     }
 
@@ -171,20 +153,6 @@ impl FuncStore {
             .unwrap_or_else(|| panic!("undefined method {:?}.", self.id_store.get_ident_name(name)))
     }
 
-    fn init_new_func(&mut self, name: String, args: Vec<String>) -> FuncId {
-        let id = FuncId(self.functions.len() as u32);
-        let name_id = self.id_store.get_ident_id(&name);
-        self.func_map.insert(name_id, id);
-        self.functions
-            .push(FuncInfo::new_normal(id, name, args.clone()));
-        self.cur_fn = id;
-        let info = self.as_normal();
-        args.iter().for_each(|name| {
-            info.add_local(name);
-        });
-        id
-    }
-
     fn add_builtin_func(&mut self, name: String, address: u64, arity: usize) -> FuncId {
         let id = FuncId(self.functions.len() as u32);
         let name_id = self.id_store.get_ident_id(&name);
@@ -192,27 +160,6 @@ impl FuncStore {
         self.functions
             .push(FuncInfo::new_builtin(id, name, address, arity));
         id
-    }
-
-    fn gen_stmts(&mut self, ast: &[(Stmt, Span)]) -> Result<()> {
-        let len = ast.len();
-        for node in &ast[..len - 1] {
-            self.gen_stmt(node, false)?;
-        }
-        self.gen_stmt(&ast[len - 1], true)
-    }
-
-    fn gen_stmt(&mut self, ast: &(Stmt, Span), use_value: bool) -> Result<()> {
-        match &ast.0 {
-            Stmt::Expr(expr) => self.gen_expr(&expr.0, use_value),
-            Stmt::Decl(decl) => {
-                if use_value {
-                    self.gen_decl(&decl.0)
-                } else {
-                    self.gen_decl_no(&decl.0)
-                }
-            }
-        }
     }
 
     fn dump_bcir(&self, id: FuncId) {
@@ -289,6 +236,68 @@ pub enum FuncKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FuncInfo {
+    /// ID of this function.
+    pub id: FuncId,
+    /// name of this function.
+    name: String,
+    /// arity of this function.
+    arity: usize,
+    pub(super) kind: FuncKind,
+}
+
+impl FuncInfo {
+    fn new_normal(name: String, info: NormalFuncInfo) -> Self {
+        Self {
+            id: info.id,
+            name,
+            arity: info.args.len(),
+            kind: FuncKind::Normal(info),
+        }
+    }
+
+    fn new_builtin(id: FuncId, name: String, address: u64, arity: usize) -> Self {
+        Self {
+            id,
+            name,
+            arity,
+            kind: FuncKind::Builtin {
+                abs_address: address,
+            },
+        }
+    }
+
+    pub(super) fn arity(&self) -> usize {
+        self.arity
+    }
+
+    pub(super) fn as_normal(&self) -> &NormalFuncInfo {
+        match &self.kind {
+            FuncKind::Normal(info) => info,
+            FuncKind::Builtin { .. } => unreachable!(),
+        }
+    }
+}
+
+impl FuncStore {
+    /// Generate bytecode Ir in a new function from [(Stmt, Span)].
+    fn compile_func(
+        &mut self,
+        name: String,
+        args: Vec<String>,
+        ast: Vec<(Stmt, Span)>,
+    ) -> Result<()> {
+        let id = FuncId(self.functions.len() as u32);
+        let name_id = self.id_store.get_ident_id(&name);
+        self.func_map.insert(name_id, id);
+        let mut info = NormalFuncInfo::new(id, args, ast);
+        info.compile(&mut self.id_store, &mut self.remaining)?;
+        self.functions.push(FuncInfo::new_normal(name, info));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct NormalFuncInfo {
     /// ID of this function.
     pub id: FuncId,
@@ -303,6 +312,8 @@ pub struct NormalFuncInfo {
     /// The number of temporary registers.
     reg_num: u16,
     /// corresponding AST.
+    ///
+    /// !!CAUTION!!:this field is consumed by bytecode compiler.
     ast: Vec<(Stmt, Span)>,
     /// corresponding bytecode ir.
     bc_ir: Vec<BcIr>,
@@ -313,6 +324,25 @@ pub struct NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
+    fn new(id: FuncId, args: Vec<String>, ast: Vec<(Stmt, Span)>) -> Self {
+        let mut info = NormalFuncInfo {
+            id,
+            bc: vec![],
+            args: args.clone(),
+            locals: HashMap::default(),
+            temp: 0,
+            reg_num: 0,
+            ast,
+            bc_ir: vec![],
+            labels: vec![],
+            constants: vec![],
+        };
+        args.into_iter().for_each(|name| {
+            info.add_local(name);
+        });
+        info
+    }
+
     /// get a number of arguments.
     pub(super) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.reg_num as usize
@@ -321,6 +351,11 @@ impl NormalFuncInfo {
     /// get bytecode.
     pub(super) fn bytecode(&self) -> &Vec<BcOp> {
         &self.bc
+    }
+
+    /// get a constant.
+    pub(super) fn get_constant(&self, id: u32) -> Value {
+        self.constants[id as usize]
     }
 
     /// get new destination label.
@@ -341,11 +376,6 @@ impl NormalFuncInfo {
         let constants = self.constants.len();
         self.constants.push(val);
         constants as u32
-    }
-
-    /// get a constant.
-    pub(super) fn get_constant(&self, id: u32) -> Value {
-        self.constants[id as usize]
     }
 
     /// get the next register id.
@@ -377,13 +407,14 @@ impl NormalFuncInfo {
     fn find_local(&mut self, ident: &String) -> BcLocal {
         match self.locals.get(ident) {
             Some(local) => BcLocal(*local),
-            None => self.add_local(ident),
+            None => self.add_local(ident.clone()),
         }
     }
 
-    fn add_local(&mut self, ident: &String) -> BcLocal {
+    /// Add a variable identifier without checking duplicates.
+    fn add_local(&mut self, ident: String) -> BcLocal {
         let local = self.locals.len() as u16;
-        self.locals.insert(ident.to_owned(), local);
+        assert!(self.locals.insert(ident, local).is_none());
         BcLocal(local)
     }
 
@@ -444,399 +475,435 @@ impl NormalFuncInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct FuncInfo {
-    /// ID of this function.
-    pub id: FuncId,
-    /// name of this function.
-    name: String,
-    /// arity of this function.
-    arity: usize,
-    pub(super) kind: FuncKind,
-}
-
-impl FuncInfo {
-    fn new_normal(id: FuncId, name: String, args: Vec<String>) -> Self {
-        Self {
-            id,
-            name,
-            arity: args.len(),
-            kind: FuncKind::Normal(NormalFuncInfo {
-                id,
-                bc: vec![],
-                args,
-                locals: HashMap::default(),
-                temp: 0,
-                reg_num: 0,
-                ast: vec![],
-                bc_ir: vec![],
-                labels: vec![],
-                constants: vec![],
-            }),
+impl NormalFuncInfo {
+    fn compile(&mut self, id_store: &mut IdStore, remaining: &mut Vec<TempInfo>) -> Result<()> {
+        let mut ast = std::mem::take(&mut self.ast);
+        let last = ast.pop().unwrap();
+        for node in ast.into_iter() {
+            self.gen_stmt(id_store, remaining, node, false)?;
         }
+        self.gen_stmt(id_store, remaining, last, true)
     }
 
-    fn new_builtin(id: FuncId, name: String, address: u64, arity: usize) -> Self {
-        Self {
-            id,
-            name,
-            arity,
-            kind: FuncKind::Builtin {
-                abs_address: address,
-            },
-        }
-    }
-
-    pub(super) fn arity(&self) -> usize {
-        self.arity
-    }
-
-    pub(super) fn as_normal(&mut self) -> &mut NormalFuncInfo {
-        match &mut self.kind {
-            FuncKind::Normal(info) => info,
-            FuncKind::Builtin { .. } => unreachable!(),
-        }
-    }
-
-    pub(super) fn as_normal_ref(&self) -> &NormalFuncInfo {
-        match &self.kind {
-            FuncKind::Normal(info) => info,
-            FuncKind::Builtin { .. } => unreachable!(),
-        }
-    }
-}
-
-impl FuncStore {
-    /// Generate bytecode Ir in a new function from [(Stmt, Span)].
-    fn decl_func(
+    fn gen_stmt(
         &mut self,
-        func_name: String,
-        args: Vec<String>,
-        ast: &[(Expr, Span)],
-    ) -> Result<FuncId> {
-        let save = self.cur_fn;
-        let func = self.init_new_func(func_name, args);
-        self.gen_exprs(ast, true)?;
-        self.as_normal().ast = ast
-            .iter()
-            .map(|(expr, span)| (Stmt::Expr((expr.clone(), span.clone())), span.clone()))
-            .collect();
-        self.cur_fn = save;
-        Ok(func)
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        ast: (Stmt, Span),
+        use_value: bool,
+    ) -> Result<()> {
+        match ast.0 {
+            Stmt::Expr(expr) => self.gen_expr(id_store, remaining, expr.0, use_value),
+            Stmt::Decl(decl) => {
+                if use_value {
+                    self.gen_decl(remaining, &decl.0)
+                } else {
+                    self.gen_decl_no(remaining, &decl.0)
+                }
+            }
+        }
     }
 
-    fn gen_decl(&mut self, decl: &Decl) -> Result<()> {
-        self.gen_decl_no(decl)?;
-        self.as_normal().gen_nil(None);
+    fn gen_decl(&mut self, remaining: &mut Vec<TempInfo>, decl: &Decl) -> Result<()> {
+        self.gen_decl_no(remaining, decl)?;
+        self.gen_nil(None);
         Ok(())
     }
 
-    fn gen_decl_no(&mut self, decl: &Decl) -> Result<()> {
+    fn gen_decl_no(&mut self, remaining: &mut Vec<TempInfo>, decl: &Decl) -> Result<()> {
         match decl {
             Decl::MethodDef(name, arg_name, body) => {
-                let _ = self.decl_func(name.to_string(), arg_name.clone(), body)?;
+                let _ =
+                    self.decl_func(remaining, name.to_string(), arg_name.clone(), body.clone())?;
                 Ok(())
             }
         }
     }
 
-    fn gen_exprs(&mut self, ast: &[(Expr, Span)], use_value: bool) -> Result<()> {
-        let len = ast.len();
-        assert!(len != 0);
-        for (expr, _) in &ast[..len - 1] {
-            self.gen_expr(&expr, false)?;
-        }
-        self.gen_expr(&ast[len - 1].0, use_value)
+    fn decl_func(
+        &mut self,
+        remaining: &mut Vec<TempInfo>,
+        name: String,
+        args: Vec<String>,
+        ast: Vec<(Expr, Span)>,
+    ) -> Result<()> {
+        let ast = ast
+            .into_iter()
+            .map(|(expr, span)| (Stmt::Expr((expr, span.clone())), span))
+            .collect();
+        remaining.push(TempInfo { name, args, ast });
+        Ok(())
     }
 
-    fn gen_temp_expr(&mut self, expr: &Expr) -> Result<BcTemp> {
-        self.gen_expr(expr, true)?;
-        Ok(self.as_normal().pop())
+    fn gen_exprs(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        mut ast: Vec<(Expr, Span)>,
+        use_value: bool,
+    ) -> Result<()> {
+        let len = ast.len();
+        assert!(len != 0);
+        let last = ast.pop().unwrap();
+        for (expr, _) in ast {
+            self.gen_expr(id_store, remaining, expr, false)?;
+        }
+        self.gen_expr(id_store, remaining, last.0, use_value)
+    }
+
+    fn gen_temp_expr(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        expr: Expr,
+    ) -> Result<BcTemp> {
+        self.gen_expr(id_store, remaining, expr, true)?;
+        Ok(self.pop())
     }
 
     /// Generate bytecode Ir from an *Expr*.
-    fn gen_expr(&mut self, expr: &Expr, use_value: bool) -> Result<()> {
+    fn gen_expr(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        expr: Expr,
+        use_value: bool,
+    ) -> Result<()> {
         match expr {
             Expr::Nil => {
-                self.as_normal().gen_nil(None);
+                self.gen_nil(None);
             }
             Expr::Integer(i) => {
-                self.as_normal().gen_integer(None, *i);
+                self.gen_integer(None, i);
             }
             Expr::Float(f) => {
-                self.as_normal().gen_float(None, *f);
+                self.gen_float(None, f);
             }
             Expr::Neg(box (rhs, _)) => {
                 match rhs {
-                    Expr::Integer(i) => self.as_normal().gen_integer(None, -i),
-                    Expr::Float(f) => self.as_normal().gen_float(None, -f),
+                    Expr::Integer(i) => self.gen_integer(None, -i),
+                    Expr::Float(f) => self.gen_float(None, -f),
                     _ => {
-                        self.gen_expr(rhs, true)?;
-                        self.as_normal().gen_neg(None);
+                        self.gen_expr(id_store, remaining, rhs, true)?;
+                        self.gen_neg(None);
                     }
                 };
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
-                self.gen_add(None, lhs, rhs)?;
+                self.gen_add(id_store, remaining, None, lhs, rhs)?;
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                self.gen_sub(None, lhs, rhs)?;
+                self.gen_sub(id_store, remaining, None, lhs, rhs)?;
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_mul(None, lhs, rhs)?;
+                self.gen_mul(id_store, remaining, None, lhs, rhs)?;
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_div(None, lhs, rhs)?;
+                self.gen_div(id_store, remaining, None, lhs, rhs)?;
             }
             Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                self.gen_cmp(None, *kind, lhs, rhs)?;
+                self.gen_cmp(id_store, remaining, None, kind, lhs, rhs)?;
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let local2 = self.as_normal().find_local(ident);
-                return self.gen_store_expr(local2, rhs, use_value);
+                let local2 = self.find_local(&ident);
+                return self.gen_store_expr(id_store, remaining, local2, rhs, use_value);
             }
             Expr::LocalLoad(ident) => {
-                let local2 = self.as_normal().load_local(ident)?;
-                self.as_normal().gen_temp_mov(local2.into());
+                let local2 = self.load_local(&ident)?;
+                self.gen_temp_mov(local2.into());
             }
             Expr::Call(name, args) => {
-                let name_id = self.get_ident_id(name);
-                let arg = self.gen_args(args)?;
-                self.as_normal().temp -= args.len() as u16;
+                let name_id = id_store.get_ident_id(&name);
+                let len = args.len();
+                let arg = self.gen_args(id_store, remaining, args)?;
+                self.temp -= len as u16;
                 let ret = if use_value {
-                    Some(self.as_normal().push().into())
+                    Some(self.push().into())
                 } else {
                     None
                 };
-                self.as_normal()
-                    .bc_ir
-                    .push(BcIr::FnCall(name_id, ret, arg, args.len()));
+                self.bc_ir.push(BcIr::FnCall(name_id, ret, arg, len));
                 return Ok(());
             }
             Expr::If(box (cond_, _), then_, else_) => {
-                let then_pos = self.as_normal().new_label();
-                let succ_pos = self.as_normal().new_label();
-                let cond = self.gen_temp_expr(cond_)?.into();
+                let then_pos = self.new_label();
+                let succ_pos = self.new_label();
+                let cond = self.gen_temp_expr(id_store, remaining, cond_)?.into();
                 let inst = BcIr::CondBr(cond, then_pos);
-                self.as_normal().bc_ir.push(inst);
-                self.gen_exprs(else_, use_value)?;
-                self.as_normal().bc_ir.push(BcIr::Br(succ_pos));
+                self.bc_ir.push(inst);
+                self.gen_exprs(id_store, remaining, else_, use_value)?;
+                self.bc_ir.push(BcIr::Br(succ_pos));
                 if use_value {
-                    self.as_normal().pop();
+                    self.pop();
                 }
-                self.as_normal().apply_label(then_pos);
-                self.gen_exprs(then_, use_value)?;
-                self.as_normal().apply_label(succ_pos);
+                self.apply_label(then_pos);
+                self.gen_exprs(id_store, remaining, then_, use_value)?;
+                self.apply_label(succ_pos);
                 return Ok(());
             }
             Expr::While(box (cond, _), body) => {
-                self.gen_while(cond, body)?;
+                self.gen_while(id_store, remaining, cond, body)?;
                 if use_value {
-                    self.as_normal().gen_nil(None);
+                    self.gen_nil(None);
                 }
                 return Ok(());
             }
             Expr::Return(box stmt) => {
-                self.gen_stmt(stmt, true)?;
-                self.as_normal().gen_ret()?;
+                self.gen_stmt(id_store, remaining, stmt, true)?;
+                self.gen_ret()?;
                 return Ok(());
             }
         }
         if !use_value {
-            self.as_normal().pop();
+            self.pop();
         }
         Ok(())
     }
-}
 
-impl FuncStore {
-    fn gen_args(&mut self, args: &[(Expr, std::ops::Range<usize>)]) -> Result<BcTemp> {
-        let arg = self.as_normal().next_reg();
+    fn gen_args(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        args: Vec<(Expr, std::ops::Range<usize>)>,
+    ) -> Result<BcTemp> {
+        let arg = self.next_reg();
         for arg in args {
-            self.gen_expr(&arg.0, true)?;
+            self.gen_expr(id_store, remaining, arg.0, true)?;
         }
         Ok(arg)
     }
 
     fn gen_binary(
         &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
         dst: Option<BcLocal>,
-        lhs: &Expr,
-        rhs: &Expr,
+        lhs: Expr,
+        rhs: Expr,
     ) -> Result<(BcReg, BcReg, BcReg)> {
         let (lhs, rhs) = match (lhs.is_local(), rhs.is_local()) {
             (Some(lhs), Some(rhs)) => {
-                let lhs = self.as_normal().find_local(&lhs).into();
-                let rhs = self.as_normal().find_local(&rhs).into();
+                let lhs = self.find_local(&lhs).into();
+                let rhs = self.find_local(&rhs).into();
                 (lhs, rhs)
             }
             (Some(lhs), None) => {
-                let lhs = self.as_normal().find_local(&lhs).into();
-                let rhs = self.gen_temp_expr(rhs)?.into();
+                let lhs = self.find_local(&lhs).into();
+                let rhs = self.gen_temp_expr(id_store, remaining, rhs)?.into();
                 (lhs, rhs)
             }
             (None, Some(rhs)) => {
-                let lhs = self.gen_temp_expr(lhs)?.into();
-                let rhs = self.as_normal().find_local(&rhs).into();
+                let lhs = self.gen_temp_expr(id_store, remaining, lhs)?.into();
+                let rhs = self.find_local(&rhs).into();
                 (lhs, rhs)
             }
             (None, None) => {
-                self.gen_expr(lhs, true)?;
-                self.gen_expr(rhs, true)?;
-                let rhs = self.as_normal().pop().into();
-                let lhs = self.as_normal().pop().into();
+                self.gen_expr(id_store, remaining, lhs, true)?;
+                self.gen_expr(id_store, remaining, rhs, true)?;
+                let rhs = self.pop().into();
+                let lhs = self.pop().into();
                 (lhs, rhs)
             }
         };
         let dst = match dst {
-            None => self.as_normal().push().into(),
+            None => self.push().into(),
             Some(local) => local.into(),
         };
         Ok((dst, lhs, rhs))
     }
 
-    fn gen_singular(&mut self, dst: Option<BcLocal>, lhs: &Expr) -> Result<(BcReg, BcReg)> {
+    fn gen_singular(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        dst: Option<BcLocal>,
+        lhs: Expr,
+    ) -> Result<(BcReg, BcReg)> {
         let lhs = match lhs.is_local() {
-            Some(lhs) => self.as_normal().find_local(&lhs).into(),
-            None => self.gen_temp_expr(lhs)?.into(),
+            Some(lhs) => self.find_local(&lhs).into(),
+            None => self.gen_temp_expr(id_store, remaining, lhs)?.into(),
         };
         let dst = match dst {
-            None => self.as_normal().push().into(),
+            None => self.push().into(),
             Some(local) => local.into(),
         };
         Ok((dst, lhs))
     }
 
-    fn gen_add(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
+    fn gen_add(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        dst: Option<BcLocal>,
+        lhs: Expr,
+        rhs: Expr,
+    ) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
-            let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.as_normal().bc_ir.push(BcIr::Addri(dst, lhs, i));
+            let (dst, lhs) = self.gen_singular(id_store, remaining, dst, lhs)?;
+            self.bc_ir.push(BcIr::Addri(dst, lhs, i));
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.as_normal().bc_ir.push(BcIr::Add(dst, lhs, rhs));
+            let (dst, lhs, rhs) = self.gen_binary(id_store, remaining, dst, lhs, rhs)?;
+            self.bc_ir.push(BcIr::Add(dst, lhs, rhs));
         }
         Ok(())
     }
 
-    fn gen_sub(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
+    fn gen_sub(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        dst: Option<BcLocal>,
+        lhs: Expr,
+        rhs: Expr,
+    ) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
-            let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.as_normal().bc_ir.push(BcIr::Subri(dst, lhs, i));
+            let (dst, lhs) = self.gen_singular(id_store, remaining, dst, lhs)?;
+            self.bc_ir.push(BcIr::Subri(dst, lhs, i));
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.as_normal().bc_ir.push(BcIr::Sub(dst, lhs, rhs));
+            let (dst, lhs, rhs) = self.gen_binary(id_store, remaining, dst, lhs, rhs)?;
+            self.bc_ir.push(BcIr::Sub(dst, lhs, rhs));
         }
         Ok(())
     }
 
-    fn gen_mul(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.as_normal().bc_ir.push(BcIr::Mul(dst, lhs, rhs));
+    fn gen_mul(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        dst: Option<BcLocal>,
+        lhs: Expr,
+        rhs: Expr,
+    ) -> Result<()> {
+        let (dst, lhs, rhs) = self.gen_binary(id_store, remaining, dst, lhs, rhs)?;
+        self.bc_ir.push(BcIr::Mul(dst, lhs, rhs));
         Ok(())
     }
 
-    fn gen_div(&mut self, dst: Option<BcLocal>, lhs: &Expr, rhs: &Expr) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-        self.as_normal().bc_ir.push(BcIr::Div(dst, lhs, rhs));
+    fn gen_div(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        dst: Option<BcLocal>,
+        lhs: Expr,
+        rhs: Expr,
+    ) -> Result<()> {
+        let (dst, lhs, rhs) = self.gen_binary(id_store, remaining, dst, lhs, rhs)?;
+        self.bc_ir.push(BcIr::Div(dst, lhs, rhs));
         Ok(())
     }
 
     fn gen_cmp(
         &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
         dst: Option<BcLocal>,
         kind: CmpKind,
-        lhs: &Expr,
-        rhs: &Expr,
+        lhs: Expr,
+        rhs: Expr,
     ) -> Result<()> {
         if let Some(i) = rhs.is_smi() {
-            let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            self.as_normal().bc_ir.push(BcIr::Cmpri(kind, dst, lhs, i));
+            let (dst, lhs) = self.gen_singular(id_store, remaining, dst, lhs)?;
+            self.bc_ir.push(BcIr::Cmpri(kind, dst, lhs, i));
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            self.as_normal().bc_ir.push(BcIr::Cmp(kind, dst, lhs, rhs));
+            let (dst, lhs, rhs) = self.gen_binary(id_store, remaining, dst, lhs, rhs)?;
+            self.bc_ir.push(BcIr::Cmp(kind, dst, lhs, rhs));
         }
         Ok(())
     }
 
-    fn gen_store_expr(&mut self, local: BcLocal, rhs: &Expr, use_value: bool) -> Result<()> {
+    fn gen_store_expr(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        local: BcLocal,
+        rhs: Expr,
+        use_value: bool,
+    ) -> Result<()> {
         match rhs {
             Expr::Nil => {
-                self.as_normal().gen_nil(Some(local));
+                self.gen_nil(Some(local));
             }
             Expr::Integer(i) => {
-                self.as_normal().gen_integer(Some(local), *i);
+                self.gen_integer(Some(local), i);
             }
             Expr::Float(f) => {
-                self.as_normal().gen_float(Some(local), *f);
+                self.gen_float(Some(local), f);
             }
             Expr::Neg(box (rhs, _)) => {
                 match rhs {
-                    Expr::Integer(i) => self.as_normal().gen_integer(Some(local), -i),
-                    Expr::Float(f) => self.as_normal().gen_float(Some(local), -f),
+                    Expr::Integer(i) => self.gen_integer(Some(local), -i),
+                    Expr::Float(f) => self.gen_float(Some(local), -f),
                     _ => {
-                        self.gen_store_expr(local, rhs, false)?;
-                        self.as_normal().gen_neg(Some(local));
+                        self.gen_store_expr(id_store, remaining, local, rhs, false)?;
+                        self.gen_neg(Some(local));
                     }
                 };
             }
             Expr::Add(box (lhs, _), box (rhs, _)) => {
-                self.gen_add(Some(local), lhs, rhs)?;
+                self.gen_add(id_store, remaining, Some(local), lhs, rhs)?;
             }
             Expr::Sub(box (lhs, _), box (rhs, _)) => {
-                self.gen_sub(Some(local), lhs, rhs)?;
+                self.gen_sub(id_store, remaining, Some(local), lhs, rhs)?;
             }
             Expr::Mul(box (lhs, _), box (rhs, _)) => {
-                self.gen_mul(Some(local), lhs, rhs)?;
+                self.gen_mul(id_store, remaining, Some(local), lhs, rhs)?;
             }
             Expr::Div(box (lhs, _), box (rhs, _)) => {
-                self.gen_div(Some(local), lhs, rhs)?;
+                self.gen_div(id_store, remaining, Some(local), lhs, rhs)?;
             }
             Expr::Cmp(kind, box (lhs, _), box (rhs, _)) => {
-                self.gen_cmp(Some(local), *kind, lhs, rhs)?;
+                self.gen_cmp(id_store, remaining, Some(local), kind, lhs, rhs)?;
             }
             Expr::LocalStore(ident, box (rhs, _)) => {
-                let local2 = self.as_normal().find_local(ident);
-                self.gen_store_expr(local2, rhs, false)?;
-                self.as_normal().gen_mov(local.into(), local2.into());
+                let src = self.find_local(&ident);
+                self.gen_store_expr(id_store, remaining, src, rhs, false)?;
+                self.gen_mov(local.into(), src.into());
             }
             Expr::LocalLoad(ident) => {
-                let local2 = self.as_normal().load_local(ident)?;
-                self.as_normal().gen_mov(local.into(), local2.into());
+                let local2 = self.load_local(&ident)?;
+                self.gen_mov(local.into(), local2.into());
             }
             Expr::Call(name, args) => {
-                let name_id = self.get_ident_id(&name);
-                let arg = self.gen_args(args)?;
-                self.as_normal().temp -= args.len() as u16;
-                let inst = BcIr::FnCall(name_id, Some(local.into()), arg, args.len());
-                self.as_normal().bc_ir.push(inst);
+                let name_id = id_store.get_ident_id(&name);
+                let len = args.len();
+                let arg = self.gen_args(id_store, remaining, args)?;
+                self.temp -= len as u16;
+                let inst = BcIr::FnCall(name_id, Some(local.into()), arg, len);
+                self.bc_ir.push(inst);
             }
             Expr::Return(_) => unreachable!(),
             rhs => {
-                let ret = self.as_normal().next_reg();
-                self.gen_expr(rhs, true)?;
-                self.as_normal().gen_mov(local.into(), ret.into());
+                let ret = self.next_reg();
+                self.gen_expr(id_store, remaining, rhs, true)?;
+                self.gen_mov(local.into(), ret.into());
                 if !use_value {
-                    self.as_normal().pop();
+                    self.pop();
                 }
                 return Ok(());
             }
         };
         if use_value {
-            self.as_normal().gen_temp_mov(local.into());
+            self.gen_temp_mov(local.into());
         }
         Ok(())
     }
 
-    fn gen_while(&mut self, cond: &Expr, body: &[(Expr, Span)]) -> Result<()> {
-        let cond_pos = self.as_normal().new_label();
-        let succ_pos = self.as_normal().new_label();
-        self.as_normal().apply_label(cond_pos);
-        let cond = self.gen_temp_expr(cond)?.into();
+    fn gen_while(
+        &mut self,
+        id_store: &mut IdStore,
+        remaining: &mut Vec<TempInfo>,
+        cond: Expr,
+        body: Vec<(Expr, Span)>,
+    ) -> Result<()> {
+        let cond_pos = self.new_label();
+        let succ_pos = self.new_label();
+        self.apply_label(cond_pos);
+        let cond = self.gen_temp_expr(id_store, remaining, cond)?.into();
         let inst = BcIr::CondNotBr(cond, succ_pos);
-        self.as_normal().bc_ir.push(inst);
-        self.gen_exprs(body, false)?;
-        self.as_normal().bc_ir.push(BcIr::Br(cond_pos));
-        self.as_normal().apply_label(succ_pos);
+        self.bc_ir.push(inst);
+        self.gen_exprs(id_store, remaining, body, false)?;
+        self.bc_ir.push(BcIr::Br(cond_pos));
+        self.apply_label(succ_pos);
         Ok(())
     }
 }

@@ -162,6 +162,7 @@ impl BcCompiler {
     //       +-------------+
     // -0xxx |    %(n-1)   | <- rsp
     //       +-------------+
+    //       |      :      |
     //
 
     pub fn exec_toplevel(fn_store: &FuncStore) -> Value {
@@ -179,7 +180,7 @@ impl BcCompiler {
                 }
             }
         }
-        let main = eval.method_label[FuncId(0)];
+        let main = eval.method_label[fn_store.get_main_func()];
         let entry = eval.jit.label();
         let bccomp_ptr = &eval as *const _;
         let funcstore_ptr = fn_store as *const _;

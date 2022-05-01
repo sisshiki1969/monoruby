@@ -1,6 +1,61 @@
 use super::*;
 
 ///
+/// Program counter base.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BcPcBase(*const BcOp);
+
+impl std::ops::Add<usize> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: usize) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs as isize) })
+    }
+}
+
+impl std::ops::Add<InstId> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: InstId) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs.0 as isize) })
+    }
+}
+
+impl BcPcBase {
+    fn new(func: &NormalFuncInfo) -> Self {
+        BcPcBase(&func.bytecode()[0] as *const _)
+    }
+}
+
+///
+/// Program counter
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BcPc(*const BcOp);
+
+impl std::ops::Sub<BcPcBase> for BcPc {
+    type Output = usize;
+    fn sub(self, rhs: BcPcBase) -> usize {
+        let offset = unsafe { self.0.offset_from(rhs.0) };
+        assert!(offset >= 0);
+        offset as usize
+    }
+}
+
+impl std::ops::AddAssign<usize> for BcPc {
+    fn add_assign(&mut self, offset: usize) {
+        unsafe {
+            *self = BcPc(self.0.add(offset));
+        }
+    }
+}
+
+impl BcPc {
+    fn get(&self) -> BcOp {
+        unsafe { (*(self.0)).clone() }
+    }
+}
+
+///
 /// Bytecode interpreter.
 ///
 pub struct Interp {
@@ -26,16 +81,16 @@ impl std::ops::IndexMut<u16> for Interp {
 impl Interp {
     pub fn eval_toplevel(fn_store: &FuncStore) -> Value {
         let mut eval = Self::new(fn_store);
-        let hir_func = &fn_store[FuncId(0)].as_normal_ref();
-        eval.push_frame(0, 0, hir_func, None);
+        let main = fn_store.get_main_func();
+        eval.push_frame(0, 0, fn_store[main].as_normal(), None);
         eval.eval_loop(fn_store)
     }
 
     fn new(fn_store: &FuncStore) -> Self {
-        let cur_fn = FuncId(0);
-        let pc_top = BcPcBase::new(&fn_store[cur_fn].as_normal_ref());
+        let main = fn_store.get_main_func();
+        let pc_top = BcPcBase::new(&fn_store[main].as_normal());
         Self {
-            cur_fn,
+            cur_fn: main,
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
@@ -64,7 +119,7 @@ impl Interp {
             return true;
         };
         self.cur_fn = func;
-        self.pc_top = BcPcBase::new(&fn_store[func].as_normal_ref());
+        self.pc_top = BcPcBase::new(&fn_store[func].as_normal());
         self.pc = self.pc_top + pc;
         if let Some(ret) = ret {
             self[ret] = val;
@@ -80,7 +135,7 @@ impl Interp {
                     self[ret] = Value::integer(i);
                 }
                 BcOp::Const(ret, id) => {
-                    self[ret] = fn_store[self.cur_fn].as_normal_ref().get_constant(id);
+                    self[ret] = fn_store[self.cur_fn].as_normal().get_constant(id);
                 }
                 BcOp::Nil(ret) => {
                     self[ret] = Value::nil();
