@@ -19,6 +19,7 @@ pub enum Mir {
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
     Nil(SsaReg),
+    Bool(SsaReg, bool),
     CastIntFloat(MirUnop),
     INeg(MirUnop),
     FNeg(MirUnop),
@@ -142,6 +143,9 @@ impl std::fmt::Debug for MirContext {
                         }
                         Mir::Nil(ret) => {
                             format!("{:?}: {:?} = nil", ret, func[*ret].ty,)
+                        }
+                        Mir::Bool(ret, b) => {
+                            format!("{:?}: {:?} = {:?}", ret, func[*ret].ty, b)
                         }
                         Mir::CastIntFloat(op) => {
                             format!(
@@ -501,6 +505,10 @@ impl MirFunction {
 
     fn new_nil(&mut self, hirssa: Option<SsaReg>) -> SsaReg {
         self.add_assign(Mir::Nil(self.next_reg()), Type::Nil, hirssa)
+    }
+
+    fn new_bool(&mut self, hirssa: Option<SsaReg>, b: bool) -> SsaReg {
+        self.add_assign(Mir::Bool(self.next_reg(), b), Type::Bool, hirssa)
     }
 
     fn new_as_float_operand(&mut self, src: MirOperand, hirssa: Option<SsaReg>) -> SsaReg {
@@ -882,6 +890,9 @@ impl MirContext {
                     }
                     Hir::Nil(hreg) => {
                         self.new_nil(Some(*hreg));
+                    }
+                    Hir::Bool(hreg, b) => {
+                        self.new_bool(Some(*hreg), *b);
                     }
                     Hir::Neg(op) => {
                         match &op.src {

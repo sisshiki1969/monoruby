@@ -426,13 +426,17 @@ impl NormalFuncInfo {
         self.bc_ir.push(BcIr::Integer(reg, i));
     }
 
-    fn gen_float(&mut self, dst: Option<BcLocal>, f: f64) {
+    fn gen_const(&mut self, dst: Option<BcLocal>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        let id = self.new_constant(Value::float(f));
+        let id = self.new_constant(v);
         self.bc_ir.push(BcIr::Const(reg, id));
+    }
+
+    fn gen_float(&mut self, dst: Option<BcLocal>, f: f64) {
+        self.gen_const(dst, Value::float(f));
     }
 
     fn gen_nil(&mut self, dst: Option<BcLocal>) {
@@ -468,10 +472,10 @@ impl NormalFuncInfo {
         self.bc_ir.push(BcIr::Mov(dst, src));
     }
 
-    fn gen_temp_mov(&mut self, rhs: BcReg) -> BcReg {
+    fn gen_temp_mov(&mut self, rhs: BcReg) {
         let lhs = self.push();
         self.gen_mov(lhs.into(), rhs);
-        lhs.into()
+        //lhs.into()
     }
 }
 
@@ -570,9 +574,10 @@ impl NormalFuncInfo {
         use_value: bool,
     ) -> Result<()> {
         match expr {
-            Expr::Nil => {
-                self.gen_nil(None);
-            }
+            Expr::Nil => self.gen_nil(None),
+            Expr::True => self.gen_const(None, Value::bool(true)),
+            Expr::False => self.gen_const(None, Value::bool(false)),
+            Expr::Self_ => self.gen_temp_mov(BcReg::Self_),
             Expr::Integer(i) => {
                 self.gen_integer(None, i);
             }
@@ -820,9 +825,10 @@ impl NormalFuncInfo {
         use_value: bool,
     ) -> Result<()> {
         match rhs {
-            Expr::Nil => {
-                self.gen_nil(Some(local));
-            }
+            Expr::Nil => self.gen_nil(Some(local)),
+            Expr::True => self.gen_const(Some(local), Value::bool(true)),
+            Expr::False => self.gen_const(Some(local), Value::bool(false)),
+            Expr::Self_ => self.gen_mov(local.into(), BcReg::Self_),
             Expr::Integer(i) => {
                 self.gen_integer(Some(local), i);
             }
@@ -911,6 +917,7 @@ impl NormalFuncInfo {
 impl NormalFuncInfo {
     fn get_index(&self, reg: &BcReg) -> u16 {
         match reg {
+            BcReg::Self_ => 0,
             BcReg::Temp(i) => 1 + self.locals.len() as u16 + i.0,
             BcReg::Local(i) => 1 + i.0,
         }

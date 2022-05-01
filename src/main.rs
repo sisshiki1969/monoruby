@@ -223,6 +223,11 @@ mod test {
         run_test("10 == 2");
         run_test("10 != 2");
 
+        run_test("true != true");
+        run_test("true != false");
+        run_test("false != false");
+        run_test("false != true");
+
         run_test("1.9 < 2.1");
         run_test("1.9 <= 2.1");
         run_test("1.9 >= 2.1");

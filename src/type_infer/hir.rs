@@ -17,6 +17,7 @@ pub enum Hir {
     Integer(SsaReg, i32),
     Float(SsaReg, f64),
     Nil(SsaReg),
+    Bool(SsaReg, bool),
     Neg(HirUnop),
     Add(HirBinop2),
     Sub(HirBinop2),
@@ -149,6 +150,7 @@ impl std::fmt::Debug for HirContext {
                         Hir::Integer(ret, i) => format!("{:?} = {}: i32", ret, i),
                         Hir::Float(ret, f) => format!("{:?} = {}: f64", ret, f),
                         Hir::Nil(ret) => format!("{:?} = nil", ret),
+                        Hir::Bool(ret, b) => format!("{:?} = {:?}", ret, b),
                         Hir::Neg(op) => {
                             format!("{:?} = neg {:?}", op.ret, op.src)
                         }
@@ -394,6 +396,10 @@ impl HirFunction {
         self.add_assign(Hir::Nil(self.next_reg()))
     }
 
+    fn new_bool(&mut self, b: bool) -> SsaReg {
+        self.add_assign(Hir::Bool(self.next_reg(), b))
+    }
+
     fn new_neg(&mut self, src: SsaReg) -> SsaReg {
         let ret = self.next_reg();
         self.add_assign(Hir::Neg(HirUnop {
@@ -592,6 +598,9 @@ impl HirContext {
     fn gen_expr(&mut self, ast: &Expr) -> Result<SsaReg> {
         match ast {
             Expr::Nil => Ok(self.new_nil()),
+            Expr::True => Ok(self.new_bool(true)),
+            Expr::False => Ok(self.new_bool(false)),
+            Expr::Self_ => unimplemented!(),
             Expr::Integer(i) => Ok(self.new_integer(*i)),
             Expr::Float(f) => Ok(self.new_float(*f)),
             Expr::Neg(box (lhs, _)) => {
@@ -733,11 +742,14 @@ impl HirContext {
                 }
                 self.new_call_nouse(name, arg_regs)?;
             }
-            Expr::Nil => {}
-            Expr::Integer(_) => {}
-            Expr::Float(_) => {}
-            Expr::LocalLoad(_) => {}
-            Expr::Cmp(_, _, _) => {}
+            Expr::Nil
+            | Expr::True
+            | Expr::False
+            | Expr::Self_
+            | Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::LocalLoad(_)
+            | Expr::Cmp(_, _, _) => {}
             Expr::Return(box stmt) => {
                 let ret = self.gen_stmt(stmt)?;
                 self.new_ret(ret);

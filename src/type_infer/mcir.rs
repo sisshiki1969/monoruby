@@ -11,6 +11,7 @@ pub enum McIR {
     Integer(GReg, i32),
     Float(FReg, f64),
     Nil(GReg),
+    Bool(GReg, bool),
     CastIntFloat(FReg, McGeneralOperand),
     INeg(GReg),
     FNeg(FReg),
@@ -208,6 +209,7 @@ impl std::fmt::Debug for McIrContext {
                         McIR::Integer(ret, i) => format!("%{:?} = {}: i32", ret, i),
                         McIR::Float(ret, f) => format!("%{:?} = {}: f64", ret, f),
                         McIR::Nil(ret) => format!("%{:?} = nil", ret),
+                        McIR::Bool(ret, b) => format!("%{:?} = {:?}", ret, *b),
                         McIR::CastIntFloat(ret, src) => {
                             format!("%{:?} = cast {:?} i32 to f64", ret, src)
                         }
@@ -679,6 +681,10 @@ impl McIrContext {
                 Mir::Nil(ssa) => {
                     let reg = self.alloc_greg(*ssa);
                     self.func_mut().insts.push(McIR::Nil(reg));
+                }
+                Mir::Bool(ssa, b) => {
+                    let reg = self.alloc_greg(*ssa);
+                    self.func_mut().insts.push(McIR::Bool(reg, *b));
                 }
                 Mir::CastIntFloat(op) => {
                     let dst = self.alloc_freg(op.ret);

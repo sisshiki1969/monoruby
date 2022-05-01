@@ -110,6 +110,19 @@ macro_rules! value_op {
     }};
 }
 
+macro_rules! value_eq {
+    ($lhs:ident, $rhs:ident, $op:ident) => {{
+        match ($lhs.unpack(), $rhs.unpack()) {
+            (RV::Integer($lhs), RV::Integer($rhs)) => $lhs.$op(&$rhs),
+            (RV::Integer($lhs), RV::Float($rhs)) => ($lhs as f64).$op(&$rhs),
+            (RV::Float($lhs), RV::Integer($rhs)) => $lhs.$op(&($rhs as f64)),
+            (RV::Float($lhs), RV::Float($rhs)) => $lhs.$op(&$rhs),
+            (RV::Bool($lhs), RV::Bool($rhs)) => $lhs.$op(&$rhs),
+            _ => unreachable!(),
+        }
+    }};
+}
+
 impl std::ops::Index<SsaReg> for Evaluator {
     type Output = Value;
     fn index(&self, index: SsaReg) -> &Value {
@@ -242,6 +255,9 @@ impl Evaluator {
             Hir::Nil(ret) => {
                 self[*ret] = Value::nil();
             }
+            Hir::Bool(ret, b) => {
+                self[*ret] = Value::bool(*b);
+            }
             Hir::Neg(op) => {
                 let src = self.eval_operand(&op.src);
                 self[op.ret] = match src.unpack() {
@@ -298,8 +314,8 @@ impl Evaluator {
                 let lhs = self.eval_operand(&op.lhs);
                 let rhs = self.eval_operand(&op.rhs);
                 self[op.ret] = Value::bool(match kind {
-                    CmpKind::Eq => value_op!(lhs, rhs, eq),
-                    CmpKind::Ne => value_op!(lhs, rhs, ne),
+                    CmpKind::Eq => value_eq!(lhs, rhs, eq),
+                    CmpKind::Ne => value_eq!(lhs, rhs, ne),
                     CmpKind::Lt => value_op!(lhs, rhs, lt),
                     CmpKind::Gt => value_op!(lhs, rhs, gt),
                     CmpKind::Le => value_op!(lhs, rhs, le),
@@ -310,8 +326,8 @@ impl Evaluator {
                 let lhs = self[*lhs];
                 let rhs = self.eval_operand(rhs);
                 let b = match kind {
-                    CmpKind::Eq => value_op!(lhs, rhs, eq),
-                    CmpKind::Ne => value_op!(lhs, rhs, ne),
+                    CmpKind::Eq => value_eq!(lhs, rhs, eq),
+                    CmpKind::Ne => value_eq!(lhs, rhs, ne),
                     CmpKind::Lt => value_op!(lhs, rhs, lt),
                     CmpKind::Gt => value_op!(lhs, rhs, gt),
                     CmpKind::Le => value_op!(lhs, rhs, le),

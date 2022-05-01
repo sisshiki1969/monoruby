@@ -538,6 +538,17 @@ impl Codegen {
                         monoasm!(self.jit, movq  [rbp-(ofs)], (*i););
                     }
                 },
+                McIR::Bool(reg, b) => {
+                    let i = if *b { 1 } else { 0 };
+                    match self.g_phys_reg(*reg) {
+                        GeneralPhysReg::Reg(reg) => {
+                            monoasm!(self.jit, movq  R(reg), (i););
+                        }
+                        GeneralPhysReg::Stack(ofs) => {
+                            monoasm!(self.jit, movq  [rbp-(ofs)], (i););
+                        }
+                    }
+                }
                 McIR::Nil(_) => {}
                 McIR::Float(reg, f) => {
                     let label = self.jit.const_f64(*f);

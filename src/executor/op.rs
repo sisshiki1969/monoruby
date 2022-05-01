@@ -70,7 +70,31 @@ macro_rules! cmp_values {
     };
 }
 
-cmp_values!(eq, ne, ge, gt, le, lt);
+cmp_values!(ge, gt, le, lt);
+
+macro_rules! eq_values {
+    ($op:ident) => {
+        paste! {
+            pub(super) extern "C" fn [<cmp_ $op _values>](lhs: Value, rhs: Value) -> Value {
+                let b = match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
+                    (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
+                    (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
+                    (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
+                    (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
+                    _ => unreachable!(),
+                };
+                Value::bool(b)
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        eq_values!($op1);
+        eq_values!($($op2),+);
+    };
+}
+
+eq_values!(eq, ne);
 
 macro_rules! cmp_ri_values {
     ($op:ident) => {

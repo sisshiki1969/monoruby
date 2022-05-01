@@ -32,6 +32,10 @@ pub enum Token {
     Int(i32),
     Float(u64),
     Ident(String),
+    Nil,
+    True,
+    False,
+    Self_,
     Separator,
 }
 
@@ -63,6 +67,10 @@ impl std::fmt::Display for Token {
             Self::Int(i) => write!(f, "{}", i),
             Self::Float(n) => write!(f, "{}", f64::from_ne_bytes(u64::to_ne_bytes(*n))),
             Self::Ident(s) => write!(f, "{}", s),
+            Self::Nil => write!(f, "nil"),
+            Self::True => write!(f, "true"),
+            Self::False => write!(f, "false"),
+            Self::Self_ => write!(f, "self"),
             Self::Separator => write!(f, ";"),
         }
     }
@@ -168,6 +176,10 @@ pub fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Cheap<char>> {
         just('=').to(Token::Assign),
         just(">").to(Token::Gt),
         just("<").to(Token::Lt),
+        just("nil").to(Token::Nil),
+        just("true").to(Token::True),
+        just("false").to(Token::False),
+        just("self").to(Token::Self_),
         reserved(),
         text::int(10)
             .then(just('.').ignore_then(text::digits(10)).or_not())
@@ -281,6 +293,26 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Cheap<Token>> {
         }
         .map_with_span(|expr, span| (expr, span));
 
+        let nil = select! {
+            Token::Nil => Expr::Nil,
+        }
+        .map_with_span(|expr, span| (expr, span));
+
+        let true_ = select! {
+            Token::True => Expr::True,
+        }
+        .map_with_span(|expr, span| (expr, span));
+
+        let false_ = select! {
+            Token::False => Expr::False,
+        }
+        .map_with_span(|expr, span| (expr, span));
+
+        let self_ = select! {
+            Token::Self_ => Expr::Self_,
+        }
+        .map_with_span(|expr, span| (expr, span));
+
         let call = select! {Token::Call(s) => s}
             .map_with_span(|s, span| (s, span))
             .then(
@@ -299,7 +331,16 @@ fn expr() -> impl Parser<Token, Spanned<Expr>, Error = Cheap<Token>> {
 
         // primary := <number>
         //          | '(' <expr> ')'
-        let primary = choice((call, number, local, parenthesized));
+        let primary = choice((
+            nil,
+            true_,
+            false_,
+            self_,
+            call,
+            number,
+            local,
+            parenthesized,
+        ));
 
         // unary := -a
         //        | +a
