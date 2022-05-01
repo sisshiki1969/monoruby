@@ -1,4 +1,4 @@
-use super::*;
+/*use super::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum McIR {
@@ -933,9 +933,10 @@ impl McIrContext {
                 }
                 Mir::Phi(ret, _) => {
                     let _reg = self.alloc_reg(*ret, hir_func[*ret].ty);
-                    //self.insts.push(McIR::In(reg));*/
+                    //self.insts.push(McIR::In(reg));
                 }
             }
         }
     }
 }
+*/

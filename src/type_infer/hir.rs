@@ -121,7 +121,7 @@ impl HirBBId {
         self.0
     }
 }
-
+/*
 ///
 /// A state of Hir.
 ///
@@ -800,3 +800,4 @@ impl HirContext {
         Ok(ret)
     }
 }
+*/

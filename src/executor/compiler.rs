@@ -165,7 +165,7 @@ impl BcCompiler {
     //       |      :      |
     //
 
-    pub fn exec_toplevel(fn_store: &FuncStore) -> Value {
+    pub fn exec_toplevel(fn_store: &mut FuncStore) -> Value {
         let now = Instant::now();
         let mut eval = Self::new();
         for _ in &fn_store.functions {
@@ -525,7 +525,7 @@ impl BcCompiler {
                         subq rsp, 168;
                         movq rdi, rbx; // &mut BcCmpiler
                         movq rsi, r12; // &FuncStore
-                        movq rdx, (id.0 as u64); // IdentId
+                        movq rdx, (u32::from(*id)); // IdentId
                         movq rcx, (*len as usize); // args_len: usize
                         movq rax, (get_func_absolute_address);
                         call rax;

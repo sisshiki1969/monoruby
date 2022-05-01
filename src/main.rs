@@ -1,4 +1,5 @@
 #![feature(box_patterns)]
+pub use ruruby_parse::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
@@ -15,9 +16,7 @@ mod types;
 mod value;
 pub use ast::*;
 use executor::*;
-use parse::Span;
 pub use parse::*;
-use type_infer::*;
 use types::*;
 use value::*;
 
@@ -40,7 +39,7 @@ fn main() {
             let mut file = File::open(file).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            let _ = exec(&code);
+            //let _ = exec(&code);
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -68,7 +67,7 @@ fn main() {
     }
 }
 
-fn exec(code: &str) -> Result<(), ()> {
+/*fn exec(code: &str) -> Result<(), ()> {
     let ast = match MonorubyParser::parse(code) {
         Ok(ast) => ast,
         Err(_) => {
@@ -86,17 +85,17 @@ fn exec(code: &str) -> Result<(), ()> {
     let bccomp_val = BcCompiler::exec_toplevel(&gen);
     eprintln!("bccomp: {:?}", bccomp_val);
     Ok(())
-}
+}*/
 
 fn repl_exec(code: &str) -> Result<(), ()> {
-    let ast = match MonorubyParser::parse(code) {
+    let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
-        Err(_) => {
-            eprintln!("Parse error.");
+        Err(err) => {
+            err.source_info.show_loc(&err.loc);
             return Err(());
         }
     };
-    let gen = match FuncStore::from_ast(ast) {
+    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
@@ -104,10 +103,10 @@ fn repl_exec(code: &str) -> Result<(), ()> {
         }
     };
 
-    let interp_val = Interp::eval_toplevel(&gen);
+    let interp_val = Interp::eval_toplevel(&mut gen);
     eprintln!("interp: {:?}", interp_val);
 
-    let bccomp_val = BcCompiler::exec_toplevel(&gen);
+    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
     eprintln!("bccomp: {:?}", bccomp_val);
 
     Ok(())
@@ -124,11 +123,11 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let all_codes = vec![code.to_string()];
-    let ast = match MonorubyParser::parse(code) {
-        Ok(ast) => ast,
+    let res = match Parser::parse_program(code.to_string(), std::path::Path::new(""), "") {
+        Ok(res) => res,
         Err(_) => panic!("Parse error."),
     };
-    let gen = match FuncStore::from_ast(ast.clone()) {
+    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
         Ok(gen) => gen,
         Err(err) => {
             panic!("Error in compiling AST. {:?}", err);
@@ -137,25 +136,25 @@ pub fn run_test(code: &str) {
     //#[cfg(debug_assertions)]
     //dbg!(&gen);
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&gen);
+    let interp_val = Interp::eval_toplevel(&mut gen);
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
 
     let now = Instant::now();
-    let bccomp_val = BcCompiler::exec_toplevel(&gen);
+    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
     eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
 
     assert_eq!(interp_val, bccomp_val);
 
     //dbg!(&stmt);
-    let mut hir = HirContext::new();
-    match hir.from_ast(&ast) {
-        Ok(_) => {}
-        Err(err) => panic!("Error in compiling AST. {:?}", err),
-    };
-    let now = Instant::now();
-    let eval_res = Evaluator::eval_toplevel(&hir);
-    eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
-
+    /*let mut hir = HirContext::new();
+        match hir.from_ast(&ast) {
+            Ok(_) => {}
+            Err(err) => panic!("Error in compiling AST. {:?}", err),
+        };
+        let now = Instant::now();
+        let eval_res = Evaluator::eval_toplevel(&hir);
+        eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
+    */
     let now = Instant::now();
     let ruby_res = run_ruby(&all_codes);
     eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());

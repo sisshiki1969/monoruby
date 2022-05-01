@@ -16,7 +16,7 @@ use stack::*;
 
 #[derive(Debug, Clone)]
 pub enum BcErr {
-    UndefinedLocal(String),
+    UndefinedLocal(IdentId),
     //UndefinedMethod(String),
 }
 

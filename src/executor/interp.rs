@@ -79,14 +79,14 @@ impl std::ops::IndexMut<u16> for Interp {
 }
 
 impl Interp {
-    pub fn eval_toplevel(fn_store: &FuncStore) -> Value {
+    pub fn eval_toplevel(fn_store: &mut FuncStore) -> Value {
         let mut eval = Self::new(fn_store);
         let main = fn_store.get_main_func();
         eval.push_frame(0, 0, fn_store[main].as_normal(), None);
         eval.eval_loop(fn_store)
     }
 
-    fn new(fn_store: &FuncStore) -> Self {
+    fn new(fn_store: &mut FuncStore) -> Self {
         let main = fn_store.get_main_func();
         let pc_top = BcPcBase::new(&fn_store[main].as_normal());
         Self {

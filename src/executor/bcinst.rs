@@ -1,4 +1,5 @@
 use super::*;
+use ruruby_parse::IdentId;
 
 ///
 /// bytecode Ir.
