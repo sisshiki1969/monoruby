@@ -524,6 +524,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut Context,
         mut nodes: Vec<Node>,
+        ret: Option<BcLocal>,
         use_value: bool,
     ) -> Result<()> {
         let last = match nodes.pop() {
@@ -533,7 +534,14 @@ impl NormalFuncInfo {
         for node in nodes.into_iter() {
             self.gen_expr(ctx, node, false)?;
         }
-        self.gen_expr(ctx, last, use_value)?;
+        match ret {
+            Some(ret) => {
+                self.gen_store_expr(ctx, ret, last, use_value)?;
+            }
+            None => {
+                self.gen_expr(ctx, last, use_value)?;
+            }
+        }
         Ok(())
     }
 
@@ -544,6 +552,16 @@ impl NormalFuncInfo {
 
     /// Generate bytecode Ir from an *Node*.
     fn gen_expr(&mut self, ctx: &mut Context, expr: Node, use_value: bool) -> Result<()> {
+        if !use_value {
+            match &expr.kind {
+                NodeKind::Nil
+                | NodeKind::Bool(_)
+                | NodeKind::SelfValue
+                | NodeKind::Integer(_)
+                | NodeKind::Float(_) => return Ok(()),
+                _ => {}
+            }
+        }
         match expr.kind {
             NodeKind::Nil => self.gen_nil(None),
             NodeKind::Bool(b) => self.gen_const(None, Value::bool(b)),
@@ -600,15 +618,7 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                assert!(receiver.kind == NodeKind::SelfValue);
-                assert!(arglist.kw_args.len() == 0);
-                assert!(arglist.hash_splat.len() == 0);
-                assert!(arglist.block.is_none());
-                assert!(!arglist.delegate);
-                let args = arglist.args;
-                let len = args.len();
-                let arg = self.gen_args(ctx, args)?;
-                self.temp -= len as u16;
+                let (arg, len) = self.check_fast_call(ctx, receiver, arglist)?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
@@ -659,7 +669,7 @@ impl NormalFuncInfo {
                 }
                 return Ok(());
             }
-            NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(ctx, nodes, use_value),
+            NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(ctx, nodes, None, use_value),
             NodeKind::Begin {
                 box body,
                 rescue,
@@ -684,6 +694,7 @@ impl NormalFuncInfo {
                     ast: body,
                 });
                 if use_value {
+                    // TODO: This should be a Symbol.
                     self.gen_nil(None);
                 }
                 return Ok(());
@@ -760,19 +771,14 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                assert!(receiver.kind == NodeKind::SelfValue);
-                assert!(arglist.kw_args.len() == 0);
-                assert!(arglist.hash_splat.len() == 0);
-                assert!(arglist.block.is_none());
-                assert!(!arglist.delegate);
-                let args = arglist.args;
-                let len = args.len();
-                let arg = self.gen_args(ctx, args)?;
-                self.temp -= len as u16;
+                let (arg, len) = self.check_fast_call(ctx, receiver, arglist)?;
                 let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
                 self.bc_ir.push(inst);
             }
             NodeKind::Return(_) => unreachable!(),
+            NodeKind::CompStmt(nodes) => {
+                return self.gen_comp_stmts(ctx, nodes, Some(local), use_value)
+            }
             _ => {
                 let ret = self.next_reg();
                 self.gen_expr(ctx, rhs, true)?;
@@ -795,6 +801,24 @@ impl NormalFuncInfo {
             self.gen_expr(ctx, arg, true)?;
         }
         Ok(arg)
+    }
+
+    fn check_fast_call(
+        &mut self,
+        ctx: &mut Context,
+        receiver: Node,
+        arglist: ArgList,
+    ) -> Result<(BcTemp, usize)> {
+        assert!(receiver.kind == NodeKind::SelfValue);
+        assert!(arglist.kw_args.len() == 0);
+        assert!(arglist.hash_splat.len() == 0);
+        assert!(arglist.block.is_none());
+        assert!(!arglist.delegate);
+        let args = arglist.args;
+        let len = args.len();
+        let arg = self.gen_args(ctx, args)?;
+        self.temp -= len as u16;
+        Ok((arg, len))
     }
 
     fn gen_binary(
