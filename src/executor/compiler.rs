@@ -57,8 +57,6 @@ extern "C" fn get_func_absolute_address(
     }
 
     let dest = bc_comp.method_label[func_id];
-    #[cfg(debug_assertions)]
-    eprintln!("method {:?} resolved.", fn_store.get_ident_name(func_name));
     bc_comp.jit.get_label_absolute_address(dest)
 }
 

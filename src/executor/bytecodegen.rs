@@ -42,7 +42,9 @@ struct Context {
 impl Context {
     fn new(id_store: IdentifierTable) -> Self {
         Self {
+            /// identifier table.
             id_store,
+            /// remaining functions to be compiled.
             remaining: vec![],
         }
     }
@@ -56,7 +58,6 @@ pub struct FuncStore {
     /// Functions.
     pub functions: Vec<FuncInfo>,
     func_map: HashMap<IdentId, FuncId>,
-    /// remaining functions to be compiled.
     ctx: Context,
 }
 
@@ -84,9 +85,8 @@ impl FuncStore {
 
     pub fn from_ast(ast: Node, id_store: IdentifierTable) -> Result<Self> {
         let mut store = Self::new(id_store);
-        let name = store.ctx.id_store.get_ident_id("/main");
         store.ctx.remaining.push(TempInfo {
-            name,
+            name: IdentId::_MAIN,
             args: vec![],
             ast,
         });
@@ -94,10 +94,6 @@ impl FuncStore {
         store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
         while let Some(TempInfo { name, args, ast }) = store.ctx.remaining.pop() {
             store.compile_func(name, args, ast)?;
-        }
-        #[cfg(debug_assertions)]
-        for func in &store.functions {
-            store.dump_bcir(func.id);
         }
         for func in store.functions.iter_mut() {
             match &mut func.kind {
@@ -107,13 +103,16 @@ impl FuncStore {
                 }
             }
         }
+        #[cfg(debug_assertions)]
+        for func in &store.functions {
+            store.dump_bytecode(func.id);
+        }
         Ok(store)
     }
 
     /// Get *FuncId* of the toplevel function.
     pub fn get_main_func(&mut self) -> FuncId {
-        let id = self.ctx.id_store.get_ident_id("/main");
-        self.get_method_or_panic(id)
+        self.get_method_or_panic(IdentId::_MAIN)
     }
 
     pub fn get_ident_name(&self, id: IdentId) -> &str {
@@ -143,66 +142,100 @@ impl FuncStore {
         id
     }
 
-    fn dump_bcir(&self, id: FuncId) {
+    fn dump_bytecode(&self, id: FuncId) {
         match &self[id].kind {
             FuncKind::Builtin { .. } => {}
             FuncKind::Normal(info) => {
-                eprintln!("{:?} name:{} args:{:?}", info.id, self[id].name, info.args);
-                let mut i = 0;
-                let mut iter = info.bc_ir.iter();
-                while let Some(inst) = iter.next() {
+                eprintln!(
+                    "{:?} name:{} args:{:?}",
+                    info.id,
+                    self[id].name,
+                    info.args
+                        .iter()
+                        .map(|id| self.ctx.id_store.get_name(*id))
+                        .collect::<Vec<_>>()
+                );
+                for (i, inst) in info.bc.iter().enumerate() {
                     eprint!(":{:05} ", i);
                     match inst {
-                        BcIr::Br(dst) => {
-                            let dst = info.labels[*dst].unwrap();
+                        BcOp::Br(dst) => {
                             eprintln!("br =>{:?}", dst);
                         }
-                        BcIr::CondBr(reg, dst) => {
-                            let dst = info.labels[*dst].unwrap();
-                            eprintln!("condbr {:?} =>{:?}", reg, dst);
+                        BcOp::CondBr(reg, dst) => {
+                            eprintln!("condbr %{} =>{:?}", reg, dst);
                         }
-                        BcIr::CondNotBr(reg, dst) => {
-                            let dst = info.labels[*dst].unwrap();
-                            eprintln!("condnbr {:?} =>{:?}", reg, dst);
+                        BcOp::CondNotBr(reg, dst) => {
+                            eprintln!("condnbr %{} =>{:?}", reg, dst);
                         }
-                        BcIr::Integer(reg, num) => eprintln!("{:?} = {}", reg, num),
-                        BcIr::Const(reg, id) => eprintln!("{:?} = constants[{}]", reg, id),
-                        BcIr::Nil(reg) => eprintln!("{:?} = nil", reg),
-                        BcIr::Neg(dst, src) => eprintln!("{:?} = neg {:?}", dst, src),
-                        BcIr::Add(dst, lhs, rhs) => eprintln!("{:?} = {:?} + {:?}", dst, lhs, rhs),
-                        BcIr::Addri(dst, lhs, rhs) => {
-                            eprintln!("{:?} = {:?} + {}:i16", dst, lhs, rhs)
+                        BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
+                        BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
+                        BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
+                        BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
+                        BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
+                        BcOp::Addri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
                         }
-                        BcIr::Sub(dst, lhs, rhs) => eprintln!("{:?} = {:?} - {:?}", dst, lhs, rhs),
-                        BcIr::Subri(dst, lhs, rhs) => {
-                            eprintln!("{:?} = {:?} - {}:i16", dst, lhs, rhs)
+                        BcOp::Sub(dst, lhs, rhs) => eprintln!("%{} = %{} - %{}", dst, lhs, rhs),
+                        BcOp::Subri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} - {}: i16", dst, lhs, rhs)
                         }
-                        BcIr::Mul(dst, lhs, rhs) => eprintln!("{:?} = {:?} * {:?}", dst, lhs, rhs),
-                        BcIr::Div(dst, lhs, rhs) => eprintln!("{:?} = {:?} / {:?}", dst, lhs, rhs),
-                        BcIr::Cmp(kind, dst, lhs, rhs) => {
-                            eprintln!("{:?} = {:?} {:?} {:?}", dst, lhs, kind, rhs)
+                        BcOp::Mul(dst, lhs, rhs) => eprintln!("%{} = %{} * %{}", dst, lhs, rhs),
+                        BcOp::Div(dst, lhs, rhs) => eprintln!("%{} = %{} / %{}", dst, lhs, rhs),
+                        BcOp::Eq(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Eq, rhs)
                         }
-                        BcIr::Cmpri(kind, dst, lhs, rhs) => {
-                            eprintln!("{:?} = {:?} {:?} {}:i16", dst, lhs, kind, rhs)
+                        BcOp::Ne(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ne, rhs)
                         }
-                        BcIr::Ret(reg) => eprintln!("ret {:?}", reg),
-                        BcIr::Mov(dst, src) => eprintln!("{:?} = {:?}", dst, src),
-                        BcIr::FnCall(id, ret, arg, len) => {
+                        BcOp::Gt(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Gt, rhs)
+                        }
+                        BcOp::Ge(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ge, rhs)
+                        }
+                        BcOp::Lt(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Lt, rhs)
+                        }
+                        BcOp::Le(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Le, rhs)
+                        }
+
+                        BcOp::Eqri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Eq, rhs)
+                        }
+                        BcOp::Neri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ne, rhs)
+                        }
+                        BcOp::Gtri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Gt, rhs)
+                        }
+                        BcOp::Geri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ge, rhs)
+                        }
+                        BcOp::Ltri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Lt, rhs)
+                        }
+                        BcOp::Leri(dst, lhs, rhs) => {
+                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Le, rhs)
+                        }
+
+                        BcOp::Ret(reg) => eprintln!("ret %{}", reg),
+                        BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
+                        BcOp::FnCall(id, ret, arg, len) => {
                             let id = self.func_map.get(id).unwrap();
-                            match ret {
-                                Some(ret) => {
+                            match *ret {
+                                u16::MAX => {
+                                    eprintln!("_ = call {}(%{}; {})", self[*id].name, arg, len)
+                                }
+                                ret => {
                                     eprintln!(
-                                        "{:?} = call {}({:?}; {})",
+                                        "%{:?} = call {}(%{}; {})",
                                         ret, self[*id].name, arg, len
                                     )
-                                }
-                                None => {
-                                    eprintln!("_ = call {}({:?}; {})", self[*id].name, arg, len)
                                 }
                             }
                         }
                     }
-                    i += 1;
                 }
                 eprintln!("------------------------------------")
             }
@@ -441,11 +474,13 @@ impl NormalFuncInfo {
         };
     }
 
-    fn gen_ret(&mut self) -> Result<()> {
-        let ret = self.pop().into();
+    fn gen_ret(&mut self, local: Option<BcLocal>) {
+        let ret = match local {
+            Some(local) => local.into(),
+            None => self.pop().into(),
+        };
         assert_eq!(0, self.temp);
         self.bc_ir.push(BcIr::Ret(ret));
-        Ok(())
     }
 
     fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
@@ -478,66 +513,14 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 
 impl NormalFuncInfo {
     fn compile(&mut self, ctx: &mut Context) -> Result<()> {
-        let mut nodes = match self.ast.kind.clone() {
-            NodeKind::CompStmt(nodes) => nodes,
-            NodeKind::Begin {
-                box body,
-                rescue,
-                else_: None,
-                ensure: None,
-            } => {
-                assert!(rescue.len() == 0);
-                match body.kind {
-                    NodeKind::CompStmt(nodes) => nodes,
-                    kind => unreachable!("{:?}", kind),
-                }
-            }
-            kind => unreachable!("{:?}", kind),
+        self.gen_expr(ctx, self.ast.clone(), true)?;
+        if self.temp == 1 {
+            self.gen_ret(None);
         };
-
-        let last = match nodes.pop() {
-            Some(node) => node,
-            None => Node::new_nil(Loc(0, 0)),
-        };
-        for node in nodes.into_iter() {
-            self.gen_expr(ctx, node, false)?;
-        }
-        self.gen_expr(ctx, last, true)?;
-        self.gen_ret()?;
         Ok(())
     }
-    /*
-    fn gen_decl(&mut self, remaining: &mut Context, decl: &Decl) -> Result<()> {
-            self.gen_decl_no(remaining, decl)?;
-            self.gen_nil(None);
-            Ok(())
-        }
 
-        fn gen_decl_no(&mut self, remaining: &mut Context, decl: &Decl) -> Result<()> {
-            match decl {
-                Decl::MethodDef(name, arg_name, body) => {
-                    let _ =
-                        self.decl_func(remaining, name.to_string(), arg_name.clone(), body.clone())?;
-                    Ok(())
-                }
-            }
-        }
-
-        fn decl_func(
-            &mut self,
-            remaining: &mut Context,
-            name: String,
-            args: Vec<String>,
-            ast: Vec<(Node, Span)>,
-        ) -> Result<()> {
-            let ast = ast
-                .into_iter()
-                .map(|(expr, span)| (Stmt::Node((expr, span.clone())), span))
-                .collect();
-            remaining.push(TempInfo { name, args, ast });
-            Ok(())
-        }*/
-    fn gen_exprs(
+    fn gen_comp_stmts(
         &mut self,
         ctx: &mut Context,
         mut nodes: Vec<Node>,
@@ -639,26 +622,18 @@ impl NormalFuncInfo {
                 box then_,
                 box else_,
             } => {
-                let then_ = match then_.kind {
-                    NodeKind::CompStmt(then_) => then_,
-                    _ => unimplemented!(),
-                };
-                let else_ = match else_.kind {
-                    NodeKind::CompStmt(else_) => else_,
-                    _ => unimplemented!(),
-                };
                 let then_pos = self.new_label();
                 let succ_pos = self.new_label();
                 let cond = self.gen_temp_expr(ctx, cond)?.into();
                 let inst = BcIr::CondBr(cond, then_pos);
                 self.bc_ir.push(inst);
-                self.gen_exprs(ctx, else_, use_value)?;
+                self.gen_expr(ctx, else_, use_value)?;
                 self.bc_ir.push(BcIr::Br(succ_pos));
                 if use_value {
                     self.pop();
                 }
                 self.apply_label(then_pos);
-                self.gen_exprs(ctx, then_, use_value)?;
+                self.gen_expr(ctx, then_, use_value)?;
                 self.apply_label(succ_pos);
                 return Ok(());
             }
@@ -668,22 +643,33 @@ impl NormalFuncInfo {
                 cond_op,
             } => {
                 assert!(cond_op);
-                let body = match body.kind {
-                    NodeKind::CompStmt(body) => body,
-                    _ => unimplemented!(),
-                };
                 self.gen_while(ctx, cond, body)?;
                 if use_value {
                     self.gen_nil(None);
                 }
                 return Ok(());
             }
-            NodeKind::Return(box stmt) => {
-                self.gen_expr(ctx, stmt, true)?;
-                self.gen_ret()?;
+            NodeKind::Return(box expr) => {
+                if let Some(local) = is_local(&expr) {
+                    let local = self.load_local(local)?;
+                    self.gen_ret(Some(local));
+                } else {
+                    self.gen_expr(ctx, expr, true)?;
+                    self.gen_ret(None);
+                }
                 return Ok(());
             }
-            NodeKind::CompStmt(nodes) => return self.gen_exprs(ctx, nodes, use_value),
+            NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(ctx, nodes, use_value),
+            NodeKind::Begin {
+                box body,
+                rescue,
+                else_: None,
+                ensure: None,
+            } => {
+                assert!(rescue.len() == 0);
+                self.gen_expr(ctx, body, use_value)?;
+                return Ok(());
+            }
             NodeKind::MethodDef(name, params, box body, _lv) => {
                 let mut args = vec![];
                 for param in params {
@@ -706,6 +692,99 @@ impl NormalFuncInfo {
         }
         if !use_value {
             self.pop();
+        }
+        Ok(())
+    }
+
+    fn gen_store_expr(
+        &mut self,
+        ctx: &mut Context,
+        local: BcLocal,
+        rhs: Node,
+        use_value: bool,
+    ) -> Result<()> {
+        match rhs.kind {
+            NodeKind::Nil => self.gen_nil(Some(local)),
+            NodeKind::Bool(b) => self.gen_const(Some(local), Value::bool(b)),
+            NodeKind::SelfValue => self.gen_mov(local.into(), BcReg::Self_),
+            NodeKind::Integer(i) => {
+                self.gen_integer(Some(local), i);
+            }
+            NodeKind::Float(f) => {
+                self.gen_float(Some(local), f);
+            }
+            NodeKind::UnOp(op, box rhs) => {
+                assert!(op == UnOp::Neg);
+                match rhs.kind {
+                    NodeKind::Integer(i) => self.gen_integer(Some(local), -i),
+                    NodeKind::Float(f) => self.gen_float(Some(local), -f),
+                    _ => {
+                        self.gen_store_expr(ctx, local, rhs, false)?;
+                        self.gen_neg(Some(local));
+                    }
+                };
+            }
+            NodeKind::BinOp(op, box lhs, box rhs) => match op {
+                BinOp::Add => self.gen_add(ctx, Some(local), lhs, rhs)?,
+                BinOp::Sub => self.gen_sub(ctx, Some(local), lhs, rhs)?,
+                BinOp::Mul => self.gen_mul(ctx, Some(local), lhs, rhs)?,
+                BinOp::Div => self.gen_div(ctx, Some(local), lhs, rhs)?,
+                BinOp::Eq => self.gen_cmp(ctx, Some(local), CmpKind::Eq, lhs, rhs)?,
+                BinOp::Ne => self.gen_cmp(ctx, Some(local), CmpKind::Ne, lhs, rhs)?,
+                BinOp::Ge => self.gen_cmp(ctx, Some(local), CmpKind::Ge, lhs, rhs)?,
+                BinOp::Gt => self.gen_cmp(ctx, Some(local), CmpKind::Gt, lhs, rhs)?,
+                BinOp::Le => self.gen_cmp(ctx, Some(local), CmpKind::Le, lhs, rhs)?,
+                BinOp::Lt => self.gen_cmp(ctx, Some(local), CmpKind::Lt, lhs, rhs)?,
+                _ => unimplemented!(),
+            },
+            NodeKind::MulAssign(mut mlhs, mut mrhs) => {
+                assert!(mlhs.len() == 1);
+                assert!(mrhs.len() == 1);
+                let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
+                match lhs.kind {
+                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                        let src = self.find_local(lhs);
+                        self.gen_store_expr(ctx, src, rhs, false)?;
+                        self.gen_mov(local.into(), src.into());
+                    }
+                    _ => unimplemented!(),
+                }
+            }
+            NodeKind::LocalVar(ident) => {
+                let local2 = self.load_local(ident)?;
+                self.gen_mov(local.into(), local2.into());
+            }
+            NodeKind::Send {
+                box receiver,
+                method,
+                arglist,
+                safe_nav: false,
+            } => {
+                assert!(receiver.kind == NodeKind::SelfValue);
+                assert!(arglist.kw_args.len() == 0);
+                assert!(arglist.hash_splat.len() == 0);
+                assert!(arglist.block.is_none());
+                assert!(!arglist.delegate);
+                let args = arglist.args;
+                let len = args.len();
+                let arg = self.gen_args(ctx, args)?;
+                self.temp -= len as u16;
+                let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
+                self.bc_ir.push(inst);
+            }
+            NodeKind::Return(_) => unreachable!(),
+            _ => {
+                let ret = self.next_reg();
+                self.gen_expr(ctx, rhs, true)?;
+                self.gen_mov(local.into(), ret.into());
+                if !use_value {
+                    self.pop();
+                }
+                return Ok(());
+            }
+        };
+        if use_value {
+            self.gen_temp_mov(local.into());
         }
         Ok(())
     }
@@ -849,107 +928,14 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_store_expr(
-        &mut self,
-        ctx: &mut Context,
-        local: BcLocal,
-        rhs: Node,
-        use_value: bool,
-    ) -> Result<()> {
-        match rhs.kind {
-            NodeKind::Nil => self.gen_nil(Some(local)),
-            NodeKind::Bool(b) => self.gen_const(Some(local), Value::bool(b)),
-            NodeKind::SelfValue => self.gen_mov(local.into(), BcReg::Self_),
-            NodeKind::Integer(i) => {
-                self.gen_integer(Some(local), i);
-            }
-            NodeKind::Float(f) => {
-                self.gen_float(Some(local), f);
-            }
-            NodeKind::UnOp(op, box rhs) => {
-                assert!(op == UnOp::Neg);
-                match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(Some(local), -i),
-                    NodeKind::Float(f) => self.gen_float(Some(local), -f),
-                    _ => {
-                        self.gen_store_expr(ctx, local, rhs, false)?;
-                        self.gen_neg(Some(local));
-                    }
-                };
-            }
-            NodeKind::BinOp(op, box lhs, box rhs) => match op {
-                BinOp::Add => self.gen_add(ctx, Some(local), lhs, rhs)?,
-                BinOp::Sub => self.gen_sub(ctx, Some(local), lhs, rhs)?,
-                BinOp::Mul => self.gen_mul(ctx, Some(local), lhs, rhs)?,
-                BinOp::Div => self.gen_div(ctx, Some(local), lhs, rhs)?,
-                BinOp::Eq => self.gen_cmp(ctx, Some(local), CmpKind::Eq, lhs, rhs)?,
-                BinOp::Ne => self.gen_cmp(ctx, Some(local), CmpKind::Ne, lhs, rhs)?,
-                BinOp::Ge => self.gen_cmp(ctx, Some(local), CmpKind::Ge, lhs, rhs)?,
-                BinOp::Gt => self.gen_cmp(ctx, Some(local), CmpKind::Gt, lhs, rhs)?,
-                BinOp::Le => self.gen_cmp(ctx, Some(local), CmpKind::Le, lhs, rhs)?,
-                BinOp::Lt => self.gen_cmp(ctx, Some(local), CmpKind::Lt, lhs, rhs)?,
-                _ => unimplemented!(),
-            },
-            NodeKind::MulAssign(mut mlhs, mut mrhs) => {
-                assert!(mlhs.len() == 1);
-                assert!(mrhs.len() == 1);
-                let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                match lhs.kind {
-                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                        let src = self.find_local(lhs);
-                        self.gen_store_expr(ctx, src, rhs, false)?;
-                        self.gen_mov(local.into(), src.into());
-                    }
-                    _ => unimplemented!(),
-                }
-            }
-            NodeKind::LocalVar(ident) => {
-                let local2 = self.load_local(ident)?;
-                self.gen_mov(local.into(), local2.into());
-            }
-            NodeKind::Send {
-                box receiver,
-                method,
-                arglist,
-                safe_nav: false,
-            } => {
-                assert!(receiver.kind == NodeKind::SelfValue);
-                assert!(arglist.kw_args.len() == 0);
-                assert!(arglist.hash_splat.len() == 0);
-                assert!(arglist.block.is_none());
-                assert!(!arglist.delegate);
-                let args = arglist.args;
-                let len = args.len();
-                let arg = self.gen_args(ctx, args)?;
-                self.temp -= len as u16;
-                let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
-                self.bc_ir.push(inst);
-            }
-            NodeKind::Return(_) => unreachable!(),
-            _ => {
-                let ret = self.next_reg();
-                self.gen_expr(ctx, rhs, true)?;
-                self.gen_mov(local.into(), ret.into());
-                if !use_value {
-                    self.pop();
-                }
-                return Ok(());
-            }
-        };
-        if use_value {
-            self.gen_temp_mov(local.into());
-        }
-        Ok(())
-    }
-
-    fn gen_while(&mut self, ctx: &mut Context, cond: Node, body: Vec<Node>) -> Result<()> {
+    fn gen_while(&mut self, ctx: &mut Context, cond: Node, body: Node) -> Result<()> {
         let cond_pos = self.new_label();
         let succ_pos = self.new_label();
         self.apply_label(cond_pos);
         let cond = self.gen_temp_expr(ctx, cond)?.into();
         let inst = BcIr::CondNotBr(cond, succ_pos);
         self.bc_ir.push(inst);
-        self.gen_exprs(ctx, body, false)?;
+        self.gen_expr(ctx, body, false)?;
         self.bc_ir.push(BcIr::Br(cond_pos));
         self.apply_label(succ_pos);
         Ok(())

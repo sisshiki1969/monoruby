@@ -10,13 +10,11 @@ use rustyline::Editor;
 
 mod ast;
 mod executor;
-mod parse;
 mod type_infer;
 mod types;
 mod value;
 pub use ast::*;
 use executor::*;
-pub use parse::*;
 use types::*;
 use value::*;
 
@@ -39,7 +37,7 @@ fn main() {
             let mut file = File::open(file).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            //let _ = exec(&code);
+            let _ = exec(&code);
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -67,25 +65,27 @@ fn main() {
     }
 }
 
-/*fn exec(code: &str) -> Result<(), ()> {
-    let ast = match MonorubyParser::parse(code) {
+fn exec(code: &str) -> Result<(), ()> {
+    let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
-        Err(_) => {
-            eprintln!("Parse error.");
+        Err(err) => {
+            err.source_info.show_loc(&err.loc);
             return Err(());
         }
     };
-    let gen = match FuncStore::from_ast(ast) {
+    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
         Ok(gen) => gen,
         Err(err) => {
             eprintln!("Error in compiling AST. {:?}", err);
             return Err(());
         }
     };
-    let bccomp_val = BcCompiler::exec_toplevel(&gen);
+    let interp_val = Interp::eval_toplevel(&mut gen);
+    eprintln!("interp: {:?}", interp_val);
+    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
     eprintln!("bccomp: {:?}", bccomp_val);
     Ok(())
-}*/
+}
 
 fn repl_exec(code: &str) -> Result<(), ()> {
     let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
@@ -169,7 +169,7 @@ fn run_ruby(code: &Vec<String>) -> RV {
         .collect::<Vec<String>>()
         .join(";");
     let output = Command::new("ruby")
-        .args(&["-e", &format!("p(eval\"{}\")", code)])
+        .args(&["-e", &format!("p(eval\"def f() {} end; f\")", code)])
         .output();
     match &output {
         Ok(output) => {
@@ -349,5 +349,12 @@ mod test {
         f(5.1, 7)
         "#,
         );
+    }
+
+    #[test]
+    fn test6() {
+        run_test("return 5");
+        run_test("a=5; return a");
+        run_test("a=5; b=6; return a+b");
     }
 }
