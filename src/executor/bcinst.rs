@@ -24,6 +24,7 @@ pub(super) enum BcIr {
     Ret(BcReg),
     Mov(BcReg, BcReg),                             // dst, offset
     FnCall(IdentId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
+    MethodDef(IdentId, usize),
 }
 
 ///
@@ -87,4 +88,5 @@ pub(super) enum BcOp {
     Mov(u16, u16),
     /// func call(func_id, %ret, %args, args_len)
     FnCall(IdentId, u16, u16, u16),
+    MethodDef(IdentId, FuncId),
 }

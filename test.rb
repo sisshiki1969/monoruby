@@ -5,4 +5,4 @@ def fib(x)
       fib(x-1)+fib(x-2)
   end
 end;
-fib(40)
+puts fib(40)

@@ -20,17 +20,29 @@ use value::*;
 
 use clap;
 
-/// Simple program to greet a person
 #[derive(clap::Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
-struct CLArgs {
+#[clap(author, version, about, long_about = None, trailing_var_arg = true)]
+struct CommandLineArgs {
+    /// one lineer. several -e's allowed. Omit [programfile]
+    #[clap(short, multiple_occurrences = true)]
+    exec: Vec<String>,
+    /// print the version number, then turn on verbose mode
+    #[clap(short)]
+    verbose: bool,
     /// File name.
     file: Option<String>,
 }
 
 fn main() {
     use clap::Parser;
-    let args = CLArgs::parse();
+    let args = CommandLineArgs::parse();
+
+    if !args.exec.is_empty() {
+        for code in args.exec {
+            let _ = exec(&code);
+        }
+        return;
+    }
 
     match args.file {
         Some(file) => {
@@ -80,8 +92,11 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let interp_val = Interp::eval_toplevel(&mut gen);
-    eprintln!("interp: {:?}", interp_val);
+    #[cfg(debug_assertions)]
+    {
+        let interp_val = Interp::eval_toplevel(&mut gen);
+        eprintln!("interp: {:?}", interp_val);
+    }
     let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
     eprintln!("bccomp: {:?}", bccomp_val);
     Ok(())
@@ -133,31 +148,42 @@ pub fn run_test(code: &str) {
             panic!("Error in compiling AST. {:?}", err);
         }
     };
-    //#[cfg(debug_assertions)]
-    //dbg!(&gen);
+    #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let interp_val = Interp::eval_toplevel(&mut gen);
+    #[cfg(not(debug_assertions))]
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("interp: {:?}", interp_val);
 
+    #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
+    #[cfg(not(debug_assertions))]
     eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("bccomp: {:?}", bccomp_val);
 
     assert_eq!(interp_val, bccomp_val);
 
     //dbg!(&stmt);
     /*let mut hir = HirContext::new();
-        match hir.from_ast(&ast) {
-            Ok(_) => {}
-            Err(err) => panic!("Error in compiling AST. {:?}", err),
-        };
-        let now = Instant::now();
-        let eval_res = Evaluator::eval_toplevel(&hir);
-        eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
+    match hir.from_ast(&ast) {
+        Ok(_) => {}
+        Err(err) => panic!("Error in compiling AST. {:?}", err),
+    };
+    let now = Instant::now();
+    let eval_res = Evaluator::eval_toplevel(&hir);
+    eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
     */
+    #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let ruby_res = run_ruby(&all_codes);
-    eprintln!("ruby: {:?} elapsed:{:?}", ruby_res, now.elapsed());
+    #[cfg(not(debug_assertions))]
+    eprintln!("ruby: {} elapsed:{:?}", ruby_res, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("ruby: {}", ruby_res);
+
     assert_eq!(interp_val.unpack(), ruby_res);
 }
 
@@ -356,5 +382,28 @@ mod test {
         run_test("return 5");
         run_test("a=5; return a");
         run_test("a=5; b=6; return a+b");
+    }
+
+    #[test]
+    fn test7() {
+        run_test(
+            r#"
+        def f
+          1
+        end
+        a = 0
+        i = 0
+        while i < 1000000
+          a = a + f()
+          if i == 500
+            def f
+              0
+            end
+          end
+          i = i + 1
+        end
+        a 
+        "#,
+        );
     }
 }

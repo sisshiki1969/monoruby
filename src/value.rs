@@ -1,8 +1,8 @@
 use super::*;
 
-//const UNINITIALIZED: u64 = 0x04; // 0000_0100
+//const UNINITIALIZED: u64 = 0x24; // 0010_0100
+const NIL_VALUE: u64 = 0x04; // 0000_0100
 const FALSE_VALUE: u64 = 0x14; // 0001_0100
-const NIL_VALUE: u64 = 0x24; // 0010_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
                               //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
                               //const BOOL_MASK1: u64 = 0b0011_0000;
@@ -24,6 +24,17 @@ pub enum RV {
     Float(f64),
 }
 
+impl std::fmt::Display for RV {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RV::Integer(n) => write!(f, "{}", n),
+            RV::Float(n) => write!(f, "{}", n),
+            RV::Bool(b) => write!(f, "{:?}", b),
+            RV::Nil => write!(f, "nil"),
+        }
+    }
+}
+
 /*impl RV {
     pub fn pack(&self) -> u64 {
         match self {
@@ -43,12 +54,7 @@ pub enum RV {
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.unpack() {
-            RV::Integer(n) => write!(f, "{}i32", n),
-            RV::Float(n) => write!(f, "{}f64", n),
-            RV::Bool(b) => write!(f, "{}", b),
-            RV::Nil => write!(f, "nil"),
-        }
+        write!(f, "{}", self.unpack())
     }
 }
 
@@ -187,27 +193,27 @@ impl Value {
 }
 
 impl Value {
-    /*#[inline(always)]
-    fn is_nil(&self) -> bool {
+    /*fn is_nil(&self) -> bool {
         self.0.get() == NIL_VALUE
     }*/
 
-    #[inline(always)]
+    pub fn to_bool(&self) -> bool {
+        let v = self.0.get();
+        (v | 0x10) != 0x14
+    }
+
     fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
     }
 
-    #[inline(always)]
     pub fn as_fnum(&self) -> i64 {
         (self.0.get() as i64) >> 1
     }
 
-    #[inline(always)]
     pub fn is_fnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 
-    #[inline(always)]
     fn as_fixnum(&self) -> Option<i32> {
         if self.is_fnum() {
             Some(self.as_fnum() as i32)
@@ -216,7 +222,6 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     fn as_flonum(&self) -> Option<f64> {
         let u = self.0.get();
         if u & 0b11 == 2 {

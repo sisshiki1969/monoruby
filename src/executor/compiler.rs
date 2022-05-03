@@ -11,6 +11,8 @@ use super::*;
 pub struct BcCompiler {
     jit: JitMemory,
     method_label: MethodDestTable,
+    func_map: HashMap<IdentId, FuncId>,
+    class_version: DestLabel,
 }
 
 struct MethodDestTable(Vec<DestLabel>);
@@ -46,7 +48,7 @@ extern "C" fn get_func_absolute_address(
     func_name: IdentId,
     args_len: usize,
 ) -> *const u8 {
-    let func_id = fn_store.get_method_or_panic(func_name);
+    let func_id = bc_comp.get_method_or_panic(fn_store, func_name);
 
     let arity = fn_store[func_id].arity();
     if arity != args_len {
@@ -60,11 +62,24 @@ extern "C" fn get_func_absolute_address(
     bc_comp.jit.get_label_absolute_address(dest)
 }
 
+extern "C" fn define_method(
+    bc_comp: &mut BcCompiler,
+    _fn_store: &FuncStore,
+    func_name: IdentId,
+    func_id: FuncId,
+) {
+    bc_comp.func_map.insert(func_name, func_id);
+}
+
 impl BcCompiler {
-    pub fn new() -> Self {
+    pub fn new(fn_store: &FuncStore) -> Self {
+        let mut jit = JitMemory::new();
+        let class_version = jit.const_i64(0);
         Self {
-            jit: JitMemory::new(),
+            jit,
             method_label: MethodDestTable::new(),
+            func_map: fn_store.predefined_func_map.clone(),
+            class_version,
         }
     }
 
@@ -78,8 +93,7 @@ impl BcCompiler {
 
     fn epilogue(&mut self) {
         monoasm!(self.jit,
-            movq rsp, rbp;
-            popq rbp;
+            leave;
             ret;
         );
     }
@@ -142,6 +156,13 @@ impl BcCompiler {
         );
     }
 
+    pub fn get_method_or_panic(&self, fn_store: &FuncStore, name: IdentId) -> FuncId {
+        *self
+            .func_map
+            .get(&name)
+            .unwrap_or_else(|| panic!("undefined method {:?}.", fn_store.get_ident_name(name)))
+    }
+
     //
     // stack layout for jit-ed code.
     //
@@ -165,7 +186,7 @@ impl BcCompiler {
 
     pub fn exec_toplevel(fn_store: &mut FuncStore) -> Value {
         let now = Instant::now();
-        let mut eval = Self::new();
+        let mut eval = Self::new(fn_store);
         for _ in &fn_store.functions {
             eval.method_label.push(eval.jit.label());
         }
@@ -515,8 +536,16 @@ impl BcCompiler {
                     }
                     let func = self.jit.label();
                     let l1 = self.jit.label();
+                    let exit = self.jit.label();
+                    let saved_class_version = self.jit.const_i64(0);
+                    let class_version = self.class_version;
                     monoasm!(self.jit,
-                        jmp l1;
+                        movq rax, [rip + class_version];
+                        cmpq [rip + saved_class_version], rax;
+                        jeq l1;
+                        movq [rip + saved_class_version], rax;
+                        lea rax, [rip + exit];
+                        pushq rax;
                     func:
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
@@ -537,16 +566,29 @@ impl BcCompiler {
                         subq rsi, [rsp];
                         // apply patch.
                         movl [rdi], rsi;
-                        jmp rax;
+                        popq rax;
                     l1:
                         // patch point
                         call func;
+                    exit:
                     );
                     if *ret != u16::MAX {
                         monoasm!(self.jit,
                             movq [rbp - (conv(*ret))], rax;
                         );
                     }
+                }
+                BcOp::MethodDef(id, fid) => {
+                    let class_version = self.class_version;
+                    monoasm!(self.jit,
+                        addq [rip + class_version], 1;
+                        movq rdi, rbx; // &mut BcCmpiler
+                        movq rsi, r12; // &FuncStore
+                        movq rdx, (u32::from(*id)); // IdentId
+                        movq rcx, (u32::from(*fid)); // FuncId
+                        movq rax, (define_method);
+                        call rax;
+                    );
                 }
                 BcOp::Br(next_pc) => {
                     let dest = labels[next_pc.0 as usize];

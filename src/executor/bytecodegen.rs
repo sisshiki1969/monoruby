@@ -25,8 +25,15 @@ extern "C" fn assert(expected: Value, actual: Value) -> Value {
 #[repr(transparent)]
 pub struct FuncId(pub u32);
 
+impl From<FuncId> for u32 {
+    fn from(id: FuncId) -> u32 {
+        id.0
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct TempInfo {
+    temp_id: usize,
     name: IdentId,
     args: Vec<IdentId>,
     ast: Node,
@@ -34,19 +41,31 @@ struct TempInfo {
 
 #[derive(Clone, PartialEq)]
 struct Context {
+    /// identifier table.
     id_store: IdentifierTable,
     /// remaining functions to be compiled.
     remaining: Vec<TempInfo>,
+    temp_map: HashMap<usize, FuncId>,
 }
 
 impl Context {
     fn new(id_store: IdentifierTable) -> Self {
         Self {
-            /// identifier table.
             id_store,
-            /// remaining functions to be compiled.
             remaining: vec![],
+            temp_map: HashMap::default(),
         }
+    }
+
+    fn push_remaining(&mut self, name: IdentId, args: Vec<IdentId>, ast: Node) -> usize {
+        let temp_id = self.remaining.len();
+        self.remaining.push(TempInfo {
+            temp_id,
+            name,
+            args,
+            ast,
+        });
+        temp_id
     }
 }
 
@@ -57,7 +76,8 @@ impl Context {
 pub struct FuncStore {
     /// Functions.
     pub functions: Vec<FuncInfo>,
-    func_map: HashMap<IdentId, FuncId>,
+    pub func_map: HashMap<IdentId, FuncId>,
+    pub predefined_func_map: HashMap<IdentId, FuncId>,
     ctx: Context,
 }
 
@@ -76,30 +96,36 @@ impl std::ops::IndexMut<FuncId> for FuncStore {
 
 impl FuncStore {
     fn new(id_store: IdentifierTable) -> Self {
-        Self {
+        let mut store = Self {
             functions: vec![],
             func_map: HashMap::default(),
+            predefined_func_map: HashMap::default(),
             ctx: Context::new(id_store),
-        }
+        };
+        store.add_builtin_func("puts".to_string(), puts as *const u8 as u64, 1);
+        store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
+        store.predefined_func_map = store.func_map.clone();
+        store
     }
 
     pub fn from_ast(ast: Node, id_store: IdentifierTable) -> Result<Self> {
         let mut store = Self::new(id_store);
-        store.ctx.remaining.push(TempInfo {
-            name: IdentId::_MAIN,
-            args: vec![],
+        store.ctx.push_remaining(IdentId::_MAIN, vec![], ast);
+
+        while let Some(TempInfo {
+            temp_id,
+            name,
+            args,
             ast,
-        });
-        store.add_builtin_func("puts".to_string(), puts as *const u8 as u64, 1);
-        store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
-        while let Some(TempInfo { name, args, ast }) = store.ctx.remaining.pop() {
-            store.compile_func(name, args, ast)?;
+        }) = store.ctx.remaining.pop()
+        {
+            store.compile_func(temp_id, name, args, ast)?;
         }
         for func in store.functions.iter_mut() {
             match &mut func.kind {
                 FuncKind::Builtin { .. } => {}
                 FuncKind::Normal(ref mut info) => {
-                    info.gen_bytecode_from_ir();
+                    info.gen_bytecode_from_ir(&store.ctx.temp_map);
                 }
             }
         }
@@ -123,13 +149,10 @@ impl FuncStore {
         self.ctx.id_store.get_ident_id(name)
     }
 
-    fn get_method(&self, name: IdentId) -> Option<&FuncId> {
-        self.func_map.get(&name)
-    }
-
     pub fn get_method_or_panic(&self, name: IdentId) -> FuncId {
         *self
-            .get_method(name)
+            .func_map
+            .get(&name)
             .unwrap_or_else(|| panic!("undefined method {:?}.", self.get_ident_name(name)))
     }
 
@@ -235,6 +258,9 @@ impl FuncStore {
                                 }
                             }
                         }
+                        BcOp::MethodDef(id, fid) => {
+                            eprintln!("define {:?}: {:?}", id, fid)
+                        }
                     }
                 }
                 eprintln!("------------------------------------")
@@ -295,13 +321,20 @@ impl FuncInfo {
 
 impl FuncStore {
     /// Generate bytecode Ir in a new function from [(Stmt, Span)].
-    fn compile_func(&mut self, name: IdentId, args: Vec<IdentId>, ast: Node) -> Result<()> {
-        let id = FuncId(self.functions.len() as u32);
-        self.func_map.insert(name, id);
-        let mut info = NormalFuncInfo::new(id, args, ast);
+    fn compile_func(
+        &mut self,
+        temp_id: usize,
+        name: IdentId,
+        args: Vec<IdentId>,
+        ast: Node,
+    ) -> Result<()> {
+        let func_id = FuncId(self.functions.len() as u32);
+        self.func_map.insert(name, func_id);
+        let mut info = NormalFuncInfo::new(func_id, args, ast);
         info.compile(&mut self.ctx)?;
         let name = self.ctx.id_store.get_name(name).to_string();
         self.functions.push(FuncInfo::new_normal(name, info));
+        self.ctx.temp_map.insert(temp_id, func_id);
         Ok(())
     }
 }
@@ -323,7 +356,7 @@ pub struct NormalFuncInfo {
     /// corresponding AST.
     ///
     /// !!CAUTION!!:this field is consumed by bytecode compiler.
-    ast: Node,
+    node: Node,
     /// corresponding bytecode ir.
     bc_ir: Vec<BcIr>,
     /// destination labels.
@@ -333,7 +366,7 @@ pub struct NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
-    fn new(id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
+    fn new(id: FuncId, args: Vec<IdentId>, node: Node) -> Self {
         let mut info = NormalFuncInfo {
             id,
             bc: vec![],
@@ -341,7 +374,7 @@ impl NormalFuncInfo {
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
-            ast,
+            node,
             bc_ir: vec![],
             labels: vec![],
             constants: vec![],
@@ -513,7 +546,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 
 impl NormalFuncInfo {
     fn compile(&mut self, ctx: &mut Context) -> Result<()> {
-        self.gen_expr(ctx, self.ast.clone(), true)?;
+        self.gen_expr(ctx, self.node.clone(), true)?;
         if self.temp == 1 {
             self.gen_ret(None);
         };
@@ -680,7 +713,7 @@ impl NormalFuncInfo {
                 self.gen_expr(ctx, body, use_value)?;
                 return Ok(());
             }
-            NodeKind::MethodDef(name, params, box body, _lv) => {
+            NodeKind::MethodDef(name, params, box node, _lv) => {
                 let mut args = vec![];
                 for param in params {
                     match param.kind {
@@ -688,11 +721,8 @@ impl NormalFuncInfo {
                         _ => unimplemented!("{:?}", param.kind),
                     }
                 }
-                ctx.remaining.push(TempInfo {
-                    name,
-                    args,
-                    ast: body,
-                });
+                let temp_id = ctx.push_remaining(name, args, node);
+                self.bc_ir.push(BcIr::MethodDef(name, temp_id));
                 if use_value {
                     // TODO: This should be a Symbol.
                     self.gen_nil(None);
@@ -975,7 +1005,7 @@ impl NormalFuncInfo {
         }
     }
 
-    fn gen_bytecode_from_ir(&mut self) {
+    fn gen_bytecode_from_ir(&mut self, temp_map: &HashMap<usize, FuncId>) {
         let mut ops = vec![];
         for inst in &self.bc_ir {
             let op = match inst {
@@ -1058,6 +1088,9 @@ impl NormalFuncInfo {
                     self.get_index(&BcReg::from(*arg)),
                     *len as u16,
                 ),
+                BcIr::MethodDef(id, temp_id) => {
+                    BcOp::MethodDef(*id, *temp_map.get(&temp_id).unwrap())
+                }
             };
             ops.push(op);
         }

@@ -63,6 +63,7 @@ pub struct Interp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
+    func_map: HashMap<IdentId, FuncId>,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -94,6 +95,7 @@ impl Interp {
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
+            func_map: fn_store.predefined_func_map.clone(),
         }
     }
 
@@ -101,6 +103,13 @@ impl Interp {
         let op = self.pc.get();
         self.pc += 1;
         op
+    }
+
+    pub fn get_method_or_panic(&self, fn_store: &FuncStore, name: IdentId) -> FuncId {
+        *self
+            .func_map
+            .get(&name)
+            .unwrap_or_else(|| panic!("undefined method {:?}.", fn_store.get_ident_name(name)))
     }
 
     fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
@@ -258,7 +267,7 @@ impl Interp {
                         }
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    let func_id = fn_store.get_method_or_panic(id);
+                    let func_id = self.get_method_or_panic(fn_store, id);
                     let info = &fn_store[func_id];
                     check_arity(info.arity(), len);
                     match &info.kind {
@@ -297,14 +306,17 @@ impl Interp {
                     self.pc = self.pc_top + next_pc;
                 }
                 BcOp::CondBr(cond_, then_) => {
-                    if self[cond_] != Value::bool(false) {
+                    if self[cond_].to_bool() {
                         self.pc = self.pc_top + then_;
                     };
                 }
                 BcOp::CondNotBr(cond_, else_) => {
-                    if self[cond_] == Value::bool(false) {
+                    if !self[cond_].to_bool() {
                         self.pc = self.pc_top + else_;
                     };
+                }
+                BcOp::MethodDef(id, fid) => {
+                    self.func_map.insert(id, fid);
                 }
             }
         }
