@@ -108,8 +108,7 @@ impl BcCompiler {
     fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
             // check whether lhs is fixnum.
-            movq rax, rdi;
-            andq rax, 0x1;
+            testq rdi, 0x1;
             jeq generic;
         );
     }
@@ -117,8 +116,7 @@ impl BcCompiler {
     fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
             // check whether rhs is fixnum.
-            movq rax, rsi;
-            andq rax, 0x1;
+            testq rsi, 0x1;
             jeq generic;
         );
     }
