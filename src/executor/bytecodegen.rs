@@ -660,6 +660,16 @@ impl NormalFuncInfo {
                 self.bc_ir.push(BcIr::FnCall(method, ret, arg, len));
                 return Ok(());
             }
+            NodeKind::Ident(method) => {
+                let (arg, len) = self.check_fast_call_inner(ctx, vec![])?;
+                let ret = if use_value {
+                    Some(self.push().into())
+                } else {
+                    None
+                };
+                self.bc_ir.push(BcIr::FnCall(method, ret, arg, len));
+                return Ok(());
+            }
             NodeKind::If {
                 box cond,
                 box then_,
@@ -844,7 +854,14 @@ impl NormalFuncInfo {
         assert!(arglist.hash_splat.len() == 0);
         assert!(arglist.block.is_none());
         assert!(!arglist.delegate);
-        let args = arglist.args;
+        self.check_fast_call_inner(ctx, arglist.args)
+    }
+
+    fn check_fast_call_inner(
+        &mut self,
+        ctx: &mut Context,
+        args: Vec<Node>,
+    ) -> Result<(BcTemp, usize)> {
         let len = args.len();
         let arg = self.gen_args(ctx, args)?;
         self.temp -= len as u16;

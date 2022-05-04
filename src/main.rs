@@ -97,8 +97,9 @@ fn exec(code: &str) -> Result<(), ()> {
         let interp_val = Interp::eval_toplevel(&mut gen);
         eprintln!("interp: {:?}", interp_val);
     }
-    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
-    eprintln!("bccomp: {:?}", bccomp_val);
+
+    let _bccomp_val = jitcompiler(&mut gen);
+
     Ok(())
 }
 
@@ -121,8 +122,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
     let interp_val = Interp::eval_toplevel(&mut gen);
     eprintln!("interp: {:?}", interp_val);
 
-    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
-    eprintln!("bccomp: {:?}", bccomp_val);
+    let _bccomp_val = jitcompiler(&mut gen);
 
     Ok(())
 }
@@ -156,13 +156,7 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    #[cfg(not(debug_assertions))]
-    let now = Instant::now();
-    let bccomp_val = BcCompiler::exec_toplevel(&mut gen);
-    #[cfg(not(debug_assertions))]
-    eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
-    #[cfg(debug_assertions)]
-    eprintln!("bccomp: {:?}", bccomp_val);
+    let bccomp_val = jitcompiler(&mut gen);
 
     assert_eq!(interp_val, bccomp_val);
 
@@ -176,15 +170,21 @@ pub fn run_test(code: &str) {
     let eval_res = Evaluator::eval_toplevel(&hir);
     eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
     */
-    #[cfg(not(debug_assertions))]
-    let now = Instant::now();
+
     let ruby_res = run_ruby(&all_codes);
-    #[cfg(not(debug_assertions))]
-    eprintln!("ruby: {} elapsed:{:?}", ruby_res, now.elapsed());
-    #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", ruby_res);
 
     assert_eq!(interp_val.unpack(), ruby_res);
+}
+
+fn jitcompiler(gen: &mut FuncStore) -> Value {
+    #[cfg(not(debug_assertions))]
+    let now = Instant::now();
+    let bccomp_val = BcCompiler::exec_toplevel(gen);
+    #[cfg(not(debug_assertions))]
+    eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("bccomp: {:?}", bccomp_val);
+    bccomp_val
 }
 
 fn run_ruby(code: &Vec<String>) -> RV {
@@ -194,10 +194,14 @@ fn run_ruby(code: &Vec<String>) -> RV {
         .map(|s| s.trim_matches('\n').to_owned())
         .collect::<Vec<String>>()
         .join(";");
+
+    #[cfg(not(debug_assertions))]
+    let now = Instant::now();
     let output = Command::new("ruby")
         .args(&["-e", &format!("p(eval\"def f() {} end; f\")", code)])
         .output();
-    match &output {
+
+    let res = match &output {
         Ok(output) => {
             let res = std::str::from_utf8(&output.stdout)
                 .unwrap()
@@ -220,7 +224,12 @@ fn run_ruby(code: &Vec<String>) -> RV {
         Err(err) => {
             panic!("Error occured in executing Ruby. {:?}", err);
         }
-    }
+    };
+    #[cfg(not(debug_assertions))]
+    eprintln!("ruby: {} elapsed:{:?}", ruby_res, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("ruby: {}", res);
+    res
 }
 
 #[cfg(test)]
@@ -318,10 +327,10 @@ mod test {
                 if x<3 then
                     1
                 else
-                    fib(x-1)+fib(x-2)
+                    fib(x-1) + fib(x-2)
                 end
             end;
-            fib(40)
+            fib 40
             "#,
         );
     }
