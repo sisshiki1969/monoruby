@@ -142,7 +142,7 @@ pub fn run_test(code: &str) {
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut store);
+    let interp_val = Interp::eval_toplevel(&mut store.clone());
     #[cfg(not(debug_assertions))]
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
     #[cfg(debug_assertions)]

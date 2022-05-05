@@ -63,7 +63,6 @@ pub struct Interp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
-    func_map: HashMap<IdentId, FuncId>,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -81,21 +80,19 @@ impl std::ops::IndexMut<u16> for Interp {
 
 impl Interp {
     pub fn eval_toplevel(fn_store: &mut FuncStore) -> Value {
-        let mut eval = Self::new(fn_store);
-        let main = fn_store.get_main_func();
-        eval.push_frame(0, 0, fn_store[main].as_normal(), None);
+        let main = fn_store[fn_store.get_main_func()].as_normal();
+        let mut eval = Self::new(main);
+        eval.push_frame(0, 0, main, None);
         eval.eval_loop(fn_store)
     }
 
-    fn new(fn_store: &mut FuncStore) -> Self {
-        let main = fn_store.get_main_func();
-        let pc_top = BcPcBase::new(&fn_store[main].as_normal());
+    fn new(main: &NormalFuncInfo) -> Self {
+        let pc_top = BcPcBase::new(main);
         Self {
-            cur_fn: main,
+            cur_fn: main.id,
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
-            func_map: fn_store.func_map.clone(),
         }
     }
 
@@ -106,7 +103,7 @@ impl Interp {
     }
 
     pub fn get_method_or_panic(&self, fn_store: &FuncStore, name: IdentId) -> FuncId {
-        *self
+        *fn_store
             .func_map
             .get(&name)
             .unwrap_or_else(|| panic!("undefined method {:?}.", fn_store.get_ident_name(name)))
@@ -136,7 +133,7 @@ impl Interp {
         false
     }
 
-    fn eval_loop(&mut self, fn_store: &FuncStore) -> Value {
+    fn eval_loop(&mut self, fn_store: &mut FuncStore) -> Value {
         loop {
             let op = self.get_op();
             match op {
@@ -316,7 +313,7 @@ impl Interp {
                     };
                 }
                 BcOp::MethodDef(id, fid) => {
-                    self.func_map.insert(id, fid);
+                    fn_store.func_map.insert(id, fid);
                 }
             }
         }

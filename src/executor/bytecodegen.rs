@@ -1,5 +1,7 @@
 use std::hash::Hash;
 
+use monoasm::DestLabel;
+
 use super::*;
 
 pub type Result<T> = std::result::Result<T, BcErr>;
@@ -140,7 +142,7 @@ impl FuncStore {
     }
 
     /// Get *FuncId* of the toplevel function.
-    pub fn get_main_func(&mut self) -> FuncId {
+    pub fn get_main_func(&self) -> FuncId {
         self.get_method_or_panic(IdentId::_MAIN)
     }
 
@@ -152,7 +154,7 @@ impl FuncStore {
         self.ctx.id_store.get_ident_id(name)
     }
 
-    pub fn get_method_or_panic(&self, name: IdentId) -> FuncId {
+    fn get_method_or_panic(&self, name: IdentId) -> FuncId {
         *self
             .func_map
             .get(&name)
@@ -283,6 +285,8 @@ pub struct FuncInfo {
     name: String,
     /// arity of this function.
     arity: usize,
+    /// *DestLabel* of JIT function.
+    jit_label: Option<DestLabel>,
     pub(super) kind: FuncKind,
 }
 
@@ -292,6 +296,7 @@ impl FuncInfo {
             id: info.id,
             name,
             arity: info.args.len(),
+            jit_label: None,
             kind: FuncKind::Normal(info),
         }
     }
@@ -301,6 +306,7 @@ impl FuncInfo {
             id,
             name,
             arity,
+            jit_label: None,
             kind: FuncKind::Builtin {
                 abs_address: address,
             },
@@ -309,6 +315,14 @@ impl FuncInfo {
 
     pub(super) fn arity(&self) -> usize {
         self.arity
+    }
+
+    pub(super) fn jit_label(&self) -> Option<DestLabel> {
+        self.jit_label
+    }
+
+    pub(super) fn jit_label_mut(&mut self) -> &mut Option<DestLabel> {
+        &mut self.jit_label
     }
 
     pub(super) fn as_normal(&self) -> &NormalFuncInfo {

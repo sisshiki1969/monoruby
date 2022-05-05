@@ -10,28 +10,8 @@ use super::*;
 ///
 pub struct BcCompiler {
     jit: JitMemory,
-    method_label: MethodDestTable,
     func_map: HashMap<IdentId, FuncId>,
     class_version: DestLabel,
-}
-
-struct MethodDestTable(Vec<DestLabel>);
-
-impl MethodDestTable {
-    fn new() -> Self {
-        Self(vec![])
-    }
-
-    fn push(&mut self, dest: DestLabel) {
-        self.0.push(dest);
-    }
-}
-
-impl std::ops::Index<FuncId> for MethodDestTable {
-    type Output = DestLabel;
-    fn index(&self, index: FuncId) -> &DestLabel {
-        &self.0[index.0 as usize]
-    }
 }
 
 fn conv(reg: u16) -> i64 {
@@ -48,9 +28,14 @@ extern "C" fn get_func_absolute_address(
     func_name: IdentId,
     args_len: usize,
 ) -> *const u8 {
-    let func_id = bc_comp.get_method_or_panic(fn_store, func_name);
+    let func_id = match bc_comp.get_method(func_name) {
+        Some(id) => id,
+        None => panic!("undefined method {:?}.", fn_store.get_ident_name(func_name)),
+    };
 
-    let arity = fn_store[func_id].arity();
+    let info = &fn_store[func_id];
+    let jit_label = info.jit_label();
+    let arity = info.arity();
     if arity != args_len {
         panic!(
             "number of arguments mismatch. expected:{} actual:{}",
@@ -58,8 +43,10 @@ extern "C" fn get_func_absolute_address(
         );
     }
 
-    let dest = bc_comp.method_label[func_id];
-    bc_comp.jit.get_label_absolute_address(dest)
+    match jit_label {
+        Some(dest) => bc_comp.jit.get_label_absolute_address(dest),
+        None => panic!(),
+    }
 }
 
 extern "C" fn define_method(
@@ -77,7 +64,6 @@ impl BcCompiler {
         let class_version = jit.const_i64(0);
         Self {
             jit,
-            method_label: MethodDestTable::new(),
             func_map: fn_store.func_map.clone(),
             class_version,
         }
@@ -154,11 +140,8 @@ impl BcCompiler {
         );
     }
 
-    pub fn get_method_or_panic(&self, fn_store: &FuncStore, name: IdentId) -> FuncId {
-        *self
-            .func_map
-            .get(&name)
-            .unwrap_or_else(|| panic!("undefined method {:?}.", fn_store.get_ident_name(name)))
+    pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
+        self.func_map.get(&name).map(|id| *id)
     }
 
     //
@@ -183,41 +166,44 @@ impl BcCompiler {
     //
 
     pub fn exec_toplevel(fn_store: &mut FuncStore) -> Value {
-        let now = Instant::now();
         let mut eval = Self::new(fn_store);
-        for _ in &fn_store.functions {
-            eval.method_label.push(eval.jit.label());
-        }
-        for func in &fn_store.functions {
-            eval.jit.bind_label(eval.method_label[func.id]);
+        let val = eval.exec(fn_store);
+        val
+    }
+
+    fn exec<'r, 's>(&'r mut self, fn_store: &'s mut FuncStore) -> Value {
+        let now = Instant::now();
+        for func in &mut fn_store.functions {
+            let label = self.jit.label();
+            *func.jit_label_mut() = Some(label);
+            self.jit.bind_label(func.jit_label().unwrap());
             match &func.kind {
-                FuncKind::Normal(info) => eval.compile_func_bc(info),
+                FuncKind::Normal(info) => self.compile_func_bc(info),
                 FuncKind::Builtin { abs_address } => {
-                    eval.compile_builtin_func(*abs_address, func.arity())
+                    self.compile_builtin_func(*abs_address, func.arity())
                 }
             }
         }
-        let main = eval.method_label[fn_store.get_main_func()];
-        let entry = eval.jit.label();
-        let bccomp_ptr = &eval as *const _;
-        let funcstore_ptr = fn_store as *const _;
-        monoasm!(eval.jit,
+        eprintln!("jit compile elapsed:{:?}", now.elapsed());
+        let main = fn_store[fn_store.get_main_func()].jit_label().unwrap();
+        let entry = self.jit.label();
+        monoasm!(self.jit,
         entry:
             pushq rbp;
             pushq rbx;
             pushq r12;
-            movq rbx, (bccomp_ptr);
-            movq r12, (funcstore_ptr);
+            movq rbx, rdi;
+            movq r12, rsi;
             call main;
             popq r12;
             popq rbx;
             popq rbp;
             ret;
         );
-        eval.jit.finalize();
-        let entry_point: extern "C" fn(()) -> Value = eval.jit.get_label_addr(entry);
-        eprintln!("jit compile elapsed:{:?}", now.elapsed());
-        entry_point(())
+        self.jit.finalize();
+        let entry_point: extern "C" fn(&'r BcCompiler, &'s FuncStore) -> Value =
+            self.jit.get_label_addr2(entry);
+        entry_point(self, fn_store)
     }
 
     fn compile_builtin_func(&mut self, abs_address: u64, arity: usize) {
