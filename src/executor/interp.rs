@@ -95,7 +95,7 @@ impl Interp {
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
-            func_map: fn_store.predefined_func_map.clone(),
+            func_map: fn_store.func_map.clone(),
         }
     }
 

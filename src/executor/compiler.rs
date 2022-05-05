@@ -78,7 +78,7 @@ impl BcCompiler {
         Self {
             jit,
             method_label: MethodDestTable::new(),
-            func_map: fn_store.predefined_func_map.clone(),
+            func_map: fn_store.func_map.clone(),
             class_version,
         }
     }

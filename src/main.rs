@@ -85,20 +85,17 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
-        Ok(gen) => gen,
-        Err(err) => {
-            eprintln!("Error in compiling AST. {:?}", err);
-            return Err(());
-        }
-    };
+    let mut store = FuncStore::new(res.id_store);
+    store
+        .from_ast(res.node)
+        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
     #[cfg(debug_assertions)]
     {
-        let interp_val = Interp::eval_toplevel(&mut gen);
+        let interp_val = Interp::eval_toplevel(&mut store);
         eprintln!("interp: {:?}", interp_val);
     }
 
-    let _bccomp_val = jitcompiler(&mut gen);
+    let _bccomp_val = jitcompiler(&mut store);
 
     Ok(())
 }
@@ -111,18 +108,15 @@ fn repl_exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
-        Ok(gen) => gen,
-        Err(err) => {
-            eprintln!("Error in compiling AST. {:?}", err);
-            return Err(());
-        }
-    };
+    let mut store = FuncStore::new(res.id_store);
+    store
+        .from_ast(res.node)
+        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
 
-    let interp_val = Interp::eval_toplevel(&mut gen);
+    let interp_val = Interp::eval_toplevel(&mut store);
     eprintln!("interp: {:?}", interp_val);
 
-    let _bccomp_val = jitcompiler(&mut gen);
+    let _bccomp_val = jitcompiler(&mut store);
 
     Ok(())
 }
@@ -142,21 +136,19 @@ pub fn run_test(code: &str) {
         Ok(res) => res,
         Err(_) => panic!("Parse error."),
     };
-    let mut gen = match FuncStore::from_ast(res.node, res.id_store) {
-        Ok(gen) => gen,
-        Err(err) => {
-            panic!("Error in compiling AST. {:?}", err);
-        }
-    };
+    let mut store = FuncStore::new(res.id_store);
+    store
+        .from_ast(res.node)
+        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut gen);
+    let interp_val = Interp::eval_toplevel(&mut store);
     #[cfg(not(debug_assertions))]
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let bccomp_val = jitcompiler(&mut gen);
+    let bccomp_val = jitcompiler(&mut store);
 
     assert_eq!(interp_val, bccomp_val);
 
@@ -226,7 +218,7 @@ fn run_ruby(code: &Vec<String>) -> RV {
         }
     };
     #[cfg(not(debug_assertions))]
-    eprintln!("ruby: {} elapsed:{:?}", ruby_res, now.elapsed());
+    eprintln!("ruby: {} elapsed:{:?}", res, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("ruby: {}", res);
     res
