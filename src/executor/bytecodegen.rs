@@ -143,7 +143,7 @@ impl FuncStore {
 
     /// Get *FuncId* of the toplevel function.
     pub fn get_main_func(&self) -> FuncId {
-        self.get_method_or_panic(IdentId::_MAIN)
+        *self.get_method(IdentId::_MAIN).unwrap()
     }
 
     pub fn get_ident_name(&self, id: IdentId) -> &str {
@@ -154,11 +154,8 @@ impl FuncStore {
         self.ctx.id_store.get_ident_id(name)
     }
 
-    fn get_method_or_panic(&self, name: IdentId) -> FuncId {
-        *self
-            .func_map
-            .get(&name)
-            .unwrap_or_else(|| panic!("undefined method {:?}.", self.get_ident_name(name)))
+    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
+        self.func_map.get(&name)
     }
 
     fn add_builtin_func(&mut self, name: String, address: u64, arity: usize) -> FuncId {

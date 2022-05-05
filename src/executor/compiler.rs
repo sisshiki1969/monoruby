@@ -10,7 +10,7 @@ use super::*;
 ///
 pub struct BcCompiler {
     jit: JitMemory,
-    func_map: HashMap<IdentId, FuncId>,
+    //func_map: HashMap<IdentId, FuncId>,
     class_version: DestLabel,
 }
 
@@ -28,8 +28,8 @@ extern "C" fn get_func_absolute_address(
     func_name: IdentId,
     args_len: usize,
 ) -> *const u8 {
-    let func_id = match bc_comp.get_method(func_name) {
-        Some(id) => id,
+    let func_id = match fn_store.get_method(func_name) {
+        Some(id) => *id,
         None => panic!("undefined method {:?}.", fn_store.get_ident_name(func_name)),
     };
 
@@ -50,23 +50,19 @@ extern "C" fn get_func_absolute_address(
 }
 
 extern "C" fn define_method(
-    bc_comp: &mut BcCompiler,
-    _fn_store: &FuncStore,
+    _bc_comp: &mut BcCompiler,
+    fn_store: &mut FuncStore,
     func_name: IdentId,
     func_id: FuncId,
 ) {
-    bc_comp.func_map.insert(func_name, func_id);
+    fn_store.func_map.insert(func_name, func_id);
 }
 
 impl BcCompiler {
-    pub fn new(fn_store: &FuncStore) -> Self {
+    pub fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i64(0);
-        Self {
-            jit,
-            func_map: fn_store.func_map.clone(),
-            class_version,
-        }
+        Self { jit, class_version }
     }
 
     fn prologue(&mut self, regs: usize) {
@@ -140,9 +136,9 @@ impl BcCompiler {
         );
     }
 
-    pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
+    /*pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
         self.func_map.get(&name).map(|id| *id)
-    }
+    }*/
 
     //
     // stack layout for jit-ed code.
@@ -166,7 +162,7 @@ impl BcCompiler {
     //
 
     pub fn exec_toplevel(fn_store: &mut FuncStore) -> Value {
-        let mut eval = Self::new(fn_store);
+        let mut eval = Self::new();
         let val = eval.exec(fn_store);
         val
     }
