@@ -3,6 +3,7 @@ pub use ruruby_parse::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
+#[cfg(not(debug_assertions))]
 use std::time::*;
 
 use rustyline::error::ReadlineError;
@@ -85,7 +86,7 @@ fn exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let mut store = FuncStore::new(res.id_store);
+    let mut store = Globals::new(res.id_store);
     store
         .from_ast(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
@@ -108,7 +109,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
             return Err(());
         }
     };
-    let mut store = FuncStore::new(res.id_store);
+    let mut store = Globals::new(res.id_store);
     store
         .from_ast(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
@@ -136,7 +137,7 @@ pub fn run_test(code: &str) {
         Ok(res) => res,
         Err(_) => panic!("Parse error."),
     };
-    let mut store = FuncStore::new(res.id_store);
+    let mut store = Globals::new(res.id_store);
     store
         .from_ast(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
@@ -168,7 +169,7 @@ pub fn run_test(code: &str) {
     assert_eq!(interp_val.unpack(), ruby_res);
 }
 
-fn jitcompiler(gen: &mut FuncStore) -> Value {
+fn jitcompiler(gen: &mut Globals) -> Value {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let bccomp_val = BcCompiler::exec_toplevel(gen);
@@ -190,14 +191,20 @@ fn run_ruby(code: &Vec<String>) -> RV {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let output = Command::new("ruby")
-        .args(&["-e", &format!("p(eval\"def f() {} end; f\")", code)])
+        .args(&[
+            "-e",
+            &format!("x=(eval\"def f() {} end; f\");puts;p(x)", code),
+        ])
         .output();
 
     let res = match &output {
         Ok(output) => {
             let res = std::str::from_utf8(&output.stdout)
                 .unwrap()
-                .trim_matches('\n');
+                .trim_end()
+                .split('\n')
+                .last()
+                .unwrap();
             if let Ok(n) = res.parse::<i64>() {
                 RV::Integer(n as i32)
             } else if let Ok(n) = res.parse::<f64>() {
@@ -404,6 +411,33 @@ mod test {
           i = i + 1
         end
         a 
+        "#,
+        );
+    }
+
+    #[test]
+    fn test8() {
+        run_test(
+            r#"
+        def f(x)
+          x * 2
+        end
+        def g(x)
+          x + 2
+        end
+        def h(x)
+          x * x
+        end
+        h g f 7
+        "#,
+        );
+    }
+
+    #[test]
+    fn test9() {
+        run_test(
+            r#"
+            puts 100
         "#,
         );
     }

@@ -63,6 +63,7 @@ pub struct Interp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
+    bc_comp: BcCompiler,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -79,7 +80,7 @@ impl std::ops::IndexMut<u16> for Interp {
 }
 
 impl Interp {
-    pub fn eval_toplevel(fn_store: &mut FuncStore) -> Value {
+    pub fn eval_toplevel(fn_store: &mut Globals) -> Value {
         let main = fn_store[fn_store.get_main_func()].as_normal();
         let mut eval = Self::new(main);
         eval.push_frame(0, 0, main, None);
@@ -93,6 +94,7 @@ impl Interp {
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
+            bc_comp: BcCompiler::new(),
         }
     }
 
@@ -102,11 +104,11 @@ impl Interp {
         op
     }
 
-    pub fn get_method_or_panic(&self, fn_store: &FuncStore, name: IdentId) -> FuncId {
-        *fn_store
+    pub fn get_method_or_panic(&self, globals: &Globals, name: IdentId) -> FuncId {
+        *globals
             .func_map
             .get(&name)
-            .unwrap_or_else(|| panic!("undefined method {:?}.", fn_store.get_ident_name(name)))
+            .unwrap_or_else(|| panic!("undefined method {:?}.", globals.get_ident_name(name)))
     }
 
     fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
@@ -119,7 +121,7 @@ impl Interp {
         self.cur_fn = func.id;
     }
 
-    fn pop_frame(&mut self, val: Value, fn_store: &FuncStore) -> bool {
+    fn pop_frame(&mut self, val: Value, fn_store: &Globals) -> bool {
         let (b, func, pc, ret) = self.call_stack.pop_frame();
         if b {
             return true;
@@ -133,7 +135,7 @@ impl Interp {
         false
     }
 
-    fn eval_loop(&mut self, fn_store: &mut FuncStore) -> Value {
+    fn eval_loop(&mut self, fn_store: &mut Globals) -> Value {
         loop {
             let op = self.get_op();
             match op {
@@ -274,22 +276,9 @@ impl Interp {
                         FuncKind::Builtin {
                             abs_address: address,
                         } => {
-                            let v = match len {
-                                0 => unsafe {
-                                    std::mem::transmute::<u64, extern "C" fn() -> Value>(*address)()
-                                },
-                                1 => unsafe {
-                                    std::mem::transmute::<u64, extern "C" fn(Value) -> Value>(
-                                        *address,
-                                    )(self[args])
-                                },
-                                2 => unsafe {
-                                    std::mem::transmute::<u64, extern "C" fn(Value, Value) -> Value>(
-                                        *address,
-                                    )(self[args], self[args + 1])
-                                },
-                                _ => unimplemented!(),
-                            };
+                            let arg_ptr = Arg::new(&self[args] as *const _);
+                            let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(*address) };
+                            let v = func(&mut self.bc_comp, fn_store, arg_ptr, len as usize);
                             match ret {
                                 None => {}
                                 Some(ret) => {

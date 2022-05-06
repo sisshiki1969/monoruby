@@ -7,7 +7,7 @@ mod interp;
 mod op;
 mod stack;
 use bcinst::*;
-pub use bytecodegen::FuncStore;
+pub use bytecodegen::Globals;
 use bytecodegen::*;
 pub use compiler::*;
 pub use interp::Interp;

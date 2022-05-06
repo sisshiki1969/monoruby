@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use monoasm::*;
 use monoasm_macro::monoasm;
 
@@ -10,7 +12,6 @@ use super::*;
 ///
 pub struct BcCompiler {
     jit: JitMemory,
-    //func_map: HashMap<IdentId, FuncId>,
     class_version: DestLabel,
 }
 
@@ -24,17 +25,16 @@ fn conv(reg: u16) -> i64 {
 
 extern "C" fn get_func_absolute_address(
     bc_comp: &mut BcCompiler,
-    fn_store: &FuncStore,
+    globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
 ) -> *const u8 {
-    let func_id = match fn_store.get_method(func_name) {
+    let func_id = match globals.get_method(func_name) {
         Some(id) => *id,
-        None => panic!("undefined method {:?}.", fn_store.get_ident_name(func_name)),
+        None => panic!("undefined method {:?}.", globals.get_ident_name(func_name)),
     };
 
-    let info = &fn_store[func_id];
-    let jit_label = info.jit_label();
+    let info = &mut globals[func_id];
     let arity = info.arity();
     if arity != args_len {
         panic!(
@@ -42,16 +42,16 @@ extern "C" fn get_func_absolute_address(
             arity, args_len
         );
     }
-
-    match jit_label {
-        Some(dest) => bc_comp.jit.get_label_absolute_address(dest),
-        None => panic!(),
-    }
+    let jit_label = match info.jit_label() {
+        Some(dest) => dest,
+        None => bc_comp.jit_compile(info),
+    };
+    bc_comp.jit.get_label_absolute_address(jit_label)
 }
 
 extern "C" fn define_method(
     _bc_comp: &mut BcCompiler,
-    fn_store: &mut FuncStore,
+    fn_store: &mut Globals,
     func_name: IdentId,
     func_id: FuncId,
 ) {
@@ -136,10 +136,6 @@ impl BcCompiler {
         );
     }
 
-    /*pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
-        self.func_map.get(&name).map(|id| *id)
-    }*/
-
     //
     // stack layout for jit-ed code.
     //
@@ -161,27 +157,17 @@ impl BcCompiler {
     //       |      :      |
     //
 
-    pub fn exec_toplevel(fn_store: &mut FuncStore) -> Value {
+    pub fn exec_toplevel(fn_store: &mut Globals) -> Value {
         let mut eval = Self::new();
-        let val = eval.exec(fn_store);
+        let main = fn_store.get_main_func();
+        eval.jit_compile(&mut fn_store[main]);
+
+        let main = fn_store[main].jit_label().unwrap();
+        let val = eval.exec(fn_store, main);
         val
     }
 
-    fn exec<'r, 's>(&'r mut self, fn_store: &'s mut FuncStore) -> Value {
-        let now = Instant::now();
-        for func in &mut fn_store.functions {
-            let label = self.jit.label();
-            *func.jit_label_mut() = Some(label);
-            self.jit.bind_label(func.jit_label().unwrap());
-            match &func.kind {
-                FuncKind::Normal(info) => self.compile_func_bc(info),
-                FuncKind::Builtin { abs_address } => {
-                    self.compile_builtin_func(*abs_address, func.arity())
-                }
-            }
-        }
-        eprintln!("jit compile elapsed:{:?}", now.elapsed());
-        let main = fn_store[fn_store.get_main_func()].jit_label().unwrap();
+    fn exec(&mut self, fn_store: &mut Globals, func: DestLabel) -> Value {
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:
@@ -190,19 +176,36 @@ impl BcCompiler {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            call main;
+            call func;
             popq r12;
             popq rbx;
             popq rbp;
             ret;
         );
         self.jit.finalize();
-        let entry_point: extern "C" fn(&'r BcCompiler, &'s FuncStore) -> Value =
-            self.jit.get_label_addr2(entry);
-        entry_point(self, fn_store)
+
+        let func = self.jit.get_label_addr2(entry);
+        func(self, fn_store)
     }
 
-    fn compile_builtin_func(&mut self, abs_address: u64, arity: usize) {
+    fn jit_compile(&mut self, func: &mut FuncInfo) -> DestLabel {
+        let now = Instant::now();
+        let label = self.jit.label();
+        *func.jit_label_mut() = Some(label);
+        self.jit.bind_label(label);
+        match &func.kind {
+            FuncKind::Normal(info) => self.jit_compile_normal(info),
+            FuncKind::Builtin { abs_address } => {
+                self.jit_compile_builtin(*abs_address, func.arity())
+            }
+        };
+        self.jit.finalize();
+        eprintln!("{}", self.jit.dump_code().unwrap());
+        eprintln!("jit compile elapsed:{:?}", now.elapsed());
+        label
+    }
+
+    fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after execution of call instruction.
@@ -219,28 +222,23 @@ impl BcCompiler {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
-        match arity {
-            0 => {}
-            1 => {
-                monoasm!(self.jit,
-                    movq rdi, [rsp - 0x20];
-                );
-            }
-            2 => {
-                monoasm!(self.jit,
-                    movq rdi, [rsp - 0x20];
-                    movq rsi, [rsp - 0x28];
-                );
-            }
-            _ => unimplemented!(),
-        }
+        let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
+            pushq rbp;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [rsp - 0x18]; // 1st argument: *const Value
+            movq rcx, (arity); // 2nd arguments: length of arguments:usize
             movq rax, (abs_address);
-            jmp rax;
+            movq rbp, rsp;
+            subq rsp, (offset);
+            call rax;
+            leave;
+            ret;
         );
     }
 
-    fn compile_func_bc(&mut self, func: &NormalFuncInfo) {
+    fn jit_compile_normal(&mut self, func: &NormalFuncInfo) {
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());

@@ -5,17 +5,39 @@ use monoasm::DestLabel;
 use super::*;
 
 pub type Result<T> = std::result::Result<T, BcErr>;
+pub type BuiltinFn = extern "C" fn(&mut BcCompiler, &mut Globals, Arg, usize) -> Value;
 
 //
 // Builtin methods.
 //
 
-extern "C" fn puts(arg1: Value) -> Value {
-    println!("{}", arg1);
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct Arg(*const Value);
+
+impl Arg {
+    pub fn new(ptr: *const Value) -> Self {
+        Self(ptr)
+    }
+}
+
+impl std::ops::Index<usize> for Arg {
+    type Output = Value;
+    fn index(&self, index: usize) -> &Value {
+        unsafe { &*self.0.sub(index) }
+    }
+}
+
+extern "C" fn puts(_vm: &mut BcCompiler, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+    for offset in 0..len {
+        println!("{}", arg[offset]);
+    }
     Value::nil()
 }
 
-extern "C" fn assert(expected: Value, actual: Value) -> Value {
+extern "C" fn assert(_vm: &mut BcCompiler, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+    let expected = arg[0];
+    let actual = arg[1];
     assert_eq!(expected, actual);
     Value::nil()
 }
@@ -73,35 +95,35 @@ impl Context {
 /// Store of functions.
 ///
 #[derive(Clone, PartialEq)]
-pub struct FuncStore {
+pub struct Globals {
     /// Functions.
     pub functions: Vec<FuncInfo>,
     pub func_map: HashMap<IdentId, FuncId>,
     ctx: Context,
 }
 
-impl std::ops::Index<FuncId> for FuncStore {
+impl std::ops::Index<FuncId> for Globals {
     type Output = FuncInfo;
     fn index(&self, index: FuncId) -> &FuncInfo {
         &self.functions[index.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<FuncId> for FuncStore {
+impl std::ops::IndexMut<FuncId> for Globals {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.functions[index.0 as usize]
     }
 }
 
-impl FuncStore {
+impl Globals {
     pub fn new(id_store: IdentifierTable) -> Self {
         let mut store = Self {
             functions: vec![],
             func_map: HashMap::default(),
             ctx: Context::new(id_store),
         };
-        store.add_builtin_func("puts".to_string(), puts as *const u8 as u64, 1);
-        store.add_builtin_func("assert".to_string(), assert as *const u8 as u64, 2);
+        store.add_builtin_func("puts".to_string(), puts, 1);
+        store.add_builtin_func("assert".to_string(), assert, 2);
         store
     }
 
@@ -158,7 +180,7 @@ impl FuncStore {
         self.func_map.get(&name)
     }
 
-    fn add_builtin_func(&mut self, name: String, address: u64, arity: usize) -> FuncId {
+    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: usize) -> FuncId {
         let id = FuncId(self.functions.len() as u32);
         let name_id = self.get_ident_id(&name);
         self.func_map.insert(name_id, id);
@@ -298,14 +320,14 @@ impl FuncInfo {
         }
     }
 
-    fn new_builtin(id: FuncId, name: String, address: u64, arity: usize) -> Self {
+    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
             name,
             arity,
             jit_label: None,
             kind: FuncKind::Builtin {
-                abs_address: address,
+                abs_address: address as *const u8 as u64,
             },
         }
     }
@@ -330,7 +352,7 @@ impl FuncInfo {
     }
 }
 
-impl FuncStore {
+impl Globals {
     /// Generate bytecode Ir in a new function from [(Stmt, Span)].
     fn compile_func(
         &mut self,
