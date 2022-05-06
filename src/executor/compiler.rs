@@ -34,7 +34,7 @@ extern "C" fn get_func_absolute_address(
         None => panic!("undefined method {:?}.", globals.get_ident_name(func_name)),
     };
 
-    let info = &mut globals[func_id];
+    let info = &mut globals.func[func_id];
     let arity = info.arity();
     if arity != args_len {
         panic!(
@@ -51,11 +51,11 @@ extern "C" fn get_func_absolute_address(
 
 extern "C" fn define_method(
     _bc_comp: &mut BcCompiler,
-    fn_store: &mut Globals,
+    globals: &mut Globals,
     func_name: IdentId,
     func_id: FuncId,
 ) {
-    fn_store.func_map.insert(func_name, func_id);
+    globals.func.insert(func_name, func_id);
 }
 
 impl BcCompiler {
@@ -157,13 +157,13 @@ impl BcCompiler {
     //       |      :      |
     //
 
-    pub fn exec_toplevel(fn_store: &mut Globals) -> Value {
+    pub fn exec_toplevel(globals: &mut Globals) -> Value {
         let mut eval = Self::new();
-        let main = fn_store.get_main_func();
-        eval.jit_compile(&mut fn_store[main]);
+        let main = globals.get_main_func();
+        eval.jit_compile(&mut globals.func[main]);
 
-        let main = fn_store[main].jit_label().unwrap();
-        let val = eval.exec(fn_store, main);
+        let main = globals.func[main].jit_label().unwrap();
+        let val = eval.exec(globals, main);
         val
     }
 

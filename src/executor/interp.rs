@@ -80,11 +80,11 @@ impl std::ops::IndexMut<u16> for Interp {
 }
 
 impl Interp {
-    pub fn eval_toplevel(fn_store: &mut Globals) -> Value {
-        let main = fn_store[fn_store.get_main_func()].as_normal();
+    pub fn eval_toplevel(globals: &mut Globals) -> Value {
+        let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
         eval.push_frame(0, 0, main, None);
-        eval.eval_loop(fn_store)
+        eval.eval_loop(globals)
     }
 
     fn new(main: &NormalFuncInfo) -> Self {
@@ -106,8 +106,8 @@ impl Interp {
 
     pub fn get_method_or_panic(&self, globals: &Globals, name: IdentId) -> FuncId {
         *globals
-            .func_map
-            .get(&name)
+            .func
+            .get(name)
             .unwrap_or_else(|| panic!("undefined method {:?}.", globals.get_ident_name(name)))
     }
 
@@ -121,13 +121,13 @@ impl Interp {
         self.cur_fn = func.id;
     }
 
-    fn pop_frame(&mut self, val: Value, fn_store: &Globals) -> bool {
+    fn pop_frame(&mut self, val: Value, globals: &Globals) -> bool {
         let (b, func, pc, ret) = self.call_stack.pop_frame();
         if b {
             return true;
         };
         self.cur_fn = func;
-        self.pc_top = BcPcBase::new(&fn_store[func].as_normal());
+        self.pc_top = BcPcBase::new(&globals.func[func].as_normal());
         self.pc = self.pc_top + pc;
         if let Some(ret) = ret {
             self[ret] = val;
@@ -135,7 +135,7 @@ impl Interp {
         false
     }
 
-    fn eval_loop(&mut self, fn_store: &mut Globals) -> Value {
+    fn eval_loop(&mut self, globals: &mut Globals) -> Value {
         loop {
             let op = self.get_op();
             match op {
@@ -143,7 +143,7 @@ impl Interp {
                     self[ret] = Value::integer(i);
                 }
                 BcOp::Const(ret, id) => {
-                    self[ret] = fn_store[self.cur_fn].as_normal().get_constant(id);
+                    self[ret] = globals.func[self.cur_fn].as_normal().get_constant(id);
                 }
                 BcOp::Nil(ret) => {
                     self[ret] = Value::nil();
@@ -249,7 +249,7 @@ impl Interp {
                 }
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];
-                    if self.pop_frame(val, fn_store) {
+                    if self.pop_frame(val, globals) {
                         return val;
                     };
                 }
@@ -266,8 +266,8 @@ impl Interp {
                         }
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    let func_id = self.get_method_or_panic(fn_store, id);
-                    let info = &fn_store[func_id];
+                    let func_id = self.get_method_or_panic(globals, id);
+                    let info = &globals.func[func_id];
                     check_arity(info.arity(), len);
                     match &info.kind {
                         FuncKind::Normal(info) => {
@@ -278,7 +278,7 @@ impl Interp {
                         } => {
                             let arg_ptr = Arg::new(&self[args] as *const _);
                             let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(*address) };
-                            let v = func(&mut self.bc_comp, fn_store, arg_ptr, len as usize);
+                            let v = func(&mut self.bc_comp, globals, arg_ptr, len as usize);
                             match ret {
                                 None => {}
                                 Some(ret) => {
@@ -302,7 +302,7 @@ impl Interp {
                     };
                 }
                 BcOp::MethodDef(id, fid) => {
-                    fn_store.func_map.insert(id, fid);
+                    globals.func.insert(id, fid);
                 }
             }
         }

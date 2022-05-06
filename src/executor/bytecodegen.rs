@@ -18,18 +18,117 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
-pub(super) struct TempInfo {
-    pub(super) temp_id: usize,
-    pub(super) name: IdentId,
-    pub(super) args: Vec<IdentId>,
-    pub(super) ast: Node,
+pub struct FnStore {
+    functions: Vec<FuncInfo>,
+    func_map: HashMap<IdentId, FuncId>,
+}
+
+impl FnStore {
+    pub fn new() -> Self {
+        Self {
+            functions: vec![],
+            func_map: HashMap::default(),
+        }
+    }
+
+    pub fn insert(&mut self, func_name: IdentId, func_id: FuncId) {
+        self.func_map.insert(func_name, func_id);
+    }
+
+    pub fn get(&self, name: IdentId) -> Option<&FuncId> {
+        self.func_map.get(&name)
+    }
+}
+
+impl std::ops::Index<FuncId> for FnStore {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.functions[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for FnStore {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.functions[index.0 as usize]
+    }
+}
+
+impl FnStore {
+    pub(super) fn compile_main(&mut self, ast: Node, id_store: &IdentifierTable) -> Result<()> {
+        let mut ctx = Context::new();
+        ctx.push_remaining(IdentId::_MAIN, vec![], ast);
+
+        let mut irs = vec![];
+        while let Some(TempInfo {
+            temp_id,
+            name_id,
+            args,
+            ast,
+        }) = ctx.remaining.pop()
+        {
+            let ir = self.compile_func(&mut ctx, temp_id, name_id, args, ast)?;
+            irs.push(ir);
+        }
+
+        for ir in irs {
+            match &mut self[ir.func_id].kind {
+                FuncKind::Normal(info) => {
+                    info.ir_to_bytecode(ir, &ctx.temp_map, id_store);
+                }
+                _ => unreachable!(),
+            };
+        }
+
+        Ok(())
+    }
+
+    /// Generate bytecode Ir in a new function from [(Stmt, Span)].
+    fn compile_func(
+        &mut self,
+        ctx: &mut Context,
+        //temp_map: &mut HashMap<usize, FuncId>,
+        temp_id: usize,
+        name_id: IdentId,
+        args: Vec<IdentId>,
+        ast: Node,
+    ) -> Result<IrContext> {
+        let func_id = FuncId(self.functions.len() as u32);
+        self.func_map.insert(name_id, func_id);
+        let mut info = NormalFuncInfo::new(func_id, name_id, args);
+        let mut ir = IrContext::new(func_id);
+        info.compile_ast(ctx, &mut ir, ast)?;
+        self.functions.push(FuncInfo::new_normal(name_id, info));
+        ctx.temp_map.insert(temp_id, func_id);
+        Ok(ir)
+    }
+
+    pub(super) fn add_builtin_func(
+        &mut self,
+        name_id: IdentId,
+        address: BuiltinFn,
+        arity: usize,
+    ) -> FuncId {
+        let id = FuncId(self.functions.len() as u32);
+        self.func_map.insert(name_id, id);
+        self.functions
+            .push(FuncInfo::new_builtin(id, name_id, address, arity));
+        id
+    }
 }
 
 #[derive(Clone, PartialEq)]
-pub(super) struct Context {
+struct TempInfo {
+    temp_id: usize,
+    name_id: IdentId,
+    args: Vec<IdentId>,
+    ast: Node,
+}
+
+#[derive(Clone, PartialEq)]
+struct Context {
     /// remaining functions to be compiled.
-    pub(super) remaining: Vec<TempInfo>,
-    pub(super) temp_map: HashMap<usize, FuncId>,
+    remaining: Vec<TempInfo>,
+    temp_map: HashMap<usize, FuncId>,
 }
 
 impl Context {
@@ -40,11 +139,11 @@ impl Context {
         }
     }
 
-    pub fn push_remaining(&mut self, name: IdentId, args: Vec<IdentId>, ast: Node) -> usize {
+    pub fn push_remaining(&mut self, name_id: IdentId, args: Vec<IdentId>, ast: Node) -> usize {
         let temp_id = self.remaining.len();
         self.remaining.push(TempInfo {
             temp_id,
-            name,
+            name_id,
             args,
             ast,
         });
@@ -61,9 +160,9 @@ pub(super) enum FuncKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncInfo {
     /// ID of this function.
-    pub(super) id: FuncId,
+    id: FuncId,
     /// name of this function.
-    name: String,
+    name: IdentId,
     /// arity of this function.
     arity: usize,
     /// *DestLabel* of JIT function.
@@ -72,7 +171,7 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    pub(super) fn new_normal(name: String, info: NormalFuncInfo) -> Self {
+    fn new_normal(name: IdentId, info: NormalFuncInfo) -> Self {
         Self {
             id: info.id,
             name,
@@ -82,7 +181,7 @@ impl FuncInfo {
         }
     }
 
-    pub(super) fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
+    fn new_builtin(id: FuncId, name: IdentId, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
             name,
@@ -154,6 +253,7 @@ impl IrContext {
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
+    name_id: IdentId,
     /// Bytecode.
     bc: Vec<BcOp>,
     /// the name of arguments.
@@ -169,9 +269,10 @@ pub(super) struct NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
-    pub fn new(id: FuncId, args: Vec<IdentId>) -> Self {
+    pub fn new(id: FuncId, name_id: IdentId, args: Vec<IdentId>) -> Self {
         let mut info = NormalFuncInfo {
             id,
+            name_id,
             bc: vec![],
             args: args.clone(),
             locals: HashMap::default(),
@@ -310,17 +411,17 @@ impl NormalFuncInfo {
     fn gen_temp_mov(&mut self, ir: &mut IrContext, rhs: BcReg) {
         let lhs = self.push();
         self.gen_mov(ir, lhs.into(), rhs);
-        //lhs.into()
     }
 
-    pub(super) fn dump(&self, globals: &Globals) {
+    fn dump(&self, globals: &IdentifierTable) {
+        eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?}",
             self.id,
-            globals[self.id].name,
+            globals.get_name(self.name_id),
             self.args
                 .iter()
-                .map(|id| globals.get_ident_name(*id))
+                .map(|id| globals.get_name(*id))
                 .collect::<Vec<_>>()
         );
         for (i, inst) in self.bc.iter().enumerate() {
@@ -390,7 +491,7 @@ impl NormalFuncInfo {
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
                 BcOp::FnCall(id, ret, arg, len) => {
-                    let name = globals.get_ident_name(*id);
+                    let name = globals.get_name(*id);
                     match *ret {
                         u16::MAX => {
                             eprintln!("_ = call {}(%{}; {})", name, arg, len)
@@ -405,6 +506,7 @@ impl NormalFuncInfo {
                 }
             }
         }
+        eprintln!("------------------------------------");
     }
 }
 
@@ -426,7 +528,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 }
 
 impl NormalFuncInfo {
-    pub fn compile_ast(&mut self, ctx: &mut Context, ir: &mut IrContext, ast: Node) -> Result<()> {
+    fn compile_ast(&mut self, ctx: &mut Context, ir: &mut IrContext, ast: Node) -> Result<()> {
         self.gen_expr(ctx, ir, ast, true)?;
         if self.temp == 1 {
             self.gen_ret(ir, None);
@@ -938,7 +1040,12 @@ impl NormalFuncInfo {
         }
     }
 
-    pub fn ir_to_bytecode(&mut self, ir: IrContext, temp_map: &HashMap<usize, FuncId>) {
+    pub fn ir_to_bytecode(
+        &mut self,
+        ir: IrContext,
+        temp_map: &HashMap<usize, FuncId>,
+        id_store: &IdentifierTable,
+    ) {
         let mut ops = vec![];
         for inst in &ir.ir {
             let op = match inst {
@@ -1028,5 +1135,6 @@ impl NormalFuncInfo {
             ops.push(op);
         }
         self.bc = ops;
+        self.dump(id_store);
     }
 }

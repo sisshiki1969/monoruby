@@ -88,7 +88,7 @@ fn exec(code: &str) -> Result<(), ()> {
     };
     let mut store = Globals::new(res.id_store);
     store
-        .from_ast(res.node)
+        .compile_main(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
     #[cfg(debug_assertions)]
     {
@@ -111,7 +111,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
     };
     let mut store = Globals::new(res.id_store);
     store
-        .from_ast(res.node)
+        .compile_main(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
 
     let interp_val = Interp::eval_toplevel(&mut store);
@@ -139,7 +139,7 @@ pub fn run_test(code: &str) {
     };
     let mut store = Globals::new(res.id_store);
     store
-        .from_ast(res.node)
+        .compile_main(res.node)
         .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
