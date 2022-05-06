@@ -1,18 +1,24 @@
 use super::*;
 
 mod bcinst;
+mod builtins;
 mod bytecodegen;
 mod compiler;
+mod globals;
 mod interp;
 mod op;
 mod stack;
 use bcinst::*;
-pub use bytecodegen::Globals;
+pub use builtins::*;
 use bytecodegen::*;
 pub use compiler::*;
+pub use globals::*;
 pub use interp::Interp;
 use op::*;
 use stack::*;
+
+type Result<T> = std::result::Result<T, BcErr>;
+pub type BuiltinFn = extern "C" fn(&mut BcCompiler, &mut Globals, Arg, usize) -> Value;
 
 #[derive(Debug, Clone)]
 pub enum BcErr {

@@ -4,44 +4,6 @@ use monoasm::DestLabel;
 
 use super::*;
 
-pub type Result<T> = std::result::Result<T, BcErr>;
-pub type BuiltinFn = extern "C" fn(&mut BcCompiler, &mut Globals, Arg, usize) -> Value;
-
-//
-// Builtin methods.
-//
-
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-pub struct Arg(*const Value);
-
-impl Arg {
-    pub fn new(ptr: *const Value) -> Self {
-        Self(ptr)
-    }
-}
-
-impl std::ops::Index<usize> for Arg {
-    type Output = Value;
-    fn index(&self, index: usize) -> &Value {
-        unsafe { &*self.0.sub(index) }
-    }
-}
-
-extern "C" fn puts(_vm: &mut BcCompiler, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
-    for offset in 0..len {
-        println!("{}", arg[offset]);
-    }
-    Value::nil()
-}
-
-extern "C" fn assert(_vm: &mut BcCompiler, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
-    let expected = arg[0];
-    let actual = arg[1];
-    assert_eq!(expected, actual);
-    Value::nil()
-}
-
 ///
 /// ID of function.
 ///
@@ -56,30 +18,29 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
-struct TempInfo {
-    temp_id: usize,
-    name: IdentId,
-    args: Vec<IdentId>,
-    ast: Node,
+pub(super) struct TempInfo {
+    pub(super) temp_id: usize,
+    pub(super) name: IdentId,
+    pub(super) args: Vec<IdentId>,
+    pub(super) ast: Node,
 }
 
 #[derive(Clone, PartialEq)]
-struct Context {
-    /// identifier table.
-    id_store: IdentifierTable,
+pub(super) struct Context {
     /// remaining functions to be compiled.
-    remaining: Vec<TempInfo>,
+    pub(super) remaining: Vec<TempInfo>,
+    pub(super) temp_map: HashMap<usize, FuncId>,
 }
 
 impl Context {
-    fn new(id_store: IdentifierTable) -> Self {
+    pub fn new() -> Self {
         Self {
-            id_store,
             remaining: vec![],
+            temp_map: HashMap::default(),
         }
     }
 
-    fn push_remaining(&mut self, name: IdentId, args: Vec<IdentId>, ast: Node) -> usize {
+    pub fn push_remaining(&mut self, name: IdentId, args: Vec<IdentId>, ast: Node) -> usize {
         let temp_id = self.remaining.len();
         self.remaining.push(TempInfo {
             temp_id,
@@ -91,207 +52,8 @@ impl Context {
     }
 }
 
-///
-/// Store of functions.
-///
-#[derive(Clone, PartialEq)]
-pub struct Globals {
-    /// Functions.
-    pub functions: Vec<FuncInfo>,
-    pub func_map: HashMap<IdentId, FuncId>,
-    ctx: Context,
-}
-
-impl std::ops::Index<FuncId> for Globals {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.functions[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<FuncId> for Globals {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.functions[index.0 as usize]
-    }
-}
-
-impl Globals {
-    pub fn new(id_store: IdentifierTable) -> Self {
-        let mut store = Self {
-            functions: vec![],
-            func_map: HashMap::default(),
-            ctx: Context::new(id_store),
-        };
-        store.add_builtin_func("puts".to_string(), puts, 1);
-        store.add_builtin_func("assert".to_string(), assert, 2);
-        store
-    }
-
-    pub fn from_ast(&mut self, ast: Node) -> Result<()> {
-        self.ctx.push_remaining(IdentId::_MAIN, vec![], ast);
-        // a map which associate temporaryid with *FuncId*.
-        let mut temp_map = HashMap::default();
-
-        let mut irs = vec![];
-        #[cfg(debug_assertions)]
-        let mut funcs = vec![];
-        while let Some(TempInfo {
-            temp_id,
-            name,
-            args,
-            ast,
-        }) = self.ctx.remaining.pop()
-        {
-            let ir = self.compile_func(&mut temp_map, temp_id, name, args, ast)?;
-            irs.push(ir.1);
-            #[cfg(debug_assertions)]
-            funcs.push(ir.0);
-        }
-
-        for ctx in irs {
-            match &mut self[ctx.func_id].kind {
-                FuncKind::Normal(info) => {
-                    info.bc = info.gen_bytecode_from_ir(ctx, &temp_map);
-                }
-                _ => unreachable!(),
-            };
-        }
-        #[cfg(debug_assertions)]
-        for f in funcs {
-            self.dump_bytecode(f);
-        }
-        Ok(())
-    }
-
-    /// Get *FuncId* of the toplevel function.
-    pub fn get_main_func(&self) -> FuncId {
-        *self.get_method(IdentId::_MAIN).unwrap()
-    }
-
-    pub fn get_ident_name(&self, id: IdentId) -> &str {
-        self.ctx.id_store.get_name(id)
-    }
-
-    pub fn get_ident_id(&mut self, name: &str) -> IdentId {
-        self.ctx.id_store.get_ident_id(name)
-    }
-
-    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
-        self.func_map.get(&name)
-    }
-
-    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: usize) -> FuncId {
-        let id = FuncId(self.functions.len() as u32);
-        let name_id = self.get_ident_id(&name);
-        self.func_map.insert(name_id, id);
-        self.functions
-            .push(FuncInfo::new_builtin(id, name, address, arity));
-        id
-    }
-
-    fn dump_bytecode(&self, id: FuncId) {
-        match &self[id].kind {
-            FuncKind::Builtin { .. } => {}
-            FuncKind::Normal(info) => {
-                eprintln!(
-                    "{:?} name:{} args:{:?}",
-                    info.id,
-                    self[id].name,
-                    info.args
-                        .iter()
-                        .map(|id| self.get_ident_name(*id))
-                        .collect::<Vec<_>>()
-                );
-                for (i, inst) in info.bc.iter().enumerate() {
-                    eprint!(":{:05} ", i);
-                    match inst {
-                        BcOp::Br(dst) => {
-                            eprintln!("br =>{:?}", dst);
-                        }
-                        BcOp::CondBr(reg, dst) => {
-                            eprintln!("condbr %{} =>{:?}", reg, dst);
-                        }
-                        BcOp::CondNotBr(reg, dst) => {
-                            eprintln!("condnbr %{} =>{:?}", reg, dst);
-                        }
-                        BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
-                        BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
-                        BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
-                        BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
-                        BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
-                        BcOp::Addri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
-                        }
-                        BcOp::Sub(dst, lhs, rhs) => eprintln!("%{} = %{} - %{}", dst, lhs, rhs),
-                        BcOp::Subri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} - {}: i16", dst, lhs, rhs)
-                        }
-                        BcOp::Mul(dst, lhs, rhs) => eprintln!("%{} = %{} * %{}", dst, lhs, rhs),
-                        BcOp::Div(dst, lhs, rhs) => eprintln!("%{} = %{} / %{}", dst, lhs, rhs),
-                        BcOp::Eq(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Eq, rhs)
-                        }
-                        BcOp::Ne(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ne, rhs)
-                        }
-                        BcOp::Gt(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Gt, rhs)
-                        }
-                        BcOp::Ge(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ge, rhs)
-                        }
-                        BcOp::Lt(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Lt, rhs)
-                        }
-                        BcOp::Le(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Le, rhs)
-                        }
-
-                        BcOp::Eqri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Eq, rhs)
-                        }
-                        BcOp::Neri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ne, rhs)
-                        }
-                        BcOp::Gtri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Gt, rhs)
-                        }
-                        BcOp::Geri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ge, rhs)
-                        }
-                        BcOp::Ltri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Lt, rhs)
-                        }
-                        BcOp::Leri(dst, lhs, rhs) => {
-                            eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Le, rhs)
-                        }
-
-                        BcOp::Ret(reg) => eprintln!("ret %{}", reg),
-                        BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                        BcOp::FnCall(id, ret, arg, len) => {
-                            let name = self.get_ident_name(*id);
-                            match *ret {
-                                u16::MAX => {
-                                    eprintln!("_ = call {}(%{}; {})", name, arg, len)
-                                }
-                                ret => {
-                                    eprintln!("%{:?} = call {}(%{}; {})", ret, name, arg, len)
-                                }
-                            }
-                        }
-                        BcOp::MethodDef(id, fid) => {
-                            eprintln!("define {:?}: {:?}", id, fid)
-                        }
-                    }
-                }
-                eprintln!("------------------------------------")
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-pub enum FuncKind {
+pub(super) enum FuncKind {
     Normal(NormalFuncInfo),
     Builtin { abs_address: u64 },
 }
@@ -299,7 +61,7 @@ pub enum FuncKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncInfo {
     /// ID of this function.
-    pub id: FuncId,
+    pub(super) id: FuncId,
     /// name of this function.
     name: String,
     /// arity of this function.
@@ -310,7 +72,7 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    fn new_normal(name: String, info: NormalFuncInfo) -> Self {
+    pub(super) fn new_normal(name: String, info: NormalFuncInfo) -> Self {
         Self {
             id: info.id,
             name,
@@ -320,7 +82,7 @@ impl FuncInfo {
         }
     }
 
-    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
+    pub(super) fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
             name,
@@ -352,31 +114,9 @@ impl FuncInfo {
     }
 }
 
-impl Globals {
-    /// Generate bytecode Ir in a new function from [(Stmt, Span)].
-    fn compile_func(
-        &mut self,
-        temp_map: &mut HashMap<usize, FuncId>,
-        temp_id: usize,
-        name: IdentId,
-        args: Vec<IdentId>,
-        ast: Node,
-    ) -> Result<(FuncId, IrContext)> {
-        let func_id = FuncId(self.functions.len() as u32);
-        self.func_map.insert(name, func_id);
-        let mut info = NormalFuncInfo::new(func_id, args);
-        let mut ir = IrContext::new(func_id);
-        info.compile_ast(&mut self.ctx, &mut ir, ast)?;
-        let name = self.get_ident_name(name).to_string();
-        self.functions.push(FuncInfo::new_normal(name, info));
-        temp_map.insert(temp_id, func_id);
-        Ok((func_id, ir))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-struct IrContext {
-    func_id: FuncId,
+pub(super) struct IrContext {
+    pub(super) func_id: FuncId,
     /// bytecode IR.
     ir: Vec<BcIr>,
     /// destination labels.
@@ -384,7 +124,7 @@ struct IrContext {
 }
 
 impl IrContext {
-    fn new(func_id: FuncId) -> Self {
+    pub(crate) fn new(func_id: FuncId) -> Self {
         Self {
             func_id,
             ir: vec![],
@@ -411,9 +151,9 @@ impl IrContext {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NormalFuncInfo {
+pub(super) struct NormalFuncInfo {
     /// ID of this function.
-    pub id: FuncId,
+    pub(super) id: FuncId,
     /// Bytecode.
     bc: Vec<BcOp>,
     /// the name of arguments.
@@ -429,7 +169,7 @@ pub struct NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
-    fn new(id: FuncId, args: Vec<IdentId>) -> Self {
+    pub fn new(id: FuncId, args: Vec<IdentId>) -> Self {
         let mut info = NormalFuncInfo {
             id,
             bc: vec![],
@@ -572,6 +312,100 @@ impl NormalFuncInfo {
         self.gen_mov(ir, lhs.into(), rhs);
         //lhs.into()
     }
+
+    pub(super) fn dump(&self, globals: &Globals) {
+        eprintln!(
+            "{:?} name:{} args:{:?}",
+            self.id,
+            globals[self.id].name,
+            self.args
+                .iter()
+                .map(|id| globals.get_ident_name(*id))
+                .collect::<Vec<_>>()
+        );
+        for (i, inst) in self.bc.iter().enumerate() {
+            eprint!(":{:05} ", i);
+            match inst {
+                BcOp::Br(dst) => {
+                    eprintln!("br =>{:?}", dst);
+                }
+                BcOp::CondBr(reg, dst) => {
+                    eprintln!("condbr %{} =>{:?}", reg, dst);
+                }
+                BcOp::CondNotBr(reg, dst) => {
+                    eprintln!("condnbr %{} =>{:?}", reg, dst);
+                }
+                BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
+                BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
+                BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
+                BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
+                BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
+                BcOp::Addri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
+                }
+                BcOp::Sub(dst, lhs, rhs) => eprintln!("%{} = %{} - %{}", dst, lhs, rhs),
+                BcOp::Subri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} - {}: i16", dst, lhs, rhs)
+                }
+                BcOp::Mul(dst, lhs, rhs) => eprintln!("%{} = %{} * %{}", dst, lhs, rhs),
+                BcOp::Div(dst, lhs, rhs) => eprintln!("%{} = %{} / %{}", dst, lhs, rhs),
+                BcOp::Eq(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Eq, rhs)
+                }
+                BcOp::Ne(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ne, rhs)
+                }
+                BcOp::Gt(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Gt, rhs)
+                }
+                BcOp::Ge(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ge, rhs)
+                }
+                BcOp::Lt(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Lt, rhs)
+                }
+                BcOp::Le(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Le, rhs)
+                }
+
+                BcOp::Eqri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Eq, rhs)
+                }
+                BcOp::Neri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ne, rhs)
+                }
+                BcOp::Gtri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Gt, rhs)
+                }
+                BcOp::Geri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ge, rhs)
+                }
+                BcOp::Ltri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Lt, rhs)
+                }
+                BcOp::Leri(dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Le, rhs)
+                }
+
+                BcOp::Ret(reg) => eprintln!("ret %{}", reg),
+                BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
+                BcOp::FnCall(id, ret, arg, len) => {
+                    let name = globals.get_ident_name(*id);
+                    match *ret {
+                        u16::MAX => {
+                            eprintln!("_ = call {}(%{}; {})", name, arg, len)
+                        }
+                        ret => {
+                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, arg, len)
+                        }
+                    }
+                }
+                BcOp::MethodDef(id, fid) => {
+                    eprintln!("define {:?}: {:?}", id, fid)
+                }
+            }
+        }
+    }
 }
 
 pub fn is_smi(node: &Node) -> Option<i16> {
@@ -592,7 +426,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 }
 
 impl NormalFuncInfo {
-    fn compile_ast(&mut self, ctx: &mut Context, ir: &mut IrContext, ast: Node) -> Result<()> {
+    pub fn compile_ast(&mut self, ctx: &mut Context, ir: &mut IrContext, ast: Node) -> Result<()> {
         self.gen_expr(ctx, ir, ast, true)?;
         if self.temp == 1 {
             self.gen_ret(ir, None);
@@ -1104,7 +938,7 @@ impl NormalFuncInfo {
         }
     }
 
-    fn gen_bytecode_from_ir(&self, ir: IrContext, temp_map: &HashMap<usize, FuncId>) -> Vec<BcOp> {
+    pub fn ir_to_bytecode(&mut self, ir: IrContext, temp_map: &HashMap<usize, FuncId>) {
         let mut ops = vec![];
         for inst in &ir.ir {
             let op = match inst {
@@ -1193,6 +1027,6 @@ impl NormalFuncInfo {
             };
             ops.push(op);
         }
-        ops
+        self.bc = ops;
     }
 }
