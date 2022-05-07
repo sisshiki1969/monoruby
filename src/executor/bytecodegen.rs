@@ -640,13 +640,27 @@ impl NormalFuncInfo {
                 let local2 = self.load_local(ident)?;
                 self.gen_temp_mov(ir, local2.into());
             }
-            NodeKind::Send {
+            NodeKind::MethodCall {
                 box receiver,
                 method,
                 arglist,
                 safe_nav: false,
+            } if receiver.kind == NodeKind::SelfValue => {
+                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let ret = if use_value {
+                    Some(self.push().into())
+                } else {
+                    None
+                };
+                ir.push(BcIr::FnCall(method, ret, arg, len));
+                return Ok(());
+            }
+            NodeKind::FuncCall {
+                method,
+                arglist,
+                safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, receiver, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
@@ -803,13 +817,22 @@ impl NormalFuncInfo {
                 let local2 = self.load_local(ident)?;
                 self.gen_mov(ir, local.into(), local2.into());
             }
-            NodeKind::Send {
+            NodeKind::MethodCall {
                 box receiver,
                 method,
                 arglist,
                 safe_nav: false,
+            } if receiver.kind == NodeKind::SelfValue => {
+                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
+                ir.push(inst);
+            }
+            NodeKind::FuncCall {
+                method,
+                arglist,
+                safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, receiver, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
                 let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
                 ir.push(inst);
             }
@@ -850,10 +873,8 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut Context,
         ir: &mut IrContext,
-        receiver: Node,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
-        assert!(receiver.kind == NodeKind::SelfValue);
         assert!(arglist.kw_args.len() == 0);
         assert!(arglist.hash_splat.len() == 0);
         assert!(arglist.block.is_none());
