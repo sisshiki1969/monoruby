@@ -158,45 +158,27 @@ impl Interp {
                 BcOp::Add(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    let v = if lhs.is_fnum() && rhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() + rhs.as_fnum())
-                    } else {
-                        add_values(lhs, rhs)
-                    };
-                    self[ret] = v;
+                    self[ret] = add_values(lhs, rhs);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let lhs = self[lhs];
-                    self[ret] = if lhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() + rhs as i64)
-                    } else {
-                        match lhs.unpack() {
-                            RV::Integer(lhs) => Value::integer(lhs + rhs as i32),
-                            RV::Float(lhs) => Value::float(lhs + rhs as f64),
-                            _ => unreachable!(),
-                        }
+                    self[ret] = match lhs.unpack() {
+                        RV::Integer(lhs) => Value::integer(lhs + rhs as i32),
+                        RV::Float(lhs) => Value::float(lhs + rhs as f64),
+                        _ => unreachable!(),
                     };
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
                     let lhs = self[lhs];
                     let rhs = self[rhs];
-                    let v = if lhs.is_fnum() && rhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() - rhs.as_fnum())
-                    } else {
-                        sub_values(lhs, rhs)
-                    };
-                    self[ret] = v;
+                    self[ret] = sub_values(lhs, rhs);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let lhs = self[lhs];
-                    self[ret] = if lhs.is_fnum() {
-                        Value::fixnum(lhs.as_fnum() - rhs as i64)
-                    } else {
-                        match lhs.unpack() {
-                            RV::Integer(lhs) => Value::integer(lhs - rhs as i32),
-                            RV::Float(lhs) => Value::float(lhs - rhs as f64),
-                            _ => unreachable!(),
-                        }
+                    self[ret] = match lhs.unpack() {
+                        RV::Integer(lhs) => Value::integer(lhs - rhs as i32),
+                        RV::Float(lhs) => Value::float(lhs - rhs as f64),
+                        _ => unreachable!(),
                     };
                 }
                 BcOp::Mul(ret, lhs, rhs) => {
@@ -230,22 +212,28 @@ impl Interp {
                     self[ret] = cmp_lt_values(self[lhs], self[rhs]);
                 }
                 BcOp::Eqri(ret, lhs, rhs) => {
-                    self[ret] = cmp_eq_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_eq_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Neri(ret, lhs, rhs) => {
-                    self[ret] = cmp_ne_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_ne_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Geri(ret, lhs, rhs) => {
-                    self[ret] = cmp_ge_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_ge_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Gtri(ret, lhs, rhs) => {
-                    self[ret] = cmp_gt_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_gt_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Leri(ret, lhs, rhs) => {
-                    self[ret] = cmp_le_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_le_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Ltri(ret, lhs, rhs) => {
-                    self[ret] = cmp_lt_ri_values(self[lhs], rhs as i64);
+                    let lhs = self[lhs];
+                    self[ret] = cmp_lt_values(lhs, Value::integer(rhs as i32));
                 }
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];

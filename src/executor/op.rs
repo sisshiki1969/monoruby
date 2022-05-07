@@ -29,26 +29,6 @@ macro_rules! binop_values {
 
 binop_values!(add, sub, mul, div);
 
-macro_rules! binop_ri_values {
-    ($op:ident) => {
-        paste! {
-            pub(super) extern "C" fn [<$op _ri_values>](lhs: Value, rhs: i64) -> Value {
-                match lhs.unpack() {
-                    RV::Integer(lhs) => Value::integer(lhs.$op(&(rhs as i32))),
-                    RV::Float(lhs) => Value::float(lhs.$op(&(rhs as f64))),
-                    _ => unreachable!(),
-                }
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        binop_ri_values!($op1);
-        binop_ri_values!($($op2),+);
-    };
-}
-
-binop_ri_values!(add, sub);
-
 macro_rules! cmp_values {
     ($op:ident) => {
         paste! {
@@ -96,7 +76,7 @@ macro_rules! eq_values {
 
 eq_values!(eq, ne);
 
-macro_rules! cmp_ri_values {
+/*macro_rules! cmp_ri_values {
     ($op:ident) => {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _ri_values>](lhs: Value, rhs: i64) -> Value {
@@ -113,9 +93,9 @@ macro_rules! cmp_ri_values {
         cmp_ri_values!($op1);
         cmp_ri_values!($($op2),+);
     };
-}
+}*/
 
-cmp_ri_values!(eq, ne, ge, gt, le, lt);
+//cmp_ri_values!(eq, ne, ge, gt, le, lt);
 
 pub(super) extern "C" fn neg_value(lhs: Value) -> Value {
     match lhs.unpack() {

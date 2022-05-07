@@ -103,23 +103,58 @@ impl BcCompiler {
         );
     }
 
+    fn generic_add(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        monoasm!(self.jit,
+            // fastpath
+            subq rdi, 1;
+            addq rdi, rsi;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        generic:
+            // generic path
+            movq rax, (add_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
+    fn generic_sub(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        monoasm!(self.jit,
+            // fastpath
+            subq rdi, rsi;
+            addq rdi, 1;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        generic:
+            // generic path
+            movq rax, (sub_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
     fn compri_pre(&mut self, lhs: u16, rhs: i16, generic: DestLabel) {
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(lhs))];
+            movq rsi, (Value::integer(rhs as i32).get());
         );
         self.guard_rdi_fixnum(generic);
         monoasm!(self.jit,
             xorq rax, rax;
-            movq rsi, (Value::integer(rhs as i32).get());
             cmpq rdi, rsi;
         );
     }
 
     fn compri_post(
         &mut self,
-        func: extern "C" fn(Value, i64) -> Value,
+        func: extern "C" fn(Value, Value) -> Value,
         ret: u16,
-        rhs: i16,
         generic: DestLabel,
         exit: DestLabel,
     ) {
@@ -128,7 +163,6 @@ impl BcCompiler {
             orq rax, (Value::bool(false).get());
             jmp exit;
         generic:
-            movq rsi, (rhs as i64);
             movq rax, (func);
             call rax;
         exit:
@@ -281,43 +315,18 @@ impl BcCompiler {
                     self.load_binary_args(*lhs, *rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    monoasm!(self.jit,
-                        // fastpath
-                        subq rdi, 1;
-                        addq rdi, rsi;
-                        // store the result to return reg.
-                        movq [rbp - (conv(*ret))], rdi;
-                        jmp exit;
-                    generic:
-                        // generic path
-                        movq rax, (add_values);
-                        call rax;
-                        // store the result to return reg.
-                        movq [rbp - (conv(*ret))], rax;
-                    exit:
-                    );
+                    self.generic_add(generic, exit, *ret);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
+                    let rhs = Value::integer(*rhs as i32).get();
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
-                        movq rsi, (*rhs as i64);
+                        movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    monoasm!(self.jit,
-                        // fastpath
-                        shlq rsi, 1;
-                        addq rdi, rsi;
-                        movq [rbp - (conv(*ret))], rdi;
-                        jmp exit;
-                    generic:
-                        // generic path
-                        movq rax, (add_ri_values);
-                        call rax;
-                        movq [rbp - (conv(*ret))], rax;
-                    exit:
-                    );
+                    self.generic_add(generic, exit, *ret);
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
                     let generic = self.jit.label();
@@ -325,41 +334,18 @@ impl BcCompiler {
                     self.load_binary_args(*lhs, *rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    monoasm!(self.jit,
-                        // fastpath
-                        subq rdi, rsi;
-                        addq rdi, 1;
-                        movq [rbp - (conv(*ret))], rdi;
-                        jmp exit;
-                    generic:
-                        // generic path
-                        movq rax, (sub_values);
-                        call rax;
-                        movq [rbp - (conv(*ret))], rax;
-                    exit:
-                    );
+                    self.generic_sub(generic, exit, *ret);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
+                    let rhs = Value::integer(*rhs as i32).get();
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(*lhs))];
-                        movq rsi, (*rhs as i64);
+                        movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    monoasm!(self.jit,
-                        // fastpath
-                        shlq rsi, 1;
-                        subq rdi, rsi;
-                        movq [rbp - (conv(*ret))], rdi;
-                        jmp exit;
-                    generic:
-                        // generic path
-                        movq rax, (sub_ri_values);
-                        call rax;
-                        movq [rbp - (conv(*ret))], rax;
-                    exit:
-                    );
+                    self.generic_sub(generic, exit, *ret);
                 }
 
                 BcOp::Mul(ret, lhs, rhs) => {
@@ -429,50 +415,50 @@ impl BcCompiler {
                 BcOp::Eqri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_eq_ri_values;
+                    let func = cmp_eq_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, seteq rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Neri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_ne_ri_values;
+                    let func = cmp_ne_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, setne rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Geri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_ge_ri_values;
+                    let func = cmp_ge_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, setge rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Gtri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_gt_ri_values;
+                    let func = cmp_gt_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, setgt rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Leri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_le_ri_values;
+                    let func = cmp_le_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, setle rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Ltri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let func = cmp_lt_ri_values;
+                    let func = cmp_lt_values;
                     self.compri_pre(*lhs, *rhs, generic);
                     monoasm!(self.jit, setlt rax; );
-                    self.compri_post(func, *ret, *rhs, generic, exit);
+                    self.compri_post(func, *ret, generic, exit);
                 }
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,
