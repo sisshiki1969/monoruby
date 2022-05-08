@@ -234,7 +234,17 @@ impl BcCompiler {
             }
         };
         self.jit.finalize();
-        eprintln!("{}", self.jit.dump_code().unwrap());
+        eprintln!("{:?}", func.id());
+        #[cfg(debug_assertions)]
+        {
+            let (start, code_end, end) = self.jit.code_block.last().unwrap();
+            eprintln!(
+                "code: {} bytes  data: {} bytes",
+                *code_end - *start,
+                *end - *code_end
+            );
+            eprintln!("{}", self.jit.dump_code().unwrap());
+        }
         eprintln!("jit compile elapsed:{:?}", now.elapsed());
         label
     }

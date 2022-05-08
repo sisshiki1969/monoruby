@@ -193,6 +193,10 @@ impl FuncInfo {
         }
     }
 
+    pub(super) fn id(&self) -> FuncId {
+        self.id
+    }
+
     pub(super) fn arity(&self) -> usize {
         self.arity
     }
