@@ -38,6 +38,9 @@ impl FnStore {
     pub fn get(&self, name: IdentId) -> Option<&FuncId> {
         self.func_map.get(&name)
     }
+    fn next_func_id(&self) -> FuncId {
+        FuncId(self.functions.len() as u32)
+    }
 }
 
 impl std::ops::Index<FuncId> for FnStore {
@@ -55,19 +58,18 @@ impl std::ops::IndexMut<FuncId> for FnStore {
 
 impl FnStore {
     pub(super) fn compile_main(&mut self, ast: Node, id_store: &IdentifierTable) -> Result<()> {
-        let mut last_fid = self.functions.len();
+        let mut last_fid = self.next_func_id();
         self.functions.push(FuncInfo::new_normal(
             IdentId::_MAIN,
-            NormalFuncInfo::new(FuncId(last_fid as u32), IdentId::_MAIN, vec![], ast),
+            NormalFuncInfo::new(last_fid, IdentId::_MAIN, vec![], ast),
         ));
-        self.func_map
-            .insert(IdentId::_MAIN, FuncId(last_fid as u32));
+        self.func_map.insert(IdentId::_MAIN, last_fid);
 
         let mut irs = vec![];
-        while self.functions.len() > last_fid {
-            let ir = self.compile_func(FuncId(last_fid as u32))?;
+        while self.next_func_id().0 > last_fid.0 {
+            let ir = self.compile_func(last_fid)?;
             irs.push(ir);
-            last_fid += 1;
+            last_fid = FuncId(last_fid.0 + 1);
         }
 
         for ir in irs {
@@ -97,7 +99,7 @@ impl FnStore {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        let id = FuncId(self.functions.len() as u32);
+        let id = self.next_func_id();
         self.func_map.insert(name_id, id);
         self.functions
             .push(FuncInfo::new_builtin(id, name_id, address, arity));
