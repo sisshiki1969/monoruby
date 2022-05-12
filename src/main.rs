@@ -171,7 +171,7 @@ pub fn run_test(code: &str) {
 fn jitcompiler(gen: &mut Globals) -> Value {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let bccomp_val = BcCompiler::exec_toplevel(gen);
+    let bccomp_val = Interp::jit_exec_toplevel(gen);
     #[cfg(not(debug_assertions))]
     eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
     #[cfg(debug_assertions)]

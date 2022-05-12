@@ -191,13 +191,12 @@ impl BcCompiler {
     //       |      :      |
     //
 
-    pub fn exec_toplevel(globals: &mut Globals) -> Value {
-        let mut eval = Self::new();
+    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> Value {
         let main = globals.get_main_func();
-        eval.jit_compile(&mut globals.func[main]);
+        self.jit_compile(&mut globals.func[main]);
 
         let main = globals.func[main].jit_label().unwrap();
-        let val = eval.exec(globals, main);
+        let val = self.exec(globals, main);
         val
     }
 

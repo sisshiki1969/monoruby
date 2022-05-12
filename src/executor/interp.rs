@@ -1,3 +1,4 @@
+use super::compiler::BcCompiler;
 use super::*;
 
 ///
@@ -85,6 +86,12 @@ impl Interp {
         let mut eval = Self::new(main);
         eval.push_frame(0, 0, main, None);
         eval.eval_loop(globals)
+    }
+
+    pub fn jit_exec_toplevel(globals: &mut Globals) -> Value {
+        let main = globals.func[globals.get_main_func()].as_normal();
+        let mut eval = Self::new(main);
+        eval.bc_comp.exec_toplevel(globals)
     }
 
     fn new(main: &NormalFuncInfo) -> Self {
