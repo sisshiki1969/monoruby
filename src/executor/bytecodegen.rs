@@ -205,8 +205,8 @@ impl FuncInfo {
         self.jit_label
     }
 
-    pub(super) fn jit_label_mut(&mut self) -> &mut Option<DestLabel> {
-        &mut self.jit_label
+    pub(super) fn set_jit_label(&mut self, label: DestLabel) {
+        self.jit_label = Some(label);
     }
 
     pub(super) fn as_normal(&self) -> &NormalFuncInfo {
@@ -1160,6 +1160,7 @@ impl NormalFuncInfo {
             ops.push(op);
         }
         self.bc = ops;
+        #[cfg(feature = "emit-bc")]
         self.dump(id_store);
     }
 }

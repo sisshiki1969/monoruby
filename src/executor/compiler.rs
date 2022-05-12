@@ -201,6 +201,32 @@ impl BcCompiler {
         val
     }
 
+    // # ABI of JIT-compiled code.
+    //
+    //  ## registers which used globally
+    //
+    //  - rbx: &mut BcCompiler
+    //  - r12: &mut Globals
+    //
+    //  ## stack layout when jut after the code is called
+    //
+    //  - meta and arguments is set by caller.
+    //
+    //       +-------------+
+    // -0x00 | return addr | <- rsp
+    //       +-------------+
+    // -0x08 |  (old rbp)  |
+    //       +-------------+
+    // -0x10 |    meta     |
+    //       +-------------+
+    // -0x18 |     %0      |
+    //       +-------------+
+    // -0x20 | %1(1st arg) |
+    //       +-------------+
+    //       |             |
+    //
+    //  - (old rbp) is to be set by callee.
+    //
     fn exec(&mut self, fn_store: &mut Globals, func: DestLabel) -> Value {
         let entry = self.jit.label();
         monoasm!(self.jit,
@@ -225,7 +251,7 @@ impl BcCompiler {
     fn jit_compile(&mut self, func: &mut FuncInfo) -> DestLabel {
         let now = Instant::now();
         let label = self.jit.label();
-        *func.jit_label_mut() = Some(label);
+        func.set_jit_label(label);
         self.jit.bind_label(label);
         match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info),
@@ -234,18 +260,19 @@ impl BcCompiler {
             }
         };
         self.jit.finalize();
-        eprintln!("{:?}", func.id());
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "emit-asm")]
         {
+            eprintln!("jit compile: {:?}", func.id());
             let (start, code_end, end) = self.jit.code_block.last().unwrap();
             eprintln!(
-                "code: {} bytes  data: {} bytes",
+                "offset:{:?} code: {} bytes  data: {} bytes",
+                start,
                 *code_end - *start,
                 *end - *code_end
             );
             eprintln!("{}", self.jit.dump_code().unwrap());
+            eprintln!("jit compile elapsed:{:?}", now.elapsed());
         }
-        eprintln!("jit compile elapsed:{:?}", now.elapsed());
         label
     }
 
@@ -536,10 +563,10 @@ impl BcCompiler {
                         movq rdi, [rsp];
                         subq rdi, 4;
                         // calculate a new displacement to a function address.
-                        movq rsi, rax;
-                        subq rsi, [rsp];
+                        //movq rsi, rax;
+                        subq rax, [rsp];
                         // apply patch.
-                        movl [rdi], rsi;
+                        movl [rdi], rax;
                         popq rax;
                     l1:
                         // patch point

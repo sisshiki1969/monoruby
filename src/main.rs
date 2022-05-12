@@ -16,7 +16,6 @@ mod types;
 mod value;
 pub use ast::*;
 use executor::*;
-use types::*;
 use value::*;
 
 use clap;

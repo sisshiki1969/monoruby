@@ -1,5 +1,3 @@
-use super::*;
-
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
 const NIL_VALUE: u64 = 0x04; // 0000_0100
 const FALSE_VALUE: u64 = 0x14; // 0001_0100
@@ -117,10 +115,6 @@ impl Value {
         }
     }
 
-    pub fn bool_fromu64(num: u64) -> Self {
-        Value::bool(num as u8 != 0)
-    }
-
     #[inline(always)]
     pub fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
@@ -136,10 +130,6 @@ impl Value {
         Value::fixnum(num as i64)
     }
 
-    pub fn integer_fromu64(num: u64) -> Self {
-        Value::fixnum(num as i64)
-    }
-
     pub fn float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(ZERO);
@@ -151,10 +141,6 @@ impl Value {
         } else {
             panic!()
         }
-    }
-
-    pub fn float_fromu64(num: u64) -> Self {
-        Value::float(f64::from_bits(num))
     }
 
     pub fn unpack(&self) -> RV {
@@ -240,7 +226,7 @@ impl Value {
     /*#[inline(always)]
     fn is_packed_num(&self) -> bool {
         self.0.get() & 0b11 != 0
-    }*/
+    }
 
     pub fn ty(&self) -> Type {
         match self.unpack() {
@@ -251,12 +237,12 @@ impl Value {
         }
     }
 
-    /*pub fn pack(&self) -> u64 {
+    pub fn pack(&self) -> u64 {
         self.0.get()
     }*/
 }
 
-impl Value {
+/*impl Value {
     pub fn as_i(&self) -> i32 {
         match self.unpack() {
             RV::Integer(i) => i,
@@ -271,3 +257,4 @@ impl Value {
         }
     }
 }
+*/

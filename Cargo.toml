@@ -9,6 +9,10 @@ license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+emit-asm = []
+emit-bc = []
+
 [dependencies]
 clap = { version = "3.1.0", features = ["derive"] }
 chumsky = "0.8.0"
