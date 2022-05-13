@@ -1,4 +1,4 @@
-use super::compiler::BcCompiler;
+use super::compiler::JitGen;
 use super::*;
 
 ///
@@ -64,7 +64,7 @@ pub struct Interp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
-    bc_comp: BcCompiler,
+    jit_gen: JitGen,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -91,7 +91,7 @@ impl Interp {
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Value {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
-        eval.bc_comp.exec_toplevel(globals)
+        eval.jit_gen.exec_toplevel(globals)
     }
 
     fn new(main: &NormalFuncInfo) -> Self {
@@ -101,7 +101,7 @@ impl Interp {
             pc: pc_top + 0,
             pc_top,
             call_stack: Stack::new(),
-            bc_comp: BcCompiler::new(),
+            jit_gen: JitGen::new(),
         }
     }
 
@@ -273,7 +273,7 @@ impl Interp {
                         } => {
                             let arg_ptr = Arg::new(&self[args] as *const _);
                             let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(*address) };
-                            let v = func(&mut self.bc_comp, globals, arg_ptr, len as usize);
+                            let v = func(&mut self.jit_gen, globals, arg_ptr, len as usize);
                             match ret {
                                 None => {}
                                 Some(ret) => {

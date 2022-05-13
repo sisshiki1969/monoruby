@@ -10,7 +10,7 @@ use super::*;
 ///
 /// This generates x86-64 machine code from a bytecode.
 ///
-pub struct BcCompiler {
+pub struct JitGen {
     jit: JitMemory,
     class_version: DestLabel,
 }
@@ -24,7 +24,7 @@ fn conv(reg: u16) -> i64 {
 //
 
 extern "C" fn get_func_absolute_address(
-    bc_comp: &mut BcCompiler,
+    bc_comp: &mut JitGen,
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
@@ -50,7 +50,7 @@ extern "C" fn get_func_absolute_address(
 }
 
 extern "C" fn define_method(
-    _bc_comp: &mut BcCompiler,
+    _bc_comp: &mut JitGen,
     globals: &mut Globals,
     func_name: IdentId,
     func_id: FuncId,
@@ -58,7 +58,7 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
-impl BcCompiler {
+impl JitGen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i64(0);

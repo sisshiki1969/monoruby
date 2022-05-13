@@ -18,7 +18,7 @@ use op::*;
 use stack::*;
 
 type Result<T> = std::result::Result<T, BcErr>;
-pub type BuiltinFn = extern "C" fn(&mut BcCompiler, &mut Globals, Arg, usize) -> Value;
+pub type BuiltinFn = extern "C" fn(&mut JitGen, &mut Globals, Arg, usize) -> Value;
 
 #[derive(Debug, Clone)]
 pub enum BcErr {
