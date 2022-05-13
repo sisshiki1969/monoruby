@@ -100,12 +100,12 @@ fn exec(code: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn repl_exec(code: &str) -> Result<(), ()> {
+fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
     let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
         Err(err) => {
             err.source_info.show_loc(&err.loc);
-            return Err(());
+            return Err(MonorubyErr::Parse(err));
         }
     };
     let mut store = Globals::new(res.id_store);
@@ -116,9 +116,7 @@ fn repl_exec(code: &str) -> Result<(), ()> {
     let interp_val = Interp::eval_toplevel(&mut store);
     eprintln!("interp: {:?}", interp_val);
 
-    let _bccomp_val = jitcompiler(&mut store);
-
-    Ok(())
+    jitcompiler(&mut store)
 }
 
 fn run_repl(code: &str, all_codes: &mut Vec<String>) {
@@ -151,6 +149,7 @@ pub fn run_test(code: &str) {
     let bccomp_val = jitcompiler(&mut store);
 
     let interp_val = interp_val.unwrap();
+    let bccomp_val = bccomp_val.unwrap();
 
     assert_eq!(interp_val, bccomp_val);
 
@@ -170,7 +169,7 @@ pub fn run_test(code: &str) {
     assert_eq!(interp_val.unpack(), ruby_res);
 }
 
-fn jitcompiler(gen: &mut Globals) -> Value {
+fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let bccomp_val = Interp::jit_exec_toplevel(gen);

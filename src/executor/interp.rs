@@ -88,7 +88,7 @@ impl Interp {
         eval.eval_loop(globals)
     }
 
-    pub fn jit_exec_toplevel(globals: &mut Globals) -> Value {
+    pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
         eval.jit_gen.exec_toplevel(globals)

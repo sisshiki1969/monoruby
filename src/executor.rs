@@ -24,6 +24,7 @@ pub type BuiltinFn = extern "C" fn(&mut JitGen, &mut Globals, Arg, usize) -> Val
 pub enum MonorubyErr {
     UndefinedLocal(IdentId),
     MethodNotFound,
+    Parse(ParseErr),
 }
 
 ///

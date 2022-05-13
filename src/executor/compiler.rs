@@ -230,13 +230,13 @@ impl JitGen {
     //       |      :      |
     //
 
-    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> Value {
+    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> Result<Value> {
         let main = globals.get_main_func();
         self.jit_compile(&mut globals.func[main]);
 
         let main = globals.func[main].jit_label().unwrap();
         let val = self.exec(globals, main);
-        val
+        val.ok_or(MonorubyErr::MethodNotFound)
     }
 
     // # ABI of JIT-compiled code.
@@ -265,7 +265,7 @@ impl JitGen {
     //
     //  - (old rbp) is to be set by callee.
     //
-    fn exec(&mut self, fn_store: &mut Globals, func: DestLabel) -> Value {
+    fn exec(&mut self, fn_store: &mut Globals, func: DestLabel) -> Option<Value> {
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:
