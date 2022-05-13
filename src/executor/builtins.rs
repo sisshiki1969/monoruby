@@ -26,14 +26,14 @@ impl std::ops::Index<usize> for Arg {
     }
 }
 
-extern "C" fn puts(_vm: &mut JitGen, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+extern "C" fn puts(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
     for offset in 0..len {
         println!("{}", arg[offset]);
     }
     Value::nil()
 }
 
-extern "C" fn assert(_vm: &mut JitGen, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+extern "C" fn assert(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
     let expected = arg[0];
     let actual = arg[1];
     assert_eq!(expected, actual);
