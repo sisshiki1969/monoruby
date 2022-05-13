@@ -78,12 +78,12 @@ extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
 
 impl JitGen {
     pub fn new() -> Self {
-        let mut jitmem = JitMemory::new();
-        let class_version = jitmem.const_i64(0);
-        let entry_panic = jitmem.label();
-        let entry_find_method = jitmem.label();
-        let entry_return = jitmem.label();
-        monoasm!(&mut jitmem,
+        let mut jit = JitMemory::new();
+        let class_version = jit.const_i64(0);
+        let entry_panic = jit.label();
+        let entry_find_method = jit.label();
+        let entry_return = jit.label();
+        monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
@@ -99,7 +99,7 @@ impl JitGen {
             ret;
         );
         Self {
-            jit: jitmem,
+            jit,
             class_version,
             entry_panic,
             entry_find_method,
