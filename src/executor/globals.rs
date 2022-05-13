@@ -14,13 +14,12 @@ pub struct Globals {
 
 impl Globals {
     pub fn new(id_store: IdentifierTable) -> Self {
-        let mut store = Self {
+        let mut globals = Self {
             func: FnStore::new(),
             id_store,
         };
-        store.add_builtin_func("puts".to_string(), builtins::puts, 1);
-        store.add_builtin_func("assert".to_string(), builtins::assert, 2);
-        store
+        builtins::init_builtins(&mut globals);
+        globals
     }
 
     /// Get *FuncId* of the toplevel function.
@@ -40,8 +39,8 @@ impl Globals {
         self.func.get(name)
     }
 
-    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: usize) -> FuncId {
-        let name_id = self.get_ident_id(&name);
+    pub fn add_builtin_func(&mut self, name: &str, address: BuiltinFn, arity: usize) -> FuncId {
+        let name_id = self.get_ident_id(name);
         self.func.add_builtin_func(name_id, address, arity)
     }
 
