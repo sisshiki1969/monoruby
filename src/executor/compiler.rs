@@ -13,6 +13,8 @@ use super::*;
 pub struct JitGen {
     jit: JitMemory,
     class_version: DestLabel,
+    entry_panic: DestLabel,
+    entry_find_method: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -58,11 +60,34 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
+extern "C" fn panic(_bc_comp: &mut JitGen, _globals: &mut Globals) {
+    panic!("panic in jit code.");
+}
+
 impl JitGen {
     pub fn new() -> Self {
-        let mut jit = JitMemory::new();
-        let class_version = jit.const_i64(0);
-        Self { jit, class_version }
+        let mut jitmem = JitMemory::new();
+        let class_version = jitmem.const_i64(0);
+        let entry_panic = jitmem.label();
+        let entry_find_method = jitmem.label();
+        monoasm!(&mut jitmem,
+        entry_panic:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (panic);
+            jmp rax;
+        entry_find_method:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (get_func_absolute_address);
+            jmp rax;
+        );
+        Self {
+            jit: jitmem,
+            class_version,
+            entry_panic,
+            entry_find_method,
+        }
     }
 
     fn prologue(&mut self, regs: usize) {
@@ -534,42 +559,37 @@ impl JitGen {
                             movq [rsp - ((0x28 + i * 8) as i64)], rax;
                         );
                     }
-                    let func = self.jit.label();
                     let l1 = self.jit.label();
                     let exit = self.jit.label();
-                    let saved_class_version = self.jit.const_i64(0);
+                    let saved_class_version = self.jit.const_i64(-1);
                     let class_version = self.class_version;
+                    let entry_find_method = self.entry_find_method;
+                    let entry_panic = self.entry_panic;
                     monoasm!(self.jit,
                         movq rax, [rip + class_version];
                         cmpq [rip + saved_class_version], rax;
                         jeq l1;
                         movq [rip + saved_class_version], rax;
-                        lea rax, [rip + exit];
-                        pushq rax;
-                    func:
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
                         subq rsp, 168;
-                        movq rdi, rbx; // &mut BcCmpiler
-                        movq rsi, r12; // &FuncStore
+                        lea rax, [rip + exit];
+                        pushq rax;
                         movq rdx, (u32::from(*id)); // IdentId
                         movq rcx, (*len as usize); // args_len: usize
-                        movq rax, (get_func_absolute_address);
-                        call rax;
-                        addq rsp, 168;
+                        call entry_find_method;
                         // absolute address was returned to rax.
+                        popq rdi;
+                        addq rsp, 168;
+                        // calculate a displacement to the function address.
+                        subq rax, rdi;
                         // set patch point address (= return address - 4) to rdi.
-                        movq rdi, [rsp];
                         subq rdi, 4;
-                        // calculate a new displacement to a function address.
-                        //movq rsi, rax;
-                        subq rax, [rsp];
                         // apply patch.
                         movl [rdi], rax;
-                        popq rax;
                     l1:
                         // patch point
-                        call func;
+                        call entry_panic;
                     exit:
                     );
                     if *ret != u16::MAX {
