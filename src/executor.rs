@@ -17,13 +17,13 @@ pub use interp::Interp;
 use op::*;
 use stack::*;
 
-type Result<T> = std::result::Result<T, BcErr>;
+type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut JitGen, &mut Globals, Arg, usize) -> Value;
 
-#[derive(Debug, Clone)]
-pub enum BcErr {
+#[derive(Debug, Clone, PartialEq)]
+pub enum MonorubyErr {
     UndefinedLocal(IdentId),
-    //UndefinedMethod(String),
+    MethodNotFound,
 }
 
 ///

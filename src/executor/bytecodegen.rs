@@ -285,7 +285,7 @@ impl NormalFuncInfo {
     fn load_local(&mut self, ident: IdentId) -> Result<BcLocal> {
         match self.locals.get(&ident) {
             Some(local) => Ok(BcLocal(*local)),
-            None => Err(BcErr::UndefinedLocal(ident.to_owned())),
+            None => Err(MonorubyErr::UndefinedLocal(ident.to_owned())),
         }
     }
 

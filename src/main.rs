@@ -150,6 +150,8 @@ pub fn run_test(code: &str) {
 
     let bccomp_val = jitcompiler(&mut store);
 
+    let interp_val = interp_val.unwrap();
+
     assert_eq!(interp_val, bccomp_val);
 
     //dbg!(&stmt);

@@ -15,6 +15,7 @@ pub struct JitGen {
     class_version: DestLabel,
     entry_panic: DestLabel,
     entry_find_method: DestLabel,
+    entry_return: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -25,6 +26,11 @@ fn conv(reg: u16) -> i64 {
 // Runtime functions.
 //
 
+///
+/// Get an absolute address of the given method.
+///
+/// If no method was found, return null pointer.
+///
 extern "C" fn get_func_absolute_address(
     bc_comp: &mut JitGen,
     globals: &mut Globals,
@@ -33,7 +39,10 @@ extern "C" fn get_func_absolute_address(
 ) -> *const u8 {
     let func_id = match globals.get_method(func_name) {
         Some(id) => *id,
-        None => panic!("undefined method {:?}.", globals.get_ident_name(func_name)),
+        None => {
+            eprintln!("undefined method {:?}.", globals.get_ident_name(func_name));
+            return std::ptr::null();
+        }
     };
 
     let info = &mut globals.func[func_id];
@@ -70,6 +79,7 @@ impl JitGen {
         let class_version = jitmem.const_i64(0);
         let entry_panic = jitmem.label();
         let entry_find_method = jitmem.label();
+        let entry_return = jitmem.label();
         monoasm!(&mut jitmem,
         entry_panic:
             movq rdi, rbx;
@@ -81,12 +91,16 @@ impl JitGen {
             movq rsi, r12;
             movq rax, (get_func_absolute_address);
             jmp rax;
+        entry_return:
+            leave;
+            ret;
         );
         Self {
             jit: jitmem,
             class_version,
             entry_panic,
             entry_find_method,
+            entry_return,
         }
     }
 
@@ -565,32 +579,36 @@ impl JitGen {
                     let class_version = self.class_version;
                     let entry_find_method = self.entry_find_method;
                     let entry_panic = self.entry_panic;
+                    let entry_return = self.entry_return;
                     monoasm!(self.jit,
                         movq rax, [rip + class_version];
                         cmpq [rip + saved_class_version], rax;
                         jeq l1;
-                        movq [rip + saved_class_version], rax;
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
-                        subq rsp, 168;
-                        lea rax, [rip + exit];
-                        pushq rax;
+                        subq rsp, 160;
                         movq rdx, (u32::from(*id)); // IdentId
                         movq rcx, (*len as usize); // args_len: usize
                         call entry_find_method;
                         // absolute address was returned to rax.
-                        popq rdi;
-                        addq rsp, 168;
+                        addq rsp, 160;
+                        testq rax, rax;
+                        jeq entry_return;
+                        lea rdi, [rip + exit];
                         // calculate a displacement to the function address.
                         subq rax, rdi;
                         // set patch point address (= return address - 4) to rdi.
                         subq rdi, 4;
                         // apply patch.
                         movl [rdi], rax;
+                        movq rax, [rip + class_version];
+                        movq [rip + saved_class_version], rax;
                     l1:
                         // patch point
                         call entry_panic;
                     exit:
+                        testq rax, rax;
+                        jeq entry_return;
                     );
                     if *ret != u16::MAX {
                         monoasm!(self.jit,

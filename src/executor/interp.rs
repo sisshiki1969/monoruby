@@ -81,7 +81,7 @@ impl std::ops::IndexMut<u16> for Interp {
 }
 
 impl Interp {
-    pub fn eval_toplevel(globals: &mut Globals) -> Value {
+    pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
         eval.push_frame(0, 0, main, None);
@@ -111,11 +111,14 @@ impl Interp {
         op
     }
 
-    pub fn get_method_or_panic(&self, globals: &Globals, name: IdentId) -> FuncId {
-        *globals
-            .func
-            .get(name)
-            .unwrap_or_else(|| panic!("undefined method {:?}.", globals.get_ident_name(name)))
+    pub fn get_method(&self, globals: &Globals, name: IdentId) -> Option<FuncId> {
+        globals.func.get(name).map_or_else(
+            || {
+                eprintln!("undefined method {:?}.", globals.get_ident_name(name));
+                None
+            },
+            |id| Some(*id),
+        )
     }
 
     fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
@@ -142,7 +145,7 @@ impl Interp {
         false
     }
 
-    fn eval_loop(&mut self, globals: &mut Globals) -> Value {
+    fn eval_loop(&mut self, globals: &mut Globals) -> Result<Value> {
         loop {
             let op = self.get_op();
             match op {
@@ -245,7 +248,7 @@ impl Interp {
                 BcOp::Ret(lhs) => {
                     let val = self[lhs];
                     if self.pop_frame(val, globals) {
-                        return val;
+                        return Ok(val);
                     };
                 }
                 BcOp::Mov(dst, local) => {
@@ -261,7 +264,10 @@ impl Interp {
                         }
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    let func_id = self.get_method_or_panic(globals, id);
+                    let func_id = match self.get_method(globals, id) {
+                        Some(id) => id,
+                        None => return Err(MonorubyErr::MethodNotFound),
+                    };
                     let info = &globals.func[func_id];
                     check_arity(info.arity(), len);
                     match &info.kind {
