@@ -64,7 +64,8 @@ pub struct Interp {
     pc: BcPc,
     pc_top: BcPcBase,
     call_stack: Stack,
-    jit_gen: JitGen,
+    pub jit_gen: JitGen,
+    pub error: Option<MonorubyErr>,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -91,7 +92,8 @@ impl Interp {
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
-        eval.jit_gen.exec_toplevel(globals)
+        eval.jit_gen.exec_toplevel(globals)(&mut eval, globals)
+            .ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
     }
 
     fn new(main: &NormalFuncInfo) -> Self {
@@ -102,6 +104,7 @@ impl Interp {
             pc_top,
             call_stack: Stack::new(),
             jit_gen: JitGen::new(),
+            error: None,
         }
     }
 
@@ -254,22 +257,24 @@ impl Interp {
                 BcOp::Mov(dst, local) => {
                     self[dst] = self[local];
                 }
-                BcOp::FnCall(id, ret, args, len) => {
-                    fn check_arity(arity: usize, len: u16) {
+                BcOp::FnCall(name, ret, args, len) => {
+                    fn check_arity(arity: usize, len: u16) -> Result<()> {
                         if arity != len as usize {
-                            panic!(
+                            Err(MonorubyErr::WrongArguments(format!(
                                 "number of arguments mismatch. expected:{} actual:{}",
                                 arity, len
-                            );
+                            )))
+                        } else {
+                            Ok(())
                         }
                     }
                     let ret = if ret == u16::MAX { None } else { Some(ret) };
-                    let func_id = match self.get_method(globals, id) {
+                    let func_id = match self.get_method(globals, name) {
                         Some(id) => id,
-                        None => return Err(MonorubyErr::MethodNotFound),
+                        None => return Err(MonorubyErr::MethodNotFound(name)),
                     };
                     let info = &globals.func[func_id];
-                    check_arity(info.arity(), len);
+                    check_arity(info.arity(), len)?;
                     match &info.kind {
                         FuncKind::Normal(info) => {
                             self.push_frame(args, len, info, ret);
@@ -279,7 +284,7 @@ impl Interp {
                         } => {
                             let arg_ptr = Arg::new(&self[args] as *const _);
                             let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(*address) };
-                            let v = func(&mut self.jit_gen, globals, arg_ptr, len as usize);
+                            let v = func(self, globals, arg_ptr, len as usize);
                             match ret {
                                 None => {}
                                 Some(ret) => {

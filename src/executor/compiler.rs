@@ -5,6 +5,8 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Option<Value>;
+
 ///
 /// Bytecode compiler
 ///
@@ -32,7 +34,7 @@ fn conv(reg: u16) -> i64 {
 /// If no method was found, return null pointer.
 ///
 extern "C" fn get_func_absolute_address(
-    bc_comp: &mut JitGen,
+    interp: &mut Interp,
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
@@ -40,7 +42,7 @@ extern "C" fn get_func_absolute_address(
     let func_id = match globals.get_method(func_name) {
         Some(id) => *id,
         None => {
-            eprintln!("undefined method {:?}.", globals.get_ident_name(func_name));
+            interp.error = Some(MonorubyErr::MethodNotFound(func_name));
             return std::ptr::null();
         }
     };
@@ -48,20 +50,21 @@ extern "C" fn get_func_absolute_address(
     let info = &mut globals.func[func_id];
     let arity = info.arity();
     if arity != args_len {
-        panic!(
+        interp.error = Some(MonorubyErr::WrongArguments(format!(
             "number of arguments mismatch. expected:{} actual:{}",
             arity, args_len
-        );
+        )));
+        return std::ptr::null();
     }
     let jit_label = match info.jit_label() {
         Some(dest) => dest,
-        None => bc_comp.jit_compile(info),
+        None => interp.jit_gen.jit_compile(info),
     };
-    bc_comp.jit.get_label_absolute_address(jit_label)
+    interp.jit_gen.jit.get_label_absolute_address(jit_label)
 }
 
 extern "C" fn define_method(
-    _bc_comp: &mut JitGen,
+    _interp: &mut Interp,
     globals: &mut Globals,
     func_name: IdentId,
     func_id: FuncId,
@@ -69,18 +72,18 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
-extern "C" fn panic(_bc_comp: &mut JitGen, _globals: &mut Globals) {
+extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
 impl JitGen {
     pub fn new() -> Self {
-        let mut jitmem = JitMemory::new();
-        let class_version = jitmem.const_i64(0);
-        let entry_panic = jitmem.label();
-        let entry_find_method = jitmem.label();
-        let entry_return = jitmem.label();
-        monoasm!(&mut jitmem,
+        let mut jit = JitMemory::new();
+        let class_version = jit.const_i64(0);
+        let entry_panic = jit.label();
+        let entry_find_method = jit.label();
+        let entry_return = jit.label();
+        monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
@@ -96,7 +99,7 @@ impl JitGen {
             ret;
         );
         Self {
-            jit: jitmem,
+            jit,
             class_version,
             entry_panic,
             entry_find_method,
@@ -210,7 +213,7 @@ impl JitGen {
     }
 
     //
-    // stack layout for jit-ed code.
+    // # stack layout for jit-ed code.
     //
     //       +-------------+
     // +0x08 | return addr |
@@ -229,15 +232,6 @@ impl JitGen {
     //       +-------------+
     //       |      :      |
     //
-
-    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> Result<Value> {
-        let main = globals.get_main_func();
-        self.jit_compile(&mut globals.func[main]);
-
-        let main = globals.func[main].jit_label().unwrap();
-        let val = self.exec(globals, main);
-        val.ok_or(MonorubyErr::MethodNotFound)
-    }
 
     // # ABI of JIT-compiled code.
     //
@@ -265,7 +259,11 @@ impl JitGen {
     //
     //  - (old rbp) is to be set by callee.
     //
-    fn exec(&mut self, fn_store: &mut Globals, func: DestLabel) -> Option<Value> {
+
+    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
+        let main = globals.get_main_func();
+        let main = self.jit_compile(&mut globals.func[main]);
+        //let main = globals.func[main].jit_label().unwrap();
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:
@@ -274,16 +272,14 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            call func;
+            call main;
             popq r12;
             popq rbx;
             popq rbp;
             ret;
         );
         self.jit.finalize();
-
-        let func = self.jit.get_label_addr2(entry);
-        func(self, fn_store)
+        self.jit.get_label_addr2(entry)
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo) -> DestLabel {
@@ -620,8 +616,8 @@ impl JitGen {
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;
-                        movq rdi, rbx; // &mut BcCmpiler
-                        movq rsi, r12; // &FuncStore
+                        movq rdi, rbx; // &mut Interp
+                        movq rsi, r12; // &Globals
                         movq rdx, (u32::from(*id)); // IdentId
                         movq rcx, (u32::from(*fid)); // FuncId
                         movq rax, (define_method);
