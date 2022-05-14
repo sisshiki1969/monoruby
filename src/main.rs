@@ -93,7 +93,7 @@ fn exec(code: &str) -> Result<(), MonorubyErr> {
         eprintln!("interp: {:?}", interp_val);
     }
 
-    let _bccomp_val = jitcompiler(&mut store);
+    let _ = jitcompiler(&mut store);
 
     Ok(())
 }
@@ -127,10 +127,8 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let all_codes = vec![code.to_string()];
-    let res = match Parser::parse_program(code.to_string(), std::path::Path::new(""), "") {
-        Ok(res) => res,
-        Err(_) => panic!("Parse error."),
-    };
+    let res = Parser::parse_program(code.to_string(), std::path::Path::new(""), "")
+        .unwrap_or_else(|err| panic!("Error in parsing. {:?}", err));
     let mut store = Globals::new(res.id_store);
     store
         .compile_main(res.node)
@@ -143,12 +141,12 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let bccomp_val = jitcompiler(&mut store);
+    let jit_val = jitcompiler(&mut store);
 
     let interp_val = interp_val.unwrap();
-    let bccomp_val = bccomp_val.unwrap();
+    let jit_val = jit_val.unwrap();
 
-    assert_eq!(interp_val, bccomp_val);
+    assert_eq!(interp_val, jit_val);
 
     //dbg!(&stmt);
     /*let mut hir = HirContext::new();
@@ -169,12 +167,12 @@ pub fn run_test(code: &str) {
 fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let bccomp_val = Interp::jit_exec_toplevel(gen);
+    let jit_val = Interp::jit_exec_toplevel(gen);
     #[cfg(not(debug_assertions))]
-    eprintln!("bccomp: {:?} elapsed:{:?}", bccomp_val, now.elapsed());
+    eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
     #[cfg(debug_assertions)]
-    eprintln!("bccomp: {:?}", bccomp_val);
-    bccomp_val
+    eprintln!("jit: {:?}", jit_val);
+    jit_val
 }
 
 fn run_ruby(code: &Vec<String>) -> RV {

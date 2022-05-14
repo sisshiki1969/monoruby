@@ -237,7 +237,7 @@ impl JitGen {
     //
     //  ## registers which used globally
     //
-    //  - rbx: &mut BcCompiler
+    //  - rbx: &mut Interp
     //  - r12: &mut Globals
     //
     //  ## stack layout when jut after the code is called
