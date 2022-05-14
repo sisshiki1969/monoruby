@@ -77,18 +77,16 @@ fn main() {
     }
 }
 
-fn exec(code: &str) -> Result<(), ()> {
+fn exec(code: &str) -> Result<(), MonorubyErr> {
     let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
         Err(err) => {
             err.source_info.show_loc(&err.loc);
-            return Err(());
+            return Err(MonorubyErr::Parse(err));
         }
     };
     let mut store = Globals::new(res.id_store);
-    store
-        .compile_main(res.node)
-        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
+    store.compile_main(res.node)?;
     #[cfg(debug_assertions)]
     {
         let interp_val = Interp::eval_toplevel(&mut store);
@@ -109,9 +107,7 @@ fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
         }
     };
     let mut store = Globals::new(res.id_store);
-    store
-        .compile_main(res.node)
-        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
+    store.compile_main(res.node)?;
 
     let interp_val = Interp::eval_toplevel(&mut store);
     eprintln!("interp: {:?}", interp_val);
@@ -121,7 +117,8 @@ fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
 
 fn run_repl(code: &str, all_codes: &mut Vec<String>) {
     all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";")) {
+    if let Err(err) = repl_exec(&all_codes.join(";")) {
+        eprintln!("{:?}", err);
         all_codes.pop();
     };
 }

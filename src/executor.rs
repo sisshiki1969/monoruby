@@ -25,6 +25,7 @@ pub enum MonorubyErr {
     UndefinedLocal(IdentId),
     MethodNotFound,
     Parse(ParseErr),
+    Unimplemented(String),
 }
 
 ///

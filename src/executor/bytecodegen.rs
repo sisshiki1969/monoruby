@@ -71,7 +71,7 @@ impl FnStore {
         Ok(())
     }
 
-    /// Generate bytecode.
+    /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let ir = info.compile_ast(&mut self.functions)?;
@@ -579,7 +579,12 @@ impl NormalFuncInfo {
                 BinOp::Gt => self.gen_cmp(ctx, ir, None, CmpKind::Gt, lhs, rhs)?,
                 BinOp::Le => self.gen_cmp(ctx, ir, None, CmpKind::Le, lhs, rhs)?,
                 BinOp::Lt => self.gen_cmp(ctx, ir, None, CmpKind::Lt, lhs, rhs)?,
-                _ => unimplemented!(),
+                _ => {
+                    return Err(MonorubyErr::Unimplemented(format!(
+                        "unsupported operator {:?}",
+                        op
+                    )))
+                }
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 assert!(mlhs.len() == 1);
@@ -590,7 +595,12 @@ impl NormalFuncInfo {
                         let local2 = self.find_local(lhs);
                         return self.gen_store_expr(ctx, ir, local2, rhs, use_value);
                     }
-                    _ => unimplemented!(),
+                    _ => {
+                        return Err(MonorubyErr::Unimplemented(format!(
+                            "unsupported lhs {:?}",
+                            lhs.kind
+                        )))
+                    }
                 }
             }
             NodeKind::LocalVar(ident) => {
@@ -692,14 +702,19 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::MethodDef(name, params, box node, _lv) => {
-                self.gen_method_def(ctx, ir, name, params, node);
+                self.gen_method_def(ctx, ir, name, params, node)?;
                 if use_value {
                     // TODO: This should be a Symbol.
                     self.gen_nil(ir, None);
                 }
                 return Ok(());
             }
-            _ => unimplemented!("{:?}", expr.kind),
+            _ => {
+                return Err(MonorubyErr::Unimplemented(format!(
+                    "unsupported nodekind {:?}",
+                    expr.kind
+                )))
+            }
         }
         if !use_value {
             self.pop();
@@ -714,17 +729,23 @@ impl NormalFuncInfo {
         name: IdentId,
         params: Vec<FormalParam>,
         node: Node,
-    ) {
+    ) -> Result<()> {
         let mut args = vec![];
         for param in params {
             match param.kind {
                 ParamKind::Param(name) => args.push(name),
-                _ => unimplemented!("{:?}", param.kind),
+                _ => {
+                    return Err(MonorubyErr::Unimplemented(format!(
+                        "unsupported paraneter kind {:?}",
+                        param.kind
+                    )))
+                }
             }
         }
         let func_id = FuncId(ctx.len() as u32);
         ctx.push(FuncInfo::new_normal(name, func_id, args, node));
         ir.push(BcIr::MethodDef(name, func_id));
+        Ok(())
     }
 
     fn gen_store_expr(
@@ -767,7 +788,12 @@ impl NormalFuncInfo {
                 BinOp::Gt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Gt, lhs, rhs)?,
                 BinOp::Le => self.gen_cmp(ctx, ir, Some(local), CmpKind::Le, lhs, rhs)?,
                 BinOp::Lt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Lt, lhs, rhs)?,
-                _ => unimplemented!(),
+                _ => {
+                    return Err(MonorubyErr::Unimplemented(format!(
+                        "unsupported operator {:?}",
+                        op
+                    )))
+                }
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 assert!(mlhs.len() == 1);
@@ -779,7 +805,12 @@ impl NormalFuncInfo {
                         self.gen_store_expr(ctx, ir, src, rhs, false)?;
                         self.gen_mov(ir, local.into(), src.into());
                     }
-                    _ => unimplemented!(),
+                    _ => {
+                        return Err(MonorubyErr::Unimplemented(format!(
+                            "unsupported lhs {:?}",
+                            lhs.kind
+                        )))
+                    }
                 }
             }
             NodeKind::LocalVar(ident) => {
