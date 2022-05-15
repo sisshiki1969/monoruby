@@ -18,16 +18,70 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
+pub struct Funcs(Vec<FuncInfo>);
+
+impl std::ops::Index<FuncId> for Funcs {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.0[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for Funcs {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.0[index.0 as usize]
+    }
+}
+
+impl Funcs {
+    fn new() -> Self {
+        Self(vec![])
+    }
+
+    fn next_func_id(&self) -> FuncId {
+        FuncId(self.0.len() as u32)
+    }
+
+    fn add_normal_func(&mut self, name: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> FuncId {
+        let fid = self.next_func_id();
+        self.0.push(FuncInfo::new_normal(name, fid, args, ast));
+        fid
+    }
+
+    fn add_builtin_func(&mut self, name_id: IdentId, address: BuiltinFn, arity: usize) -> FuncId {
+        let id = self.next_func_id();
+        self.0
+            .push(FuncInfo::new_builtin(id, name_id, address, arity));
+        id
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct FnStore {
-    functions: Vec<FuncInfo>,
+    functions: Funcs,
     func_map: HashMap<IdentId, FuncId>,
+    pub main: Option<FuncId>,
+}
+
+impl std::ops::Index<FuncId> for FnStore {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.functions[index]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for FnStore {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.functions[index]
+    }
 }
 
 impl FnStore {
     pub fn new() -> Self {
         Self {
-            functions: vec![],
+            functions: Funcs::new(),
             func_map: HashMap::default(),
+            main: None,
         }
     }
 
@@ -38,32 +92,18 @@ impl FnStore {
     pub fn get(&self, name: IdentId) -> Option<&FuncId> {
         self.func_map.get(&name)
     }
-    fn next_func_id(&self) -> FuncId {
-        FuncId(self.functions.len() as u32)
-    }
-}
 
-impl std::ops::Index<FuncId> for FnStore {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.functions[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<FuncId> for FnStore {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.functions[index.0 as usize]
+    fn len(&self) -> usize {
+        self.functions.0.len()
     }
 }
 
 impl FnStore {
     pub(super) fn compile_main(&mut self, ast: Node, id_store: &IdentifierTable) -> Result<()> {
-        let mut fid = self.next_func_id();
-        self.functions
-            .push(FuncInfo::new_normal(IdentId::_MAIN, fid, vec![], ast));
-        self.func_map.insert(IdentId::_MAIN, fid);
+        let mut fid = self.functions.add_normal_func(None, vec![], ast);
+        self.main = Some(fid);
 
-        while self.next_func_id().0 > fid.0 {
+        while self.len() > fid.0 as usize {
             self.compile_func(fid, id_store)?;
             fid = FuncId(fid.0 + 1);
         }
@@ -86,10 +126,8 @@ impl FnStore {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        let id = self.next_func_id();
+        let id = self.functions.add_builtin_func(name_id, address, arity);
         self.func_map.insert(name_id, id);
-        self.functions
-            .push(FuncInfo::new_builtin(id, name_id, address, arity));
         id
     }
 }
@@ -105,7 +143,7 @@ pub struct FuncInfo {
     /// ID of this function.
     id: FuncId,
     /// name of this function.
-    name: IdentId,
+    name: Option<IdentId>,
     /// arity of this function.
     arity: usize,
     /// *DestLabel* of JIT function.
@@ -114,7 +152,7 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    fn new_normal(name: IdentId, func_id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
+    fn new_normal(name: Option<IdentId>, func_id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
         let info = NormalFuncInfo::new(func_id, name, args, ast);
         Self {
             id: info.id,
@@ -128,7 +166,7 @@ impl FuncInfo {
     fn new_builtin(id: FuncId, name: IdentId, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
-            name,
+            name: Some(name),
             arity,
             jit_label: None,
             kind: FuncKind::Builtin {
@@ -206,7 +244,7 @@ impl IrContext {
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
-    name_id: IdentId,
+    name_id: Option<IdentId>,
     /// Bytecode.
     bc: Vec<BcOp>,
     /// the name of arguments.
@@ -224,7 +262,7 @@ pub(super) struct NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
-    pub fn new(id: FuncId, name_id: IdentId, args: Vec<IdentId>, ast: Node) -> Self {
+    pub fn new(id: FuncId, name_id: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> Self {
         let mut info = NormalFuncInfo {
             id,
             name_id,
@@ -374,7 +412,10 @@ impl NormalFuncInfo {
         eprintln!(
             "{:?} name:{} args:{:?}",
             self.id,
-            globals.get_name(self.name_id),
+            match self.name_id {
+                Some(name_id) => globals.get_name(name_id),
+                None => "<ANONYMOUS>",
+            },
             self.args
                 .iter()
                 .map(|id| globals.get_name(*id))
@@ -484,7 +525,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 }
 
 impl NormalFuncInfo {
-    fn compile_ast(&mut self, ctx: &mut Vec<FuncInfo>) -> Result<IrContext> {
+    fn compile_ast(&mut self, ctx: &mut Funcs) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
         self.gen_expr(ctx, &mut ir, ast, true)?;
@@ -496,7 +537,7 @@ impl NormalFuncInfo {
 
     fn gen_comp_stmts(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
@@ -520,12 +561,7 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_temp_expr(
-        &mut self,
-        ctx: &mut Vec<FuncInfo>,
-        ir: &mut IrContext,
-        expr: Node,
-    ) -> Result<BcTemp> {
+    fn gen_temp_expr(&mut self, ctx: &mut Funcs, ir: &mut IrContext, expr: Node) -> Result<BcTemp> {
         self.gen_expr(ctx, ir, expr, true)?;
         Ok(self.pop())
     }
@@ -533,7 +569,7 @@ impl NormalFuncInfo {
     /// Generate bytecode Ir from an *Node*.
     fn gen_expr(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         expr: Node,
         use_value: bool,
@@ -725,7 +761,7 @@ impl NormalFuncInfo {
 
     fn gen_method_def(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         name: IdentId,
         params: Vec<FormalParam>,
@@ -743,15 +779,14 @@ impl NormalFuncInfo {
                 }
             }
         }
-        let func_id = FuncId(ctx.len() as u32);
-        ctx.push(FuncInfo::new_normal(name, func_id, args, node));
+        let func_id = ctx.add_normal_func(Some(name), args, node);
         ir.push(BcIr::MethodDef(name, func_id));
         Ok(())
     }
 
     fn gen_store_expr(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         local: BcLocal,
         rhs: Node,
@@ -857,12 +892,7 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_args(
-        &mut self,
-        ctx: &mut Vec<FuncInfo>,
-        ir: &mut IrContext,
-        args: Vec<Node>,
-    ) -> Result<BcTemp> {
+    fn gen_args(&mut self, ctx: &mut Funcs, ir: &mut IrContext, args: Vec<Node>) -> Result<BcTemp> {
         let arg = self.next_reg();
         for arg in args {
             self.gen_expr(ctx, ir, arg, true)?;
@@ -872,7 +902,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
@@ -885,7 +915,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call_inner(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
@@ -897,7 +927,7 @@ impl NormalFuncInfo {
 
     fn gen_binary(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -936,7 +966,7 @@ impl NormalFuncInfo {
 
     fn gen_singular(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -954,7 +984,7 @@ impl NormalFuncInfo {
 
     fn gen_add(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -972,7 +1002,7 @@ impl NormalFuncInfo {
 
     fn gen_sub(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -990,7 +1020,7 @@ impl NormalFuncInfo {
 
     fn gen_mul(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1003,7 +1033,7 @@ impl NormalFuncInfo {
 
     fn gen_div(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1016,7 +1046,7 @@ impl NormalFuncInfo {
 
     fn gen_cmp(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         kind: CmpKind,
@@ -1035,7 +1065,7 @@ impl NormalFuncInfo {
 
     fn gen_while(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut Funcs,
         ir: &mut IrContext,
         cond: Node,
         body: Node,
