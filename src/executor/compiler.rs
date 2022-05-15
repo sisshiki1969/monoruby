@@ -261,9 +261,8 @@ impl JitGen {
     //
 
     pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
-        let main = globals.get_main_func();
-        let main = self.jit_compile(&mut globals.func[main]);
-        //let main = globals.func[main].jit_label().unwrap();
+        let main_id = globals.get_main_func();
+        let main = self.jit_compile(&mut globals.func[main_id]);
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:

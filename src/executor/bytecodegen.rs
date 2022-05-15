@@ -218,7 +218,8 @@ pub(super) struct NormalFuncInfo {
     /// The number of temporary registers.
     reg_num: u16,
     /// literal values.
-    constants: Vec<Value>,
+    literals: Vec<Value>,
+    /// AST.
     ast: Option<Node>,
 }
 
@@ -232,7 +233,7 @@ impl NormalFuncInfo {
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
-            constants: vec![],
+            literals: vec![],
             ast: Some(ast),
         };
         args.into_iter().for_each(|name| {
@@ -253,13 +254,13 @@ impl NormalFuncInfo {
 
     /// get a constant.
     pub(super) fn get_constant(&self, id: u32) -> Value {
-        self.constants[id as usize]
+        self.literals[id as usize]
     }
 
     /// register a new constant.
     fn new_constant(&mut self, val: Value) -> u32 {
-        let constants = self.constants.len();
-        self.constants.push(val);
+        let constants = self.literals.len();
+        self.literals.push(val);
         constants as u32
     }
 
