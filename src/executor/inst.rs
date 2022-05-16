@@ -87,6 +87,6 @@ pub(super) enum BcOp {
     /// move(%dst, %src)
     Mov(u16, u16),
     /// func call(func_id, %ret, %args, args_len)
-    FnCall(usize),
-    MethodDef(usize),
+    FnCall(CallsiteId),
+    MethodDef(MethodDefId),
 }

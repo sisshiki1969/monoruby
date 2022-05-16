@@ -248,11 +248,19 @@ pub struct CallsiteInfo {
     pub len: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct CallsiteId(u32);
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MethodDefInfo {
     pub name: IdentId,
     pub func: FuncId,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct MethodDefId(u32);
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct NormalFuncInfo {
@@ -260,7 +268,7 @@ pub(super) struct NormalFuncInfo {
     pub(super) id: FuncId,
     name_id: Option<IdentId>,
     /// Bytecode.
-    bc: Vec<BcOp>,
+    bytecode: Vec<BcOp>,
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
@@ -272,11 +280,25 @@ pub(super) struct NormalFuncInfo {
     /// literal values.
     literals: Vec<Value>,
     /// callsite info.
-    pub callsite_info: Vec<CallsiteInfo>,
+    callsite_info: Vec<CallsiteInfo>,
     /// method define info.
-    pub method_def_info: Vec<MethodDefInfo>,
+    method_def_info: Vec<MethodDefInfo>,
     /// AST.
     ast: Option<Node>,
+}
+
+impl std::ops::Index<MethodDefId> for NormalFuncInfo {
+    type Output = MethodDefInfo;
+    fn index(&self, index: MethodDefId) -> &MethodDefInfo {
+        &self.method_def_info[index.0 as usize]
+    }
+}
+
+impl std::ops::Index<CallsiteId> for NormalFuncInfo {
+    type Output = CallsiteInfo;
+    fn index(&self, index: CallsiteId) -> &CallsiteInfo {
+        &self.callsite_info[index.0 as usize]
+    }
 }
 
 impl NormalFuncInfo {
@@ -284,7 +306,7 @@ impl NormalFuncInfo {
         let mut info = NormalFuncInfo {
             id,
             name_id,
-            bc: vec![],
+            bytecode: vec![],
             args: args.clone(),
             locals: HashMap::default(),
             temp: 0,
@@ -307,7 +329,7 @@ impl NormalFuncInfo {
 
     /// get bytecode.
     pub(super) fn bytecode(&self) -> &Vec<BcOp> {
-        &self.bc
+        &self.bytecode
     }
 
     /// get a constant.
@@ -441,7 +463,7 @@ impl NormalFuncInfo {
                 .map(|id| globals.get_name(*id))
                 .collect::<Vec<_>>()
         );
-        for (i, inst) in self.bc.iter().enumerate() {
+        for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
             match inst {
                 BcOp::Br(dst) => {
@@ -513,7 +535,7 @@ impl NormalFuncInfo {
                         ret,
                         args,
                         len,
-                    } = self.callsite_info[*id].clone();
+                    } = self[*id].clone();
                     let name = globals.get_name(name);
                     match ret {
                         None => {
@@ -525,7 +547,7 @@ impl NormalFuncInfo {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = self.method_def_info[*id].clone();
+                    let MethodDefInfo { name, func } = self[*id].clone();
                     let name = globals.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
@@ -1126,7 +1148,7 @@ impl NormalFuncInfo {
         ret: Option<BcReg>,
         args: BcTemp,
         len: usize,
-    ) -> usize {
+    ) -> CallsiteId {
         let info = CallsiteInfo {
             name,
             ret: ret.map(|ret| self.get_index(&ret)),
@@ -1135,14 +1157,14 @@ impl NormalFuncInfo {
         };
         let id = self.callsite_info.len();
         self.callsite_info.push(info);
-        id
+        CallsiteId(id as u32)
     }
 
-    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> usize {
+    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> MethodDefId {
         let info = MethodDefInfo { name, func };
         let id = self.method_def_info.len();
         self.method_def_info.push(info);
-        id
+        MethodDefId(id as u32)
     }
 
     pub fn ir_to_bytecode(&mut self, ir: IrContext, id_store: &IdentifierTable) {
@@ -1229,7 +1251,7 @@ impl NormalFuncInfo {
             };
             ops.push(op);
         }
-        self.bc = ops;
+        self.bytecode = ops;
         #[cfg(feature = "emit-bc")]
         self.dump(id_store);
     }

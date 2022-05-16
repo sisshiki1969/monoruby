@@ -273,7 +273,7 @@ impl Interp {
                         ret,
                         args,
                         len,
-                    } = globals.func[self.cur_fn].as_normal().callsite_info[id].clone();
+                    } = globals.func[self.cur_fn].as_normal()[id];
                     let func_id = match self.get_method(globals, name) {
                         Some(id) => id,
                         None => return Err(MonorubyErr::MethodNotFound(name)),
@@ -313,8 +313,7 @@ impl Interp {
                     };
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } =
-                        globals.func[self.cur_fn].as_normal().method_def_info[id];
+                    let MethodDefInfo { name, func } = globals.func[self.cur_fn].as_normal()[id];
                     globals.func.insert(name, func);
                 }
             }

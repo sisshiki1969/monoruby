@@ -566,7 +566,7 @@ impl JitGen {
                         ret,
                         args,
                         len,
-                    } = func.callsite_info[*id].clone();
+                    } = func[*id].clone();
                     for i in 0..len {
                         let reg = args + i;
                         monoasm!(self.jit,
@@ -618,7 +618,7 @@ impl JitGen {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = func.method_def_info[*id];
+                    let MethodDefInfo { name, func } = func[*id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;
