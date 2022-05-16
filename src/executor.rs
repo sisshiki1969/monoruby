@@ -1,18 +1,18 @@
 use super::*;
 
-mod bcinst;
 mod builtins;
 mod bytecodegen;
 mod compiler;
 mod globals;
+mod inst;
 mod interp;
 mod op;
 mod stack;
-use bcinst::*;
 pub use builtins::*;
 use bytecodegen::*;
 pub use compiler::*;
 pub use globals::*;
+use inst::*;
 pub use interp::Interp;
 use op::*;
 use stack::*;

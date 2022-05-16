@@ -543,7 +543,7 @@ impl JitGen {
                     );
                     self.epilogue();
                 }
-                BcOp::FnCall(id, ret, args, len) => {
+                BcOp::FnCall(id) => {
                     // set arguments to a callee stack.
                     //
                     //       +-------------+
@@ -561,8 +561,14 @@ impl JitGen {
                     //       +-------------+
                     //       |             |
                     //
-                    for i in 0..*len {
-                        let reg = *args + i;
+                    let CallsiteInfo {
+                        name,
+                        ret,
+                        args,
+                        len,
+                    } = func.callsite_info[*id].clone();
+                    for i in 0..len {
+                        let reg = args + i;
                         monoasm!(self.jit,
                             movq rax, [rbp - (conv(reg))];
                             movq [rsp - ((0x28 + i * 8) as i64)], rax;
@@ -582,8 +588,8 @@ impl JitGen {
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
                         subq rsp, 160;
-                        movq rdx, (u32::from(*id)); // IdentId
-                        movq rcx, (*len as usize); // args_len: usize
+                        movq rdx, (u32::from(name)); // IdentId
+                        movq rcx, (len as usize); // args_len: usize
                         call entry_find_method;
                         // absolute address was returned to rax.
                         addq rsp, 160;
@@ -605,20 +611,21 @@ impl JitGen {
                         testq rax, rax;
                         jeq entry_return;
                     );
-                    if *ret != u16::MAX {
+                    if let Some(ret) = ret {
                         monoasm!(self.jit,
-                            movq [rbp - (conv(*ret))], rax;
+                            movq [rbp - (conv(ret))], rax;
                         );
                     }
                 }
-                BcOp::MethodDef(id, fid) => {
+                BcOp::MethodDef(id) => {
+                    let MethodDefInfo { name, func } = func.method_def_info[*id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;
                         movq rdi, rbx; // &mut Interp
                         movq rsi, r12; // &Globals
-                        movq rdx, (u32::from(*id)); // IdentId
-                        movq rcx, (u32::from(*fid)); // FuncId
+                        movq rdx, (u32::from(name)); // IdentId
+                        movq rcx, (u32::from(func)); // FuncId
                         movq rax, (define_method);
                         call rax;
                     );

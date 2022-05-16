@@ -241,6 +241,20 @@ impl IrContext {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallsiteInfo {
+    pub name: IdentId,
+    pub ret: Option<u16>,
+    pub args: u16,
+    pub len: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MethodDefInfo {
+    pub name: IdentId,
+    pub func: FuncId,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
@@ -257,6 +271,10 @@ pub(super) struct NormalFuncInfo {
     reg_num: u16,
     /// literal values.
     literals: Vec<Value>,
+    /// callsite info.
+    pub callsite_info: Vec<CallsiteInfo>,
+    /// method define info.
+    pub method_def_info: Vec<MethodDefInfo>,
     /// AST.
     ast: Option<Node>,
 }
@@ -272,6 +290,8 @@ impl NormalFuncInfo {
             temp: 0,
             reg_num: 0,
             literals: vec![],
+            callsite_info: vec![],
+            method_def_info: vec![],
             ast: Some(ast),
         };
         args.into_iter().for_each(|name| {
@@ -487,19 +507,27 @@ impl NormalFuncInfo {
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp::FnCall(id, ret, arg, len) => {
-                    let name = globals.get_name(*id);
-                    match *ret {
-                        u16::MAX => {
-                            eprintln!("_ = call {}(%{}; {})", name, arg, len)
+                BcOp::FnCall(id) => {
+                    let CallsiteInfo {
+                        name,
+                        ret,
+                        args,
+                        len,
+                    } = self.callsite_info[*id].clone();
+                    let name = globals.get_name(name);
+                    match ret {
+                        None => {
+                            eprintln!("_ = call {}(%{}; {})", name, args, len)
                         }
-                        ret => {
-                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, arg, len)
+                        Some(ret) => {
+                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, args, len)
                         }
                     }
                 }
-                BcOp::MethodDef(id, fid) => {
-                    eprintln!("define {:?}: {:?}", id, fid)
+                BcOp::MethodDef(id) => {
+                    let MethodDefInfo { name, func } = self.method_def_info[*id].clone();
+                    let name = globals.get_name(name);
+                    eprintln!("define {:?}: {:?}", name, func)
                 }
             }
         }
@@ -1092,6 +1120,31 @@ impl NormalFuncInfo {
         }
     }
 
+    fn add_callsite(
+        &mut self,
+        name: IdentId,
+        ret: Option<BcReg>,
+        args: BcTemp,
+        len: usize,
+    ) -> usize {
+        let info = CallsiteInfo {
+            name,
+            ret: ret.map(|ret| self.get_index(&ret)),
+            args: self.get_index(&BcReg::from(args)),
+            len: len as u16,
+        };
+        let id = self.callsite_info.len();
+        self.callsite_info.push(info);
+        id
+    }
+
+    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> usize {
+        let info = MethodDefInfo { name, func };
+        let id = self.method_def_info.len();
+        self.method_def_info.push(info);
+        id
+    }
+
     pub fn ir_to_bytecode(&mut self, ir: IrContext, id_store: &IdentifierTable) {
         let mut ops = vec![];
         for inst in &ir.ir {
@@ -1166,16 +1219,13 @@ impl NormalFuncInfo {
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
-                BcIr::FnCall(id, ret, arg, len) => BcOp::FnCall(
-                    *id,
-                    match ret {
-                        Some(ret) => self.get_index(ret),
-                        None => u16::MAX,
-                    },
-                    self.get_index(&BcReg::from(*arg)),
-                    *len as u16,
-                ),
-                BcIr::MethodDef(name, func_id) => BcOp::MethodDef(*name, *func_id),
+                BcIr::FnCall(id, ret, args, len) => {
+                    let id = self.add_callsite(*id, *ret, *args, *len);
+                    BcOp::FnCall(id)
+                }
+                BcIr::MethodDef(name, func_id) => {
+                    BcOp::MethodDef(self.add_method_def(*name, *func_id))
+                }
             };
             ops.push(op);
         }

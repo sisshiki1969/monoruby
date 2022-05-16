@@ -257,7 +257,7 @@ impl Interp {
                 BcOp::Mov(dst, local) => {
                     self[dst] = self[local];
                 }
-                BcOp::FnCall(name, ret, args, len) => {
+                BcOp::FnCall(id) => {
                     fn check_arity(arity: usize, len: u16) -> Result<()> {
                         if arity != len as usize {
                             Err(MonorubyErr::WrongArguments(format!(
@@ -268,7 +268,12 @@ impl Interp {
                             Ok(())
                         }
                     }
-                    let ret = if ret == u16::MAX { None } else { Some(ret) };
+                    let CallsiteInfo {
+                        name,
+                        ret,
+                        args,
+                        len,
+                    } = globals.func[self.cur_fn].as_normal().callsite_info[id].clone();
                     let func_id = match self.get_method(globals, name) {
                         Some(id) => id,
                         None => return Err(MonorubyErr::MethodNotFound(name)),
@@ -307,8 +312,10 @@ impl Interp {
                         self.pc = self.pc_top + else_;
                     };
                 }
-                BcOp::MethodDef(id, fid) => {
-                    globals.func.insert(id, fid);
+                BcOp::MethodDef(id) => {
+                    let MethodDefInfo { name, func } =
+                        globals.func[self.cur_fn].as_normal().method_def_info[id];
+                    globals.func.insert(name, func);
                 }
             }
         }
