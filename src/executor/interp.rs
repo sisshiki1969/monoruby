@@ -5,7 +5,7 @@ use super::*;
 /// Program counter base.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct BcPcBase(*const BcOp);
+struct BcPcBase(*const u64);
 
 impl std::ops::Add<usize> for BcPcBase {
     type Output = BcPc;
@@ -31,7 +31,7 @@ impl BcPcBase {
 /// Program counter
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct BcPc(*const BcOp);
+struct BcPc(*const u64);
 
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
@@ -51,8 +51,8 @@ impl std::ops::AddAssign<usize> for BcPc {
 }
 
 impl BcPc {
-    fn get(&self) -> BcOp {
-        unsafe { (*(self.0)).clone() }
+    fn get(&self) -> u64 {
+        unsafe { *(self.0) }
     }
 }
 
@@ -111,7 +111,7 @@ impl Interp {
     fn get_op(&mut self) -> BcOp {
         let op = self.pc.get();
         self.pc += 1;
-        op
+        BcOp::from_u64(op)
     }
 
     pub fn get_method(&self, globals: &Globals, name: IdentId) -> Option<FuncId> {

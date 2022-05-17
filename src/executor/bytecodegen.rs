@@ -250,7 +250,7 @@ pub struct CallsiteInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct CallsiteId(u32);
+pub struct CallsiteId(pub u32);
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MethodDefInfo {
@@ -260,7 +260,7 @@ pub struct MethodDefInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct MethodDefId(u32);
+pub struct MethodDefId(pub u32);
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct NormalFuncInfo {
@@ -268,7 +268,7 @@ pub(super) struct NormalFuncInfo {
     pub(super) id: FuncId,
     name_id: Option<IdentId>,
     /// Bytecode.
-    bytecode: Vec<BcOp>,
+    bytecode: Vec<u64>,
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
@@ -328,7 +328,7 @@ impl NormalFuncInfo {
     }
 
     /// get bytecode.
-    pub(super) fn bytecode(&self) -> &Vec<BcOp> {
+    pub(super) fn bytecode(&self) -> &Vec<u64> {
         &self.bytecode
     }
 
@@ -465,7 +465,7 @@ impl NormalFuncInfo {
         );
         for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
-            match inst {
+            match BcOp::from_u64(*inst) {
                 BcOp::Br(dst) => {
                     eprintln!("br =>{:?}", dst);
                 }
@@ -535,7 +535,7 @@ impl NormalFuncInfo {
                         ret,
                         args,
                         len,
-                    } = self[*id].clone();
+                    } = self[id];
                     let name = globals.get_name(name);
                     match ret {
                         None => {
@@ -547,7 +547,7 @@ impl NormalFuncInfo {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = self[*id].clone();
+                    let MethodDefInfo { name, func } = self[id];
                     let name = globals.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
@@ -1249,7 +1249,7 @@ impl NormalFuncInfo {
                     BcOp::MethodDef(self.add_method_def(*name, *func_id))
                 }
             };
-            ops.push(op);
+            ops.push(op.to_u64());
         }
         self.bytecode = ops;
         #[cfg(feature = "emit-bc")]

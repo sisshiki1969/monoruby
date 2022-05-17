@@ -350,194 +350,194 @@ impl JitGen {
         self.prologue(func.total_reg_num());
         for (idx, op) in func.bytecode().iter().enumerate() {
             self.jit.bind_label(labels[idx]);
-            match op {
+            match BcOp::from_u64(*op) {
                 BcOp::Integer(ret, i) => {
-                    let i = Value::integer(*i).get();
+                    let i = Value::integer(i).get();
                     monoasm!(self.jit,
-                      movq [rbp - (conv(*ret))], (i);
+                      movq [rbp - (conv(ret))], (i);
                     );
                 }
                 BcOp::Const(ret, id) => {
-                    let v = func.get_constant(*id).get();
+                    let v = func.get_constant(id).get();
                     monoasm!(self.jit,
                       movq rax, (v);
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Nil(ret) => {
                     let v = Value::nil().get();
                     monoasm!(self.jit,
                       movq rax, (v);
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Neg(dst, src) => {
                     monoasm!(self.jit,
-                      movq rdi, [rbp - (conv(*src))];
+                      movq rdi, [rbp - (conv(src))];
                       movq rax, (neg_value);
                       call rax;
-                      movq [rbp - (conv(*dst))], rax;
+                      movq [rbp - (conv(dst))], rax;
                     );
                 }
                 BcOp::Add(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    self.generic_add(generic, exit, *ret);
+                    self.generic_add(generic, exit, ret);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(*rhs as i32).get();
+                    let rhs = Value::integer(rhs as i32).get();
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
+                        movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.generic_add(generic, exit, *ret);
+                    self.generic_add(generic, exit, ret);
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    self.generic_sub(generic, exit, *ret);
+                    self.generic_sub(generic, exit, ret);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(*rhs as i32).get();
+                    let rhs = Value::integer(rhs as i32).get();
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
+                        movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.generic_sub(generic, exit, *ret);
+                    self.generic_sub(generic, exit, ret);
                 }
 
                 BcOp::Mul(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (mul_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Div(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (div_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Eq(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_eq_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Ne(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_ne_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Ge(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_ge_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Gt(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_gt_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Le(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_le_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Lt(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_lt_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Eqri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_eq_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, seteq rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Neri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_ne_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setne rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Geri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_ge_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setge rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Gtri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_gt_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setgt rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Leri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_le_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setle rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Ltri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_lt_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setlt rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,
-                      movq rax, [rbp - (conv(*src))];
-                      movq [rbp - (conv(*dst))], rax;
+                      movq rax, [rbp - (conv(src))];
+                      movq [rbp - (conv(dst))], rax;
                     );
                 }
                 BcOp::Ret(lhs) => {
-                    let lhs = conv(*lhs);
+                    let lhs = conv(lhs);
                     monoasm!(self.jit,
                         movq rax, [rbp - (lhs)];
                     );
@@ -566,7 +566,7 @@ impl JitGen {
                         ret,
                         args,
                         len,
-                    } = func[*id].clone();
+                    } = func[id];
                     for i in 0..len {
                         let reg = args + i;
                         monoasm!(self.jit,
@@ -618,7 +618,7 @@ impl JitGen {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = func[*id];
+                    let MethodDefInfo { name, func } = func[id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;
@@ -637,7 +637,7 @@ impl JitGen {
                     );
                 }
                 BcOp::CondBr(cond_, then_) => {
-                    let cond_ = conv(*cond_);
+                    let cond_ = conv(cond_);
                     let dest = labels[then_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,
@@ -646,7 +646,7 @@ impl JitGen {
                     );
                 }
                 BcOp::CondNotBr(cond_, else_) => {
-                    let cond_ = conv(*cond_);
+                    let cond_ = conv(cond_);
                     let dest = labels[else_.0 as usize];
                     let false_val = Value::bool(false).get();
                     monoasm!(self.jit,
