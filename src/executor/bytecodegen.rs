@@ -246,6 +246,7 @@ pub struct CallsiteInfo {
     pub ret: Option<u16>,
     pub args: u16,
     pub len: u16,
+    pub cache: (usize, FuncId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +299,12 @@ impl std::ops::Index<CallsiteId> for NormalFuncInfo {
     type Output = CallsiteInfo;
     fn index(&self, index: CallsiteId) -> &CallsiteInfo {
         &self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<CallsiteId> for NormalFuncInfo {
+    fn index_mut(&mut self, index: CallsiteId) -> &mut CallsiteInfo {
+        &mut self.callsite_info[index.0 as usize]
     }
 }
 
@@ -535,6 +542,7 @@ impl NormalFuncInfo {
                         ret,
                         args,
                         len,
+                        cache: _,
                     } = self[id];
                     let name = globals.get_name(name);
                     match ret {
@@ -1154,6 +1162,7 @@ impl NormalFuncInfo {
             ret: ret.map(|ret| self.get_index(&ret)),
             args: self.get_index(&BcReg::from(args)),
             len: len as u16,
+            cache: (usize::MAX, FuncId::default()),
         };
         let id = self.callsite_info.len();
         self.callsite_info.push(info);

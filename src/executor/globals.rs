@@ -26,16 +26,12 @@ impl Globals {
         self.func.main.unwrap()
     }
 
-    pub fn get_ident_name(&self, id: IdentId) -> &str {
-        self.id_store.get_name(id)
-    }
-
     fn get_ident_id(&mut self, name: &str) -> IdentId {
         self.id_store.get_ident_id(name)
     }
 
-    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
-        self.func.get(name)
+    pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
+        self.func.get(name).cloned()
     }
 
     pub fn add_builtin_func(&mut self, name: &str, address: BuiltinFn, arity: usize) -> FuncId {

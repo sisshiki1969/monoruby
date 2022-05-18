@@ -66,6 +66,7 @@ pub struct Interp {
     call_stack: Stack,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
+    class_version: usize,
 }
 
 impl std::ops::Index<u16> for Interp {
@@ -105,6 +106,7 @@ impl Interp {
             call_stack: Stack::new(),
             jit_gen: JitGen::new(),
             error: None,
+            class_version: 0,
         }
     }
 
@@ -112,16 +114,6 @@ impl Interp {
         let op = self.pc.get();
         self.pc += 1;
         BcOp::from_u64(op)
-    }
-
-    pub fn get_method(&self, globals: &Globals, name: IdentId) -> Option<FuncId> {
-        globals.func.get(name).map_or_else(
-            || {
-                eprintln!("undefined method {:?}.", globals.get_ident_name(name));
-                None
-            },
-            |id| Some(*id),
-        )
     }
 
     fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
@@ -273,10 +265,19 @@ impl Interp {
                         ret,
                         args,
                         len,
+                        cache: (version, cached_func),
                     } = globals.func[self.cur_fn].as_normal()[id];
-                    let func_id = match self.get_method(globals, name) {
-                        Some(id) => id,
-                        None => return Err(MonorubyErr::MethodNotFound(name)),
+                    let func_id = if version == self.class_version {
+                        cached_func
+                    } else {
+                        match globals.get_method(name) {
+                            Some(func_id) => {
+                                globals.func[self.cur_fn].as_normal_mut()[id].cache =
+                                    (self.class_version, func_id);
+                                func_id
+                            }
+                            None => return Err(MonorubyErr::MethodNotFound(name)),
+                        }
                     };
                     let info = &globals.func[func_id];
                     check_arity(info.arity(), len)?;
@@ -315,6 +316,7 @@ impl Interp {
                 BcOp::MethodDef(id) => {
                     let MethodDefInfo { name, func } = globals.func[self.cur_fn].as_normal()[id];
                     globals.func.insert(name, func);
+                    self.class_version += 1;
                 }
             }
         }

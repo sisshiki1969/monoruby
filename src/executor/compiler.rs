@@ -40,7 +40,7 @@ extern "C" fn get_func_absolute_address(
     args_len: usize,
 ) -> *const u8 {
     let func_id = match globals.get_method(func_name) {
-        Some(id) => *id,
+        Some(id) => id,
         None => {
             interp.error = Some(MonorubyErr::MethodNotFound(func_name));
             return std::ptr::null();
@@ -566,6 +566,7 @@ impl JitGen {
                         ret,
                         args,
                         len,
+                        ..
                     } = func[id];
                     for i in 0..len {
                         let reg = args + i;
