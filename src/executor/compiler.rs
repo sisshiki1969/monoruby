@@ -47,7 +47,7 @@ extern "C" fn get_func_absolute_address(
         }
     };
 
-    let info = &mut globals.func[func_id];
+    let info = &globals.func[func_id];
     let arity = info.arity();
     if arity != args_len {
         interp.error = Some(MonorubyErr::WrongArguments(format!(
@@ -58,7 +58,12 @@ extern "C" fn get_func_absolute_address(
     }
     let jit_label = match info.jit_label() {
         Some(dest) => dest,
-        None => interp.jit_gen.jit_compile(info),
+        None => {
+            let mut info = std::mem::take(&mut globals.func[func_id]);
+            let label = interp.jit_gen.jit_compile(&mut info, &globals.func);
+            globals.func[func_id] = info;
+            label
+        }
     };
     interp.jit_gen.jit.get_label_absolute_address(jit_label)
 }
@@ -262,7 +267,9 @@ impl JitGen {
 
     pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
         let main_id = globals.get_main_func();
-        let main = self.jit_compile(&mut globals.func[main_id]);
+        let mut info = std::mem::take(&mut globals.func[main_id]);
+        let main = self.jit_compile(&mut info, &globals.func);
+        globals.func[main_id] = info;
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:
@@ -281,13 +288,13 @@ impl JitGen {
         self.jit.get_label_addr2(entry)
     }
 
-    fn jit_compile(&mut self, func: &mut FuncInfo) -> DestLabel {
+    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> DestLabel {
         let now = Instant::now();
         let label = self.jit.label();
         func.set_jit_label(label);
         self.jit.bind_label(label);
         match &func.kind {
-            FuncKind::Normal(info) => self.jit_compile_normal(info),
+            FuncKind::Normal(info) => self.jit_compile_normal(info, store),
             FuncKind::Builtin { abs_address } => {
                 self.jit_compile_builtin(*abs_address, func.arity())
             }
@@ -342,7 +349,7 @@ impl JitGen {
         );
     }
 
-    fn jit_compile_normal(&mut self, func: &NormalFuncInfo) {
+    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) {
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
@@ -567,7 +574,7 @@ impl JitGen {
                         args,
                         len,
                         ..
-                    } = func[id];
+                    } = store[id];
                     for i in 0..len {
                         let reg = args + i;
                         monoasm!(self.jit,
@@ -619,7 +626,7 @@ impl JitGen {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = func[id];
+                    let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;

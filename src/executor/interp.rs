@@ -266,14 +266,13 @@ impl Interp {
                         args,
                         len,
                         cache: (version, cached_func),
-                    } = globals.func[self.cur_fn].as_normal()[id];
+                    } = globals.func[id];
                     let func_id = if version == self.class_version {
                         cached_func
                     } else {
                         match globals.get_method(name) {
                             Some(func_id) => {
-                                globals.func[self.cur_fn].as_normal_mut()[id].cache =
-                                    (self.class_version, func_id);
+                                globals.func[id].cache = (self.class_version, func_id);
                                 func_id
                             }
                             None => return Err(MonorubyErr::MethodNotFound(name)),
@@ -314,7 +313,7 @@ impl Interp {
                     };
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = globals.func[self.cur_fn].as_normal()[id];
+                    let MethodDefInfo { name, func } = globals.func[id];
                     globals.func.insert(name, func);
                     self.class_version += 1;
                 }

@@ -56,11 +56,38 @@ impl Funcs {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallsiteInfo {
+    pub name: IdentId,
+    pub ret: Option<u16>,
+    pub args: u16,
+    pub len: u16,
+    pub cache: (usize, FuncId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct CallsiteId(pub u32);
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MethodDefInfo {
+    pub name: IdentId,
+    pub func: FuncId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct MethodDefId(pub u32);
+
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
     func_map: HashMap<IdentId, FuncId>,
     pub main: Option<FuncId>,
+    /// method define info.
+    method_def_info: Vec<MethodDefInfo>,
+    /// callsite info.
+    callsite_info: Vec<CallsiteInfo>,
 }
 
 impl std::ops::Index<FuncId> for FnStore {
@@ -76,12 +103,34 @@ impl std::ops::IndexMut<FuncId> for FnStore {
     }
 }
 
+impl std::ops::Index<MethodDefId> for FnStore {
+    type Output = MethodDefInfo;
+    fn index(&self, index: MethodDefId) -> &MethodDefInfo {
+        &self.method_def_info[index.0 as usize]
+    }
+}
+
+impl std::ops::Index<CallsiteId> for FnStore {
+    type Output = CallsiteInfo;
+    fn index(&self, index: CallsiteId) -> &CallsiteInfo {
+        &self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<CallsiteId> for FnStore {
+    fn index_mut(&mut self, index: CallsiteId) -> &mut CallsiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
+}
+
 impl FnStore {
     pub fn new() -> Self {
         Self {
             functions: Funcs::new(),
             func_map: HashMap::default(),
             main: None,
+            method_def_info: vec![],
+            callsite_info: vec![],
         }
     }
 
@@ -95,6 +144,13 @@ impl FnStore {
 
     fn len(&self) -> usize {
         self.functions.0.len()
+    }
+
+    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> MethodDefId {
+        let info = MethodDefInfo { name, func };
+        let id = self.method_def_info.len();
+        self.method_def_info.push(info);
+        MethodDefId(id as u32)
     }
 }
 
@@ -115,7 +171,7 @@ impl FnStore {
     fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let ir = info.compile_ast(&mut self.functions)?;
-        info.ir_to_bytecode(ir, id_store);
+        info.ir_to_bytecode(ir, id_store, self);
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         Ok(())
     }
@@ -138,7 +194,13 @@ pub(super) enum FuncKind {
     Builtin { abs_address: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl std::default::Default for FuncKind {
+    fn default() -> Self {
+        Self::Builtin { abs_address: 0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FuncInfo {
     /// ID of this function.
     id: FuncId,
@@ -241,29 +303,6 @@ impl IrContext {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct CallsiteInfo {
-    pub name: IdentId,
-    pub ret: Option<u16>,
-    pub args: u16,
-    pub len: u16,
-    pub cache: (usize, FuncId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct CallsiteId(pub u32);
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct MethodDefInfo {
-    pub name: IdentId,
-    pub func: FuncId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct MethodDefId(pub u32);
-
-#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
@@ -280,32 +319,8 @@ pub(super) struct NormalFuncInfo {
     reg_num: u16,
     /// literal values.
     literals: Vec<Value>,
-    /// callsite info.
-    callsite_info: Vec<CallsiteInfo>,
-    /// method define info.
-    method_def_info: Vec<MethodDefInfo>,
     /// AST.
     ast: Option<Node>,
-}
-
-impl std::ops::Index<MethodDefId> for NormalFuncInfo {
-    type Output = MethodDefInfo;
-    fn index(&self, index: MethodDefId) -> &MethodDefInfo {
-        &self.method_def_info[index.0 as usize]
-    }
-}
-
-impl std::ops::Index<CallsiteId> for NormalFuncInfo {
-    type Output = CallsiteInfo;
-    fn index(&self, index: CallsiteId) -> &CallsiteInfo {
-        &self.callsite_info[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<CallsiteId> for NormalFuncInfo {
-    fn index_mut(&mut self, index: CallsiteId) -> &mut CallsiteInfo {
-        &mut self.callsite_info[index.0 as usize]
-    }
 }
 
 impl NormalFuncInfo {
@@ -319,8 +334,6 @@ impl NormalFuncInfo {
             temp: 0,
             reg_num: 0,
             literals: vec![],
-            callsite_info: vec![],
-            method_def_info: vec![],
             ast: Some(ast),
         };
         args.into_iter().for_each(|name| {
@@ -456,7 +469,7 @@ impl NormalFuncInfo {
         self.gen_mov(ir, lhs.into(), rhs);
     }
 
-    fn dump(&self, globals: &IdentifierTable) {
+    fn dump(&self, globals: &IdentifierTable, store: &FnStore) {
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?}",
@@ -543,7 +556,7 @@ impl NormalFuncInfo {
                         args,
                         len,
                         cache: _,
-                    } = self[id];
+                    } = store[id];
                     let name = globals.get_name(name);
                     match ret {
                         None => {
@@ -555,7 +568,7 @@ impl NormalFuncInfo {
                     }
                 }
                 BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = self[id];
+                    let MethodDefInfo { name, func } = store[id];
                     let name = globals.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
@@ -1151,7 +1164,8 @@ impl NormalFuncInfo {
     }
 
     fn add_callsite(
-        &mut self,
+        &self,
+        store: &mut FnStore,
         name: IdentId,
         ret: Option<BcReg>,
         args: BcTemp,
@@ -1164,19 +1178,17 @@ impl NormalFuncInfo {
             len: len as u16,
             cache: (usize::MAX, FuncId::default()),
         };
-        let id = self.callsite_info.len();
-        self.callsite_info.push(info);
+        let id = store.callsite_info.len();
+        store.callsite_info.push(info);
         CallsiteId(id as u32)
     }
 
-    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> MethodDefId {
-        let info = MethodDefInfo { name, func };
-        let id = self.method_def_info.len();
-        self.method_def_info.push(info);
-        MethodDefId(id as u32)
-    }
-
-    pub fn ir_to_bytecode(&mut self, ir: IrContext, id_store: &IdentifierTable) {
+    pub fn ir_to_bytecode(
+        &mut self,
+        ir: IrContext,
+        id_store: &IdentifierTable,
+        store: &mut FnStore,
+    ) {
         let mut ops = vec![];
         for inst in &ir.ir {
             let op = match inst {
@@ -1251,17 +1263,17 @@ impl NormalFuncInfo {
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
                 BcIr::FnCall(id, ret, args, len) => {
-                    let id = self.add_callsite(*id, *ret, *args, *len);
+                    let id = self.add_callsite(store, *id, *ret, *args, *len);
                     BcOp::FnCall(id)
                 }
                 BcIr::MethodDef(name, func_id) => {
-                    BcOp::MethodDef(self.add_method_def(*name, *func_id))
+                    BcOp::MethodDef(store.add_method_def(*name, *func_id))
                 }
             };
             ops.push(op.to_u64());
         }
         self.bytecode = ops;
         #[cfg(feature = "emit-bc")]
-        self.dump(id_store);
+        self.dump(id_store, store);
     }
 }
