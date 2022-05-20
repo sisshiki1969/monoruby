@@ -469,4 +469,13 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test10() {
+        run_test(
+            r#"
+            59
+        "#,
+        );
+    }
 }

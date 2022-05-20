@@ -13,9 +13,9 @@ pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Opt
 /// This generates x86-64 machine code from a bytecode.
 ///
 pub struct JitGen {
-    jit: JitMemory,
+    pub jit: JitMemory,
     class_version: DestLabel,
-    entry_panic: DestLabel,
+    pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
     entry_return: DestLabel,
 }
