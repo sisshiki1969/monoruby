@@ -1,5 +1,7 @@
 use super::compiler::JitGen;
 use super::*;
+use monoasm::*;
+use monoasm_macro::monoasm;
 
 ///
 /// Program counter base.
@@ -82,12 +84,70 @@ impl std::ops::IndexMut<u16> for Interp {
     }
 }
 
+fn conv(reg: u16) -> i64 {
+    reg as i64 * 8 + 16
+}
+
 impl Interp {
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
-        eval.push_frame(0, 0, main, None);
-        eval.eval_loop(globals)
+        //eval.push_frame(0, 0, main, None);
+        //eval.eval_loop(globals)
+        let bc_top = BcPcBase::new(main);
+        let bc_pc = bc_top + 0;
+        let entry = eval.jit_gen.jit.label();
+        let loop_ = eval.jit_gen.jit.label();
+        let integer = eval.jit_gen.jit.label();
+        let ret = eval.jit_gen.jit.label();
+        let entry_panic = eval.jit_gen.entry_panic;
+        let regs = main.total_reg_num();
+        monoasm! {
+            eval.jit_gen.jit,
+        entry:
+            pushq rbp;
+            movq rbp, rsp;
+            subq rsp, (((regs + 1) & (-2i64 as usize)) * 8);
+            movq r8, (bc_pc.0);
+        loop_:
+            movq rax, [r8]; // rax <- :0:1:2:3
+            movl rsi, rax;  // rsi <- :2:3
+            shrq rax, 32;
+            movl rdi, rax;  // rdi <- :0:1
+            andq rdi, 0xffff;   // rdi <- :1
+            shrq rax, 16;
+            andq rax, 0xffff;   // rax <- :0
+            cmpq rax, 6;
+            jeq integer;
+            cmpq rax, 148;
+            jeq ret;
+            jmp entry_panic;
+        integer:
+            shlq rsi, 1;
+            addq rsi, 1;
+            shlq rdi, 3;
+            //addq rdi, 16;
+            movq rax, rbp;
+            subq rax, rdi;
+            movq [rax - 16], rsi;
+            addq r8, 8;
+            jmp loop_;
+        ret:
+            shlq rdi, 3;
+            //addq rdi, 16;
+            movq rax, rbp;
+            subq rax, rdi;
+            movq rax, [rax - 16];
+            leave;
+            ret;
+        };
+        eval.jit_gen.jit.finalize();
+        let addr: fn() -> Option<Value> =
+            unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
+        match addr() {
+            Some(val) => Ok(val),
+            None => Err(MonorubyErr::Unimplemented(format!("_"))),
+        }
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
