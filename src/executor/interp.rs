@@ -88,7 +88,14 @@ impl std::ops::IndexMut<u16> for Interp {
     reg as i64 * 8 + 16
 }*/
 
-extern "C" fn setup_func(_interp: &mut Interp, globals: &mut Globals, func_id: FuncId) {}
+extern "C" fn get_constant(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    func_id: FuncId,
+    const_id: u32,
+) -> Value {
+    globals.func[func_id].as_normal().get_constant(const_id)
+}
 
 impl Interp {
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
@@ -101,84 +108,103 @@ impl Interp {
         let fn_entry = eval.jit_gen.jit.label();
         let loop_ = eval.jit_gen.jit.label();
         let integer = eval.jit_gen.jit.label();
+        let constant = eval.jit_gen.jit.label();
         let addri = eval.jit_gen.jit.label();
+        let addrr = eval.jit_gen.jit.label();
         let ret = eval.jit_gen.jit.label();
         let entry_panic = eval.jit_gen.entry_panic;
         let regs = main.total_reg_num();
         monoasm! {
             eval.jit_gen.jit,
         entry:
-            pushq rbp;
             pushq rbx;
             pushq r12;
-            movq rbx, rdi;
-            movq r12, rsi;
+            pushq r13;
+            pushq r14;
+            pushq r15;
+            movq rbx, rdi;  // rbx: &mut Interp
+            movq r12, rsi;  // r12: &mut Globals
             call fn_entry;
+            popq r15;
+            popq r14;
+            popq r13;
             popq r12;
             popq rbx;
-            popq rbp;
             ret;
         fn_entry:
             pushq rbp;
             movq rbp, rsp;
             subq rsp, (((regs + 1) & (-2i64 as usize)) * 8);
-            movq r8, (bc_pc.0);
-            //movq rsi, 0xffff_ffff_ffff_ffff;
+            movq r13, (bc_pc.0);    // r13: BcPc
         loop_:
-            movq rax, [r8]; // rax <- :0:1:2:3
-            addq r8, 8;
-            movl rsi, rax;  // rsi <- :2:3
+        // fetch instruction and decode
+            movq rax, [r13]; // rax <- :0:1:2:3
+            addq r13, 8;
+            movl rdi, rax;  // rdi <- :2:3
             shrq rax, 32;
-            movzxw rdi, rax;  // rdi <- :1
+            movzxw r15, rax;  // r15 <- :1
             shrq rax, 16;
             movzxw rax, rax;   // rax <- :0
+        // dispatch
             cmpq rax, 6;
             jeq integer;
+            cmpq rax, 7;
+            jeq constant;
+
+            movsxw rsi, rdi;    // rsi <- :3
+            shrq rdi, 16;
+            movzxw rdi, rdi;    // rdi <- :2
+
+            cmpq rax, 130;
+            jeq addrr;
             cmpq rax, 140;
             jeq addri;
             cmpq rax, 148;
             jeq ret;
             call entry_panic;
         };
+
+        //BcOp::Integer
+        eval.jit_gen.jit.bind_label(integer);
+        eval.vm_get_addr_r15();
         monoasm! {
             eval.jit_gen.jit,
-        integer:
-            shlq rsi, 1;
-            addq rsi, 1;
-        };
-        eval.vm_get_addr_rdi();
-        monoasm! {
-            eval.jit_gen.jit,
-            movq [rdi], rsi;
+            shlq rdi, 1;
+            addq rdi, 1;
+            movq [r15], rdi;
             jmp loop_;
         };
-        eval.jit_gen.jit.bind_label(ret);
-        eval.vm_get_addr_rdi();
+
+        //BcOp::Const
+        eval.jit_gen.jit.bind_label(constant);
+        eval.vm_get_addr_r15();
         monoasm! {
             eval.jit_gen.jit,
-            movq rax, [rdi];
+            movq rcx, rdi;  // const_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rdx, (main_id.0);  // FuncId
+            movq rax, (get_constant);
+            call rax;
+            movq [r15], rax;
+            jmp loop_;
+        };
+
+        //BcOp::Ret
+        eval.jit_gen.jit.bind_label(ret);
+        eval.vm_get_addr_r15();
+        monoasm! {
+            eval.jit_gen.jit,
+            movq rax, [r15];
             leave;
             ret;
         };
-        monoasm! {
-            eval.jit_gen.jit,
-        addri:
-            movsxw rdx, rsi;    // rdx <- :3
-            shrq rsi, 16;
-            movzxw rsi, rsi;    // rsi <- :2
-        };
-        eval.vm_get_addr_rsi();
-        eval.vm_get_addr_rdi();
-        monoasm! {
-            eval.jit_gen.jit,
-            shlq rdx, 1;
-            movq rsi, [rsi];
-            testq rsi, 0x1;
-            jeq entry_panic;
-            addq rsi, rdx;
-            movq [rdi], rsi;
-            jmp loop_;
-        };
+
+        //BcOp::Addri
+        eval.vm_addri(addri, loop_);
+        //BcOp::Addrr
+        eval.vm_addrr(addrr, loop_);
+
         eval.jit_gen.jit.finalize();
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
             unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
@@ -215,6 +241,74 @@ impl Interp {
             addq rsi, 16;
             negq rsi;
             addq rsi, rbp;
+        };
+    }
+
+    /// Get absolute address of the register.
+    /// #### @args
+    /// - *r15*: register number
+    /// #### @return
+    /// - *r15*: absolute address of the register
+    fn vm_get_addr_r15(&mut self) {
+        monoasm! {
+            self.jit_gen.jit,
+            shlq r15, 3;
+            addq r15, 16;
+            negq r15;
+            addq r15, rbp;
+        };
+    }
+
+    fn vm_addri(&mut self, addri: DestLabel, loop_: DestLabel) {
+        self.jit_gen.jit.bind_label(addri);
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! {
+            self.jit_gen.jit,
+            shlq rsi, 1;
+            movq rdi, [rdi];
+            testq rdi, 0x1;
+            jeq generic;
+            addq rdi, rsi;
+            movq [r15], rdi;
+            jmp loop_;
+        generic:
+            // generic path
+            addq rsi, 1;
+            movq rax, (add_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+            jmp loop_;
+        };
+    }
+
+    fn vm_addrr(&mut self, addrr: DestLabel, loop_: DestLabel) {
+        self.jit_gen.jit.bind_label(addrr);
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! {
+            self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic;
+            testq rsi, 0x1;
+            jeq generic;
+            subq rdi, 1;
+            addq rdi, rsi;
+            movq [r15], rdi;
+            jmp loop_;
+        generic:
+            // generic path
+            movq rax, (add_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+            jmp loop_;
         };
     }
 
