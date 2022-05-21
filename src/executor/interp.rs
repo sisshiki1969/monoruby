@@ -84,21 +84,24 @@ impl std::ops::IndexMut<u16> for Interp {
     }
 }
 
-fn conv(reg: u16) -> i64 {
+/*fn conv(reg: u16) -> i64 {
     reg as i64 * 8 + 16
-}
+}*/
+
+extern "C" fn setup_func(_interp: &mut Interp, globals: &mut Globals, func_id: FuncId) {}
 
 impl Interp {
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
-        let main = globals.func[globals.get_main_func()].as_normal();
+        let main_id = globals.get_main_func();
+        let main = globals.func[main_id].as_normal();
         let mut eval = Self::new(main);
-        //eval.push_frame(0, 0, main, None);
-        //eval.eval_loop(globals)
         let bc_top = BcPcBase::new(main);
         let bc_pc = bc_top + 0;
         let entry = eval.jit_gen.jit.label();
+        let fn_entry = eval.jit_gen.jit.label();
         let loop_ = eval.jit_gen.jit.label();
         let integer = eval.jit_gen.jit.label();
+        let addri = eval.jit_gen.jit.label();
         let ret = eval.jit_gen.jit.label();
         let entry_panic = eval.jit_gen.entry_panic;
         let regs = main.total_reg_num();
@@ -106,48 +109,113 @@ impl Interp {
             eval.jit_gen.jit,
         entry:
             pushq rbp;
+            pushq rbx;
+            pushq r12;
+            movq rbx, rdi;
+            movq r12, rsi;
+            call fn_entry;
+            popq r12;
+            popq rbx;
+            popq rbp;
+            ret;
+        fn_entry:
+            pushq rbp;
             movq rbp, rsp;
             subq rsp, (((regs + 1) & (-2i64 as usize)) * 8);
             movq r8, (bc_pc.0);
+            //movq rsi, 0xffff_ffff_ffff_ffff;
         loop_:
             movq rax, [r8]; // rax <- :0:1:2:3
+            addq r8, 8;
             movl rsi, rax;  // rsi <- :2:3
             shrq rax, 32;
-            movl rdi, rax;  // rdi <- :0:1
-            andq rdi, 0xffff;   // rdi <- :1
+            movzxw rdi, rax;  // rdi <- :1
             shrq rax, 16;
-            andq rax, 0xffff;   // rax <- :0
+            movzxw rax, rax;   // rax <- :0
             cmpq rax, 6;
             jeq integer;
+            cmpq rax, 140;
+            jeq addri;
             cmpq rax, 148;
             jeq ret;
-            jmp entry_panic;
+            call entry_panic;
+        };
+        monoasm! {
+            eval.jit_gen.jit,
         integer:
             shlq rsi, 1;
             addq rsi, 1;
-            shlq rdi, 3;
-            //addq rdi, 16;
-            movq rax, rbp;
-            subq rax, rdi;
-            movq [rax - 16], rsi;
-            addq r8, 8;
+        };
+        eval.vm_get_addr_rdi();
+        monoasm! {
+            eval.jit_gen.jit,
+            movq [rdi], rsi;
             jmp loop_;
-        ret:
-            shlq rdi, 3;
-            //addq rdi, 16;
-            movq rax, rbp;
-            subq rax, rdi;
-            movq rax, [rax - 16];
+        };
+        eval.jit_gen.jit.bind_label(ret);
+        eval.vm_get_addr_rdi();
+        monoasm! {
+            eval.jit_gen.jit,
+            movq rax, [rdi];
             leave;
             ret;
         };
+        monoasm! {
+            eval.jit_gen.jit,
+        addri:
+            movsxw rdx, rsi;    // rdx <- :3
+            shrq rsi, 16;
+            movzxw rsi, rsi;    // rsi <- :2
+        };
+        eval.vm_get_addr_rsi();
+        eval.vm_get_addr_rdi();
+        monoasm! {
+            eval.jit_gen.jit,
+            shlq rdx, 1;
+            movq rsi, [rsi];
+            testq rsi, 0x1;
+            jeq entry_panic;
+            addq rsi, rdx;
+            movq [rdi], rsi;
+            jmp loop_;
+        };
         eval.jit_gen.jit.finalize();
-        let addr: fn() -> Option<Value> =
+        let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
             unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
-        match addr() {
+        match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
             None => Err(MonorubyErr::Unimplemented(format!("_"))),
         }
+    }
+
+    /// Get absolute address of the register.
+    /// #### @args
+    /// - *rdi*: register number
+    /// #### @return
+    /// - *rdi*: absolute address of the register
+    fn vm_get_addr_rdi(&mut self) {
+        monoasm! {
+            self.jit_gen.jit,
+            shlq rdi, 3;
+            addq rdi, 16;
+            negq rdi;
+            addq rdi, rbp;
+        };
+    }
+
+    /// Get absolute address of the register.
+    /// #### @args
+    /// - *rsi*: register number
+    /// #### @return
+    /// - *rsi*: absolute address of the register
+    fn vm_get_addr_rsi(&mut self) {
+        monoasm! {
+            self.jit_gen.jit,
+            shlq rsi, 3;
+            addq rsi, 16;
+            negq rsi;
+            addq rsi, rbp;
+        };
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
