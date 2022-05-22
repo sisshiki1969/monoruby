@@ -161,7 +161,7 @@ pub fn run_test(code: &str) {
 
     let ruby_res = run_ruby(&all_codes);
 
-    assert_eq!(interp_val.unpack(), ruby_res);
+    assert_eq!(jit_val.unpack(), ruby_res);
 }
 
 fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
@@ -474,7 +474,7 @@ mod test {
     fn test10() {
         run_test(
             r#"
-            59
+            if nil then 2*5/3 else 5 end
         "#,
         );
     }

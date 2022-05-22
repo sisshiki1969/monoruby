@@ -77,7 +77,7 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
-extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
+pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
@@ -365,16 +365,15 @@ impl JitGen {
                     );
                 }
                 BcOp::Const(ret, id) => {
-                    let v = func.get_constant(id).get();
+                    let v = func.get_literal(id).get();
                     monoasm!(self.jit,
                       movq rax, (v);
                       movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Nil(ret) => {
-                    let v = Value::nil().get();
                     monoasm!(self.jit,
-                      movq rax, (v);
+                      movq rax, (NIL_VALUE);
                       movq [rbp - (conv(ret))], rax;
                     );
                 }
@@ -638,27 +637,29 @@ impl JitGen {
                         call rax;
                     );
                 }
-                BcOp::Br(next_pc) => {
-                    let dest = labels[next_pc.0 as usize];
+                BcOp::Br(disp) => {
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                       jmp dest;
                     );
                 }
-                BcOp::CondBr(cond_, then_) => {
+                BcOp::CondBr(cond_, disp) => {
                     let cond_ = conv(cond_);
-                    let dest = labels[then_.0 as usize];
-                    let false_val = Value::bool(false).get();
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      cmpq [rbp - (cond_)], (false_val);
+                      cmpq rax, [rbp - (cond_)];
+                      orq rax, 0x10;
+                      cmpq rax, (FALSE_VALUE);
                       jne dest;
                     );
                 }
-                BcOp::CondNotBr(cond_, else_) => {
+                BcOp::CondNotBr(cond_, disp) => {
                     let cond_ = conv(cond_);
-                    let dest = labels[else_.0 as usize];
-                    let false_val = Value::bool(false).get();
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      cmpq [rbp - (cond_)], (false_val);
+                      cmpq rax, [rbp - (cond_)];
+                      orq rax, 0x10;
+                      cmpq rax, (FALSE_VALUE);
                       jeq dest;
                     );
                 }

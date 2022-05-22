@@ -76,7 +76,7 @@ macro_rules! eq_values {
 
 eq_values!(eq, ne);
 
-/*macro_rules! cmp_ri_values {
+macro_rules! cmp_ri_values {
     ($op:ident) => {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _ri_values>](lhs: Value, rhs: i64) -> Value {
@@ -93,9 +93,9 @@ eq_values!(eq, ne);
         cmp_ri_values!($op1);
         cmp_ri_values!($($op2),+);
     };
-}*/
+}
 
-//cmp_ri_values!(eq, ne, ge, gt, le, lt);
+cmp_ri_values!(eq, ne, ge, gt, le, lt);
 
 pub(super) extern "C" fn neg_value(lhs: Value) -> Value {
     match lhs.unpack() {

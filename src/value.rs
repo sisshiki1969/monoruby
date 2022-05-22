@@ -1,6 +1,6 @@
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
-const NIL_VALUE: u64 = 0x04; // 0000_0100
-const FALSE_VALUE: u64 = 0x14; // 0001_0100
+pub const NIL_VALUE: u64 = 0x04; // 0000_0100
+pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
                               //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
                               //const BOOL_MASK1: u64 = 0b0011_0000;

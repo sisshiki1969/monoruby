@@ -33,11 +33,11 @@ pub(super) enum BcIr {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BcOp {
     /// branch(dest)
-    Br(InstId),
+    Br(i32),
     /// conditional branch(%reg, dest)  : branch when reg was true.
-    CondBr(u16, InstId),
+    CondBr(u16, i32),
     /// conditional branch(%reg, dest)  : branch when reg was false.
-    CondNotBr(u16, InstId),
+    CondNotBr(u16, i32),
     /// integer(%reg, i32)
     Integer(u16, i32),
     /// constant(%ret, constant_id)
@@ -129,12 +129,12 @@ impl BcOp {
         match self {
             FnCall(op1) => enc_l(1, op1.0),
             MethodDef(op1) => enc_l(2, op1.0),
-            Br(op1) => enc_l(3, op1.0),
-            CondBr(op1, op2) => enc_wl(4, *op1, op2.0),
-            CondNotBr(op1, op2) => enc_wl(5, *op1, op2.0),
+            Br(op1) => enc_l(3, *op1 as u32),
+            CondBr(op1, op2) => enc_wl(4, *op1, *op2 as u32),
+            CondNotBr(op1, op2) => enc_wl(5, *op1, *op2 as u32),
             Integer(op1, op2) => enc_wl(6, *op1, *op2 as u32),
             Const(op1, op2) => enc_wl(7, *op1, *op2),
-            Nil(op1) => enc_w(128, *op1),
+            Nil(op1) => enc_w(8, *op1),
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
             Sub(op1, op2, op3) => enc_www(131, *op1, *op2, *op3),
@@ -166,17 +166,17 @@ impl BcOp {
             match opcode {
                 1 => Self::FnCall(CallsiteId(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
-                3 => Self::Br(InstId(op2)),
-                4 => Self::CondBr(op1, InstId(op2)),
-                5 => Self::CondNotBr(op1, InstId(op2)),
+                3 => Self::Br(op2 as i32),
+                4 => Self::CondBr(op1, op2 as i32),
+                5 => Self::CondNotBr(op1, op2 as i32),
                 6 => Self::Integer(op1, op2 as i32),
                 7 => Self::Const(op1, op2),
+                8 => Self::Nil(op1),
                 _ => unreachable!(),
             }
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
-                128 => Self::Nil(op1),
                 129 => Self::Neg(op1, op2),
                 130 => Self::Add(op1, op2, op3),
                 131 => Self::Sub(op1, op2, op3),

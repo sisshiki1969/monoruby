@@ -353,12 +353,12 @@ impl NormalFuncInfo {
     }
 
     /// get a constant.
-    pub(super) fn get_constant(&self, id: u32) -> Value {
+    pub(super) fn get_literal(&self, id: u32) -> Value {
         self.literals[id as usize]
     }
 
     /// register a new constant.
-    fn new_constant(&mut self, val: Value) -> u32 {
+    fn new_literal(&mut self, val: Value) -> u32 {
         let constants = self.literals.len();
         self.literals.push(val);
         constants as u32
@@ -421,7 +421,7 @@ impl NormalFuncInfo {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        let id = self.new_constant(v);
+        let id = self.new_literal(v);
         ir.push(BcIr::Const(reg, id));
     }
 
@@ -486,14 +486,14 @@ impl NormalFuncInfo {
         for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
             match BcOp::from_u64(*inst) {
-                BcOp::Br(dst) => {
-                    eprintln!("br =>{:?}", dst);
+                BcOp::Br(disp) => {
+                    eprintln!("br =>:{:05}", i as i32 + 1 + disp);
                 }
-                BcOp::CondBr(reg, dst) => {
-                    eprintln!("condbr %{} =>{:?}", reg, dst);
+                BcOp::CondBr(reg, disp) => {
+                    eprintln!("condbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
-                BcOp::CondNotBr(reg, dst) => {
-                    eprintln!("condnbr %{} =>{:?}", reg, dst);
+                BcOp::CondNotBr(reg, disp) => {
+                    eprintln!("condnbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
                 BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
@@ -1190,19 +1190,19 @@ impl NormalFuncInfo {
         store: &mut FnStore,
     ) {
         let mut ops = vec![];
-        for inst in &ir.ir {
+        for (idx, inst) in ir.ir.iter().enumerate() {
             let op = match inst {
                 BcIr::Br(dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::Br(dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::Br(dst - idx as i32 - 1)
                 }
                 BcIr::CondBr(reg, dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::CondBr(self.get_index(reg), dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::CondBr(self.get_index(reg), dst - idx as i32 - 1)
                 }
                 BcIr::CondNotBr(reg, dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::CondNotBr(self.get_index(reg), dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::CondNotBr(self.get_index(reg), dst - idx as i32 - 1)
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
                 BcIr::Const(reg, num) => BcOp::Const(self.get_index(reg), *num),
