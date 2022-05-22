@@ -88,6 +88,8 @@ pub struct FnStore {
     method_def_info: Vec<MethodDefInfo>,
     /// callsite info.
     callsite_info: Vec<CallsiteInfo>,
+    /// literal values.
+    literals: Vec<Value>,
 }
 
 impl std::ops::Index<FuncId> for FnStore {
@@ -131,6 +133,7 @@ impl FnStore {
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
+            literals: vec![],
         }
     }
 
@@ -152,6 +155,18 @@ impl FnStore {
         self.method_def_info.push(info);
         MethodDefId(id as u32)
     }
+
+    /// get a constant.
+    pub(super) fn get_literal(&self, id: u32) -> Value {
+        self.literals[id as usize]
+    }
+
+    /// register a new constant.
+    fn new_literal(&mut self, val: Value) -> u32 {
+        let constants = self.literals.len();
+        self.literals.push(val);
+        constants as u32
+    }
 }
 
 impl FnStore {
@@ -170,7 +185,7 @@ impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
-        let ir = info.compile_ast(&mut self.functions)?;
+        let ir = info.compile_ast(self)?;
         info.ir_to_bytecode(ir, id_store, self);
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         Ok(())
@@ -317,8 +332,6 @@ pub(super) struct NormalFuncInfo {
     temp: u16,
     /// The number of temporary registers.
     reg_num: u16,
-    /// literal values.
-    literals: Vec<Value>,
     /// AST.
     ast: Option<Node>,
 }
@@ -333,7 +346,6 @@ impl NormalFuncInfo {
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
-            literals: vec![],
             ast: Some(ast),
         };
         args.into_iter().for_each(|name| {
@@ -350,18 +362,6 @@ impl NormalFuncInfo {
     /// get bytecode.
     pub(super) fn bytecode(&self) -> &Vec<u64> {
         &self.bytecode
-    }
-
-    /// get a constant.
-    pub(super) fn get_literal(&self, id: u32) -> Value {
-        self.literals[id as usize]
-    }
-
-    /// register a new constant.
-    fn new_literal(&mut self, val: Value) -> u32 {
-        let constants = self.literals.len();
-        self.literals.push(val);
-        constants as u32
     }
 
     /// get the next register id.
@@ -404,7 +404,7 @@ impl NormalFuncInfo {
         BcLocal(local)
     }
 
-    fn gen_integer(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
+    fn gen_integer(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local.into(),
@@ -412,21 +412,21 @@ impl NormalFuncInfo {
             };
             ir.push(BcIr::Integer(reg, i));
         } else {
-            self.gen_const(ir, dst, Value::fixnum(i));
+            self.gen_const(ctx, ir, dst, Value::fixnum(i));
         }
     }
 
-    fn gen_const(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, v: Value) {
+    fn gen_const(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        let id = self.new_literal(v);
+        let id = ctx.new_literal(v);
         ir.push(BcIr::Const(reg, id));
     }
 
-    fn gen_float(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
-        self.gen_const(ir, dst, Value::float(f));
+    fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
+        self.gen_const(ctx, ir, dst, Value::float(f));
     }
 
     fn gen_nil(&mut self, ir: &mut IrContext, dst: Option<BcLocal>) {
@@ -596,7 +596,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 }
 
 impl NormalFuncInfo {
-    fn compile_ast(&mut self, ctx: &mut Funcs) -> Result<IrContext> {
+    fn compile_ast(&mut self, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
         self.gen_expr(ctx, &mut ir, ast, true)?;
@@ -608,7 +608,7 @@ impl NormalFuncInfo {
 
     fn gen_comp_stmts(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
@@ -632,7 +632,12 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_temp_expr(&mut self, ctx: &mut Funcs, ir: &mut IrContext, expr: Node) -> Result<BcTemp> {
+    fn gen_temp_expr(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        expr: Node,
+    ) -> Result<BcTemp> {
         self.gen_expr(ctx, ir, expr, true)?;
         Ok(self.pop())
     }
@@ -640,7 +645,7 @@ impl NormalFuncInfo {
     /// Generate bytecode Ir from an *Node*.
     fn gen_expr(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         expr: Node,
         use_value: bool,
@@ -657,19 +662,19 @@ impl NormalFuncInfo {
         }
         match expr.kind {
             NodeKind::Nil => self.gen_nil(ir, None),
-            NodeKind::Bool(b) => self.gen_const(ir, None, Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_const(ctx, ir, None, Value::bool(b)),
             NodeKind::SelfValue => self.gen_temp_mov(ir, BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(ir, None, i);
+                self.gen_integer(ctx, ir, None, i);
             }
             NodeKind::Float(f) => {
-                self.gen_float(ir, None, f);
+                self.gen_float(ctx, ir, None, f);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ir, None, -i),
-                    NodeKind::Float(f) => self.gen_float(ir, None, -f),
+                    NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
+                    NodeKind::Float(f) => self.gen_float(ctx, ir, None, -f),
                     _ => {
                         self.gen_expr(ctx, ir, rhs, true)?;
                         self.gen_neg(ir, None);
@@ -832,7 +837,7 @@ impl NormalFuncInfo {
 
     fn gen_method_def(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         name: IdentId,
         params: Vec<FormalParam>,
@@ -850,14 +855,14 @@ impl NormalFuncInfo {
                 }
             }
         }
-        let func_id = ctx.add_normal_func(Some(name), args, node);
+        let func_id = ctx.functions.add_normal_func(Some(name), args, node);
         ir.push(BcIr::MethodDef(name, func_id));
         Ok(())
     }
 
     fn gen_store_expr(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         local: BcLocal,
         rhs: Node,
@@ -865,19 +870,19 @@ impl NormalFuncInfo {
     ) -> Result<()> {
         match rhs.kind {
             NodeKind::Nil => self.gen_nil(ir, Some(local)),
-            NodeKind::Bool(b) => self.gen_const(ir, Some(local), Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_const(ctx, ir, Some(local), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(ir, local.into(), BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(ir, Some(local), i);
+                self.gen_integer(ctx, ir, Some(local), i);
             }
             NodeKind::Float(f) => {
-                self.gen_float(ir, Some(local), f);
+                self.gen_float(ctx, ir, Some(local), f);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ir, Some(local), -i),
-                    NodeKind::Float(f) => self.gen_float(ir, Some(local), -f),
+                    NodeKind::Integer(i) => self.gen_integer(ctx, ir, Some(local), -i),
+                    NodeKind::Float(f) => self.gen_float(ctx, ir, Some(local), -f),
                     _ => {
                         self.gen_store_expr(ctx, ir, local, rhs, false)?;
                         self.gen_neg(ir, Some(local));
@@ -963,7 +968,12 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_args(&mut self, ctx: &mut Funcs, ir: &mut IrContext, args: Vec<Node>) -> Result<BcTemp> {
+    fn gen_args(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        args: Vec<Node>,
+    ) -> Result<BcTemp> {
         let arg = self.next_reg();
         for arg in args {
             self.gen_expr(ctx, ir, arg, true)?;
@@ -973,7 +983,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
@@ -986,7 +996,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call_inner(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
@@ -998,7 +1008,7 @@ impl NormalFuncInfo {
 
     fn gen_binary(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1037,7 +1047,7 @@ impl NormalFuncInfo {
 
     fn gen_singular(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1055,7 +1065,7 @@ impl NormalFuncInfo {
 
     fn gen_add(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1073,7 +1083,7 @@ impl NormalFuncInfo {
 
     fn gen_sub(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1091,7 +1101,7 @@ impl NormalFuncInfo {
 
     fn gen_mul(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1104,7 +1114,7 @@ impl NormalFuncInfo {
 
     fn gen_div(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1117,7 +1127,7 @@ impl NormalFuncInfo {
 
     fn gen_cmp(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         kind: CmpKind,
@@ -1136,7 +1146,7 @@ impl NormalFuncInfo {
 
     fn gen_while(
         &mut self,
-        ctx: &mut Funcs,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         cond: Node,
         body: Node,

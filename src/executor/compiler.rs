@@ -365,7 +365,7 @@ impl JitGen {
                     );
                 }
                 BcOp::Const(ret, id) => {
-                    let v = func.get_literal(id).get();
+                    let v = store.get_literal(id).get();
                     monoasm!(self.jit,
                       movq rax, (v);
                       movq [rbp - (conv(ret))], rax;

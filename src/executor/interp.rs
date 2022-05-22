@@ -90,13 +90,13 @@ impl std::ops::IndexMut<u16> for Interp {
     reg as i64 * 8 + 16
 }*/
 
-extern "C" fn get_constant(
-    _interp: &mut Interp,
-    globals: &mut Globals,
-    func_id: FuncId,
-    const_id: u32,
-) -> Value {
-    globals.func[func_id].as_normal().get_literal(const_id)
+extern "C" fn get_constant(_interp: &mut Interp, globals: &mut Globals, const_id: u32) -> Value {
+    globals.func.get_literal(const_id)
+}
+
+extern "C" fn define_method(_interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
+    let MethodDefInfo { name, func } = globals.func[def_id];
+    globals.func.insert(name, func);
 }
 
 extern "C" fn eprintln(data: u64) {
@@ -193,6 +193,9 @@ impl Interp {
         };
         eval.fetch_and_dispatch();
 
+        //BcOp::MethodDef
+        let method_def = eval.vm_method_def();
+
         //BcOp::Br
         let br = eval.vm_br();
 
@@ -206,32 +209,10 @@ impl Interp {
         let nil = eval.vm_nil();
 
         //BcOp::Integer
-        let integer = eval.jit_gen.jit.label();
-        eval.jit_gen.jit.bind_label(integer);
-        eval.vm_get_addr_r15();
-        monoasm! {
-            eval.jit_gen.jit,
-            shlq rdi, 1;
-            addq rdi, 1;
-            movq [r15], rdi;
-        };
-        eval.fetch_and_dispatch();
+        let integer = eval.vm_integer();
 
         //BcOp::Const
-        let constant = eval.jit_gen.jit.label();
-        eval.jit_gen.jit.bind_label(constant);
-        eval.vm_get_addr_r15();
-        monoasm! {
-            eval.jit_gen.jit,
-            movq rcx, rdi;  // const_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rdx, (main_id.0);  // FuncId
-            movq rax, (get_constant);
-            call rax;
-            movq [r15], rax;
-        };
-        eval.fetch_and_dispatch();
+        let constant = eval.vm_constant();
 
         //BcOp::Ret
         let ret = eval.jit_gen.jit.label();
@@ -296,6 +277,7 @@ impl Interp {
 
         eval.jit_gen.jit.finalize();
 
+        eval.dispatch[2] = eval.jit_gen.jit.get_label_absolute_address(method_def) as _;
         eval.dispatch[3] = eval.jit_gen.jit.get_label_absolute_address(br) as _;
         eval.dispatch[4] = eval.jit_gen.jit.get_label_absolute_address(condbr) as _;
         eval.dispatch[5] = eval.jit_gen.jit.get_label_absolute_address(condnotbr) as _;
@@ -409,6 +391,37 @@ impl Interp {
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq [r15], (NIL_VALUE);
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_integer(&mut self) -> DestLabel {
+        let label = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(label);
+        self.vm_get_addr_r15();
+        monoasm! {
+            self.jit_gen.jit,
+            shlq rdi, 1;
+            addq rdi, 1;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_constant(&mut self) -> DestLabel {
+        let label = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(label);
+        self.vm_get_addr_r15();
+        monoasm! {
+            self.jit_gen.jit,
+            movq rdx, rdi;  // const_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (get_constant);
+            call rax;
+            movq [r15], rax;
         };
         self.fetch_and_dispatch();
         label
@@ -572,6 +585,20 @@ impl Interp {
     cmp_ops!(eq, ne, gt, ge, lt, le);
     cmp_ri_ops!(eq, ne, gt, ge, lt, le);
 
+    fn vm_method_def(&mut self) -> DestLabel {
+        let label = self.jit_gen.jit.label();
+        monoasm! { self.jit_gen.jit,
+        label:
+            movq rdx, rdi;  // const_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (define_method);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_br(&mut self) -> DestLabel {
         let br = self.jit_gen.jit.label();
         monoasm! { self.jit_gen.jit,
@@ -699,7 +726,7 @@ impl Interp {
                     self[ret] = Value::integer(i);
                 }
                 BcOp::Const(ret, id) => {
-                    self[ret] = globals.func[self.cur_fn].as_normal().get_literal(id);
+                    self[ret] = globals.func.get_literal(id);
                 }
                 BcOp::Nil(ret) => {
                     self[ret] = Value::nil();
