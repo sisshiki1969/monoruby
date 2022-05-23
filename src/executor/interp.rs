@@ -34,6 +34,7 @@ impl BcPcBase {
 /// Program counter
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 struct BcPc(*const u64);
 
 impl std::ops::Sub<BcPcBase> for BcPc {
@@ -53,12 +54,6 @@ impl std::ops::AddAssign<i32> for BcPc {
     }
 }
 
-impl BcPc {
-    fn get(&self) -> u64 {
-        unsafe { *(self.0) }
-    }
-}
-
 ///
 /// Bytecode interpreter.
 ///
@@ -66,37 +61,74 @@ pub struct Interp {
     cur_fn: FuncId,
     pc: BcPc,
     pc_top: BcPcBase,
-    call_stack: Stack,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<u64>,
     class_version: usize,
 }
 
-impl std::ops::Index<u16> for Interp {
-    type Output = Value;
-    fn index(&self, index: u16) -> &Value {
-        &self.call_stack[index]
-    }
-}
-
-impl std::ops::IndexMut<u16> for Interp {
-    fn index_mut(&mut self, index: u16) -> &mut Value {
-        &mut self.call_stack[index]
-    }
-}
-
 /*fn conv(reg: u16) -> i64 {
     reg as i64 * 8 + 16
 }*/
+
+extern "C" fn get_func_data(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    func_id: FuncId,
+    data: &mut usize,
+) -> BcPc {
+    let main = globals.func[func_id].as_normal();
+    let regs = main.total_reg_num();
+    *data = ((regs + 1) & (-2i64 as usize)) * 8;
+    BcPcBase::new(main) + 0
+}
+
+extern "C" fn find_method(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    callsite_id: CallsiteId,
+) -> usize {
+    let CallsiteInfo {
+        name,
+        args,
+        len,
+        cache: (version, cached_func),
+    } = globals.func[callsite_id];
+    let func_id = if version == interp.class_version {
+        cached_func
+    } else {
+        match globals.get_method(name) {
+            Some(func_id) => {
+                globals.func[callsite_id].cache = (interp.class_version, func_id);
+                func_id
+            }
+            None => {
+                interp.error = Some(MonorubyErr::MethodNotFound(name));
+                return 0;
+            }
+        }
+    };
+    let info = &globals.func[func_id];
+    if info.arity() != len as usize {
+        interp.error = Some(MonorubyErr::WrongArguments(format!(
+            "number of arguments mismatch. expected:{} actual:{}",
+            info.arity(),
+            len
+        )));
+        0
+    } else {
+        1
+    }
+}
 
 extern "C" fn get_constant(_interp: &mut Interp, globals: &mut Globals, const_id: u32) -> Value {
     globals.func.get_literal(const_id)
 }
 
-extern "C" fn define_method(_interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
+extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
     let MethodDefInfo { name, func } = globals.func[def_id];
     globals.func.insert(name, func);
+    interp.class_version += 1;
 }
 
 extern "C" fn eprintln(data: u64) {
@@ -162,22 +194,53 @@ impl Interp {
         let main_id = globals.get_main_func();
         let main = globals.func[main_id].as_normal();
         let mut eval = Self::new(main);
-        let bc_top = BcPcBase::new(main);
-        let bc_pc = bc_top + 0;
-        let entry = eval.jit_gen.jit.label();
-        let fn_entry = eval.jit_gen.jit.label();
-        let regs = main.total_reg_num();
+        let entry = eval.construct_vm();
+
+        let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
+            unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
+        match addr(&mut eval, globals, main_id) {
+            Some(val) => Ok(val),
+            None => Err(MonorubyErr::Unimplemented(format!("_"))),
+        }
+    }
+
+    fn construct_vm(&mut self) -> DestLabel {
+        let entry = self.jit_gen.jit.label();
+        let fn_entry = self.jit_gen.jit.label();
+        let func_offset = self.jit_gen.jit.const_i64(0);
 
         monoasm! {
-            eval.jit_gen.jit,
+            self.jit_gen.jit,
             entry:
                 pushq rbx;
                 pushq r12;
                 pushq r13;
                 pushq r14;
                 pushq r15;
-                movq rbx, rdi;  // rbx: &mut Interp
-                movq r12, rsi;  // r12: &mut Globals
+
+                movq rbx, rdi;  // rdi: &mut Interp
+                movq r12, rsi;  // rsi: &mut Globals
+                                // rdx: FuncId
+                lea rcx, [rip + func_offset];
+                movq rax, (get_func_data);
+                call rax;
+                movq r13, rax;    // r13: BcPc
+                //
+                //       +-------------+
+                //  0x00 |             | <- rsp
+                //       +-------------+
+                // -0x08 | return addr |
+                //       +-------------+
+                // -0x10 |   old rbp   |
+                //       +-------------+
+                // -0x18 |    meta     |
+                //       +-------------+
+                // -0x20 |     %0      |
+                //       +-------------+
+                // -0x28 | %1(1st arg) |
+                //       +-------------+
+                //       |             |
+                //
                 call fn_entry;
                 popq r15;
                 popq r14;
@@ -188,135 +251,137 @@ impl Interp {
             fn_entry:
                 pushq rbp;
                 movq rbp, rsp;
-                subq rsp, (((regs + 1) & (-2i64 as usize)) * 8);
-                movq r13, (bc_pc.0);    // r13: BcPc
+                subq rsp, [rip + func_offset];
         };
-        eval.fetch_and_dispatch();
+        self.fetch_and_dispatch();
 
+        //BcOp::FnCall
+        let fncall = self.vm_fncall(fn_entry, func_offset);
         //BcOp::MethodDef
-        let method_def = eval.vm_method_def();
-
+        let method_def = self.vm_method_def();
         //BcOp::Br
-        let br = eval.vm_br();
-
+        let br = self.vm_br();
         //BcOp::CondBr
-        let condbr = eval.vm_condbr();
-
+        let condbr = self.vm_condbr();
         //BcOp::CondNotBr
-        let condnotbr = eval.vm_condnotbr();
-
+        let condnotbr = self.vm_condnotbr();
         //BcOp::Nil
-        let nil = eval.vm_nil();
-
+        let nil = self.vm_nil();
         //BcOp::Integer
-        let integer = eval.vm_integer();
-
+        let integer = self.vm_integer();
         //BcOp::Const
-        let constant = eval.vm_constant();
+        let constant = self.vm_constant();
 
         //BcOp::Ret
-        let ret = eval.jit_gen.jit.label();
-        eval.jit_gen.jit.bind_label(ret);
-        eval.vm_get_addr_r15();
-        monoasm! { eval.jit_gen.jit,
+        let ret = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(ret);
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
             movq rax, [r15];
             leave;
             ret;
         };
 
         //BcOp::Mov
-        let mov = eval.jit_gen.jit.label();
-        eval.jit_gen.jit.bind_label(mov);
-        eval.vm_get_addr_r15();
-        eval.vm_get_addr_rdi();
-        monoasm! { eval.jit_gen.jit,
+        let mov = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(mov);
+        self.vm_get_addr_r15();
+        self.vm_get_addr_rdi();
+        monoasm! { self.jit_gen.jit,
             movq rax, [rdi];
             movq [r15], rax;
         };
-        eval.fetch_and_dispatch();
+        self.fetch_and_dispatch();
 
         //BcOp::Add
-        let addrr = eval.vm_addrr();
+        let addrr = self.vm_addrr();
         //BcOp::Sub
-        let subrr = eval.vm_subrr();
+        let subrr = self.vm_subrr();
         //BcOp::Mul
-        let mulrr = eval.vm_mulrr();
+        let mulrr = self.vm_mulrr();
         //BcOp::Div
-        let divrr = eval.vm_divrr();
+        let divrr = self.vm_divrr();
 
         //BcOp::Eq
-        let eqrr = eval.vm_eqrr();
+        let eqrr = self.vm_eqrr();
         //BcOp::Ne
-        let nerr = eval.vm_nerr();
+        let nerr = self.vm_nerr();
         //BcOp::Lt
-        let ltrr = eval.vm_ltrr();
+        let ltrr = self.vm_ltrr();
         //BcOp::Le
-        let lerr = eval.vm_lerr();
+        let lerr = self.vm_lerr();
         //BcOp::Gt
-        let gtrr = eval.vm_gtrr();
+        let gtrr = self.vm_gtrr();
         //BcOp::Ge
-        let gerr = eval.vm_gerr();
+        let gerr = self.vm_gerr();
 
         //BcOp::Addri
-        let addri = eval.vm_addri();
+        let addri = self.vm_addri();
         //BcOp::Subri
-        let subri = eval.vm_subri();
+        let subri = self.vm_subri();
 
         //BcOp::Eqri
-        let eqri = eval.vm_eqri();
+        let eqri = self.vm_eqri();
         //BcOp::Neri
-        let neri = eval.vm_neri();
+        let neri = self.vm_neri();
         //BcOp::Ltri
-        let ltri = eval.vm_ltri();
+        let ltri = self.vm_ltri();
         //BcOp::Leri
-        let leri = eval.vm_leri();
+        let leri = self.vm_leri();
         //BcOp::Gtri
-        let gtri = eval.vm_gtri();
+        let gtri = self.vm_gtri();
         //BcOp::Geri
-        let geri = eval.vm_geri();
+        let geri = self.vm_geri();
 
-        eval.jit_gen.jit.finalize();
+        self.jit_gen.jit.finalize();
 
-        eval.dispatch[2] = eval.jit_gen.jit.get_label_absolute_address(method_def) as _;
-        eval.dispatch[3] = eval.jit_gen.jit.get_label_absolute_address(br) as _;
-        eval.dispatch[4] = eval.jit_gen.jit.get_label_absolute_address(condbr) as _;
-        eval.dispatch[5] = eval.jit_gen.jit.get_label_absolute_address(condnotbr) as _;
-        eval.dispatch[6] = eval.jit_gen.jit.get_label_absolute_address(integer) as _;
-        eval.dispatch[7] = eval.jit_gen.jit.get_label_absolute_address(constant) as _;
-        eval.dispatch[8] = eval.jit_gen.jit.get_label_absolute_address(nil) as _;
+        self.dispatch[1] = self.jit_gen.jit.get_label_absolute_address(fncall) as _;
+        self.dispatch[2] = self.jit_gen.jit.get_label_absolute_address(method_def) as _;
+        self.dispatch[3] = self.jit_gen.jit.get_label_absolute_address(br) as _;
+        self.dispatch[4] = self.jit_gen.jit.get_label_absolute_address(condbr) as _;
+        self.dispatch[5] = self.jit_gen.jit.get_label_absolute_address(condnotbr) as _;
+        self.dispatch[6] = self.jit_gen.jit.get_label_absolute_address(integer) as _;
+        self.dispatch[7] = self.jit_gen.jit.get_label_absolute_address(constant) as _;
+        self.dispatch[8] = self.jit_gen.jit.get_label_absolute_address(nil) as _;
 
-        eval.dispatch[130] = eval.jit_gen.jit.get_label_absolute_address(addrr) as _;
-        eval.dispatch[131] = eval.jit_gen.jit.get_label_absolute_address(subrr) as _;
-        eval.dispatch[132] = eval.jit_gen.jit.get_label_absolute_address(mulrr) as _;
-        eval.dispatch[133] = eval.jit_gen.jit.get_label_absolute_address(divrr) as _;
-        eval.dispatch[134] = eval.jit_gen.jit.get_label_absolute_address(eqrr) as _;
-        eval.dispatch[135] = eval.jit_gen.jit.get_label_absolute_address(nerr) as _;
-        eval.dispatch[136] = eval.jit_gen.jit.get_label_absolute_address(ltrr) as _;
-        eval.dispatch[137] = eval.jit_gen.jit.get_label_absolute_address(lerr) as _;
-        eval.dispatch[138] = eval.jit_gen.jit.get_label_absolute_address(gtrr) as _;
-        eval.dispatch[139] = eval.jit_gen.jit.get_label_absolute_address(gerr) as _;
+        self.dispatch[130] = self.jit_gen.jit.get_label_absolute_address(addrr) as _;
+        self.dispatch[131] = self.jit_gen.jit.get_label_absolute_address(subrr) as _;
+        self.dispatch[132] = self.jit_gen.jit.get_label_absolute_address(mulrr) as _;
+        self.dispatch[133] = self.jit_gen.jit.get_label_absolute_address(divrr) as _;
+        self.dispatch[134] = self.jit_gen.jit.get_label_absolute_address(eqrr) as _;
+        self.dispatch[135] = self.jit_gen.jit.get_label_absolute_address(nerr) as _;
+        self.dispatch[136] = self.jit_gen.jit.get_label_absolute_address(ltrr) as _;
+        self.dispatch[137] = self.jit_gen.jit.get_label_absolute_address(lerr) as _;
+        self.dispatch[138] = self.jit_gen.jit.get_label_absolute_address(gtrr) as _;
+        self.dispatch[139] = self.jit_gen.jit.get_label_absolute_address(gerr) as _;
 
-        eval.dispatch[140] = eval.jit_gen.jit.get_label_absolute_address(addri) as _;
-        eval.dispatch[141] = eval.jit_gen.jit.get_label_absolute_address(subri) as _;
-        eval.dispatch[142] = eval.jit_gen.jit.get_label_absolute_address(eqri) as _;
-        eval.dispatch[143] = eval.jit_gen.jit.get_label_absolute_address(neri) as _;
-        eval.dispatch[144] = eval.jit_gen.jit.get_label_absolute_address(ltri) as _;
-        eval.dispatch[145] = eval.jit_gen.jit.get_label_absolute_address(leri) as _;
-        eval.dispatch[146] = eval.jit_gen.jit.get_label_absolute_address(gtri) as _;
-        eval.dispatch[147] = eval.jit_gen.jit.get_label_absolute_address(geri) as _;
+        self.dispatch[140] = self.jit_gen.jit.get_label_absolute_address(addri) as _;
+        self.dispatch[141] = self.jit_gen.jit.get_label_absolute_address(subri) as _;
+        self.dispatch[142] = self.jit_gen.jit.get_label_absolute_address(eqri) as _;
+        self.dispatch[143] = self.jit_gen.jit.get_label_absolute_address(neri) as _;
+        self.dispatch[144] = self.jit_gen.jit.get_label_absolute_address(ltri) as _;
+        self.dispatch[145] = self.jit_gen.jit.get_label_absolute_address(leri) as _;
+        self.dispatch[146] = self.jit_gen.jit.get_label_absolute_address(gtri) as _;
+        self.dispatch[147] = self.jit_gen.jit.get_label_absolute_address(geri) as _;
 
-        eval.dispatch[148] = eval.jit_gen.jit.get_label_absolute_address(ret) as _;
-        eval.dispatch[149] = eval.jit_gen.jit.get_label_absolute_address(mov) as _;
+        self.dispatch[148] = self.jit_gen.jit.get_label_absolute_address(ret) as _;
+        self.dispatch[149] = self.jit_gen.jit.get_label_absolute_address(mov) as _;
 
-        let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
-            unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
-        match addr(&mut eval, globals, main_id) {
-            Some(val) => Ok(val),
-            None => Err(MonorubyErr::Unimplemented(format!("_"))),
-        }
+        entry
     }
 
     /// Fetch instruction and decode
+    ///
+    /// requirement:
+    /// r13: BcPc
+    ///
+    /// returns:
+    /// rax: :0
+    /// r15: :1
+    /// rdi: :2 or :2:3
+    /// rsi: :3
+    ///
+    /// use: r8, r9
     fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit_gen.jit.label();
         monoasm! { self.jit_gen.jit,
@@ -383,6 +448,58 @@ impl Interp {
             negq r15;
             addq r15, rbp;
         };
+    }
+
+    fn vm_fncall(&mut self, fn_entry: DestLabel, func_offset: DestLabel) -> DestLabel {
+        let label = self.jit_gen.jit.label();
+        let exit = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(label);
+        monoasm! { self.jit_gen.jit,
+            movq rdx, rdi;  // rdx: CallsiteId
+            movq rdi, rbx;  // rdi: &mut Interp
+            movq rsi, r12;  // rsi: &mut Globals
+            movq rax, (find_method);
+            call rax;       // rax <- FuncId
+
+            movq rdx, rax;  // rdx: FuncId
+            movq rdi, rbx;  // rdi: &mut Interp
+            movq rsi, r12;  // rsi: &mut Globals
+            lea rcx, [rip + func_offset]; // rcx: &mut usize
+            movq rax, (get_func_data);
+            call rax;
+            pushq r13;
+            pushq r15;
+            movq r13, rax;    // r13: BcPc
+            //
+            //       +-------------+
+            //  0x00 |             | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) |
+            //       +-------------+
+            //       |             |
+            //
+            call fn_entry;
+            popq r15;
+            popq r13;
+            movsxl r15, r15;
+            cmpq r15, (-1);
+            jeq exit;
+        };
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
+            movq [r15], rax;
+        exit:
+        };
+        self.fetch_and_dispatch();
+        label
     }
 
     fn vm_nil(&mut self) -> DestLabel {
@@ -680,222 +797,10 @@ impl Interp {
             cur_fn: main.id,
             pc: pc_top + 0,
             pc_top,
-            call_stack: Stack::new(),
             jit_gen,
             error: None,
             dispatch,
             class_version: 0,
-        }
-    }
-
-    fn get_op(&mut self) -> BcOp {
-        let op = self.pc.get();
-        self.pc += 1;
-        BcOp::from_u64(op)
-    }
-
-    fn push_frame(&mut self, args: u16, len: u16, func: &NormalFuncInfo, ret: Option<u16>) {
-        let pc = self.pc - self.pc_top;
-        self.call_stack
-            .push_frame(args, len, func, self.cur_fn, pc, ret);
-        let pc = BcPcBase::new(func);
-        self.pc_top = pc;
-        self.pc = pc + 0;
-        self.cur_fn = func.id;
-    }
-
-    fn pop_frame(&mut self, val: Value, globals: &Globals) -> bool {
-        let (b, func, pc, ret) = self.call_stack.pop_frame();
-        if b {
-            return true;
-        };
-        self.cur_fn = func;
-        self.pc_top = BcPcBase::new(&globals.func[func].as_normal());
-        self.pc = self.pc_top + pc;
-        if let Some(ret) = ret {
-            self[ret] = val;
-        }
-        false
-    }
-
-    fn eval_loop(&mut self, globals: &mut Globals) -> Result<Value> {
-        loop {
-            let op = self.get_op();
-            match op {
-                BcOp::Integer(ret, i) => {
-                    self[ret] = Value::integer(i);
-                }
-                BcOp::Const(ret, id) => {
-                    self[ret] = globals.func.get_literal(id);
-                }
-                BcOp::Nil(ret) => {
-                    self[ret] = Value::nil();
-                }
-                BcOp::Neg(dst, src) => {
-                    self[dst] = match self[src].unpack() {
-                        RV::Integer(i) => Value::integer(-i),
-                        RV::Float(f) => Value::float(-f),
-                        _ => unreachable!(),
-                    };
-                }
-                BcOp::Add(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = self[rhs];
-                    self[ret] = add_values(lhs, rhs);
-                }
-                BcOp::Addri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = match lhs.unpack() {
-                        RV::Integer(lhs) => Value::integer(lhs + rhs as i32),
-                        RV::Float(lhs) => Value::float(lhs + rhs as f64),
-                        _ => unreachable!(),
-                    };
-                }
-                BcOp::Sub(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = self[rhs];
-                    self[ret] = sub_values(lhs, rhs);
-                }
-                BcOp::Subri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = match lhs.unpack() {
-                        RV::Integer(lhs) => Value::integer(lhs - rhs as i32),
-                        RV::Float(lhs) => Value::float(lhs - rhs as f64),
-                        _ => unreachable!(),
-                    };
-                }
-                BcOp::Mul(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = self[rhs];
-                    let v = mul_values(lhs, rhs);
-                    self[ret] = v;
-                }
-                BcOp::Div(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    let rhs = self[rhs];
-                    let v = div_values(lhs, rhs);
-                    self[ret] = v;
-                }
-                BcOp::Eq(ret, lhs, rhs) => {
-                    self[ret] = cmp_eq_values(self[lhs], self[rhs]);
-                }
-                BcOp::Ne(ret, lhs, rhs) => {
-                    self[ret] = cmp_ne_values(self[lhs], self[rhs]);
-                }
-                BcOp::Ge(ret, lhs, rhs) => {
-                    self[ret] = cmp_ge_values(self[lhs], self[rhs]);
-                }
-                BcOp::Gt(ret, lhs, rhs) => {
-                    self[ret] = cmp_gt_values(self[lhs], self[rhs]);
-                }
-                BcOp::Le(ret, lhs, rhs) => {
-                    self[ret] = cmp_le_values(self[lhs], self[rhs]);
-                }
-                BcOp::Lt(ret, lhs, rhs) => {
-                    self[ret] = cmp_lt_values(self[lhs], self[rhs]);
-                }
-                BcOp::Eqri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_eq_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Neri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_ne_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Geri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_ge_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Gtri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_gt_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Leri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_le_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Ltri(ret, lhs, rhs) => {
-                    let lhs = self[lhs];
-                    self[ret] = cmp_lt_values(lhs, Value::integer(rhs as i32));
-                }
-                BcOp::Ret(lhs) => {
-                    let val = self[lhs];
-                    if self.pop_frame(val, globals) {
-                        return Ok(val);
-                    };
-                }
-                BcOp::Mov(dst, local) => {
-                    self[dst] = self[local];
-                }
-                BcOp::FnCall(id) => {
-                    fn check_arity(arity: usize, len: u16) -> Result<()> {
-                        if arity != len as usize {
-                            Err(MonorubyErr::WrongArguments(format!(
-                                "number of arguments mismatch. expected:{} actual:{}",
-                                arity, len
-                            )))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    let CallsiteInfo {
-                        name,
-                        ret,
-                        args,
-                        len,
-                        cache: (version, cached_func),
-                    } = globals.func[id];
-                    let func_id = if version == self.class_version {
-                        cached_func
-                    } else {
-                        match globals.get_method(name) {
-                            Some(func_id) => {
-                                globals.func[id].cache = (self.class_version, func_id);
-                                func_id
-                            }
-                            None => return Err(MonorubyErr::MethodNotFound(name)),
-                        }
-                    };
-                    let info = &globals.func[func_id];
-                    check_arity(info.arity(), len)?;
-                    match &info.kind {
-                        FuncKind::Normal(info) => {
-                            self.push_frame(args, len, info, ret);
-                        }
-                        FuncKind::Builtin {
-                            abs_address: address,
-                        } => {
-                            let arg_ptr = Arg::new(&self[args] as *const _);
-                            let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(*address) };
-                            let v = func(self, globals, arg_ptr, len as usize);
-                            match ret {
-                                None => {}
-                                Some(ret) => {
-                                    self[ret] = v;
-                                }
-                            }
-                        }
-                    }
-                }
-                BcOp::Br(disp) => {
-                    self.pc += disp;
-                }
-                BcOp::CondBr(cond_, disp) => {
-                    if self[cond_].to_bool() {
-                        self.pc += disp;
-                    };
-                }
-                BcOp::CondNotBr(cond_, disp) => {
-                    if !self[cond_].to_bool() {
-                        self.pc += disp;
-                    };
-                }
-                BcOp::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = globals.func[id];
-                    globals.func.insert(name, func);
-                    self.class_version += 1;
-                }
-            }
         }
     }
 }

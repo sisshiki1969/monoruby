@@ -59,7 +59,6 @@ impl Funcs {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CallsiteInfo {
     pub name: IdentId,
-    pub ret: Option<u16>,
     pub args: u16,
     pub len: u16,
     pub cache: (usize, FuncId),
@@ -549,20 +548,19 @@ impl NormalFuncInfo {
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp::FnCall(id) => {
+                BcOp::FnCall(ret, id) => {
                     let CallsiteInfo {
                         name,
-                        ret,
                         args,
                         len,
                         cache: _,
                     } = store[id];
                     let name = globals.get_name(name);
                     match ret {
-                        None => {
+                        0 => {
                             eprintln!("_ = call {}(%{}; {})", name, args, len)
                         }
-                        Some(ret) => {
+                        ret => {
                             eprintln!("%{:?} = call {}(%{}; {})", ret, name, args, len)
                         }
                     }
@@ -1177,13 +1175,11 @@ impl NormalFuncInfo {
         &self,
         store: &mut FnStore,
         name: IdentId,
-        ret: Option<BcReg>,
         args: BcTemp,
         len: usize,
     ) -> CallsiteId {
         let info = CallsiteInfo {
             name,
-            ret: ret.map(|ret| self.get_index(&ret)),
             args: self.get_index(&BcReg::from(args)),
             len: len as u16,
             cache: (usize::MAX, FuncId::default()),
@@ -1273,8 +1269,9 @@ impl NormalFuncInfo {
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
                 BcIr::FnCall(id, ret, args, len) => {
-                    let id = self.add_callsite(store, *id, *ret, *args, *len);
-                    BcOp::FnCall(id)
+                    let id = self.add_callsite(store, *id, *args, *len);
+                    let ret = ret.map_or(0, |ret| self.get_index(&ret));
+                    BcOp::FnCall(ret, id)
                 }
                 BcIr::MethodDef(name, func_id) => {
                     BcOp::MethodDef(store.add_method_def(*name, *func_id))

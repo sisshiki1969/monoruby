@@ -229,6 +229,7 @@ fn run_ruby(code: &Vec<String>) -> RV {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn test0() {
         run_test("");

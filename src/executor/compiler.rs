@@ -549,7 +549,7 @@ impl JitGen {
                     );
                     self.epilogue();
                 }
-                BcOp::FnCall(id) => {
+                BcOp::FnCall(ret, id) => {
                     // set arguments to a callee stack.
                     //
                     //       +-------------+
@@ -568,11 +568,7 @@ impl JitGen {
                     //       |             |
                     //
                     let CallsiteInfo {
-                        name,
-                        ret,
-                        args,
-                        len,
-                        ..
+                        name, args, len, ..
                     } = store[id];
                     for i in 0..len {
                         let reg = args + i;
@@ -618,7 +614,7 @@ impl JitGen {
                         testq rax, rax;
                         jeq entry_return;
                     );
-                    if let Some(ret) = ret {
+                    if ret != 0 {
                         monoasm!(self.jit,
                             movq [rbp - (conv(ret))], rax;
                         );

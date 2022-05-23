@@ -86,8 +86,9 @@ pub(super) enum BcOp {
     Ret(u16),
     /// move(%dst, %src)
     Mov(u16, u16),
-    /// func call(func_id, %ret, %args, args_len)
-    FnCall(CallsiteId),
+    /// func call(%ret, callsite_id)  if there is no return register, %ret = 0.
+    FnCall(u16, CallsiteId),
+    /// method definition(method_def_id)
     MethodDef(MethodDefId),
 }
 
@@ -127,7 +128,7 @@ impl BcOp {
     pub fn to_u64(&self) -> u64 {
         use BcOp::*;
         match self {
-            FnCall(op1) => enc_l(1, op1.0),
+            FnCall(op1, op2) => enc_wl(1, *op1, op2.0),
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
             CondBr(op1, op2) => enc_wl(4, *op1, *op2 as u32),
@@ -164,7 +165,7 @@ impl BcOp {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::FnCall(CallsiteId(op2)),
+                1 => Self::FnCall(op1, CallsiteId(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(op1, op2 as i32),

@@ -655,7 +655,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#0c031a9e31892031e0856e2d5815e3c988730023"
+source = "git+https://github.com/sisshiki1969/monoasm.git#1a64838916611c91dddf51983fdd4c7773509727"
 dependencies = [
  "libc",
  "monoasm_macro",
@@ -667,7 +667,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#0c031a9e31892031e0856e2d5815e3c988730023"
+source = "git+https://github.com/sisshiki1969/monoasm.git#1a64838916611c91dddf51983fdd4c7773509727"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -816,9 +816,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b10983b38c53aebdf33f542c6275b0f58a238129d00c4ae0e6fb59738d783ca"
+checksum = "7709cef83f0c1f58f666e746a08b21e0085f7440fa6a29cc194d68aac97a4225"
 
 [[package]]
 name = "openssl"
