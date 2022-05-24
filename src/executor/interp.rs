@@ -54,33 +54,38 @@ impl std::ops::AddAssign<i32> for BcPc {
     }
 }
 
-///
-/// Bytecode interpreter.
-///
-pub struct Interp {
-    cur_fn: FuncId,
-    pc: BcPc,
-    pc_top: BcPcBase,
-    pub jit_gen: JitGen,
-    pub error: Option<MonorubyErr>,
-    dispatch: Vec<u64>,
-    class_version: usize,
-}
-
 /*fn conv(reg: u16) -> i64 {
     reg as i64 * 8 + 16
 }*/
 
+#[derive(Debug, Clone)]
+#[repr(C)]
+struct FuncData {
+    offset: usize,
+    address: u64,
+}
+
 extern "C" fn get_func_data(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     func_id: FuncId,
-    data: &mut usize,
+    data: &mut FuncData,
 ) -> BcPc {
-    let main = globals.func[func_id].as_normal();
-    let regs = main.total_reg_num();
-    *data = ((regs + 2) & (-2i64 as usize)) * 8;
-    BcPcBase::new(main) + 0
+    let label = globals.func[func_id].jit_label().unwrap();
+    let address = interp.jit_gen.jit.get_label_absolute_address(label) as u64;
+    data.address = address;
+    let arity = globals.func[func_id].arity();
+    match &globals.func[func_id].kind {
+        FuncKind::Normal(info) => {
+            let regs = info.total_reg_num();
+            data.offset = ((regs + 2) & (-2i64 as usize)) * 8;
+            BcPcBase::new(info) + 0
+        }
+        FuncKind::Builtin { .. } => {
+            data.offset = (arity + arity % 2) * 8 + 16;
+            BcPc(std::ptr::null())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -204,12 +209,66 @@ macro_rules! cmp_ri_ops {
     };
 }
 
+///
+/// Bytecode interpreter.
+///
+pub struct Interp {
+    cur_fn: FuncId,
+    pc: BcPc,
+    pc_top: BcPcBase,
+    pub jit_gen: JitGen,
+    pub error: Option<MonorubyErr>,
+    dispatch: Vec<u64>,
+    class_version: usize,
+    vm_entry: DestLabel,
+}
+
 impl Interp {
+    fn new(main: &NormalFuncInfo) -> Self {
+        let pc_top = BcPcBase::new(main);
+        let mut jit_gen = JitGen::new();
+        let vm_entry = jit_gen.jit.label();
+        // dispatch table.
+        let entry_panic = jit_gen.jit.label();
+        monoasm! { jit_gen.jit,
+            entry_panic:
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rax, (super::compiler::unimplemented_inst);
+                call rax;
+                leave;
+                ret;
+        };
+        jit_gen.jit.finalize();
+        let panic_addr = jit_gen.jit.get_label_absolute_address(entry_panic) as u64;
+        let dispatch = vec![panic_addr; 256];
+        Self {
+            cur_fn: main.id,
+            pc: pc_top + 0,
+            pc_top,
+            jit_gen,
+            error: None,
+            dispatch,
+            class_version: 0,
+            vm_entry,
+        }
+    }
+
+    pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
+        let main = globals.func[globals.get_main_func()].as_normal();
+        let mut eval = Self::new(main);
+        eval.jit_gen.exec_toplevel(globals)(&mut eval, globals)
+            .ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
+    }
+
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let main_id = globals.get_main_func();
         let main = globals.func[main_id].as_normal();
         let mut eval = Self::new(main);
-        let entry = eval.construct_vm();
+
+        globals.func.precompile(&mut eval.jit_gen, eval.vm_entry);
+
+        let entry = eval.construct_vm(eval.vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
             unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
@@ -219,10 +278,11 @@ impl Interp {
         }
     }
 
-    fn construct_vm(&mut self) -> DestLabel {
+    fn construct_vm(&mut self, vm_entry: DestLabel) -> DestLabel {
         let entry = self.jit_gen.jit.label();
-        let fn_entry = self.jit_gen.jit.label();
+        //let fn_entry = self.jit_gen.jit.label();
         let func_offset = self.jit_gen.jit.const_i64(0);
+        let func_address = self.jit_gen.jit.const_i64(0);
 
         monoasm! {
             self.jit_gen.jit,
@@ -256,14 +316,15 @@ impl Interp {
                 //       +-------------+
                 //       |             |
                 //
-                call fn_entry;
+                movq rax, [rip + func_address];
+                call rax;
                 popq r15;
                 popq r14;
                 popq r13;
                 popq r12;
                 popq rbx;
                 ret;
-            fn_entry:
+            vm_entry:
                 pushq rbp;
                 movq rbp, rsp;
                 subq rsp, [rip + func_offset];
@@ -271,7 +332,7 @@ impl Interp {
         self.fetch_and_dispatch();
 
         //BcOp::FnCall
-        let fncall = self.vm_fncall(fn_entry, func_offset);
+        let fncall = self.vm_fncall(func_offset, func_address);
         //BcOp::MethodDef
         let method_def = self.vm_method_def();
         //BcOp::Br
@@ -469,7 +530,7 @@ impl Interp {
         };
     }
 
-    fn vm_fncall(&mut self, fn_entry: DestLabel, func_offset: DestLabel) -> DestLabel {
+    fn vm_fncall(&mut self, func_offset: DestLabel, func_address: DestLabel) -> DestLabel {
         let label = self.jit_gen.jit.label();
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
@@ -501,13 +562,7 @@ impl Interp {
             lea rdx, [rsp - 0x28];
         };
         self.vm_get_addr_rdi();
-        /*for i in 0..len {
-            let reg = args + i;
-            monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - ((0x28 + i * 8) as i64)], rax;
-            );
-        }*/
+
         monoasm! { self.jit_gen.jit,
             //
             //       +-------------+
@@ -537,7 +592,8 @@ impl Interp {
             jmp loop_;
         loop_exit:
 
-            call fn_entry;
+            movq rax, [rip + func_address];
+            call rax;
             popq r15;
             popq r13;
             movsxl r15, r15;
@@ -847,40 +903,5 @@ impl Interp {
         };
         self.fetch_and_dispatch();
         br
-    }
-
-    pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
-        let main = globals.func[globals.get_main_func()].as_normal();
-        let mut eval = Self::new(main);
-        eval.jit_gen.exec_toplevel(globals)(&mut eval, globals)
-            .ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
-    }
-
-    fn new(main: &NormalFuncInfo) -> Self {
-        let pc_top = BcPcBase::new(main);
-        let mut jit_gen = JitGen::new();
-        // dispatch table.
-        let entry_panic = jit_gen.jit.label();
-        monoasm! { jit_gen.jit,
-            entry_panic:
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rax, (super::compiler::unimplemented_inst);
-                call rax;
-                leave;
-                ret;
-        };
-        jit_gen.jit.finalize();
-        let panic_addr = jit_gen.jit.get_label_absolute_address(entry_panic) as u64;
-        let dispatch = vec![panic_addr; 256];
-        Self {
-            cur_fn: main.id,
-            pc: pc_top + 0,
-            pc_top,
-            jit_gen,
-            error: None,
-            dispatch,
-            class_version: 0,
-        }
     }
 }

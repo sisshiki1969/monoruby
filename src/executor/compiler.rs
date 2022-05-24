@@ -294,15 +294,13 @@ impl JitGen {
 
     fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> DestLabel {
         let now = Instant::now();
-        let label = self.jit.label();
-        func.set_jit_label(label);
-        self.jit.bind_label(label);
-        match &func.kind {
+        let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
             FuncKind::Builtin { abs_address } => {
                 self.jit_compile_builtin(*abs_address, func.arity())
             }
         };
+        func.set_jit_label(label);
         self.jit.finalize();
         #[cfg(feature = "emit-asm")]
         {
@@ -320,7 +318,7 @@ impl JitGen {
         label
     }
 
-    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) {
+    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) -> DestLabel {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after execution of call instruction.
@@ -337,8 +335,10 @@ impl JitGen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
+        let label = self.jit.label();
         let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
+        label:
             pushq rbp;
             movq rdi, rbx;
             movq rsi, r12;
@@ -351,9 +351,12 @@ impl JitGen {
             leave;
             ret;
         );
+        label
     }
 
-    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) {
+    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> DestLabel {
+        let label = self.jit.label();
+        self.jit.bind_label(label);
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
@@ -665,5 +668,6 @@ impl JitGen {
                 }
             }
         }
+        label
     }
 }

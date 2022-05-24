@@ -166,6 +166,20 @@ impl FnStore {
         self.literals.push(val);
         constants as u32
     }
+
+    pub fn precompile(&mut self, jit: &mut JitGen, vm_entry: DestLabel) {
+        for func in &mut self.functions.0 {
+            match &func.kind {
+                FuncKind::Normal(_) => {
+                    func.set_jit_label(vm_entry);
+                }
+                FuncKind::Builtin { abs_address } => {
+                    let label = jit.jit_compile_builtin(*abs_address, func.arity());
+                    func.set_jit_label(label);
+                }
+            };
+        }
+    }
 }
 
 impl FnStore {
