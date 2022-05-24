@@ -63,17 +63,17 @@ impl std::ops::AddAssign<i32> for BcPc {
 struct FuncData {
     offset: usize,
     address: u64,
+    pc: BcPc,
 }
 
 extern "C" fn get_func_data(
-    interp: &mut Interp,
+    _interp: &mut Interp,
     globals: &mut Globals,
     func_id: FuncId,
     data: &mut FuncData,
 ) -> BcPc {
     let label = globals.func[func_id].jit_label().unwrap();
-    let address = interp.jit_gen.jit.get_label_absolute_address(label) as u64;
-    data.address = address;
+    data.address = label.0;
     let arity = globals.func[func_id].arity();
     match &globals.func[func_id].kind {
         FuncKind::Normal(info) => {
@@ -106,38 +106,15 @@ extern "C" fn find_method(
     interp: &mut Interp,
     globals: &mut Globals,
     callsite_id: CallsiteId,
+    data: &mut FuncData,
 ) -> EncodedCallInfo {
-    let CallsiteInfo {
-        name,
-        args,
-        len,
-        cache: (version, cached_func),
-    } = globals.func[callsite_id];
-    //eprintln!("{}", globals.id_store.get_name(name));
-    let func_id = if version == interp.class_version {
-        cached_func
-    } else {
-        match globals.get_method(name) {
-            Some(func_id) => {
-                globals.func[callsite_id].cache = (interp.class_version, func_id);
-                func_id
-            }
-            None => {
-                interp.error = Some(MonorubyErr::MethodNotFound(name));
-                return EncodedCallInfo::none();
-            }
+    match interp.find_method(globals, callsite_id) {
+        Some((func_id, args, len)) => {
+            let pc = get_func_data(interp, globals, func_id, data);
+            data.pc = pc;
+            EncodedCallInfo::new(func_id, args, len)
         }
-    };
-    let info = &globals.func[func_id];
-    if info.arity() != len as usize {
-        interp.error = Some(MonorubyErr::WrongArguments(format!(
-            "number of arguments mismatch. expected:{} actual:{}",
-            info.arity(),
-            len
-        )));
-        EncodedCallInfo::none()
-    } else {
-        EncodedCallInfo::new(func_id, args, len)
+        None => EncodedCallInfo::none(),
     }
 }
 
@@ -249,6 +226,45 @@ impl Interp {
         }
     }
 
+    fn find_method(
+        &mut self,
+        globals: &mut Globals,
+        callsite_id: CallsiteId,
+    ) -> Option<(FuncId, u16, u16)> {
+        let CallsiteInfo {
+            name,
+            args,
+            len,
+            cache: (version, cached_func),
+        } = globals.func[callsite_id];
+        //eprintln!("{}", globals.id_store.get_name(name));
+        let func_id = if version == self.class_version {
+            cached_func
+        } else {
+            match globals.get_method(name) {
+                Some(func_id) => {
+                    globals.func[callsite_id].cache = (self.class_version, func_id);
+                    func_id
+                }
+                None => {
+                    self.error = Some(MonorubyErr::MethodNotFound(name));
+                    return None;
+                }
+            }
+        };
+        let info = &globals.func[func_id];
+        if info.arity() != len as usize {
+            self.error = Some(MonorubyErr::WrongArguments(format!(
+                "number of arguments mismatch. expected:{} actual:{}",
+                info.arity(),
+                len
+            )));
+            None
+        } else {
+            Some((func_id, args, len))
+        }
+    }
+
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
@@ -261,9 +277,9 @@ impl Interp {
         let main = globals.func[main_id].as_normal();
         let mut eval = Self::new(main);
 
-        globals.func.precompile(&mut eval.jit_gen, eval.vm_entry);
-
         let entry = eval.construct_vm(eval.vm_entry);
+        let vm_entry = eval.jit_gen.jit.get_label_address(eval.vm_entry);
+        globals.func.precompile(&mut eval.jit_gen, vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
             unsafe { std::mem::transmute(entry.0) };
@@ -277,6 +293,7 @@ impl Interp {
         let entry = self.jit_gen.jit.get_current_address();
         let func_offset = self.jit_gen.jit.const_i64(0);
         let func_address = self.jit_gen.jit.const_i64(0);
+        let func_pc = self.jit_gen.jit.const_i64(0);
 
         monoasm! {
             self.jit_gen.jit,
@@ -343,7 +360,7 @@ impl Interp {
         };
         self.fetch_and_dispatch();
 
-        self.dispatch[1] = self.vm_fncall(func_offset, func_address);
+        self.dispatch[1] = self.vm_fncall(func_offset, func_address, func_pc);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = self.vm_br();
         self.dispatch[4] = self.vm_condbr();
@@ -460,7 +477,12 @@ impl Interp {
         };
     }
 
-    fn vm_fncall(&mut self, func_offset: DestLabel, func_address: DestLabel) -> CodePtr {
+    fn vm_fncall(
+        &mut self,
+        func_offset: DestLabel,
+        func_address: DestLabel,
+        func_pc: DestLabel,
+    ) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
@@ -469,24 +491,17 @@ impl Interp {
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
+            lea rcx, [rip + func_offset]; // rcx: &mut usize
             movq rax, (find_method);
             call rax;       // rax <- EncodedCallInfo
 
-            movl rdx, rax;  // rdx: FuncId
-            shrq rax, 32;
-            movl r14, rax;  // r14: args:len.
-            movq rdi, rbx;  // rdi: &mut Interp
-            movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rip + func_offset]; // rcx: &mut usize
-            movq rax, (get_func_data);
-            call rax;
-
             pushq r13;
             pushq r15;
-            movq r13, rax;    // r13: BcPc
-            movl rdi, r14;
+            movq r13, [rip + func_pc];    // r13: BcPc
+            shrq rax, 32;
+            movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
-            movzxw r14, r14;    // r14 <- len
+            movzxw r14, rax;    // r14 <- len
             shlq r14, 3;
             lea rdx, [rsp - 0x28];
         };

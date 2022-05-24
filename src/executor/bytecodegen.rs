@@ -1,7 +1,5 @@
 use std::hash::Hash;
 
-use monoasm::DestLabel;
-
 use super::*;
 
 ///
@@ -167,7 +165,7 @@ impl FnStore {
         constants as u32
     }
 
-    pub fn precompile(&mut self, jit: &mut JitGen, vm_entry: DestLabel) {
+    pub fn precompile(&mut self, jit: &mut JitGen, vm_entry: CodePtr) {
         for func in &mut self.functions.0 {
             match &func.kind {
                 FuncKind::Normal(_) => {
@@ -236,8 +234,8 @@ pub struct FuncInfo {
     name: Option<IdentId>,
     /// arity of this function.
     arity: usize,
-    /// *DestLabel* of JIT function.
-    jit_label: Option<DestLabel>,
+    /// address of JIT function.
+    jit_label: Option<CodePtr>,
     pub(super) kind: FuncKind,
 }
 
@@ -273,11 +271,11 @@ impl FuncInfo {
         self.arity
     }
 
-    pub(super) fn jit_label(&self) -> Option<DestLabel> {
+    pub(super) fn jit_label(&self) -> Option<CodePtr> {
         self.jit_label
     }
 
-    pub(super) fn set_jit_label(&mut self, label: DestLabel) {
+    pub(super) fn set_jit_label(&mut self, label: CodePtr) {
         self.jit_label = Some(label);
     }
 

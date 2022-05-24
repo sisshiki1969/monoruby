@@ -1,4 +1,5 @@
 #![feature(box_patterns)]
+pub use monoasm::CodePtr;
 pub use ruruby_parse::*;
 use std::collections::HashMap;
 use std::fs::File;

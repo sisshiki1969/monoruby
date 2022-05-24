@@ -38,12 +38,12 @@ extern "C" fn get_func_absolute_address(
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
-) -> *const u8 {
+) -> CodePtr {
     let func_id = match globals.get_method(func_name) {
         Some(id) => id,
         None => {
             interp.error = Some(MonorubyErr::MethodNotFound(func_name));
-            return std::ptr::null();
+            return CodePtr::default();
         }
     };
 
@@ -54,9 +54,9 @@ extern "C" fn get_func_absolute_address(
             "number of arguments mismatch. expected:{} actual:{}",
             arity, args_len
         )));
-        return std::ptr::null();
+        return CodePtr::default();
     }
-    let jit_label = match info.jit_label() {
+    match info.jit_label() {
         Some(dest) => dest,
         None => {
             let mut info = std::mem::take(&mut globals.func[func_id]);
@@ -64,8 +64,7 @@ extern "C" fn get_func_absolute_address(
             globals.func[func_id] = info;
             label
         }
-    };
-    interp.jit_gen.jit.get_label_absolute_address(jit_label)
+    }
 }
 
 extern "C" fn define_method(
@@ -282,7 +281,8 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            call main;
+            movq rax, (main.0);
+            call rax;
             popq r12;
             popq rbx;
             popq rbp;
@@ -292,7 +292,7 @@ impl JitGen {
         self.jit.get_label_addr2(entry)
     }
 
-    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> DestLabel {
+    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {
         let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
@@ -318,7 +318,7 @@ impl JitGen {
         label
     }
 
-    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) -> DestLabel {
+    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) -> CodePtr {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after execution of call instruction.
@@ -335,10 +335,9 @@ impl JitGen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
-        let label = self.jit.label();
+        let label = self.jit.get_current_address();
         let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
-        label:
             pushq rbp;
             movq rdi, rbx;
             movq rsi, r12;
@@ -354,9 +353,8 @@ impl JitGen {
         label
     }
 
-    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> DestLabel {
-        let label = self.jit.label();
-        self.jit.bind_label(label);
+    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> CodePtr {
+        let label = self.jit.get_current_address();
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
