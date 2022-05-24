@@ -79,21 +79,36 @@ extern "C" fn get_func_data(
 ) -> BcPc {
     let main = globals.func[func_id].as_normal();
     let regs = main.total_reg_num();
-    *data = ((regs + 1) & (-2i64 as usize)) * 8;
+    *data = ((regs + 2) & (-2i64 as usize)) * 8;
     BcPcBase::new(main) + 0
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+struct EncodedCallInfo(u64);
+
+impl EncodedCallInfo {
+    fn new(func_id: FuncId, args: u16, len: u16) -> Self {
+        Self((func_id.0 as u64) + ((args as u64) << 48) + ((len as u64) << 32))
+    }
+
+    fn none() -> Self {
+        Self(-1i64 as u64)
+    }
 }
 
 extern "C" fn find_method(
     interp: &mut Interp,
     globals: &mut Globals,
     callsite_id: CallsiteId,
-) -> usize {
+) -> EncodedCallInfo {
     let CallsiteInfo {
         name,
         args,
         len,
         cache: (version, cached_func),
     } = globals.func[callsite_id];
+    //eprintln!("{}", globals.id_store.get_name(name));
     let func_id = if version == interp.class_version {
         cached_func
     } else {
@@ -104,7 +119,7 @@ extern "C" fn find_method(
             }
             None => {
                 interp.error = Some(MonorubyErr::MethodNotFound(name));
-                return 0;
+                return EncodedCallInfo::none();
             }
         }
     };
@@ -115,9 +130,9 @@ extern "C" fn find_method(
             info.arity(),
             len
         )));
-        0
+        EncodedCallInfo::none()
     } else {
-        1
+        EncodedCallInfo::new(func_id, args, len)
     }
 }
 
@@ -293,6 +308,9 @@ impl Interp {
         };
         self.fetch_and_dispatch();
 
+        //BcOp::Neg
+        let neg = self.vm_neg();
+
         //BcOp::Add
         let addrr = self.vm_addrr();
         //BcOp::Sub
@@ -344,6 +362,7 @@ impl Interp {
         self.dispatch[7] = self.jit_gen.jit.get_label_absolute_address(constant) as _;
         self.dispatch[8] = self.jit_gen.jit.get_label_absolute_address(nil) as _;
 
+        self.dispatch[129] = self.jit_gen.jit.get_label_absolute_address(neg) as _;
         self.dispatch[130] = self.jit_gen.jit.get_label_absolute_address(addrr) as _;
         self.dispatch[131] = self.jit_gen.jit.get_label_absolute_address(subrr) as _;
         self.dispatch[132] = self.jit_gen.jit.get_label_absolute_address(mulrr) as _;
@@ -453,23 +472,43 @@ impl Interp {
     fn vm_fncall(&mut self, fn_entry: DestLabel, func_offset: DestLabel) -> DestLabel {
         let label = self.jit_gen.jit.label();
         let exit = self.jit_gen.jit.label();
+        let loop_ = self.jit_gen.jit.label();
+        let loop_exit = self.jit_gen.jit.label();
         self.jit_gen.jit.bind_label(label);
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
             movq rax, (find_method);
-            call rax;       // rax <- FuncId
+            call rax;       // rax <- EncodedCallInfo
 
-            movq rdx, rax;  // rdx: FuncId
+            movl rdx, rax;  // rdx: FuncId
+            shrq rax, 32;
+            movl r14, rax;  // r14: args:len.
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
             lea rcx, [rip + func_offset]; // rcx: &mut usize
             movq rax, (get_func_data);
             call rax;
+
             pushq r13;
             pushq r15;
             movq r13, rax;    // r13: BcPc
+            movl rdi, r14;
+            shrq rdi, 16;   // rdi <- args
+            movzxw r14, r14;    // r14 <- len
+            shlq r14, 3;
+            lea rdx, [rsp - 0x28];
+        };
+        self.vm_get_addr_rdi();
+        /*for i in 0..len {
+            let reg = args + i;
+            monoasm!(self.jit,
+                movq rax, [rbp - (conv(reg))];
+                movq [rsp - ((0x28 + i * 8) as i64)], rax;
+            );
+        }*/
+        monoasm! { self.jit_gen.jit,
             //
             //       +-------------+
             //  0x00 |             | <- rsp
@@ -486,6 +525,18 @@ impl Interp {
             //       +-------------+
             //       |             |
             //
+            movq rsi, rdi;
+            subq rsi, r14;
+        loop_:
+            cmpq rdi, rsi;
+            jeq loop_exit;
+            movq rax, [rdi];
+            movq [rdx], rax;
+            subq rdi, 8;
+            subq rdx, 8;
+            jmp loop_;
+        loop_exit:
+
             call fn_entry;
             popq r15;
             popq r13;
@@ -564,6 +615,35 @@ impl Interp {
             // generic path
             addq rsi, 1;
             movq rax, (add_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_neg(&mut self) -> DestLabel {
+        let label = self.jit_gen.jit.label();
+        self.jit_gen.jit.bind_label(label);
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            testq rdi, 0x1;
+            jeq generic;
+            shrq rdi, 1;
+            negq rdi;
+            shlq rdi, 1;
+            addq rdi, 1;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic:
+            // generic path
+            movq rax, (neg_value);
             call rax;
             // store the result to return reg.
             movq [r15], rax;
@@ -785,7 +865,7 @@ impl Interp {
             entry_panic:
                 movq rdi, rbx;
                 movq rsi, r12;
-                movq rax, (super::compiler::panic);
+                movq rax, (super::compiler::unimplemented_inst);
                 call rax;
                 leave;
                 ret;

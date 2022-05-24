@@ -353,7 +353,7 @@ impl NormalFuncInfo {
         info
     }
 
-    /// get a number of arguments.
+    /// get a number of registers.
     pub(super) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.reg_num as usize
     }

@@ -149,7 +149,7 @@ impl Value {
         } else if let Some(f) = self.as_flonum() {
             RV::Float(f)
         } else if !self.is_packed_value() {
-            panic!()
+            panic!("invalid Value: {:08x}", self.get())
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,

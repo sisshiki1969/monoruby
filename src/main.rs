@@ -351,7 +351,7 @@ mod test {
             r#"
             def f; 1; end
             a = 0; i = 0
-            while i < 1000000000
+            while i < 200000000
               a = a + f
               if i == 500
                 def f; 0; end
@@ -398,6 +398,18 @@ mod test {
         end
         f(5,7)
         f(4,9)
+        "#,
+        );
+    }
+
+    #[test]
+    fn test5a() {
+        run_test(
+            r#"
+        def f(a)
+          a
+        end
+        f(7)
         "#,
         );
     }

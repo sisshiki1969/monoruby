@@ -77,6 +77,10 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
+pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals) {
+    panic!("unimplemented inst.");
+}
+
 pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
@@ -316,7 +320,7 @@ impl JitGen {
         label
     }
 
-    fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) {
+    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after execution of call instruction.
