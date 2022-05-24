@@ -158,9 +158,8 @@ extern "C" fn eprintln(data: u64) {
 macro_rules! cmp_ops {
     ($op:ident) => {
         paste! {
-            fn [<vm_ $op rr>](&mut self) -> DestLabel {
-                let label = self.jit_gen.jit.label();
-                self.jit_gen.jit.bind_label(label);
+            fn [<vm_ $op rr>](&mut self) -> CodePtr {
+                let label = self.jit_gen.jit.get_current_address();
                 self.vm_get_addr_rdi(); // rdi <- lhs addr
                 self.vm_get_addr_rsi(); // rsi <- rhs addr
                 self.vm_get_addr_r15(); // r15 <- ret addr
@@ -186,9 +185,8 @@ macro_rules! cmp_ops {
 macro_rules! cmp_ri_ops {
     ($op:ident) => {
         paste! {
-            fn [<vm_ $op ri>](&mut self) -> DestLabel {
-                let label = self.jit_gen.jit.label();
-                self.jit_gen.jit.bind_label(label);
+            fn [<vm_ $op ri>](&mut self) -> CodePtr {
+                let label = self.jit_gen.jit.get_current_address();
                 self.vm_get_addr_rdi(); // rdi <- lhs addr
                 self.vm_get_addr_r15(); // r15 <- ret addr
                 monoasm! { self.jit_gen.jit,
@@ -218,7 +216,7 @@ pub struct Interp {
     pc_top: BcPcBase,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
-    dispatch: Vec<u64>,
+    dispatch: Vec<CodePtr>,
     class_version: usize,
     vm_entry: DestLabel,
 }
@@ -229,9 +227,8 @@ impl Interp {
         let mut jit_gen = JitGen::new();
         let vm_entry = jit_gen.jit.label();
         // dispatch table.
-        let entry_panic = jit_gen.jit.label();
+        let entry_panic = jit_gen.jit.get_current_address();
         monoasm! { jit_gen.jit,
-            entry_panic:
                 movq rdi, rbx;
                 movq rsi, r12;
                 movq rax, (super::compiler::unimplemented_inst);
@@ -239,9 +236,7 @@ impl Interp {
                 leave;
                 ret;
         };
-        jit_gen.jit.finalize();
-        let panic_addr = jit_gen.jit.get_label_absolute_address(entry_panic) as u64;
-        let dispatch = vec![panic_addr; 256];
+        let dispatch = vec![entry_panic; 256];
         Self {
             cur_fn: main.id,
             pc: pc_top + 0,
@@ -271,22 +266,20 @@ impl Interp {
         let entry = eval.construct_vm(eval.vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
-            unsafe { std::mem::transmute(eval.jit_gen.jit.get_label_absolute_address(entry)) };
+            unsafe { std::mem::transmute(entry.0) };
         match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
             None => Err(MonorubyErr::Unimplemented(format!("_"))),
         }
     }
 
-    fn construct_vm(&mut self, vm_entry: DestLabel) -> DestLabel {
-        let entry = self.jit_gen.jit.label();
-        //let fn_entry = self.jit_gen.jit.label();
+    fn construct_vm(&mut self, vm_entry: DestLabel) -> CodePtr {
+        let entry = self.jit_gen.jit.get_current_address();
         let func_offset = self.jit_gen.jit.const_i64(0);
         let func_address = self.jit_gen.jit.const_i64(0);
 
         monoasm! {
             self.jit_gen.jit,
-            entry:
                 pushq rbx;
                 pushq r12;
                 pushq r13;
@@ -331,26 +324,8 @@ impl Interp {
         };
         self.fetch_and_dispatch();
 
-        //BcOp::FnCall
-        let fncall = self.vm_fncall(func_offset, func_address);
-        //BcOp::MethodDef
-        let method_def = self.vm_method_def();
-        //BcOp::Br
-        let br = self.vm_br();
-        //BcOp::CondBr
-        let condbr = self.vm_condbr();
-        //BcOp::CondNotBr
-        let condnotbr = self.vm_condnotbr();
-        //BcOp::Nil
-        let nil = self.vm_nil();
-        //BcOp::Integer
-        let integer = self.vm_integer();
-        //BcOp::Const
-        let constant = self.vm_constant();
-
         //BcOp::Ret
-        let ret = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(ret);
+        let ret = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq rax, [r15];
@@ -359,8 +334,7 @@ impl Interp {
         };
 
         //BcOp::Mov
-        let mov = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(mov);
+        let mov = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         self.vm_get_addr_rdi();
         monoasm! { self.jit_gen.jit,
@@ -369,84 +343,40 @@ impl Interp {
         };
         self.fetch_and_dispatch();
 
-        //BcOp::Neg
-        let neg = self.vm_neg();
+        self.dispatch[1] = self.vm_fncall(func_offset, func_address);
+        self.dispatch[2] = self.vm_method_def();
+        self.dispatch[3] = self.vm_br();
+        self.dispatch[4] = self.vm_condbr();
+        self.dispatch[5] = self.vm_condnotbr();
+        self.dispatch[6] = self.vm_integer();
+        self.dispatch[7] = self.vm_constant();
+        self.dispatch[8] = self.vm_nil();
 
-        //BcOp::Add
-        let addrr = self.vm_addrr();
-        //BcOp::Sub
-        let subrr = self.vm_subrr();
-        //BcOp::Mul
-        let mulrr = self.vm_mulrr();
-        //BcOp::Div
-        let divrr = self.vm_divrr();
+        self.dispatch[129] = self.vm_neg();
+        self.dispatch[130] = self.vm_addrr();
+        self.dispatch[131] = self.vm_subrr();
+        self.dispatch[132] = self.vm_mulrr();
+        self.dispatch[133] = self.vm_divrr();
+        self.dispatch[134] = self.vm_eqrr();
+        self.dispatch[135] = self.vm_nerr();
+        self.dispatch[136] = self.vm_ltrr();
+        self.dispatch[137] = self.vm_lerr();
+        self.dispatch[138] = self.vm_gtrr();
+        self.dispatch[139] = self.vm_gerr();
 
-        //BcOp::Eq
-        let eqrr = self.vm_eqrr();
-        //BcOp::Ne
-        let nerr = self.vm_nerr();
-        //BcOp::Lt
-        let ltrr = self.vm_ltrr();
-        //BcOp::Le
-        let lerr = self.vm_lerr();
-        //BcOp::Gt
-        let gtrr = self.vm_gtrr();
-        //BcOp::Ge
-        let gerr = self.vm_gerr();
+        self.dispatch[140] = self.vm_addri();
+        self.dispatch[141] = self.vm_subri();
+        self.dispatch[142] = self.vm_eqri();
+        self.dispatch[143] = self.vm_neri();
+        self.dispatch[144] = self.vm_ltri();
+        self.dispatch[145] = self.vm_leri();
+        self.dispatch[146] = self.vm_gtri();
+        self.dispatch[147] = self.vm_geri();
 
-        //BcOp::Addri
-        let addri = self.vm_addri();
-        //BcOp::Subri
-        let subri = self.vm_subri();
-
-        //BcOp::Eqri
-        let eqri = self.vm_eqri();
-        //BcOp::Neri
-        let neri = self.vm_neri();
-        //BcOp::Ltri
-        let ltri = self.vm_ltri();
-        //BcOp::Leri
-        let leri = self.vm_leri();
-        //BcOp::Gtri
-        let gtri = self.vm_gtri();
-        //BcOp::Geri
-        let geri = self.vm_geri();
+        self.dispatch[148] = ret;
+        self.dispatch[149] = mov;
 
         self.jit_gen.jit.finalize();
-
-        self.dispatch[1] = self.jit_gen.jit.get_label_absolute_address(fncall) as _;
-        self.dispatch[2] = self.jit_gen.jit.get_label_absolute_address(method_def) as _;
-        self.dispatch[3] = self.jit_gen.jit.get_label_absolute_address(br) as _;
-        self.dispatch[4] = self.jit_gen.jit.get_label_absolute_address(condbr) as _;
-        self.dispatch[5] = self.jit_gen.jit.get_label_absolute_address(condnotbr) as _;
-        self.dispatch[6] = self.jit_gen.jit.get_label_absolute_address(integer) as _;
-        self.dispatch[7] = self.jit_gen.jit.get_label_absolute_address(constant) as _;
-        self.dispatch[8] = self.jit_gen.jit.get_label_absolute_address(nil) as _;
-
-        self.dispatch[129] = self.jit_gen.jit.get_label_absolute_address(neg) as _;
-        self.dispatch[130] = self.jit_gen.jit.get_label_absolute_address(addrr) as _;
-        self.dispatch[131] = self.jit_gen.jit.get_label_absolute_address(subrr) as _;
-        self.dispatch[132] = self.jit_gen.jit.get_label_absolute_address(mulrr) as _;
-        self.dispatch[133] = self.jit_gen.jit.get_label_absolute_address(divrr) as _;
-        self.dispatch[134] = self.jit_gen.jit.get_label_absolute_address(eqrr) as _;
-        self.dispatch[135] = self.jit_gen.jit.get_label_absolute_address(nerr) as _;
-        self.dispatch[136] = self.jit_gen.jit.get_label_absolute_address(ltrr) as _;
-        self.dispatch[137] = self.jit_gen.jit.get_label_absolute_address(lerr) as _;
-        self.dispatch[138] = self.jit_gen.jit.get_label_absolute_address(gtrr) as _;
-        self.dispatch[139] = self.jit_gen.jit.get_label_absolute_address(gerr) as _;
-
-        self.dispatch[140] = self.jit_gen.jit.get_label_absolute_address(addri) as _;
-        self.dispatch[141] = self.jit_gen.jit.get_label_absolute_address(subri) as _;
-        self.dispatch[142] = self.jit_gen.jit.get_label_absolute_address(eqri) as _;
-        self.dispatch[143] = self.jit_gen.jit.get_label_absolute_address(neri) as _;
-        self.dispatch[144] = self.jit_gen.jit.get_label_absolute_address(ltri) as _;
-        self.dispatch[145] = self.jit_gen.jit.get_label_absolute_address(leri) as _;
-        self.dispatch[146] = self.jit_gen.jit.get_label_absolute_address(gtri) as _;
-        self.dispatch[147] = self.jit_gen.jit.get_label_absolute_address(geri) as _;
-
-        self.dispatch[148] = self.jit_gen.jit.get_label_absolute_address(ret) as _;
-        self.dispatch[149] = self.jit_gen.jit.get_label_absolute_address(mov) as _;
-
         entry
     }
 
@@ -530,12 +460,11 @@ impl Interp {
         };
     }
 
-    fn vm_fncall(&mut self, func_offset: DestLabel, func_address: DestLabel) -> DestLabel {
-        let label = self.jit_gen.jit.label();
+    fn vm_fncall(&mut self, func_offset: DestLabel, func_address: DestLabel) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
         let loop_exit = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
@@ -609,9 +538,8 @@ impl Interp {
         label
     }
 
-    fn vm_nil(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_nil(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq [r15], (NIL_VALUE);
@@ -620,9 +548,8 @@ impl Interp {
         label
     }
 
-    fn vm_integer(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_integer(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! {
             self.jit_gen.jit,
@@ -634,9 +561,8 @@ impl Interp {
         label
     }
 
-    fn vm_constant(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_constant(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! {
             self.jit_gen.jit,
@@ -651,9 +577,8 @@ impl Interp {
         label
     }
 
-    fn vm_addri(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_addri(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
@@ -679,9 +604,8 @@ impl Interp {
         label
     }
 
-    fn vm_neg(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_neg(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
@@ -708,9 +632,8 @@ impl Interp {
         label
     }
 
-    fn vm_addrr(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_addrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_rsi(); // rsi <- rhs addr
@@ -739,9 +662,8 @@ impl Interp {
         label
     }
 
-    fn vm_subri(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_subri(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
@@ -768,9 +690,8 @@ impl Interp {
         label
     }
 
-    fn vm_subrr(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_subrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_rsi(); // rsi <- rhs addr
@@ -799,9 +720,8 @@ impl Interp {
         label
     }
 
-    fn vm_mulrr(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_mulrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_rsi(); // rsi <- rhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
@@ -817,9 +737,8 @@ impl Interp {
         label
     }
 
-    fn vm_divrr(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(label);
+    fn vm_divrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_rdi(); // rdi <- lhs addr
         self.vm_get_addr_rsi(); // rsi <- rhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
@@ -838,10 +757,9 @@ impl Interp {
     cmp_ops!(eq, ne, gt, ge, lt, le);
     cmp_ri_ops!(eq, ne, gt, ge, lt, le);
 
-    fn vm_method_def(&mut self) -> DestLabel {
-        let label = self.jit_gen.jit.label();
+    fn vm_method_def(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         monoasm! { self.jit_gen.jit,
-        label:
             movq rdx, rdi;  // const_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
@@ -852,21 +770,19 @@ impl Interp {
         label
     }
 
-    fn vm_br(&mut self) -> DestLabel {
-        let br = self.jit_gen.jit.label();
+    fn vm_br(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         monoasm! { self.jit_gen.jit,
-        br:
             shlq rdi, 3;
             addq r13, rdi;
         };
         self.fetch_and_dispatch();
-        br
+        label
     }
 
-    fn vm_condbr(&mut self) -> DestLabel {
-        let br = self.jit_gen.jit.label();
+    fn vm_condbr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let exit = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(br);
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq r15, [r15];
@@ -881,13 +797,12 @@ impl Interp {
             addq r13, rdi;
         };
         self.fetch_and_dispatch();
-        br
+        label
     }
 
-    fn vm_condnotbr(&mut self) -> DestLabel {
-        let br = self.jit_gen.jit.label();
+    fn vm_condnotbr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
         let exit = self.jit_gen.jit.label();
-        self.jit_gen.jit.bind_label(br);
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq r15, [r15];
@@ -902,6 +817,6 @@ impl Interp {
             addq r13, rdi;
         };
         self.fetch_and_dispatch();
-        br
+        label
     }
 }
