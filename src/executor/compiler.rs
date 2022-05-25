@@ -13,9 +13,9 @@ pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Opt
 /// This generates x86-64 machine code from a bytecode.
 ///
 pub struct JitGen {
-    jit: JitMemory,
+    pub jit: JitMemory,
     class_version: DestLabel,
-    entry_panic: DestLabel,
+    pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
     entry_return: DestLabel,
 }
@@ -38,29 +38,33 @@ extern "C" fn get_func_absolute_address(
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
-) -> *const u8 {
+) -> CodePtr {
     let func_id = match globals.get_method(func_name) {
-        Some(id) => *id,
+        Some(id) => id,
         None => {
             interp.error = Some(MonorubyErr::MethodNotFound(func_name));
-            return std::ptr::null();
+            return CodePtr::default();
         }
     };
 
-    let info = &mut globals.func[func_id];
+    let info = &globals.func[func_id];
     let arity = info.arity();
     if arity != args_len {
         interp.error = Some(MonorubyErr::WrongArguments(format!(
             "number of arguments mismatch. expected:{} actual:{}",
             arity, args_len
         )));
-        return std::ptr::null();
+        return CodePtr::default();
     }
-    let jit_label = match info.jit_label() {
+    match info.jit_label() {
         Some(dest) => dest,
-        None => interp.jit_gen.jit_compile(info),
-    };
-    interp.jit_gen.jit.get_label_absolute_address(jit_label)
+        None => {
+            let mut info = std::mem::take(&mut globals.func[func_id]);
+            let label = interp.jit_gen.jit_compile(&mut info, &globals.func);
+            globals.func[func_id] = info;
+            label
+        }
+    }
 }
 
 extern "C" fn define_method(
@@ -72,7 +76,11 @@ extern "C" fn define_method(
     globals.func.insert(func_name, func_id);
 }
 
-extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
+pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals) {
+    panic!("unimplemented inst.");
+}
+
+pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
@@ -262,7 +270,9 @@ impl JitGen {
 
     pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
         let main_id = globals.get_main_func();
-        let main = self.jit_compile(&mut globals.func[main_id]);
+        let mut info = std::mem::take(&mut globals.func[main_id]);
+        let main = self.jit_compile(&mut info, &globals.func);
+        globals.func[main_id] = info;
         let entry = self.jit.label();
         monoasm!(self.jit,
         entry:
@@ -271,7 +281,8 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            call main;
+            movq rax, (main.0);
+            call rax;
             popq r12;
             popq rbx;
             popq rbp;
@@ -281,17 +292,15 @@ impl JitGen {
         self.jit.get_label_addr2(entry)
     }
 
-    fn jit_compile(&mut self, func: &mut FuncInfo) -> DestLabel {
+    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {
         let now = Instant::now();
-        let label = self.jit.label();
-        func.set_jit_label(label);
-        self.jit.bind_label(label);
-        match &func.kind {
-            FuncKind::Normal(info) => self.jit_compile_normal(info),
+        let label = match &func.kind {
+            FuncKind::Normal(info) => self.jit_compile_normal(info, store),
             FuncKind::Builtin { abs_address } => {
                 self.jit_compile_builtin(*abs_address, func.arity())
             }
         };
+        func.set_jit_label(label);
         self.jit.finalize();
         #[cfg(feature = "emit-asm")]
         {
@@ -309,7 +318,7 @@ impl JitGen {
         label
     }
 
-    fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) {
+    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) -> CodePtr {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after execution of call instruction.
@@ -326,6 +335,7 @@ impl JitGen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
+        let label = self.jit.get_current_address();
         let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
             pushq rbp;
@@ -340,9 +350,11 @@ impl JitGen {
             leave;
             ret;
         );
+        label
     }
 
-    fn jit_compile_normal(&mut self, func: &NormalFuncInfo) {
+    fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> CodePtr {
+        let label = self.jit.get_current_address();
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
@@ -350,200 +362,199 @@ impl JitGen {
         self.prologue(func.total_reg_num());
         for (idx, op) in func.bytecode().iter().enumerate() {
             self.jit.bind_label(labels[idx]);
-            match op {
+            match BcOp::from_u64(*op) {
                 BcOp::Integer(ret, i) => {
-                    let i = Value::integer(*i).get();
+                    let i = Value::integer(i).get();
                     monoasm!(self.jit,
-                      movq [rbp - (conv(*ret))], (i);
+                      movq [rbp - (conv(ret))], (i);
                     );
                 }
                 BcOp::Const(ret, id) => {
-                    let v = func.get_constant(*id).get();
+                    let v = store.get_literal(id).get();
                     monoasm!(self.jit,
                       movq rax, (v);
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Nil(ret) => {
-                    let v = Value::nil().get();
                     monoasm!(self.jit,
-                      movq rax, (v);
-                      movq [rbp - (conv(*ret))], rax;
+                      movq rax, (NIL_VALUE);
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Neg(dst, src) => {
                     monoasm!(self.jit,
-                      movq rdi, [rbp - (conv(*src))];
+                      movq rdi, [rbp - (conv(src))];
                       movq rax, (neg_value);
                       call rax;
-                      movq [rbp - (conv(*dst))], rax;
+                      movq [rbp - (conv(dst))], rax;
                     );
                 }
                 BcOp::Add(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    self.generic_add(generic, exit, *ret);
+                    self.generic_add(generic, exit, ret);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(*rhs as i32).get();
+                    let rhs = Value::integer(rhs as i32).get();
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
+                        movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.generic_add(generic, exit, *ret);
+                    self.generic_add(generic, exit, ret);
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     self.guard_rdi_fixnum(generic);
                     self.guard_rsi_fixnum(generic);
-                    self.generic_sub(generic, exit, *ret);
+                    self.generic_sub(generic, exit, ret);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(*rhs as i32).get();
+                    let rhs = Value::integer(rhs as i32).get();
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(*lhs))];
+                        movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.generic_sub(generic, exit, *ret);
+                    self.generic_sub(generic, exit, ret);
                 }
 
                 BcOp::Mul(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (mul_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Div(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (div_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Eq(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_eq_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Ne(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_ne_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Ge(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_ge_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Gt(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_gt_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Le(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_le_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Lt(ret, lhs, rhs) => {
-                    self.load_binary_args(*lhs, *rhs);
+                    self.load_binary_args(lhs, rhs);
                     monoasm!(self.jit,
                       movq rax, (cmp_lt_values);
                       call rax;
-                      movq [rbp - (conv(*ret))], rax;
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Eqri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_eq_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, seteq rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Neri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_ne_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setne rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Geri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_ge_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setge rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Gtri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_gt_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setgt rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Leri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_le_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setle rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Ltri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
                     let func = cmp_lt_values;
-                    self.compri_pre(*lhs, *rhs, generic);
+                    self.compri_pre(lhs, rhs, generic);
                     monoasm!(self.jit, setlt rax; );
-                    self.compri_post(func, *ret, generic, exit);
+                    self.compri_post(func, ret, generic, exit);
                 }
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,
-                      movq rax, [rbp - (conv(*src))];
-                      movq [rbp - (conv(*dst))], rax;
+                      movq rax, [rbp - (conv(src))];
+                      movq [rbp - (conv(dst))], rax;
                     );
                 }
                 BcOp::Ret(lhs) => {
-                    let lhs = conv(*lhs);
+                    let lhs = conv(lhs);
                     monoasm!(self.jit,
                         movq rax, [rbp - (lhs)];
                     );
                     self.epilogue();
                 }
-                BcOp::FnCall(id, ret, args, len) => {
+                BcOp::FnCall(ret, id) => {
                     // set arguments to a callee stack.
                     //
                     //       +-------------+
@@ -561,8 +572,11 @@ impl JitGen {
                     //       +-------------+
                     //       |             |
                     //
-                    for i in 0..*len {
-                        let reg = *args + i;
+                    let CallsiteInfo {
+                        name, args, len, ..
+                    } = store[id];
+                    for i in 0..len {
+                        let reg = args + i;
                         monoasm!(self.jit,
                             movq rax, [rbp - (conv(reg))];
                             movq [rsp - ((0x28 + i * 8) as i64)], rax;
@@ -582,8 +596,8 @@ impl JitGen {
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
                         subq rsp, 160;
-                        movq rdx, (u32::from(*id)); // IdentId
-                        movq rcx, (*len as usize); // args_len: usize
+                        movq rdx, (u32::from(name)); // IdentId
+                        movq rcx, (len as usize); // args_len: usize
                         call entry_find_method;
                         // absolute address was returned to rax.
                         addq rsp, 160;
@@ -605,49 +619,53 @@ impl JitGen {
                         testq rax, rax;
                         jeq entry_return;
                     );
-                    if *ret != u16::MAX {
+                    if ret != 0 {
                         monoasm!(self.jit,
-                            movq [rbp - (conv(*ret))], rax;
+                            movq [rbp - (conv(ret))], rax;
                         );
                     }
                 }
-                BcOp::MethodDef(id, fid) => {
+                BcOp::MethodDef(id) => {
+                    let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         addq [rip + class_version], 1;
                         movq rdi, rbx; // &mut Interp
                         movq rsi, r12; // &Globals
-                        movq rdx, (u32::from(*id)); // IdentId
-                        movq rcx, (u32::from(*fid)); // FuncId
+                        movq rdx, (u32::from(name)); // IdentId
+                        movq rcx, (u32::from(func)); // FuncId
                         movq rax, (define_method);
                         call rax;
                     );
                 }
-                BcOp::Br(next_pc) => {
-                    let dest = labels[next_pc.0 as usize];
+                BcOp::Br(disp) => {
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                       jmp dest;
                     );
                 }
-                BcOp::CondBr(cond_, then_) => {
-                    let cond_ = conv(*cond_);
-                    let dest = labels[then_.0 as usize];
-                    let false_val = Value::bool(false).get();
+                BcOp::CondBr(cond_, disp) => {
+                    let cond_ = conv(cond_);
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      cmpq [rbp - (cond_)], (false_val);
+                      cmpq rax, [rbp - (cond_)];
+                      orq rax, 0x10;
+                      cmpq rax, (FALSE_VALUE);
                       jne dest;
                     );
                 }
-                BcOp::CondNotBr(cond_, else_) => {
-                    let cond_ = conv(*cond_);
-                    let dest = labels[else_.0 as usize];
-                    let false_val = Value::bool(false).get();
+                BcOp::CondNotBr(cond_, disp) => {
+                    let cond_ = conv(cond_);
+                    let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      cmpq [rbp - (cond_)], (false_val);
+                      cmpq rax, [rbp - (cond_)];
+                      orq rax, 0x10;
+                      cmpq rax, (FALSE_VALUE);
                       jeq dest;
                     );
                 }
             }
         }
+        label
     }
 }

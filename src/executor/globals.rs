@@ -9,7 +9,6 @@ pub struct Globals {
     pub func: FnStore,
     /// identifier table.
     pub id_store: IdentifierTable,
-    //ctx: Context,
 }
 
 impl Globals {
@@ -24,19 +23,15 @@ impl Globals {
 
     /// Get *FuncId* of the toplevel function.
     pub fn get_main_func(&self) -> FuncId {
-        *self.get_method(IdentId::_MAIN).unwrap()
-    }
-
-    pub fn get_ident_name(&self, id: IdentId) -> &str {
-        self.id_store.get_name(id)
+        self.func.main.unwrap()
     }
 
     fn get_ident_id(&mut self, name: &str) -> IdentId {
         self.id_store.get_ident_id(name)
     }
 
-    pub fn get_method(&self, name: IdentId) -> Option<&FuncId> {
-        self.func.get(name)
+    pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
+        self.func.get(name).cloned()
     }
 
     pub fn add_builtin_func(&mut self, name: &str, address: BuiltinFn, arity: usize) -> FuncId {

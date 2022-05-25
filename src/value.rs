@@ -1,6 +1,6 @@
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
-const NIL_VALUE: u64 = 0x04; // 0000_0100
-const FALSE_VALUE: u64 = 0x14; // 0001_0100
+pub const NIL_VALUE: u64 = 0x04; // 0000_0100
+pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
                               //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
                               //const BOOL_MASK1: u64 = 0b0011_0000;
@@ -149,7 +149,7 @@ impl Value {
         } else if let Some(f) = self.as_flonum() {
             RV::Float(f)
         } else if !self.is_packed_value() {
-            panic!()
+            panic!("invalid Value: {:08x}", self.get())
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,

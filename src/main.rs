@@ -1,4 +1,5 @@
 #![feature(box_patterns)]
+pub use monoasm::CodePtr;
 pub use ruruby_parse::*;
 use std::collections::HashMap;
 use std::fs::File;
@@ -162,7 +163,7 @@ pub fn run_test(code: &str) {
 
     let ruby_res = run_ruby(&all_codes);
 
-    assert_eq!(interp_val.unpack(), ruby_res);
+    assert_eq!(jit_val.unpack(), ruby_res);
 }
 
 fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
@@ -230,6 +231,7 @@ fn run_ruby(code: &Vec<String>) -> RV {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn test0() {
         run_test("");
@@ -345,6 +347,25 @@ mod test {
     }
 
     #[test]
+    #[ignore]
+    fn bench_redefine() {
+        run_test(
+            r#"
+            def f; 1; end
+            a = 0; i = 0
+            while i < 200000000
+              a = a + f
+              if i == 500
+                def f; 0; end
+              end
+              i = i + 1
+            end
+            a
+            "#,
+        );
+    }
+
+    #[test]
     fn test2() {
         run_test(
             r#"
@@ -379,6 +400,18 @@ mod test {
         end
         f(5,7)
         f(4,9)
+        "#,
+        );
+    }
+
+    #[test]
+    fn test5a() {
+        run_test(
+            r#"
+        def f(a)
+          a
+        end
+        f(7)
         "#,
         );
     }
@@ -448,6 +481,15 @@ mod test {
         run_test(
             r#"
             puts 100
+        "#,
+        );
+    }
+
+    #[test]
+    fn test10() {
+        run_test(
+            r#"
+            if nil then 2*5/3 else 5 end
         "#,
         );
     }

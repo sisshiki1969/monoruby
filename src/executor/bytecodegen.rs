@@ -1,7 +1,5 @@
 use std::hash::Hash;
 
-use monoasm::DestLabel;
-
 use super::*;
 
 ///
@@ -18,16 +16,121 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
+pub struct Funcs(Vec<FuncInfo>);
+
+impl std::ops::Index<FuncId> for Funcs {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.0[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for Funcs {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.0[index.0 as usize]
+    }
+}
+
+impl Funcs {
+    fn new() -> Self {
+        Self(vec![])
+    }
+
+    fn next_func_id(&self) -> FuncId {
+        FuncId(self.0.len() as u32)
+    }
+
+    fn add_normal_func(&mut self, name: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> FuncId {
+        let fid = self.next_func_id();
+        self.0.push(FuncInfo::new_normal(name, fid, args, ast));
+        fid
+    }
+
+    fn add_builtin_func(&mut self, name_id: IdentId, address: BuiltinFn, arity: usize) -> FuncId {
+        let id = self.next_func_id();
+        self.0
+            .push(FuncInfo::new_builtin(id, name_id, address, arity));
+        id
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CallsiteInfo {
+    pub name: IdentId,
+    pub args: u16,
+    pub len: u16,
+    pub cache: (usize, FuncId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct CallsiteId(pub u32);
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MethodDefInfo {
+    pub name: IdentId,
+    pub func: FuncId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct MethodDefId(pub u32);
+
+#[derive(Clone, PartialEq)]
 pub struct FnStore {
-    functions: Vec<FuncInfo>,
+    functions: Funcs,
     func_map: HashMap<IdentId, FuncId>,
+    pub main: Option<FuncId>,
+    /// method define info.
+    method_def_info: Vec<MethodDefInfo>,
+    /// callsite info.
+    callsite_info: Vec<CallsiteInfo>,
+    /// literal values.
+    literals: Vec<Value>,
+}
+
+impl std::ops::Index<FuncId> for FnStore {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.functions[index]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for FnStore {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.functions[index]
+    }
+}
+
+impl std::ops::Index<MethodDefId> for FnStore {
+    type Output = MethodDefInfo;
+    fn index(&self, index: MethodDefId) -> &MethodDefInfo {
+        &self.method_def_info[index.0 as usize]
+    }
+}
+
+impl std::ops::Index<CallsiteId> for FnStore {
+    type Output = CallsiteInfo;
+    fn index(&self, index: CallsiteId) -> &CallsiteInfo {
+        &self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<CallsiteId> for FnStore {
+    fn index_mut(&mut self, index: CallsiteId) -> &mut CallsiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
 }
 
 impl FnStore {
     pub fn new() -> Self {
         Self {
-            functions: vec![],
+            functions: Funcs::new(),
             func_map: HashMap::default(),
+            main: None,
+            method_def_info: vec![],
+            callsite_info: vec![],
+            literals: vec![],
         }
     }
 
@@ -38,32 +141,51 @@ impl FnStore {
     pub fn get(&self, name: IdentId) -> Option<&FuncId> {
         self.func_map.get(&name)
     }
-    fn next_func_id(&self) -> FuncId {
-        FuncId(self.functions.len() as u32)
-    }
-}
 
-impl std::ops::Index<FuncId> for FnStore {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.functions[index.0 as usize]
+    fn len(&self) -> usize {
+        self.functions.0.len()
     }
-}
 
-impl std::ops::IndexMut<FuncId> for FnStore {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.functions[index.0 as usize]
+    fn add_method_def(&mut self, name: IdentId, func: FuncId) -> MethodDefId {
+        let info = MethodDefInfo { name, func };
+        let id = self.method_def_info.len();
+        self.method_def_info.push(info);
+        MethodDefId(id as u32)
+    }
+
+    /// get a constant.
+    pub(super) fn get_literal(&self, id: u32) -> Value {
+        self.literals[id as usize]
+    }
+
+    /// register a new constant.
+    fn new_literal(&mut self, val: Value) -> u32 {
+        let constants = self.literals.len();
+        self.literals.push(val);
+        constants as u32
+    }
+
+    pub fn precompile(&mut self, jit: &mut JitGen, vm_entry: CodePtr) {
+        for func in &mut self.functions.0 {
+            match &func.kind {
+                FuncKind::Normal(_) => {
+                    func.set_jit_label(vm_entry);
+                }
+                FuncKind::Builtin { abs_address } => {
+                    let label = jit.jit_compile_builtin(*abs_address, func.arity());
+                    func.set_jit_label(label);
+                }
+            };
+        }
     }
 }
 
 impl FnStore {
     pub(super) fn compile_main(&mut self, ast: Node, id_store: &IdentifierTable) -> Result<()> {
-        let mut fid = self.next_func_id();
-        self.functions
-            .push(FuncInfo::new_normal(IdentId::_MAIN, fid, vec![], ast));
-        self.func_map.insert(IdentId::_MAIN, fid);
+        let mut fid = self.functions.add_normal_func(None, vec![], ast);
+        self.main = Some(fid);
 
-        while self.next_func_id().0 > fid.0 {
+        while self.len() > fid.0 as usize {
             self.compile_func(fid, id_store)?;
             fid = FuncId(fid.0 + 1);
         }
@@ -74,8 +196,8 @@ impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
-        let ir = info.compile_ast(&mut self.functions)?;
-        info.ir_to_bytecode(ir, id_store);
+        let ir = info.compile_ast(self)?;
+        info.ir_to_bytecode(ir, id_store, self);
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         Ok(())
     }
@@ -86,10 +208,8 @@ impl FnStore {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        let id = self.next_func_id();
+        let id = self.functions.add_builtin_func(name_id, address, arity);
         self.func_map.insert(name_id, id);
-        self.functions
-            .push(FuncInfo::new_builtin(id, name_id, address, arity));
         id
     }
 }
@@ -100,21 +220,27 @@ pub(super) enum FuncKind {
     Builtin { abs_address: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl std::default::Default for FuncKind {
+    fn default() -> Self {
+        Self::Builtin { abs_address: 0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FuncInfo {
     /// ID of this function.
     id: FuncId,
     /// name of this function.
-    name: IdentId,
+    name: Option<IdentId>,
     /// arity of this function.
     arity: usize,
-    /// *DestLabel* of JIT function.
-    jit_label: Option<DestLabel>,
+    /// address of JIT function.
+    jit_label: Option<CodePtr>,
     pub(super) kind: FuncKind,
 }
 
 impl FuncInfo {
-    fn new_normal(name: IdentId, func_id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
+    fn new_normal(name: Option<IdentId>, func_id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
         let info = NormalFuncInfo::new(func_id, name, args, ast);
         Self {
             id: info.id,
@@ -128,7 +254,7 @@ impl FuncInfo {
     fn new_builtin(id: FuncId, name: IdentId, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
-            name,
+            name: Some(name),
             arity,
             jit_label: None,
             kind: FuncKind::Builtin {
@@ -145,11 +271,11 @@ impl FuncInfo {
         self.arity
     }
 
-    pub(super) fn jit_label(&self) -> Option<DestLabel> {
+    pub(super) fn jit_label(&self) -> Option<CodePtr> {
         self.jit_label
     }
 
-    pub(super) fn set_jit_label(&mut self, label: DestLabel) {
+    pub(super) fn set_jit_label(&mut self, label: CodePtr) {
         self.jit_label = Some(label);
     }
 
@@ -206,9 +332,9 @@ impl IrContext {
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
-    name_id: IdentId,
+    name_id: Option<IdentId>,
     /// Bytecode.
-    bc: Vec<BcOp>,
+    bytecode: Vec<u64>,
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
@@ -217,23 +343,20 @@ pub(super) struct NormalFuncInfo {
     temp: u16,
     /// The number of temporary registers.
     reg_num: u16,
-    /// literal values.
-    literals: Vec<Value>,
     /// AST.
     ast: Option<Node>,
 }
 
 impl NormalFuncInfo {
-    pub fn new(id: FuncId, name_id: IdentId, args: Vec<IdentId>, ast: Node) -> Self {
+    pub fn new(id: FuncId, name_id: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> Self {
         let mut info = NormalFuncInfo {
             id,
             name_id,
-            bc: vec![],
+            bytecode: vec![],
             args: args.clone(),
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
-            literals: vec![],
             ast: Some(ast),
         };
         args.into_iter().for_each(|name| {
@@ -242,26 +365,14 @@ impl NormalFuncInfo {
         info
     }
 
-    /// get a number of arguments.
+    /// get a number of registers.
     pub(super) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.reg_num as usize
     }
 
     /// get bytecode.
-    pub(super) fn bytecode(&self) -> &Vec<BcOp> {
-        &self.bc
-    }
-
-    /// get a constant.
-    pub(super) fn get_constant(&self, id: u32) -> Value {
-        self.literals[id as usize]
-    }
-
-    /// register a new constant.
-    fn new_constant(&mut self, val: Value) -> u32 {
-        let constants = self.literals.len();
-        self.literals.push(val);
-        constants as u32
+    pub(super) fn bytecode(&self) -> &Vec<u64> {
+        &self.bytecode
     }
 
     /// get the next register id.
@@ -304,7 +415,7 @@ impl NormalFuncInfo {
         BcLocal(local)
     }
 
-    fn gen_integer(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
+    fn gen_integer(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local.into(),
@@ -312,21 +423,21 @@ impl NormalFuncInfo {
             };
             ir.push(BcIr::Integer(reg, i));
         } else {
-            self.gen_const(ir, dst, Value::fixnum(i));
+            self.gen_const(ctx, ir, dst, Value::fixnum(i));
         }
     }
 
-    fn gen_const(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, v: Value) {
+    fn gen_const(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => self.push().into(),
         };
-        let id = self.new_constant(v);
+        let id = ctx.new_literal(v);
         ir.push(BcIr::Const(reg, id));
     }
 
-    fn gen_float(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
-        self.gen_const(ir, dst, Value::float(f));
+    fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
+        self.gen_const(ctx, ir, dst, Value::float(f));
     }
 
     fn gen_nil(&mut self, ir: &mut IrContext, dst: Option<BcLocal>) {
@@ -369,28 +480,31 @@ impl NormalFuncInfo {
         self.gen_mov(ir, lhs.into(), rhs);
     }
 
-    fn dump(&self, globals: &IdentifierTable) {
+    fn dump(&self, globals: &IdentifierTable, store: &FnStore) {
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?}",
             self.id,
-            globals.get_name(self.name_id),
+            match self.name_id {
+                Some(name_id) => globals.get_name(name_id),
+                None => "<ANONYMOUS>",
+            },
             self.args
                 .iter()
                 .map(|id| globals.get_name(*id))
                 .collect::<Vec<_>>()
         );
-        for (i, inst) in self.bc.iter().enumerate() {
+        for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
-            match inst {
-                BcOp::Br(dst) => {
-                    eprintln!("br =>{:?}", dst);
+            match BcOp::from_u64(*inst) {
+                BcOp::Br(disp) => {
+                    eprintln!("br =>:{:05}", i as i32 + 1 + disp);
                 }
-                BcOp::CondBr(reg, dst) => {
-                    eprintln!("condbr %{} =>{:?}", reg, dst);
+                BcOp::CondBr(reg, disp) => {
+                    eprintln!("condbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
-                BcOp::CondNotBr(reg, dst) => {
-                    eprintln!("condnbr %{} =>{:?}", reg, dst);
+                BcOp::CondNotBr(reg, disp) => {
+                    eprintln!("condnbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
                 BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
@@ -446,19 +560,27 @@ impl NormalFuncInfo {
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp::FnCall(id, ret, arg, len) => {
-                    let name = globals.get_name(*id);
-                    match *ret {
-                        u16::MAX => {
-                            eprintln!("_ = call {}(%{}; {})", name, arg, len)
+                BcOp::FnCall(ret, id) => {
+                    let CallsiteInfo {
+                        name,
+                        args,
+                        len,
+                        cache: _,
+                    } = store[id];
+                    let name = globals.get_name(name);
+                    match ret {
+                        0 => {
+                            eprintln!("_ = call {}(%{}; {})", name, args, len)
                         }
                         ret => {
-                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, arg, len)
+                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, args, len)
                         }
                     }
                 }
-                BcOp::MethodDef(id, fid) => {
-                    eprintln!("define {:?}: {:?}", id, fid)
+                BcOp::MethodDef(id) => {
+                    let MethodDefInfo { name, func } = store[id];
+                    let name = globals.get_name(name);
+                    eprintln!("define {:?}: {:?}", name, func)
                 }
             }
         }
@@ -484,7 +606,7 @@ pub fn is_local(node: &Node) -> Option<IdentId> {
 }
 
 impl NormalFuncInfo {
-    fn compile_ast(&mut self, ctx: &mut Vec<FuncInfo>) -> Result<IrContext> {
+    fn compile_ast(&mut self, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
         self.gen_expr(ctx, &mut ir, ast, true)?;
@@ -496,7 +618,7 @@ impl NormalFuncInfo {
 
     fn gen_comp_stmts(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
@@ -522,7 +644,7 @@ impl NormalFuncInfo {
 
     fn gen_temp_expr(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         expr: Node,
     ) -> Result<BcTemp> {
@@ -533,7 +655,7 @@ impl NormalFuncInfo {
     /// Generate bytecode Ir from an *Node*.
     fn gen_expr(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         expr: Node,
         use_value: bool,
@@ -550,19 +672,19 @@ impl NormalFuncInfo {
         }
         match expr.kind {
             NodeKind::Nil => self.gen_nil(ir, None),
-            NodeKind::Bool(b) => self.gen_const(ir, None, Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_const(ctx, ir, None, Value::bool(b)),
             NodeKind::SelfValue => self.gen_temp_mov(ir, BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(ir, None, i);
+                self.gen_integer(ctx, ir, None, i);
             }
             NodeKind::Float(f) => {
-                self.gen_float(ir, None, f);
+                self.gen_float(ctx, ir, None, f);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ir, None, -i),
-                    NodeKind::Float(f) => self.gen_float(ir, None, -f),
+                    NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
+                    NodeKind::Float(f) => self.gen_float(ctx, ir, None, -f),
                     _ => {
                         self.gen_expr(ctx, ir, rhs, true)?;
                         self.gen_neg(ir, None);
@@ -725,7 +847,7 @@ impl NormalFuncInfo {
 
     fn gen_method_def(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         name: IdentId,
         params: Vec<FormalParam>,
@@ -743,15 +865,14 @@ impl NormalFuncInfo {
                 }
             }
         }
-        let func_id = FuncId(ctx.len() as u32);
-        ctx.push(FuncInfo::new_normal(name, func_id, args, node));
+        let func_id = ctx.functions.add_normal_func(Some(name), args, node);
         ir.push(BcIr::MethodDef(name, func_id));
         Ok(())
     }
 
     fn gen_store_expr(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         local: BcLocal,
         rhs: Node,
@@ -759,19 +880,19 @@ impl NormalFuncInfo {
     ) -> Result<()> {
         match rhs.kind {
             NodeKind::Nil => self.gen_nil(ir, Some(local)),
-            NodeKind::Bool(b) => self.gen_const(ir, Some(local), Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_const(ctx, ir, Some(local), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(ir, local.into(), BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(ir, Some(local), i);
+                self.gen_integer(ctx, ir, Some(local), i);
             }
             NodeKind::Float(f) => {
-                self.gen_float(ir, Some(local), f);
+                self.gen_float(ctx, ir, Some(local), f);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ir, Some(local), -i),
-                    NodeKind::Float(f) => self.gen_float(ir, Some(local), -f),
+                    NodeKind::Integer(i) => self.gen_integer(ctx, ir, Some(local), -i),
+                    NodeKind::Float(f) => self.gen_float(ctx, ir, Some(local), -f),
                     _ => {
                         self.gen_store_expr(ctx, ir, local, rhs, false)?;
                         self.gen_neg(ir, Some(local));
@@ -859,7 +980,7 @@ impl NormalFuncInfo {
 
     fn gen_args(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         args: Vec<Node>,
     ) -> Result<BcTemp> {
@@ -872,7 +993,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
@@ -885,7 +1006,7 @@ impl NormalFuncInfo {
 
     fn check_fast_call_inner(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
@@ -897,7 +1018,7 @@ impl NormalFuncInfo {
 
     fn gen_binary(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -936,7 +1057,7 @@ impl NormalFuncInfo {
 
     fn gen_singular(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -954,7 +1075,7 @@ impl NormalFuncInfo {
 
     fn gen_add(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -972,7 +1093,7 @@ impl NormalFuncInfo {
 
     fn gen_sub(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -990,7 +1111,7 @@ impl NormalFuncInfo {
 
     fn gen_mul(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1003,7 +1124,7 @@ impl NormalFuncInfo {
 
     fn gen_div(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1016,7 +1137,7 @@ impl NormalFuncInfo {
 
     fn gen_cmp(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         dst: Option<BcLocal>,
         kind: CmpKind,
@@ -1035,7 +1156,7 @@ impl NormalFuncInfo {
 
     fn gen_while(
         &mut self,
-        ctx: &mut Vec<FuncInfo>,
+        ctx: &mut FnStore,
         ir: &mut IrContext,
         cond: Node,
         body: Node,
@@ -1062,21 +1183,44 @@ impl NormalFuncInfo {
         }
     }
 
-    pub fn ir_to_bytecode(&mut self, ir: IrContext, id_store: &IdentifierTable) {
+    fn add_callsite(
+        &self,
+        store: &mut FnStore,
+        name: IdentId,
+        args: BcTemp,
+        len: usize,
+    ) -> CallsiteId {
+        let info = CallsiteInfo {
+            name,
+            args: self.get_index(&BcReg::from(args)),
+            len: len as u16,
+            cache: (usize::MAX, FuncId::default()),
+        };
+        let id = store.callsite_info.len();
+        store.callsite_info.push(info);
+        CallsiteId(id as u32)
+    }
+
+    pub fn ir_to_bytecode(
+        &mut self,
+        ir: IrContext,
+        id_store: &IdentifierTable,
+        store: &mut FnStore,
+    ) {
         let mut ops = vec![];
-        for inst in &ir.ir {
+        for (idx, inst) in ir.ir.iter().enumerate() {
             let op = match inst {
                 BcIr::Br(dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::Br(dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::Br(dst - idx as i32 - 1)
                 }
                 BcIr::CondBr(reg, dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::CondBr(self.get_index(reg), dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::CondBr(self.get_index(reg), dst - idx as i32 - 1)
                 }
                 BcIr::CondNotBr(reg, dst) => {
-                    let dst = ir.labels[*dst].unwrap();
-                    BcOp::CondNotBr(self.get_index(reg), dst)
+                    let dst = ir.labels[*dst].unwrap().0 as i32;
+                    BcOp::CondNotBr(self.get_index(reg), dst - idx as i32 - 1)
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
                 BcIr::Const(reg, num) => BcOp::Const(self.get_index(reg), *num),
@@ -1136,21 +1280,19 @@ impl NormalFuncInfo {
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
-                BcIr::FnCall(id, ret, arg, len) => BcOp::FnCall(
-                    *id,
-                    match ret {
-                        Some(ret) => self.get_index(ret),
-                        None => u16::MAX,
-                    },
-                    self.get_index(&BcReg::from(*arg)),
-                    *len as u16,
-                ),
-                BcIr::MethodDef(name, func_id) => BcOp::MethodDef(*name, *func_id),
+                BcIr::FnCall(id, ret, args, len) => {
+                    let id = self.add_callsite(store, *id, *args, *len);
+                    let ret = ret.map_or(0, |ret| self.get_index(&ret));
+                    BcOp::FnCall(ret, id)
+                }
+                BcIr::MethodDef(name, func_id) => {
+                    BcOp::MethodDef(store.add_method_def(*name, *func_id))
+                }
             };
-            ops.push(op);
+            ops.push(op.to_u64());
         }
-        self.bc = ops;
+        self.bytecode = ops;
         #[cfg(feature = "emit-bc")]
-        self.dump(id_store);
+        self.dump(id_store, store);
     }
 }
