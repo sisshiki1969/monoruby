@@ -29,6 +29,9 @@ struct CommandLineArgs {
     /// print the version number, then turn on verbose mode
     #[clap(short)]
     verbose: bool,
+    /// switch JIT compilation.
+    #[clap(short, long)]
+    jit: bool,
     /// File name.
     file: Option<String>,
 }
@@ -39,7 +42,7 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            let _ = exec(&code);
+            let _ = exec(&code, args.jit);
         }
         return;
     }
@@ -49,7 +52,7 @@ fn main() {
             let mut file = File::open(file).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            let _ = exec(&code);
+            let _ = exec(&code, args.jit);
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -77,7 +80,7 @@ fn main() {
     }
 }
 
-fn exec(code: &str) -> Result<(), MonorubyErr> {
+fn exec(code: &str, jit: bool) -> Result<(), MonorubyErr> {
     let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
         Err(err) => {
@@ -87,14 +90,12 @@ fn exec(code: &str) -> Result<(), MonorubyErr> {
     };
     let mut store = Globals::new(res.id_store);
     store.compile_main(res.node)?;
-    #[cfg(debug_assertions)]
-    {
+    if !jit {
         let interp_val = Interp::eval_toplevel(&mut store);
         eprintln!("interp: {:?}", interp_val);
+    } else {
+        let _ = jitcompiler(&mut store);
     }
-
-    let _ = jitcompiler(&mut store);
-
     Ok(())
 }
 
