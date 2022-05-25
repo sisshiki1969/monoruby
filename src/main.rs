@@ -331,6 +331,20 @@ mod test {
     }
 
     #[test]
+    #[ignore]
+    fn bench_loop() {
+        run_test(
+            r#"
+            i = 0
+            while i < 1000000000
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
     fn test2() {
         run_test(
             r#"
