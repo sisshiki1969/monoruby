@@ -1,6 +1,7 @@
 use std::hash::Hash;
 
 use super::*;
+use crate::executor::interp::{BcPc, BcPcBase};
 
 ///
 /// ID of function.
@@ -198,7 +199,10 @@ impl FnStore {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let ir = info.compile_ast(self)?;
         info.ir_to_bytecode(ir, id_store, self);
+        let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
+        self[func_id].inst_pc = BcPcBase::new(self[func_id].as_normal()) + 0;
+        self[func_id].stack_offset = (regs + regs % 2) * 8 + 16;
         Ok(())
     }
 
@@ -236,6 +240,10 @@ pub struct FuncInfo {
     arity: usize,
     /// address of JIT function.
     jit_label: Option<CodePtr>,
+    /// stack offset
+    stack_offset: usize,
+    /// the address of program counter
+    inst_pc: BcPc,
     pub(super) kind: FuncKind,
 }
 
@@ -247,6 +255,8 @@ impl FuncInfo {
             name,
             arity: info.args.len(),
             jit_label: None,
+            stack_offset: 0,
+            inst_pc: BcPc::default(),
             kind: FuncKind::Normal(info),
         }
     }
@@ -257,6 +267,8 @@ impl FuncInfo {
             name: Some(name),
             arity,
             jit_label: None,
+            stack_offset: (arity + arity % 2) * 8 + 16,
+            inst_pc: BcPc::default(),
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
@@ -269,6 +281,14 @@ impl FuncInfo {
 
     pub(super) fn arity(&self) -> usize {
         self.arity
+    }
+
+    pub(super) fn stack_offset(&self) -> usize {
+        self.stack_offset
+    }
+
+    pub(super) fn inst_pc(&self) -> BcPc {
+        self.inst_pc
     }
 
     pub(super) fn jit_label(&self) -> Option<CodePtr> {
@@ -295,7 +315,7 @@ impl FuncInfo {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct IrContext {
+pub(crate) struct IrContext {
     /// bytecode IR.
     ir: Vec<BcIr>,
     /// destination labels.
@@ -1201,7 +1221,7 @@ impl NormalFuncInfo {
         CallsiteId(id as u32)
     }
 
-    pub fn ir_to_bytecode(
+    pub(crate) fn ir_to_bytecode(
         &mut self,
         ir: IrContext,
         id_store: &IdentifierTable,

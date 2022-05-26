@@ -8,7 +8,7 @@ use paste::paste;
 /// Program counter base.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct BcPcBase(*const u64);
+pub(crate) struct BcPcBase(*const u64);
 
 impl std::ops::Add<usize> for BcPcBase {
     type Output = BcPc;
@@ -25,7 +25,7 @@ impl std::ops::Add<InstId> for BcPcBase {
 }
 
 impl BcPcBase {
-    fn new(func: &NormalFuncInfo) -> Self {
+    pub(super) fn new(func: &NormalFuncInfo) -> Self {
         BcPcBase(&func.bytecode()[0] as *const _)
     }
 }
@@ -35,7 +35,7 @@ impl BcPcBase {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-struct BcPc(*const u64);
+pub struct BcPc(*const u64);
 
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
@@ -51,6 +51,12 @@ impl std::ops::AddAssign<i32> for BcPc {
         unsafe {
             *self = BcPc(self.0.offset(offset as isize));
         }
+    }
+}
+
+impl std::default::Default for BcPc {
+    fn default() -> Self {
+        Self(std::ptr::null())
     }
 }
 
@@ -71,21 +77,11 @@ extern "C" fn get_func_data(
     globals: &mut Globals,
     func_id: FuncId,
     data: &mut FuncData,
-) -> BcPc {
+) {
     let label = globals.func[func_id].jit_label().unwrap();
     data.address = label.0;
-    let arity = globals.func[func_id].arity();
-    match &globals.func[func_id].kind {
-        FuncKind::Normal(info) => {
-            let regs = info.total_reg_num();
-            data.offset = ((regs + 2) & (-2i64 as usize)) * 8;
-            BcPcBase::new(info) + 0
-        }
-        FuncKind::Builtin { .. } => {
-            data.offset = (arity + arity % 2) * 8 + 16;
-            BcPc(std::ptr::null())
-        }
-    }
+    data.offset = globals.func[func_id].stack_offset();
+    data.pc = globals.func[func_id].inst_pc();
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -110,8 +106,7 @@ extern "C" fn find_method(
 ) -> EncodedCallInfo {
     match interp.find_method(globals, callsite_id) {
         Some((func_id, args, len)) => {
-            let pc = get_func_data(interp, globals, func_id, data);
-            data.pc = pc;
+            get_func_data(interp, globals, func_id, data);
             EncodedCallInfo::new(func_id, args, len)
         }
         None => EncodedCallInfo::none(),
@@ -189,8 +184,6 @@ macro_rules! cmp_ri_ops {
 ///
 pub struct Interp {
     cur_fn: FuncId,
-    pc: BcPc,
-    pc_top: BcPcBase,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<CodePtr>,
@@ -200,7 +193,6 @@ pub struct Interp {
 
 impl Interp {
     fn new(main: &NormalFuncInfo) -> Self {
-        let pc_top = BcPcBase::new(main);
         let mut jit_gen = JitGen::new();
         let vm_entry = jit_gen.jit.label();
         // dispatch table.
@@ -216,8 +208,6 @@ impl Interp {
         let dispatch = vec![entry_panic; 256];
         Self {
             cur_fn: main.id,
-            pc: pc_top + 0,
-            pc_top,
             jit_gen,
             error: None,
             dispatch,
@@ -237,7 +227,6 @@ impl Interp {
             len,
             cache: (version, cached_func),
         } = globals.func[callsite_id];
-        //eprintln!("{}", globals.id_store.get_name(name));
         let func_id = if version == self.class_version {
             cached_func
         } else {
@@ -308,7 +297,7 @@ impl Interp {
             lea rcx, [rip + func_offset];
             movq rax, (get_func_data);
             call rax;
-            movq r13, rax;    // r13: BcPc
+            movq r13, [rip + func_pc];    // r13: BcPc
             //
             //       +-------------+
             //  0x00 |             | <- rsp
