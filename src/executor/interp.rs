@@ -295,49 +295,48 @@ impl Interp {
         let func_address = self.jit_gen.jit.const_i64(0);
         let func_pc = self.jit_gen.jit.const_i64(0);
 
-        monoasm! {
-            self.jit_gen.jit,
-                pushq rbx;
-                pushq r12;
-                pushq r13;
-                pushq r14;
-                pushq r15;
+        monoasm! { self.jit_gen.jit,
+            pushq rbx;
+            pushq r12;
+            pushq r13;
+            pushq r14;
+            pushq r15;
 
-                movq rbx, rdi;  // rdi: &mut Interp
-                movq r12, rsi;  // rsi: &mut Globals
-                                // rdx: FuncId
-                lea rcx, [rip + func_offset];
-                movq rax, (get_func_data);
-                call rax;
-                movq r13, rax;    // r13: BcPc
-                //
-                //       +-------------+
-                //  0x00 |             | <- rsp
-                //       +-------------+
-                // -0x08 | return addr |
-                //       +-------------+
-                // -0x10 |   old rbp   |
-                //       +-------------+
-                // -0x18 |    meta     |
-                //       +-------------+
-                // -0x20 |     %0      |
-                //       +-------------+
-                // -0x28 | %1(1st arg) |
-                //       +-------------+
-                //       |             |
-                //
-                movq rax, [rip + func_address];
-                call rax;
-                popq r15;
-                popq r14;
-                popq r13;
-                popq r12;
-                popq rbx;
-                ret;
-            vm_entry:
-                pushq rbp;
-                movq rbp, rsp;
-                subq rsp, [rip + func_offset];
+            movq rbx, rdi;  // rdi: &mut Interp
+            movq r12, rsi;  // rsi: &mut Globals
+                            // rdx: FuncId
+            lea rcx, [rip + func_offset];
+            movq rax, (get_func_data);
+            call rax;
+            movq r13, rax;    // r13: BcPc
+            //
+            //       +-------------+
+            //  0x00 |             | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) |
+            //       +-------------+
+            //       |             |
+            //
+            movq rax, [rip + func_address];
+            call rax;
+            popq r15;
+            popq r14;
+            popq r13;
+            popq r12;
+            popq rbx;
+            ret;
+        vm_entry:
+            pushq rbp;
+            movq rbp, rsp;
+            subq rsp, [rip + func_offset];
         };
         self.fetch_and_dispatch();
 
@@ -427,10 +426,8 @@ impl Interp {
             movzxw rdi, rdi;    // rdi <- :2
         l1:
             movq r8, (self.dispatch.as_ptr());
-            movzxb r9, rax;
-            shlq r9, 3;
-            addq r9, r8;
-            movq rax, [r9];
+            movzxb rax, rax;
+            movq rax, [r8 + rax * 8];
             jmp rax;
         };
     }
@@ -442,10 +439,9 @@ impl Interp {
     /// - *rdi*: absolute address of the register
     fn vm_get_addr_rdi(&mut self) {
         monoasm! { self.jit_gen.jit,
-            shlq rdi, 3;
-            addq rdi, 16;
+            //addq rdi, 2;
             negq rdi;
-            addq rdi, rbp;
+            lea rdi, [rbp + rdi * 8 - 16];
         };
     }
 
@@ -456,10 +452,8 @@ impl Interp {
     /// - *rsi*: absolute address of the register
     fn vm_get_addr_rsi(&mut self) {
         monoasm! { self.jit_gen.jit,
-            shlq rsi, 3;
-            addq rsi, 16;
             negq rsi;
-            addq rsi, rbp;
+            lea rsi, [rbp + rsi * 8 - 16];
         };
     }
 
@@ -470,10 +464,8 @@ impl Interp {
     /// - *r15*: absolute address of the register
     fn vm_get_addr_r15(&mut self) {
         monoasm! { self.jit_gen.jit,
-            shlq r15, 3;
-            addq r15, 16;
             negq r15;
-            addq r15, rbp;
+            lea r15, [rbp + r15 * 8 - 16];
         };
     }
 
@@ -566,8 +558,7 @@ impl Interp {
     fn vm_integer(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
-        monoasm! {
-            self.jit_gen.jit,
+        monoasm! { self.jit_gen.jit,
             shlq rdi, 1;
             addq rdi, 1;
             movq [r15], rdi;
@@ -579,8 +570,7 @@ impl Interp {
     fn vm_constant(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
-        monoasm! {
-            self.jit_gen.jit,
+        monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // const_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
