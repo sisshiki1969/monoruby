@@ -13,7 +13,6 @@ use rustyline::Editor;
 mod ast;
 mod executor;
 mod type_infer;
-mod types;
 mod value;
 pub use ast::*;
 use executor::*;

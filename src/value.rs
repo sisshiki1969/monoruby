@@ -73,22 +73,14 @@ impl Value {
         Value(std::num::NonZeroU64::new(id).unwrap())
     }
 
-    #[inline(always)]
+    /*#[inline(always)]
     pub fn from_unchecked(id: u64) -> Self {
         unsafe { Value(std::num::NonZeroU64::new_unchecked(id)) }
-    }
+    }*/
 
     #[inline(always)]
     pub fn get(&self) -> u64 {
         self.0.get()
-    }
-
-    #[inline(always)]
-    pub fn get_u32(&self) -> (u32, u32) {
-        let val = self.0.get();
-        let v1 = (val >> 32) as u32;
-        let v2 = val as u32;
-        (v1, v2)
     }
 
     #[inline(always)]
