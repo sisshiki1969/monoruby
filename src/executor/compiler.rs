@@ -220,54 +220,58 @@ impl JitGen {
         );
     }
 
-    //
-    // # stack layout for jit-ed code.
-    //
-    //       +-------------+
-    // +0x08 | return addr |
-    //       +-------------+
-    //  0x00 |  prev rbp   | <- rbp
-    //       +-------------+
-    // -0x08 |    meta     |
-    //       +-------------+
-    // -0x10 |     %0      |
-    //       +-------------+
-    // -0x18 |     %1      |
-    //       +-------------+
-    //       |      :      |
-    //       +-------------+
-    // -0xxx |    %(n-1)   | <- rsp
-    //       +-------------+
-    //       |      :      |
-    //
+    ///
+    /// ## stack layout for JIT-ed code (jut after prologue).
+    ///
+    ///~~~text
+    ///       +-------------+
+    /// +0x08 | return addr |
+    ///       +-------------+
+    ///  0x00 |  prev rbp   | <- rbp
+    ///       +-------------+
+    /// -0x08 |    meta     |
+    ///       +-------------+
+    /// -0x10 |     %0      |
+    ///       +-------------+
+    /// -0x18 |     %1      |
+    ///       +-------------+
+    ///       |      :      |
+    ///       +-------------+
+    /// -0xy0 |    %(n-1)   | <- rsp
+    ///       +-------------+
+    ///       |      :      |
+    /// ~~~
 
-    // # ABI of JIT-compiled code.
-    //
-    //  ## registers which used globally
-    //
-    //  - rbx: &mut Interp
-    //  - r12: &mut Globals
-    //
-    //  ## stack layout when jut after the code is called
-    //
-    //  - meta and arguments is set by caller.
-    //
-    //       +-------------+
-    // -0x00 | return addr | <- rsp
-    //       +-------------+
-    // -0x08 |  (old rbp)  |
-    //       +-------------+
-    // -0x10 |    meta     |
-    //       +-------------+
-    // -0x18 |     %0      |
-    //       +-------------+
-    // -0x20 | %1(1st arg) |
-    //       +-------------+
-    //       |             |
-    //
-    //  - (old rbp) is to be set by callee.
-    //
-
+    /// ## ABI of JIT-compiled code.
+    ///
+    /// ### global registers:
+    ///  - rbx: &mut Interp
+    ///  - r12: &mut Globals
+    ///  - r13: pc (dummy for JIT-ed code)
+    ///
+    /// ### stack_offset:
+    ///
+    ///  - \[rip + func_offset\]: (not used, hard-coded.)
+    ///
+    /// ## stack layout when just after the code is called
+    /// ~~~text
+    ///       +-------------+
+    /// -0x00 | return addr | <- rsp
+    ///       +-------------+
+    /// -0x08 |  (old rbp)  |
+    ///       +-------------+
+    /// -0x10 |    meta     |
+    ///       +-------------+
+    /// -0x18 |     %0      |
+    ///       +-------------+
+    /// -0x20 | %1(1st arg) |
+    ///       +-------------+
+    ///       |             |
+    /// ~~~~
+    ///
+    ///  - meta and arguments is set by caller.
+    ///  - (old rbp) is to be set by callee.
+    ///
     pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
         let main_id = globals.get_main_func();
         let mut info = std::mem::take(&mut globals.func[main_id]);
@@ -335,17 +339,26 @@ impl JitGen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
+        //
+        // global registers:
+        //   rbx: &mut Interp
+        //   r12: &mut Globals
+        //   r13: pc (dummy for builtin funcions)
+        //
+        //   stack_offset: [rip + func_offset] (not used, because we can hard-code it.)
+        //
         let label = self.jit.get_current_address();
         let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
             pushq rbp;
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [rsp - 0x18]; // 1st argument: *const Value
-            movq rcx, (arity); // 2nd arguments: length of arguments:usize
+            lea  rdx, [rsp - 0x18];
+            movq rcx, (arity);
             movq rax, (abs_address);
             movq rbp, rsp;
             subq rsp, (offset);
+            // fn(&mut Interp, &mut Globals, *const Value, len:usize)
             call rax;
             leave;
             ret;

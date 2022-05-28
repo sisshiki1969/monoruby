@@ -322,6 +322,16 @@ impl Interp {
             popq r12;
             popq rbx;
             ret;
+            //
+            // VM entry
+            //
+            // global registers:
+            //   rbx: &mut Interp
+            //   r12: &mut Globals
+            //   r13: pc
+            //
+            //   stack_offset: [rip + func_offset]
+            //
         vm_entry:
             pushq rbp;
             movq rbp, rsp;
@@ -494,7 +504,7 @@ impl Interp {
             shlq r14, 3;
             lea rdx, [rsp - 0x28];
         };
-        self.vm_get_addr_rdi();
+        self.vm_get_addr_rdi(); // rdi <- *args
 
         monoasm! { self.jit_gen.jit,
             //
