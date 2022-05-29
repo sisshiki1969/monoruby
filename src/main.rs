@@ -354,7 +354,7 @@ mod test {
             for i in 0..1000000000
               j = j + 1
             end
-            return j
+            j
             "#,
         );
     }

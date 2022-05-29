@@ -629,7 +629,7 @@ impl NormalFuncInfo {
     fn compile_ast(&mut self, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
-        self.gen_expr(ctx, &mut ir, ast, true)?;
+        self.gen_expr(ctx, &mut ir, ast, true, true)?;
         if self.temp == 1 {
             self.gen_ret(&mut ir, None);
         };
@@ -643,20 +643,24 @@ impl NormalFuncInfo {
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
         use_value: bool,
+        is_ret: bool,
     ) -> Result<()> {
         let last = match nodes.pop() {
             Some(node) => node,
             None => Node::new_nil(Loc(0, 0)),
         };
         for node in nodes.into_iter() {
-            self.gen_expr(ctx, ir, node, false)?;
+            self.gen_expr(ctx, ir, node, false, false)?;
         }
         match ret {
             Some(ret) => {
                 self.gen_store_expr(ctx, ir, ret, last, use_value)?;
+                if is_ret {
+                    self.gen_ret(ir, ret.into());
+                }
             }
             None => {
-                self.gen_expr(ctx, ir, last, use_value)?;
+                self.gen_expr(ctx, ir, last, use_value, is_ret)?;
             }
         }
         Ok(())
@@ -669,7 +673,7 @@ impl NormalFuncInfo {
         ir: &mut IrContext,
         expr: Node,
     ) -> Result<BcTemp> {
-        self.gen_expr(ctx, ir, expr, true)?;
+        self.gen_expr(ctx, ir, expr, true, false)?;
         Ok(self.pop())
     }
 
@@ -680,6 +684,7 @@ impl NormalFuncInfo {
         ir: &mut IrContext,
         expr: Node,
         use_value: bool,
+        is_ret: bool,
     ) -> Result<()> {
         if !use_value {
             match &expr.kind {
@@ -707,7 +712,7 @@ impl NormalFuncInfo {
                     NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
                     NodeKind::Float(f) => self.gen_float(ctx, ir, None, -f),
                     _ => {
-                        self.gen_expr(ctx, ir, rhs, true)?;
+                        self.gen_expr(ctx, ir, rhs, true, false)?;
                         self.gen_neg(ir, None);
                     }
                 };
@@ -737,7 +742,13 @@ impl NormalFuncInfo {
                 match lhs.kind {
                     NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                         let local2 = self.find_local(lhs);
-                        return self.gen_store_expr(ctx, ir, local2, rhs, use_value);
+                        if is_ret {
+                            self.gen_store_expr(ctx, ir, local2, rhs, false)?;
+                            self.gen_ret(ir, Some(local2));
+                        } else {
+                            self.gen_store_expr(ctx, ir, local2, rhs, use_value)?;
+                        }
+                        return Ok(());
                     }
                     _ => {
                         return Err(MonorubyErr::Unimplemented(format!(
@@ -749,7 +760,11 @@ impl NormalFuncInfo {
             }
             NodeKind::LocalVar(ident) => {
                 let local2 = self.load_local(ident)?;
-                self.gen_temp_mov(ir, local2.into());
+                if is_ret {
+                    self.gen_ret(ir, Some(local2));
+                } else {
+                    self.gen_temp_mov(ir, local2.into());
+                }
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -800,13 +815,13 @@ impl NormalFuncInfo {
                 let cond = self.gen_temp_expr(ctx, ir, cond)?.into();
                 let inst = BcIr::CondBr(cond, then_pos);
                 ir.push(inst);
-                self.gen_expr(ctx, ir, else_, use_value)?;
+                self.gen_expr(ctx, ir, else_, use_value, false)?;
                 ir.push(BcIr::Br(succ_pos));
                 if use_value {
                     self.pop();
                 }
                 ir.apply_label(then_pos);
-                self.gen_expr(ctx, ir, then_, use_value)?;
+                self.gen_expr(ctx, ir, then_, use_value, false)?;
                 ir.apply_label(succ_pos);
                 return Ok(());
             }
@@ -848,7 +863,7 @@ impl NormalFuncInfo {
                     ir.push(BcIr::CondBr(dst, loop_exit));
                     self.pop();
 
-                    self.gen_expr(ctx, ir, *body.body, false)?;
+                    self.gen_expr(ctx, ir, *body.body, false, false)?;
 
                     ir.push(BcIr::Addri(counter.into(), counter.into(), 1));
                     ir.push(BcIr::Br(loop_entry));
@@ -868,13 +883,13 @@ impl NormalFuncInfo {
                     let local = self.load_local(local)?;
                     self.gen_ret(ir, Some(local));
                 } else {
-                    self.gen_expr(ctx, ir, expr, true)?;
+                    self.gen_expr(ctx, ir, expr, true, false)?;
                     self.gen_ret(ir, None);
                 }
                 return Ok(());
             }
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, ir, nodes, None, use_value)
+                return self.gen_comp_stmts(ctx, ir, nodes, None, use_value, is_ret)
             }
             NodeKind::Begin {
                 box body,
@@ -883,7 +898,7 @@ impl NormalFuncInfo {
                 ensure: None,
             } => {
                 assert!(rescue.len() == 0);
-                self.gen_expr(ctx, ir, body, use_value)?;
+                self.gen_expr(ctx, ir, body, use_value, is_ret)?;
                 return Ok(());
             }
             NodeKind::MethodDef(name, params, box node, _lv) => {
@@ -1022,11 +1037,11 @@ impl NormalFuncInfo {
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, ir, nodes, Some(local), use_value)
+                return self.gen_comp_stmts(ctx, ir, nodes, Some(local), use_value, false)
             }
             _ => {
                 let ret = self.next_reg();
-                self.gen_expr(ctx, ir, rhs, true)?;
+                self.gen_expr(ctx, ir, rhs, true, false)?;
                 self.gen_mov(ir, local.into(), ret.into());
                 if !use_value {
                     self.pop();
@@ -1048,7 +1063,7 @@ impl NormalFuncInfo {
     ) -> Result<BcTemp> {
         let arg = self.next_reg();
         for arg in args {
-            self.gen_expr(ctx, ir, arg, true)?;
+            self.gen_expr(ctx, ir, arg, true, false)?;
         }
         Ok(arg)
     }
@@ -1103,8 +1118,8 @@ impl NormalFuncInfo {
                 (lhs, rhs)
             }
             (None, None) => {
-                self.gen_expr(ctx, ir, lhs, true)?;
-                self.gen_expr(ctx, ir, rhs, true)?;
+                self.gen_expr(ctx, ir, lhs, true, false)?;
+                self.gen_expr(ctx, ir, rhs, true, false)?;
                 let rhs = self.pop().into();
                 let lhs = self.pop().into();
                 (lhs, rhs)
@@ -1229,7 +1244,7 @@ impl NormalFuncInfo {
         let cond = self.gen_temp_expr(ctx, ir, cond)?.into();
         let inst = BcIr::CondNotBr(cond, succ_pos);
         ir.push(inst);
-        self.gen_expr(ctx, ir, body, false)?;
+        self.gen_expr(ctx, ir, body, false, false)?;
         ir.push(BcIr::Br(cond_pos));
         ir.apply_label(succ_pos);
         Ok(())
