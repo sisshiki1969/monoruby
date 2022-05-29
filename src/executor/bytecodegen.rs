@@ -662,6 +662,7 @@ impl NormalFuncInfo {
         Ok(())
     }
 
+    /// Generate bytecode Ir that evaluate *expr* and assign it to a temporary register.
     fn gen_temp_expr(
         &mut self,
         ctx: &mut FnStore,
@@ -672,7 +673,7 @@ impl NormalFuncInfo {
         Ok(self.pop())
     }
 
-    /// Generate bytecode Ir from an *Node*.
+    /// Generate bytecode Ir for *expr*.
     fn gen_expr(
         &mut self,
         ctx: &mut FnStore,
@@ -816,6 +817,47 @@ impl NormalFuncInfo {
             } => {
                 assert!(cond_op);
                 self.gen_while(ctx, ir, cond, body)?;
+                if use_value {
+                    self.gen_nil(ir, None);
+                }
+                return Ok(());
+            }
+            NodeKind::For {
+                param,
+                box iter,
+                body,
+            } => {
+                assert_eq!(1, param.len());
+                let counter = self.find_local(param[0]);
+                if let NodeKind::Range {
+                    box start,
+                    box end,
+                    exclude_end: false,
+                    ..
+                } = iter.kind
+                {
+                    let loop_entry = ir.new_label();
+                    let loop_exit = ir.new_label();
+                    self.gen_store_expr(ctx, ir, counter, start, false)?;
+                    self.gen_temp_expr(ctx, ir, end)?;
+                    let end = self.push().into();
+
+                    ir.apply_label(loop_entry);
+                    let dst = self.push().into();
+                    ir.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end));
+                    ir.push(BcIr::CondBr(dst, loop_exit));
+                    self.pop();
+
+                    self.gen_expr(ctx, ir, *body.body, false)?;
+
+                    ir.push(BcIr::Addri(counter.into(), counter.into(), 1));
+                    ir.push(BcIr::Br(loop_entry));
+
+                    ir.apply_label(loop_exit);
+                    self.pop();
+                } else {
+                    unimplemented!()
+                }
                 if use_value {
                     self.gen_nil(ir, None);
                 }

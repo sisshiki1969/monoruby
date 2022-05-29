@@ -333,7 +333,7 @@ mod test {
 
     #[test]
     #[ignore]
-    fn bench_loop() {
+    fn bench_while() {
         run_test(
             r#"
             i = 0
@@ -341,6 +341,20 @@ mod test {
               i = i + 1
             end
             i
+            "#,
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_for() {
+        run_test(
+            r#"
+            j = 0
+            for i in 0..1000000000
+              j = j + 1
+            end
+            return j
             "#,
         );
     }
