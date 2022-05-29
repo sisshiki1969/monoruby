@@ -83,6 +83,12 @@ impl std::fmt::Debug for BcTemp {
     }
 }
 
+impl std::ops::AddAssign<usize> for BcTemp {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 = self.0 + rhs as u16;
+    }
+}
+
 ///
 /// ID of local variable.
 ///

@@ -42,7 +42,7 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            let _ = exec(&code, args.jit);
+            let _ = exec(&code, args.jit).unwrap();
         }
         return;
     }
@@ -52,7 +52,7 @@ fn main() {
             let mut file = File::open(file).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            let _ = exec(&code, args.jit);
+            let _ = exec(&code, args.jit).unwrap();
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -284,6 +284,12 @@ mod test {
         run_test("def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a");
         run_test("a=42; b=-a");
         run_test("a=42; a; b=-a");
+    }
+    #[test]
+    fn test_assign() {
+        run_test("a=8; b=2; a,b=b,a; b/a");
+        run_test("a,b,c=1,2,3; a-b-c");
+        run_test("a=b=c=7; a+b+c");
     }
 
     #[test]

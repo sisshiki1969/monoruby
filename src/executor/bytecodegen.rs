@@ -414,6 +414,10 @@ impl NormalFuncInfo {
         BcTemp(self.temp)
     }
 
+    fn popn(&mut self, len: usize) {
+        self.temp -= len as u16;
+    }
+
     fn load_local(&mut self, ident: IdentId) -> Result<BcLocal> {
         match self.locals.get(&ident) {
             Some(local) => Ok(BcLocal(*local)),
@@ -736,27 +740,29 @@ impl NormalFuncInfo {
                 }
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
-                assert!(mlhs.len() == 1);
-                assert!(mrhs.len() == 1);
-                let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                match lhs.kind {
-                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                        let local2 = self.find_local(lhs);
-                        if is_ret {
-                            self.gen_store_expr(ctx, ir, local2, rhs, false)?;
-                            self.gen_ret(ir, Some(local2));
-                        } else {
-                            self.gen_store_expr(ctx, ir, local2, rhs, use_value)?;
+                if mlhs.len() == 1 && mrhs.len() == 1 {
+                    let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
+                    match lhs.kind {
+                        NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                            let local = self.find_local(lhs);
+                            if is_ret {
+                                self.gen_store_expr(ctx, ir, local, rhs, false)?;
+                                self.gen_ret(ir, Some(local));
+                            } else {
+                                self.gen_store_expr(ctx, ir, local, rhs, use_value)?;
+                            }
                         }
-                        return Ok(());
+                        _ => {
+                            return Err(MonorubyErr::Unimplemented(format!(
+                                "unsupported lhs {:?}",
+                                lhs.kind
+                            )))
+                        }
                     }
-                    _ => {
-                        return Err(MonorubyErr::Unimplemented(format!(
-                            "unsupported lhs {:?}",
-                            lhs.kind
-                        )))
-                    }
+                } else {
+                    self.gen_mul_assign(ctx, ir, mlhs, mrhs, use_value, is_ret)?;
                 }
+                return Ok(());
             }
             NodeKind::LocalVar(ident) => {
                 let local2 = self.load_local(ident)?;
@@ -922,31 +928,6 @@ impl NormalFuncInfo {
         Ok(())
     }
 
-    fn gen_method_def(
-        &mut self,
-        ctx: &mut FnStore,
-        ir: &mut IrContext,
-        name: IdentId,
-        params: Vec<FormalParam>,
-        node: Node,
-    ) -> Result<()> {
-        let mut args = vec![];
-        for param in params {
-            match param.kind {
-                ParamKind::Param(name) => args.push(name),
-                _ => {
-                    return Err(MonorubyErr::Unimplemented(format!(
-                        "unsupported paraneter kind {:?}",
-                        param.kind
-                    )))
-                }
-            }
-        }
-        let func_id = ctx.functions.add_normal_func(Some(name), args, node);
-        ir.push(BcIr::MethodDef(name, func_id));
-        Ok(())
-    }
-
     fn gen_store_expr(
         &mut self,
         ctx: &mut FnStore,
@@ -995,21 +976,25 @@ impl NormalFuncInfo {
                 }
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
-                assert!(mlhs.len() == 1);
-                assert!(mrhs.len() == 1);
-                let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                match lhs.kind {
-                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                        let src = self.find_local(lhs);
-                        self.gen_store_expr(ctx, ir, src, rhs, false)?;
-                        self.gen_mov(ir, local.into(), src.into());
+                if mlhs.len() == 1 && mrhs.len() == 1 {
+                    let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
+                    match lhs.kind {
+                        NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                            let src = self.find_local(lhs);
+                            self.gen_store_expr(ctx, ir, src, rhs, false)?;
+                            self.gen_mov(ir, local.into(), src.into());
+                        }
+                        _ => {
+                            return Err(MonorubyErr::Unimplemented(format!(
+                                "unsupported lhs {:?}",
+                                lhs.kind
+                            )))
+                        }
                     }
-                    _ => {
-                        return Err(MonorubyErr::Unimplemented(format!(
-                            "unsupported lhs {:?}",
-                            lhs.kind
-                        )))
-                    }
+                } else {
+                    self.gen_mul_assign(ctx, ir, mlhs, mrhs, true, false)?;
+                    let temp = self.pop().into();
+                    self.gen_mov(ir, local.into(), temp);
                 }
             }
             NodeKind::LocalVar(ident) => {
@@ -1052,6 +1037,31 @@ impl NormalFuncInfo {
         if use_value {
             self.gen_temp_mov(ir, local.into());
         }
+        Ok(())
+    }
+
+    fn gen_method_def(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        name: IdentId,
+        params: Vec<FormalParam>,
+        node: Node,
+    ) -> Result<()> {
+        let mut args = vec![];
+        for param in params {
+            match param.kind {
+                ParamKind::Param(name) => args.push(name),
+                _ => {
+                    return Err(MonorubyErr::Unimplemented(format!(
+                        "unsupported paraneter kind {:?}",
+                        param.kind
+                    )))
+                }
+            }
+        }
+        let func_id = ctx.functions.add_normal_func(Some(name), args, node);
+        ir.push(BcIr::MethodDef(name, func_id));
         Ok(())
     }
 
@@ -1229,6 +1239,47 @@ impl NormalFuncInfo {
             ir.push(BcIr::Cmp(kind, dst, lhs, rhs));
         }
         Ok(())
+    }
+
+    fn gen_mul_assign(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        mlhs: Vec<Node>,
+        mrhs: Vec<Node>,
+        use_value: bool,
+        is_ret: bool,
+    ) -> Result<()> {
+        let mlhs_len = mlhs.len();
+        assert!(mlhs_len == mrhs.len());
+        let mut temp_reg = self.next_reg();
+        for rhs in mrhs {
+            self.gen_expr(ctx, ir, rhs, true, false)?;
+        }
+        for lhs in mlhs {
+            match lhs.kind {
+                NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                    let local = self.find_local(lhs);
+                    self.gen_mov(ir, local.into(), temp_reg.into());
+                }
+                _ => {
+                    return Err(MonorubyErr::Unimplemented(format!(
+                        "unsupported lhs {:?}",
+                        lhs.kind
+                    )))
+                }
+            }
+            temp_reg += 1;
+        }
+        self.popn(mlhs_len);
+        // TODO: This is not correct. We must make an Array.
+        if is_ret {
+            self.gen_nil(ir, None);
+            self.gen_ret(ir, None);
+        } else if use_value {
+            self.gen_nil(ir, None);
+        }
+        return Ok(());
     }
 
     fn gen_while(
