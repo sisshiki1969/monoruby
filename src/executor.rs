@@ -27,6 +27,43 @@ pub enum MonorubyErr {
     Unimplemented(String),
 }
 
+impl MonorubyErr {
+    pub fn parse(error: ParseErr) -> MonorubyErr {
+        MonorubyErr::Parse(error)
+    }
+
+    pub fn undefined_local(ident: IdentId) -> MonorubyErr {
+        MonorubyErr::UndefinedLocal(ident)
+    }
+
+    pub fn method_not_found(name: IdentId) -> MonorubyErr {
+        MonorubyErr::MethodNotFound(name)
+    }
+
+    pub fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
+        MonorubyErr::WrongArguments(format!(
+            "number of arguments mismatch. expected:{} actual:{}",
+            expected, actual
+        ))
+    }
+
+    pub fn unsupported_parameter_kind(param: ParamKind) -> MonorubyErr {
+        MonorubyErr::Unimplemented(format!("unsupported parameter kind {:?}", param))
+    }
+
+    pub fn unsupported_operator(op: BinOp) -> MonorubyErr {
+        MonorubyErr::Unimplemented(format!("unsupported operator {:?}", op))
+    }
+
+    pub fn unsupported_lhs(lhs: NodeKind) -> MonorubyErr {
+        MonorubyErr::Unimplemented(format!("unsupported lhs {:?}", lhs))
+    }
+
+    pub fn unsupported_node(expr: NodeKind) -> MonorubyErr {
+        MonorubyErr::Unimplemented(format!("unsupported nodekind {:?}", expr))
+    }
+}
+
 ///
 /// ID of instruction.
 ///

@@ -144,18 +144,14 @@ impl Interp {
                     func_id
                 }
                 None => {
-                    self.error = Some(MonorubyErr::MethodNotFound(name));
+                    self.error = Some(MonorubyErr::method_not_found(name));
                     return None;
                 }
             }
         };
         let info = &globals.func[func_id];
         if info.arity() != len as usize {
-            self.error = Some(MonorubyErr::WrongArguments(format!(
-                "number of arguments mismatch. expected:{} actual:{}",
-                info.arity(),
-                len
-            )));
+            self.error = Some(MonorubyErr::wrong_arguments(info.arity(), len as usize));
             None
         } else {
             Some((func_id, args, len))

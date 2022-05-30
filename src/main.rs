@@ -85,7 +85,7 @@ fn exec(code: &str, jit: bool) -> Result<(), MonorubyErr> {
         Ok(ast) => ast,
         Err(err) => {
             err.source_info.show_loc(&err.loc);
-            return Err(MonorubyErr::Parse(err));
+            return Err(MonorubyErr::parse(err));
         }
     };
     let mut store = Globals::new(res.id_store);
@@ -104,7 +104,7 @@ fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
         Ok(ast) => ast,
         Err(err) => {
             err.source_info.show_loc(&err.loc);
-            return Err(MonorubyErr::Parse(err));
+            return Err(MonorubyErr::parse(err));
         }
     };
     let mut store = Globals::new(res.id_store);

@@ -430,7 +430,7 @@ impl NormalFuncInfo {
     fn load_local(&mut self, ident: IdentId) -> Result<BcLocal> {
         match self.locals.get(&ident) {
             Some(local) => Ok(BcLocal(*local)),
-            None => Err(MonorubyErr::UndefinedLocal(ident.to_owned())),
+            None => Err(MonorubyErr::undefined_local(ident)),
         }
     }
 
@@ -741,12 +741,7 @@ impl NormalFuncInfo {
                 BinOp::Gt => self.gen_cmp(ctx, ir, None, CmpKind::Gt, lhs, rhs)?,
                 BinOp::Le => self.gen_cmp(ctx, ir, None, CmpKind::Le, lhs, rhs)?,
                 BinOp::Lt => self.gen_cmp(ctx, ir, None, CmpKind::Lt, lhs, rhs)?,
-                _ => {
-                    return Err(MonorubyErr::Unimplemented(format!(
-                        "unsupported operator {:?}",
-                        op
-                    )))
-                }
+                _ => return Err(MonorubyErr::unsupported_operator(op)),
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -761,12 +756,7 @@ impl NormalFuncInfo {
                                 self.gen_store_expr(ctx, ir, local, rhs, use_value)?;
                             }
                         }
-                        _ => {
-                            return Err(MonorubyErr::Unimplemented(format!(
-                                "unsupported lhs {:?}",
-                                lhs.kind
-                            )))
-                        }
+                        _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
                     }
                 } else {
                     self.gen_mul_assign(ctx, ir, mlhs, mrhs, use_value, is_ret)?;
@@ -898,12 +888,7 @@ impl NormalFuncInfo {
                 }
                 return Ok(());
             }
-            _ => {
-                return Err(MonorubyErr::Unimplemented(format!(
-                    "unsupported nodekind {:?}",
-                    expr.kind
-                )))
-            }
+            _ => return Err(MonorubyErr::unsupported_node(expr.kind)),
         }
         if !use_value {
             self.pop();
@@ -951,12 +936,7 @@ impl NormalFuncInfo {
                 BinOp::Gt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Gt, lhs, rhs)?,
                 BinOp::Le => self.gen_cmp(ctx, ir, Some(local), CmpKind::Le, lhs, rhs)?,
                 BinOp::Lt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Lt, lhs, rhs)?,
-                _ => {
-                    return Err(MonorubyErr::Unimplemented(format!(
-                        "unsupported operator {:?}",
-                        op
-                    )))
-                }
+                _ => return Err(MonorubyErr::unsupported_operator(op)),
             },
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -967,12 +947,7 @@ impl NormalFuncInfo {
                             self.gen_store_expr(ctx, ir, src, rhs, false)?;
                             self.gen_mov(ir, local.into(), src.into());
                         }
-                        _ => {
-                            return Err(MonorubyErr::Unimplemented(format!(
-                                "unsupported lhs {:?}",
-                                lhs.kind
-                            )))
-                        }
+                        _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
                     }
                 } else {
                     self.gen_mul_assign(ctx, ir, mlhs, mrhs, true, false)?;
@@ -1035,12 +1010,7 @@ impl NormalFuncInfo {
         for param in params {
             match param.kind {
                 ParamKind::Param(name) => args.push(name),
-                _ => {
-                    return Err(MonorubyErr::Unimplemented(format!(
-                        "unsupported paraneter kind {:?}",
-                        param.kind
-                    )))
-                }
+                _ => return Err(MonorubyErr::unsupported_parameter_kind(param.kind)),
             }
         }
         let func_id = ctx.functions.add_normal_func(Some(name), args, node);
@@ -1236,21 +1206,18 @@ impl NormalFuncInfo {
         let mlhs_len = mlhs.len();
         assert!(mlhs_len == mrhs.len());
         let mut temp_reg = self.next_reg();
+        // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
             self.gen_expr(ctx, ir, rhs, true, false)?;
         }
+        // Assign values to left-hand side expressions.
         for lhs in mlhs {
             match lhs.kind {
                 NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                     let local = self.find_local(lhs);
                     self.gen_mov(ir, local.into(), temp_reg.into());
                 }
-                _ => {
-                    return Err(MonorubyErr::Unimplemented(format!(
-                        "unsupported lhs {:?}",
-                        lhs.kind
-                    )))
-                }
+                _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
             }
             temp_reg += 1;
         }

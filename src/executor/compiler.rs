@@ -42,7 +42,7 @@ extern "C" fn get_func_absolute_address(
     let func_id = match globals.get_method(func_name) {
         Some(id) => id,
         None => {
-            interp.error = Some(MonorubyErr::MethodNotFound(func_name));
+            interp.error = Some(MonorubyErr::method_not_found(func_name));
             return CodePtr::default();
         }
     };
@@ -50,10 +50,7 @@ extern "C" fn get_func_absolute_address(
     let info = &globals.func[func_id];
     let arity = info.arity();
     if arity != args_len {
-        interp.error = Some(MonorubyErr::WrongArguments(format!(
-            "number of arguments mismatch. expected:{} actual:{}",
-            arity, args_len
-        )));
+        interp.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
         return CodePtr::default();
     }
     match info.jit_label() {
