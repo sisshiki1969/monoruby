@@ -315,11 +315,19 @@ impl FuncInfo {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+enum LoopKind {
+    For,
+    While,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IrContext {
     /// bytecode IR.
     ir: Vec<BcIr>,
     /// destination labels.
     labels: Vec<Option<InstId>>,
+    /// loop information.
+    loops: Vec<(LoopKind, usize, Option<BcReg>)>, // (kind, label for exit, return register)
 }
 
 impl IrContext {
@@ -327,6 +335,7 @@ impl IrContext {
         Self {
             ir: vec![],
             labels: vec![],
+            loops: vec![],
         }
     }
 
@@ -837,51 +846,25 @@ impl NormalFuncInfo {
                 cond_op,
             } => {
                 assert!(cond_op);
-                self.gen_while(ctx, ir, cond, body)?;
-                if use_value {
-                    self.gen_nil(ir, None);
-                }
-                return Ok(());
+                return self.gen_while(ctx, ir, cond, body, use_value);
             }
             NodeKind::For {
                 param,
                 box iter,
                 body,
             } => {
-                assert_eq!(1, param.len());
-                let counter = self.find_local(param[0]);
-                if let NodeKind::Range {
-                    box start,
-                    box end,
-                    exclude_end: false,
-                    ..
-                } = iter.kind
-                {
-                    let loop_entry = ir.new_label();
-                    let loop_exit = ir.new_label();
-                    self.gen_store_expr(ctx, ir, counter, start, false)?;
-                    self.gen_temp_expr(ctx, ir, end)?;
-                    let end = self.push().into();
-
-                    ir.apply_label(loop_entry);
-                    let dst = self.push().into();
-                    ir.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end));
-                    ir.push(BcIr::CondBr(dst, loop_exit));
-                    self.pop();
-
-                    self.gen_expr(ctx, ir, *body.body, false, false)?;
-
-                    ir.push(BcIr::Addri(counter.into(), counter.into(), 1));
-                    ir.push(BcIr::Br(loop_entry));
-
-                    ir.apply_label(loop_exit);
-                    self.pop();
-                } else {
-                    unimplemented!()
+                return self.gen_for(ctx, ir, param, iter, body, use_value);
+            }
+            NodeKind::Break(box val) => {
+                let (_kind, break_pos, ret_reg) = ir.loops.last().unwrap().clone();
+                match ret_reg {
+                    Some(reg) => {
+                        let temp = self.gen_temp_expr(ctx, ir, val)?;
+                        ir.push(BcIr::Mov(reg, temp.into()));
+                    }
+                    None => {}
                 }
-                if use_value {
-                    self.gen_nil(ir, None);
-                }
+                ir.push(BcIr::Br(break_pos));
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
@@ -1279,7 +1262,65 @@ impl NormalFuncInfo {
         } else if use_value {
             self.gen_nil(ir, None);
         }
-        return Ok(());
+        Ok(())
+    }
+
+    fn gen_for(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        param: Vec<IdentId>,
+        iter: Node,
+        body: BlockInfo,
+        use_value: bool,
+    ) -> Result<()> {
+        assert_eq!(1, param.len());
+        let counter = self.find_local(param[0]);
+        let break_pos = ir.new_label();
+        ir.loops.push((
+            LoopKind::For,
+            break_pos,
+            match use_value {
+                true => Some(self.next_reg().into()),
+                false => None,
+            },
+        ));
+        if let NodeKind::Range {
+            box start,
+            box end,
+            exclude_end: false,
+            ..
+        } = iter.kind
+        {
+            let loop_entry = ir.new_label();
+            let loop_exit = ir.new_label();
+            self.gen_store_expr(ctx, ir, counter, start, false)?;
+            self.gen_temp_expr(ctx, ir, end)?;
+            let end = self.push().into();
+
+            ir.apply_label(loop_entry);
+            let dst = self.push().into();
+            ir.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end));
+            ir.push(BcIr::CondBr(dst, loop_exit));
+            self.pop();
+
+            self.gen_expr(ctx, ir, *body.body, false, false)?;
+
+            ir.push(BcIr::Addri(counter.into(), counter.into(), 1));
+            ir.push(BcIr::Br(loop_entry));
+
+            ir.apply_label(loop_exit);
+            self.pop();
+        } else {
+            unimplemented!()
+        }
+        if use_value {
+            // TODO: we must return iter object.
+            self.gen_nil(ir, None);
+        }
+        ir.loops.pop().unwrap();
+        ir.apply_label(break_pos);
+        Ok(())
     }
 
     fn gen_while(
@@ -1288,9 +1329,19 @@ impl NormalFuncInfo {
         ir: &mut IrContext,
         cond: Node,
         body: Node,
+        use_value: bool,
     ) -> Result<()> {
         let cond_pos = ir.new_label();
         let succ_pos = ir.new_label();
+        let break_pos = ir.new_label();
+        ir.loops.push((
+            LoopKind::While,
+            break_pos,
+            match use_value {
+                true => Some(self.next_reg().into()),
+                false => None,
+            },
+        ));
         ir.apply_label(cond_pos);
         let cond = self.gen_temp_expr(ctx, ir, cond)?.into();
         let inst = BcIr::CondNotBr(cond, succ_pos);
@@ -1298,6 +1349,13 @@ impl NormalFuncInfo {
         self.gen_expr(ctx, ir, body, false, false)?;
         ir.push(BcIr::Br(cond_pos));
         ir.apply_label(succ_pos);
+
+        if use_value {
+            self.gen_nil(ir, None);
+        }
+        ir.loops.pop().unwrap();
+        ir.apply_label(break_pos);
+
         Ok(())
     }
 }

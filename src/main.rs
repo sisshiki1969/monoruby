@@ -385,14 +385,52 @@ mod test {
     }
 
     #[test]
-    fn test2() {
+    fn test_while1() {
         run_test(
             r#"
             a=1
-            b=while a<25000000 do
+            b=while a<2500 do
                 a=a+1
             end
             a
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_while2() {
+        run_test(
+            r#"
+            a=1
+            b=while a<2500 do
+                a=a+1
+                if a == 100 then break a end
+            end
+            b
+            "#,
+        );
+    }
+
+    /*#[test]
+    fn test_for1() {
+        run_test(
+            r#"
+            a=1
+            b = for a in 0..300 do
+            end
+            b # => 0..300
+            "#,
+        );
+    }*/
+
+    #[test]
+    fn test_for2() {
+        run_test(
+            r#"
+            b = for a in 0..300 do
+                if a == 77 then break a/7 end
+            end
+            b
             "#,
         );
     }
