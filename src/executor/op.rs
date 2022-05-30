@@ -1,7 +1,7 @@
 use super::*;
 
 use paste::paste;
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Shl, Shr, Sub};
 
 //
 // Generic operations.
@@ -28,6 +28,47 @@ macro_rules! binop_values {
 }
 
 binop_values!(add, sub, mul, div);
+
+macro_rules! int_binop_values {
+    ($op:ident) => {
+        paste! {
+            pub(super) extern "C" fn [<$op _values>](lhs: Value, rhs: Value) -> Value {
+                match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.$op(&rhs)),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        int_binop_values!($op1);
+        int_binop_values!($($op2),+);
+    };
+}
+
+int_binop_values!(bitor, bitand, bitxor);
+
+pub(super) extern "C" fn shr_values(lhs: Value, rhs: Value) -> Value {
+    match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
+            lhs.shr(&rhs)
+        } else {
+            lhs.shl(-&rhs)
+        }),
+        _ => unreachable!(),
+    }
+}
+
+pub(super) extern "C" fn shl_values(lhs: Value, rhs: Value) -> Value {
+    match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
+            lhs.shl(&rhs)
+        } else {
+            lhs.shr(-&rhs)
+        }),
+        _ => unreachable!(),
+    }
+}
 
 macro_rules! cmp_values {
     ($op:ident) => {

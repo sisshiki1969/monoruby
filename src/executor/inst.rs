@@ -19,6 +19,11 @@ pub(super) enum BcIr {
     Subri(BcReg, BcReg, i16),          // ret, lhs, int
     Mul(BcReg, BcReg, BcReg),          // ret, lhs, rhs
     Div(BcReg, BcReg, BcReg),          // ret, lhs, rhs
+    BitOr(BcReg, BcReg, BcReg),        // ret, lhs, rhs
+    BitAnd(BcReg, BcReg, BcReg),       // ret, lhs, rhs
+    BitXor(BcReg, BcReg, BcReg),       // ret, lhs, rhs
+    Shr(BcReg, BcReg, BcReg),          // ret, lhs, rhs
+    Shl(BcReg, BcReg, BcReg),          // ret, lhs, rhs
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, lhs, rhs
     Ret(BcReg),
@@ -58,6 +63,16 @@ pub(super) enum BcOp {
     Mul(u16, u16, u16),
     /// div(%ret, %lhs, %rhs)
     Div(u16, u16, u16),
+    /// bor(%ret, %lhs, %rhs)
+    BitOr(u16, u16, u16),
+    /// band(%ret, %lhs, %rhs)
+    BitAnd(u16, u16, u16),
+    /// bxor(%ret, %lhs, %rhs)
+    BitXor(u16, u16, u16),
+    /// shr(%ret, %lhs, %rhs)
+    Shr(u16, u16, u16),
+    /// shl(%ret, %lhs, %rhs)
+    Shl(u16, u16, u16),
     /// eq(%ret, %lhs, %rhs)
     Eq(u16, u16, u16),
     /// ne(%ret, %lhs, %rhs)
@@ -157,6 +172,11 @@ impl BcOp {
             Geri(op1, op2, op3) => enc_wwsw(147, *op1, *op2, *op3),
             Ret(op1) => enc_w(148, *op1),
             Mov(op1, op2) => enc_ww(149, *op1, *op2),
+            BitOr(op1, op2, op3) => enc_www(150, *op1, *op2, *op3),
+            BitAnd(op1, op2, op3) => enc_www(151, *op1, *op2, *op3),
+            BitXor(op1, op2, op3) => enc_www(152, *op1, *op2, *op3),
+            Shr(op1, op2, op3) => enc_www(153, *op1, *op2, *op3),
+            Shl(op1, op2, op3) => enc_www(154, *op1, *op2, *op3),
         }
     }
 
@@ -199,6 +219,11 @@ impl BcOp {
                 147 => Self::Geri(op1, op2, op3 as i16),
                 148 => Self::Ret(op1),
                 149 => Self::Mov(op1, op2),
+                150 => Self::BitOr(op1, op2, op3),
+                151 => Self::BitAnd(op1, op2, op3),
+                152 => Self::BitXor(op1, op2, op3),
+                153 => Self::Shr(op1, op2, op3),
+                154 => Self::Shl(op1, op2, op3),
                 _ => unreachable!(),
             }
         }

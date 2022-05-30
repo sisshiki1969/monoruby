@@ -183,6 +183,8 @@ impl Interp {
         };
         self.fetch_and_dispatch();
 
+        let (shl, shr) = self.vm_shift();
+
         self.dispatch[1] = self.vm_fncall(func_offset, func_address, func_pc);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
@@ -215,6 +217,12 @@ impl Interp {
 
         self.dispatch[148] = ret;
         self.dispatch[149] = mov;
+
+        self.dispatch[150] = self.vm_bitorrr();
+        self.dispatch[151] = self.vm_bitandrr();
+        self.dispatch[152] = self.vm_bitxorrr();
+        self.dispatch[153] = shr;
+        self.dispatch[154] = shl;
 
         self.jit_gen.jit.finalize();
         entry
@@ -582,6 +590,177 @@ impl Interp {
         };
         self.fetch_and_dispatch();
         label
+    }
+
+    fn vm_bitorrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic;
+            testq rsi, 0x1;
+            jeq generic;
+            orq rdi, rsi;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic:
+            // generic path
+            movq rax, (bitor_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_bitandrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic;
+            testq rsi, 0x1;
+            jeq generic;
+            andq rdi, rsi;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic:
+            // generic path
+            movq rax, (bitand_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_bitxorrr(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        let generic = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic;
+            testq rsi, 0x1;
+            jeq generic;
+            xorq rdi, rsi;
+            addq rdi, 1;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic:
+            // generic path
+            movq rax, (bitxor_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_shift(&mut self) -> (CodePtr, CodePtr) {
+        let shl_label = self.jit_gen.jit.get_current_address();
+        let generic_shl = self.jit_gen.jit.label();
+        let generic_shr = self.jit_gen.jit.label();
+        let to_shl = self.jit_gen.jit.label();
+        let to_shr = self.jit_gen.jit.label();
+        let shl = self.jit_gen.jit.label();
+        let shr = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic_shl;
+            testq rsi, 0x1;
+            jeq generic_shl;
+            movq rcx, rsi;
+            sarq rcx, 1;
+            js to_shr;
+        shl:
+            sarq rdi, 1;
+            salq rdi, rcx;
+            shlq rdi, 1;
+            orq rdi, 1;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic_shl:
+            // generic path
+            movq rax, (shl_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        to_shr:
+            negq rcx;
+            jmp shr;
+            };
+
+        let shr_label = self.jit_gen.jit.get_current_address();
+        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! { self.jit_gen.jit,
+            movq rdi, [rdi];
+            movq rsi, [rsi];
+            testq rdi, 0x1;
+            jeq generic_shr;
+            testq rsi, 0x1;
+            jeq generic_shr;
+            movq rcx, rsi;
+            sarq rcx, 1;
+            js to_shl;
+        shr:
+            sarq rdi, 1;
+            sarq rdi, rcx;
+            shlq rdi, 1;
+            orq rdi, 1;
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        generic_shr:
+            // generic path
+            movq rax, (shr_values);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        monoasm! { self.jit_gen.jit,
+        to_shl:
+            negq rcx;
+            jmp shl;
+                };
+        (shl_label, shr_label)
     }
 
     cmp_ops!(eq, ne, gt, ge, lt, le);

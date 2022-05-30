@@ -1,7 +1,7 @@
-use std::hash::Hash;
-
 use super::*;
 use crate::executor::interp::{BcPc, BcPcBase};
+use paste::paste;
+use std::hash::Hash;
 
 ///
 /// ID of function.
@@ -553,6 +553,11 @@ impl NormalFuncInfo {
                 }
                 BcOp::Mul(dst, lhs, rhs) => eprintln!("%{} = %{} * %{}", dst, lhs, rhs),
                 BcOp::Div(dst, lhs, rhs) => eprintln!("%{} = %{} / %{}", dst, lhs, rhs),
+                BcOp::BitOr(dst, lhs, rhs) => eprintln!("%{} = %{} | %{}", dst, lhs, rhs),
+                BcOp::BitAnd(dst, lhs, rhs) => eprintln!("%{} = %{} & %{}", dst, lhs, rhs),
+                BcOp::BitXor(dst, lhs, rhs) => eprintln!("%{} = %{} ^ %{}", dst, lhs, rhs),
+                BcOp::Shr(dst, lhs, rhs) => eprintln!("%{} = %{} >> %{}", dst, lhs, rhs),
+                BcOp::Shl(dst, lhs, rhs) => eprintln!("%{} = %{} << %{}", dst, lhs, rhs),
                 BcOp::Eq(dst, lhs, rhs) => {
                     eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Eq, rhs)
                 }
@@ -735,6 +740,11 @@ impl NormalFuncInfo {
                 BinOp::Sub => self.gen_sub(ctx, ir, None, lhs, rhs)?,
                 BinOp::Mul => self.gen_mul(ctx, ir, None, lhs, rhs)?,
                 BinOp::Div => self.gen_div(ctx, ir, None, lhs, rhs)?,
+                BinOp::BitOr => self.gen_bitor(ctx, ir, None, lhs, rhs)?,
+                BinOp::BitAnd => self.gen_bitand(ctx, ir, None, lhs, rhs)?,
+                BinOp::BitXor => self.gen_bitxor(ctx, ir, None, lhs, rhs)?,
+                BinOp::Shr => self.gen_shr(ctx, ir, None, lhs, rhs)?,
+                BinOp::Shl => self.gen_shl(ctx, ir, None, lhs, rhs)?,
                 BinOp::Eq => self.gen_cmp(ctx, ir, None, CmpKind::Eq, lhs, rhs)?,
                 BinOp::Ne => self.gen_cmp(ctx, ir, None, CmpKind::Ne, lhs, rhs)?,
                 BinOp::Ge => self.gen_cmp(ctx, ir, None, CmpKind::Ge, lhs, rhs)?,
@@ -930,6 +940,11 @@ impl NormalFuncInfo {
                 BinOp::Sub => self.gen_sub(ctx, ir, Some(local), lhs, rhs)?,
                 BinOp::Mul => self.gen_mul(ctx, ir, Some(local), lhs, rhs)?,
                 BinOp::Div => self.gen_div(ctx, ir, Some(local), lhs, rhs)?,
+                BinOp::BitOr => self.gen_bitor(ctx, ir, Some(local), lhs, rhs)?,
+                BinOp::BitAnd => self.gen_bitand(ctx, ir, Some(local), lhs, rhs)?,
+                BinOp::BitXor => self.gen_bitxor(ctx, ir, Some(local), lhs, rhs)?,
+                BinOp::Shr => self.gen_shr(ctx, ir, Some(local), lhs, rhs)?,
+                BinOp::Shl => self.gen_shl(ctx, ir, Some(local), lhs, rhs)?,
                 BinOp::Eq => self.gen_cmp(ctx, ir, Some(local), CmpKind::Eq, lhs, rhs)?,
                 BinOp::Ne => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ne, lhs, rhs)?,
                 BinOp::Ge => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ge, lhs, rhs)?,
@@ -1112,69 +1127,73 @@ impl NormalFuncInfo {
         };
         Ok((dst, lhs))
     }
+}
 
-    fn gen_add(
-        &mut self,
-        ctx: &mut FnStore,
-        ir: &mut IrContext,
-        dst: Option<BcLocal>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<()> {
-        if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(ctx, ir, dst, lhs)?;
-            ir.push(BcIr::Addri(dst, lhs, i));
-        } else {
-            let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
-            ir.push(BcIr::Add(dst, lhs, rhs));
+macro_rules! gen_ops {
+    (($op:ident, $inst:ident)) => {
+        paste! {
+            fn [<gen_ $op>](
+                &mut self,
+                ctx: &mut FnStore,
+                ir: &mut IrContext,
+                dst: Option<BcLocal>,
+                lhs: Node,
+                rhs: Node,
+            ) -> Result<()> {
+                let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
+                ir.push(BcIr::$inst(dst, lhs, rhs));
+                Ok(())
+            }
         }
-        Ok(())
-    }
+    };
+    (($op1:ident, $inst1:ident), $(($op2:ident, $inst2:ident)),+) => {
+        gen_ops!(($op1, $inst1));
+        gen_ops!($(($op2, $inst2)),+);
+    };
+}
 
-    fn gen_sub(
-        &mut self,
-        ctx: &mut FnStore,
-        ir: &mut IrContext,
-        dst: Option<BcLocal>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<()> {
-        if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(ctx, ir, dst, lhs)?;
-            ir.push(BcIr::Subri(dst, lhs, i));
-        } else {
-            let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
-            ir.push(BcIr::Sub(dst, lhs, rhs));
+macro_rules! gen_ri_ops {
+    (($op:ident, $inst:ident)) => {
+        paste! {
+            fn [<gen_ $op>](
+                &mut self,
+                ctx: &mut FnStore,
+                ir: &mut IrContext,
+                dst: Option<BcLocal>,
+                lhs: Node,
+                rhs: Node,
+            ) -> Result<()> {
+                if let Some(i) = is_smi(&rhs) {
+                    let (dst, lhs) = self.gen_singular(ctx, ir, dst, lhs)?;
+                    ir.push(BcIr::[<$inst ri>](dst, lhs, i));
+                } else {
+                    let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
+                    ir.push(BcIr::$inst(dst, lhs, rhs));
+                }
+                Ok(())
+            }
         }
-        Ok(())
-    }
+    };
+    (($op1:ident, $inst1:ident), $(($op2:ident, $inst2:ident)),+) => {
+        gen_ri_ops!(($op1, $inst1));
+        gen_ri_ops!($(($op2, $inst2)),+);
+    };
+}
 
-    fn gen_mul(
-        &mut self,
-        ctx: &mut FnStore,
-        ir: &mut IrContext,
-        dst: Option<BcLocal>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
-        ir.push(BcIr::Mul(dst, lhs, rhs));
-        Ok(())
-    }
+impl NormalFuncInfo {
+    gen_ri_ops!((add, Add), (sub, Sub));
+    gen_ops!(
+        (mul, Mul),
+        (div, Div),
+        (bitor, BitOr),
+        (bitand, BitAnd),
+        (bitxor, BitXor),
+        (shr, Shr),
+        (shl, Shl)
+    );
+}
 
-    fn gen_div(
-        &mut self,
-        ctx: &mut FnStore,
-        ir: &mut IrContext,
-        dst: Option<BcLocal>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<()> {
-        let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
-        ir.push(BcIr::Div(dst, lhs, rhs));
-        Ok(())
-    }
-
+impl NormalFuncInfo {
     fn gen_cmp(
         &mut self,
         ctx: &mut FnStore,
@@ -1401,6 +1420,31 @@ impl NormalFuncInfo {
                     self.get_index(rhs),
                 ),
                 BcIr::Div(dst, lhs, rhs) => BcOp::Div(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::BitOr(dst, lhs, rhs) => BcOp::BitOr(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::BitAnd(dst, lhs, rhs) => BcOp::BitAnd(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::BitXor(dst, lhs, rhs) => BcOp::BitXor(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Shr(dst, lhs, rhs) => BcOp::Shr(
+                    self.get_index(dst),
+                    self.get_index(lhs),
+                    self.get_index(rhs),
+                ),
+                BcIr::Shl(dst, lhs, rhs) => BcOp::Shl(
                     self.get_index(dst),
                     self.get_index(lhs),
                     self.get_index(rhs),

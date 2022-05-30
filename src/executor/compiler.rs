@@ -186,6 +186,118 @@ impl JitGen {
         );
     }
 
+    fn generic_bit_or(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        monoasm!(self.jit,
+            // fastpath
+            orq rdi, rsi;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        generic:
+            // generic path
+            movq rax, (bitor_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
+    fn generic_bit_and(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        monoasm!(self.jit,
+            // fastpath
+            andq rdi, rsi;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        generic:
+            // generic path
+            movq rax, (bitand_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
+    fn generic_bit_xor(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        monoasm!(self.jit,
+            // fastpath
+            xorq rdi, rsi;
+            addq rdi, 1;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        generic:
+            // generic path
+            movq rax, (bitxor_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
+    fn generic_shr(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        let shl = self.jit.label();
+        let after = self.jit.label();
+        monoasm!(self.jit,
+            // fastpath
+            sarq rdi, 1;
+            movq rcx, rsi;
+            sarq rcx, 1;
+            js shl;
+            sarq rdi, rcx;
+        after:
+            shlq rdi, 1;
+            orq rdi, 1;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        shl:
+            negq rcx;
+            salq rdi, rcx;
+            jmp after;
+        generic:
+            // generic path
+            movq rax, (shr_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
+    fn generic_shl(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
+        let shr = self.jit.label();
+        let after = self.jit.label();
+        monoasm!(self.jit,
+            // fastpath
+            sarq rdi, 1;
+            movq rcx, rsi;
+            sarq rcx, 1;
+            js shr;
+            salq rdi, rcx;
+        after:
+            shlq rdi, 1;
+            orq rdi, 1;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+            jmp exit;
+        shr:
+            negq rcx;
+            sarq rdi, rcx;
+            jmp after;
+        generic:
+            // generic path
+            movq rax, (shl_values);
+            call rax;
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        exit:
+        );
+    }
+
     ///
     /// ## stack layout for JIT-ed code (jut after prologue).
     ///
@@ -474,6 +586,46 @@ impl JitGen {
                       call rax;
                       movq [rbp - (conv(ret))], rax;
                     );
+                }
+                BcOp::BitOr(ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args(lhs, rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.generic_bit_or(generic, exit, ret);
+                }
+                BcOp::BitAnd(ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args(lhs, rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.generic_bit_and(generic, exit, ret);
+                }
+                BcOp::BitXor(ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args(lhs, rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.generic_bit_xor(generic, exit, ret);
+                }
+                BcOp::Shr(ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args(lhs, rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.generic_shr(generic, exit, ret);
+                }
+                BcOp::Shl(ret, lhs, rhs) => {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args(lhs, rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.generic_shl(generic, exit, ret);
                 }
                 BcOp::Eq(ret, lhs, rhs) => cmp!(lhs, rhs, ret, seteq, cmp_eq_values),
                 BcOp::Ne(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setne, cmp_ne_values),
