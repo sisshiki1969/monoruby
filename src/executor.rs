@@ -23,13 +23,18 @@ pub enum MonorubyErr {
     UndefinedLocal(IdentId),
     MethodNotFound(IdentId),
     WrongArguments(String),
-    Parse(ParseErr),
+    Syntax(ParseErr),
+    Syntax2(String),
     Unimplemented(String),
 }
 
 impl MonorubyErr {
     pub fn parse(error: ParseErr) -> MonorubyErr {
-        MonorubyErr::Parse(error)
+        MonorubyErr::Syntax(error)
+    }
+
+    pub fn escape_from_eval() -> MonorubyErr {
+        MonorubyErr::Syntax2("can't escape from eval.".to_string())
     }
 
     pub fn undefined_local(ident: IdentId) -> MonorubyErr {

@@ -735,6 +735,36 @@ impl NormalFuncInfo {
                     }
                 };
             }
+            NodeKind::AssignOp(op, box lhs, box rhs) => {
+                let local = match lhs.kind {
+                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
+                    _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
+                };
+                match op {
+                    BinOp::Add => self.gen_add(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Sub => self.gen_sub(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Mul => self.gen_mul(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Div => self.gen_div(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::BitOr => self.gen_bitor(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::BitAnd => self.gen_bitand(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::BitXor => self.gen_bitxor(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Shr => self.gen_shr(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Shl => self.gen_shl(ctx, ir, Some(local), lhs, rhs)?,
+                    BinOp::Eq => self.gen_cmp(ctx, ir, Some(local), CmpKind::Eq, lhs, rhs)?,
+                    BinOp::Ne => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ne, lhs, rhs)?,
+                    BinOp::Ge => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ge, lhs, rhs)?,
+                    BinOp::Gt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Gt, lhs, rhs)?,
+                    BinOp::Le => self.gen_cmp(ctx, ir, Some(local), CmpKind::Le, lhs, rhs)?,
+                    BinOp::Lt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Lt, lhs, rhs)?,
+                    _ => return Err(MonorubyErr::unsupported_operator(op)),
+                };
+                if is_ret {
+                    self.gen_ret(ir, Some(local));
+                } else if use_value {
+                    self.gen_temp_mov(ir, local.into());
+                }
+                return Ok(());
+            }
             NodeKind::BinOp(op, box lhs, box rhs) => match op {
                 BinOp::Add => self.gen_add(ctx, ir, None, lhs, rhs)?,
                 BinOp::Sub => self.gen_sub(ctx, ir, None, lhs, rhs)?,
@@ -777,9 +807,10 @@ impl NormalFuncInfo {
                 let local2 = self.load_local(ident)?;
                 if is_ret {
                     self.gen_ret(ir, Some(local2));
-                } else {
+                } else if use_value {
                     self.gen_temp_mov(ir, local2.into());
                 }
+                return Ok(());
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -856,7 +887,10 @@ impl NormalFuncInfo {
                 return self.gen_for(ctx, ir, param, iter, body, use_value);
             }
             NodeKind::Break(box val) => {
-                let (_kind, break_pos, ret_reg) = ir.loops.last().unwrap().clone();
+                let (_kind, break_pos, ret_reg) = match ir.loops.last() {
+                    Some(data) => data.clone(),
+                    None => return Err(MonorubyErr::escape_from_eval()),
+                };
                 match ret_reg {
                     Some(reg) => {
                         let temp = self.gen_temp_expr(ctx, ir, val)?;

@@ -287,6 +287,19 @@ mod test {
     }
 
     #[test]
+    fn test_assign_op() {
+        run_test("a=3; a+=7; a");
+        run_test("a=3; a-=7; a");
+        run_test("a=3; a*=7; a");
+        run_test("a=300; a/=7; a");
+        run_test("a=30; a<<=7; a");
+        run_test("a=3000; a>>=7; a");
+        run_test("a=36; a|=77; a");
+        run_test("a=36; a&=77; a");
+        run_test("a=36; a^=77; a");
+    }
+
+    #[test]
     fn test1() {
         run_test("a=42; b=35.0; c=7; def f(x) a=4; end; if a-b==c then 0 else 1 end");
         run_test("def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a");
