@@ -202,7 +202,7 @@ fn run_ruby(code: &Vec<String>) -> RV {
                 .last()
                 .unwrap();
             if let Ok(n) = res.parse::<i64>() {
-                RV::Integer(n as i32)
+                RV::Integer(n)
             } else if let Ok(n) = res.parse::<f64>() {
                 RV::Float(n)
             } else if res == "true" {
@@ -284,6 +284,10 @@ mod test {
         run_test("157 << -1");
         run_test("157 >> 1");
         run_test("157 >> -1");
+        run_test("157 >> 64");
+        run_test("157 << -64");
+        // run_test("157 << 64");
+        // run_test("157 >> -64");
     }
 
     #[test]

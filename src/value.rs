@@ -18,7 +18,7 @@ pub struct Value(std::num::NonZeroU64);
 pub enum RV {
     Nil,
     Bool(bool),
-    Integer(i32),
+    Integer(i64),
     Float(f64),
 }
 
@@ -118,8 +118,8 @@ impl Value {
         top & 0b1 == 0
     }*/
 
-    pub fn integer(num: i32) -> Self {
-        Value::fixnum(num as i64)
+    pub fn integer(num: i64) -> Self {
+        Value::fixnum(num)
     }
 
     pub fn float(num: f64) -> Self {
@@ -192,9 +192,9 @@ impl Value {
         self.0.get() & 0b1 == 1
     }
 
-    fn as_fixnum(&self) -> Option<i32> {
+    fn as_fixnum(&self) -> Option<i64> {
         if self.is_fnum() {
-            Some(self.as_fnum() as i32)
+            Some(self.as_fnum())
         } else {
             None
         }

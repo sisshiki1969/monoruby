@@ -51,9 +51,9 @@ int_binop_values!(bitor, bitand, bitxor);
 pub(super) extern "C" fn shr_values(lhs: Value, rhs: Value) -> Value {
     match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
-            lhs.shr(&rhs)
+            lhs.checked_shr(rhs as u64 as u32).unwrap_or(0)
         } else {
-            lhs.shl(-&rhs)
+            lhs.checked_shl(-rhs as u64 as u32).unwrap_or(0)
         }),
         _ => unreachable!(),
     }
@@ -62,9 +62,9 @@ pub(super) extern "C" fn shr_values(lhs: Value, rhs: Value) -> Value {
 pub(super) extern "C" fn shl_values(lhs: Value, rhs: Value) -> Value {
     match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
-            lhs.shl(&rhs)
+            lhs.checked_shl(rhs as u64 as u32).unwrap_or(0)
         } else {
-            lhs.shr(-&rhs)
+            lhs.checked_shr(-rhs as u64 as u32).unwrap_or(0)
         }),
         _ => unreachable!(),
     }
@@ -122,7 +122,7 @@ macro_rules! cmp_ri_values {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _ri_values>](lhs: Value, rhs: i64) -> Value {
                 let b = match lhs.unpack() {
-                    RV::Integer(lhs) => lhs.$op(&(rhs as i32)),
+                    RV::Integer(lhs) => lhs.$op(&rhs),
                     RV::Float(lhs) => lhs.$op(&(rhs as f64)),
                     _ => unreachable!(),
                 };

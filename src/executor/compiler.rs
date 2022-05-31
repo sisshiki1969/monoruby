@@ -241,12 +241,15 @@ impl JitGen {
     fn generic_shr(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
         let shl = self.jit.label();
         let after = self.jit.label();
+        let zero = self.jit.label();
         monoasm!(self.jit,
             // fastpath
             sarq rdi, 1;
             movq rcx, rsi;
             sarq rcx, 1;
             js shl;
+            cmpq rcx, 64;
+            jge zero;
             sarq rdi, rcx;
         after:
             shlq rdi, 1;
@@ -256,7 +259,13 @@ impl JitGen {
             jmp exit;
         shl:
             negq rcx;
+            // TODO: we must check overflow
+            cmpq rcx, 64;
+            jge zero;
             salq rdi, rcx;
+            jmp after;
+        zero:
+            xorq rdi, rdi;
             jmp after;
         generic:
             // generic path
@@ -271,12 +280,16 @@ impl JitGen {
     fn generic_shl(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
         let shr = self.jit.label();
         let after = self.jit.label();
+        let zero = self.jit.label();
         monoasm!(self.jit,
             // fastpath
             sarq rdi, 1;
             movq rcx, rsi;
             sarq rcx, 1;
             js shr;
+            // TODO: we must check overflow
+            cmpq rcx, 64;
+            jge zero;
             salq rdi, rcx;
         after:
             shlq rdi, 1;
@@ -286,7 +299,12 @@ impl JitGen {
             jmp exit;
         shr:
             negq rcx;
+            cmpq rcx, 64;
+            jge zero;
             sarq rdi, rcx;
+            jmp after;
+        zero:
+            xorq rdi, rdi;
             jmp after;
         generic:
             // generic path
@@ -477,7 +495,7 @@ impl JitGen {
                 let exit = self.jit.label();
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv($lhs))];
-                    movq rsi, (Value::integer($rhs as i32).get());
+                    movq rsi, (Value::integer($rhs as i64).get());
                 );
                 self.guard_rdi_fixnum(generic);
                 monoasm!(self.jit,
@@ -506,7 +524,7 @@ impl JitGen {
             self.jit.bind_label(labels[idx]);
             match BcOp::from_u64(*op) {
                 BcOp::Integer(ret, i) => {
-                    let i = Value::integer(i).get();
+                    let i = Value::integer(i as i64).get();
                     monoasm!(self.jit,
                       movq [rbp - (conv(ret))], (i);
                     );
@@ -543,7 +561,7 @@ impl JitGen {
                 BcOp::Addri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(rhs as i32).get();
+                    let rhs = Value::integer(rhs as i64).get();
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);
@@ -562,7 +580,7 @@ impl JitGen {
                 BcOp::Subri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let exit = self.jit.label();
-                    let rhs = Value::integer(rhs as i32).get();
+                    let rhs = Value::integer(rhs as i64).get();
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(lhs))];
                         movq rsi, (rhs);

@@ -694,7 +694,7 @@ impl Interp {
         monoasm! { self.jit_gen.jit,
             movq rdi, [rdi];
             movq rsi, [rsi];
-            testq rdi, 0x1;
+            /*testq rdi, 0x1;
             jeq generic_shl;
             testq rsi, 0x1;
             jeq generic_shl;
@@ -706,9 +706,9 @@ impl Interp {
             salq rdi, rcx;
             shlq rdi, 1;
             orq rdi, 1;
-            movq [r15], rdi;
+            movq [r15], rdi;*/
         };
-        self.fetch_and_dispatch();
+        //self.fetch_and_dispatch();
         monoasm! { self.jit_gen.jit,
         generic_shl:
             // generic path
@@ -731,7 +731,7 @@ impl Interp {
         monoasm! { self.jit_gen.jit,
             movq rdi, [rdi];
             movq rsi, [rsi];
-            testq rdi, 0x1;
+            /*testq rdi, 0x1;
             jeq generic_shr;
             testq rsi, 0x1;
             jeq generic_shr;
@@ -743,9 +743,9 @@ impl Interp {
             sarq rdi, rcx;
             shlq rdi, 1;
             orq rdi, 1;
-            movq [r15], rdi;
+            movq [r15], rdi;*/
         };
-        self.fetch_and_dispatch();
+        //self.fetch_and_dispatch();
         monoasm! { self.jit_gen.jit,
         generic_shr:
             // generic path
