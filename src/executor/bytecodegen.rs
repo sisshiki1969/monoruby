@@ -1,5 +1,6 @@
 use super::*;
 use crate::executor::interp::{BcPc, BcPcBase};
+use num::BigInt;
 use paste::paste;
 use std::hash::Hash;
 
@@ -80,7 +81,7 @@ pub struct MethodDefId(pub u32);
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
-    func_map: HashMap<IdentId, FuncId>,
+    func_map: FxHashMap<IdentId, FuncId>,
     pub main: Option<FuncId>,
     /// method define info.
     method_def_info: Vec<MethodDefInfo>,
@@ -127,7 +128,7 @@ impl FnStore {
     pub fn new() -> Self {
         Self {
             functions: Funcs::new(),
-            func_map: HashMap::default(),
+            func_map: FxHashMap::default(),
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
@@ -367,7 +368,7 @@ pub(super) struct NormalFuncInfo {
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
-    locals: HashMap<IdentId, u16>,
+    locals: FxHashMap<IdentId, u16>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -383,7 +384,7 @@ impl NormalFuncInfo {
             name_id,
             bytecode: vec![],
             args: args.clone(),
-            locals: HashMap::default(),
+            locals: FxHashMap::default(),
             temp: 0,
             reg_num: 0,
             ast: Some(ast),
@@ -471,6 +472,16 @@ impl NormalFuncInfo {
 
     fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
         self.gen_const(ctx, ir, dst, Value::float(f));
+    }
+
+    fn gen_bigint(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        dst: Option<BcLocal>,
+        bigint: BigInt,
+    ) {
+        self.gen_const(ctx, ir, dst, Value::bigint(bigint));
     }
 
     fn gen_nil(&mut self, ir: &mut IrContext, dst: Option<BcLocal>) {
@@ -695,6 +706,37 @@ impl NormalFuncInfo {
         Ok(self.pop())
     }
 
+    /// Generate bytecode Ir for binary operations.
+    fn gen_binop(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        op: BinOp,
+        lhs: Node,
+        rhs: Node,
+        dst: Option<BcLocal>,
+    ) -> Result<()> {
+        match op {
+            BinOp::Add => self.gen_add(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Sub => self.gen_sub(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Mul => self.gen_mul(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Div => self.gen_div(ctx, ir, dst, lhs, rhs)?,
+            BinOp::BitOr => self.gen_bitor(ctx, ir, dst, lhs, rhs)?,
+            BinOp::BitAnd => self.gen_bitand(ctx, ir, dst, lhs, rhs)?,
+            BinOp::BitXor => self.gen_bitxor(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Shr => self.gen_shr(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Shl => self.gen_shl(ctx, ir, dst, lhs, rhs)?,
+            BinOp::Eq => self.gen_cmp(ctx, ir, dst, CmpKind::Eq, lhs, rhs)?,
+            BinOp::Ne => self.gen_cmp(ctx, ir, dst, CmpKind::Ne, lhs, rhs)?,
+            BinOp::Ge => self.gen_cmp(ctx, ir, dst, CmpKind::Ge, lhs, rhs)?,
+            BinOp::Gt => self.gen_cmp(ctx, ir, dst, CmpKind::Gt, lhs, rhs)?,
+            BinOp::Le => self.gen_cmp(ctx, ir, dst, CmpKind::Le, lhs, rhs)?,
+            BinOp::Lt => self.gen_cmp(ctx, ir, dst, CmpKind::Lt, lhs, rhs)?,
+            _ => return Err(MonorubyErr::unsupported_operator(op)),
+        };
+        Ok(())
+    }
+
     /// Generate bytecode Ir for *expr*.
     fn gen_expr(
         &mut self,
@@ -721,6 +763,9 @@ impl NormalFuncInfo {
             NodeKind::Integer(i) => {
                 self.gen_integer(ctx, ir, None, i);
             }
+            NodeKind::Bignum(bigint) => {
+                self.gen_bigint(ctx, ir, None, bigint);
+            }
             NodeKind::Float(f) => {
                 self.gen_float(ctx, ir, None, f);
             }
@@ -740,24 +785,7 @@ impl NormalFuncInfo {
                     NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
                 };
-                match op {
-                    BinOp::Add => self.gen_add(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Sub => self.gen_sub(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Mul => self.gen_mul(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Div => self.gen_div(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::BitOr => self.gen_bitor(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::BitAnd => self.gen_bitand(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::BitXor => self.gen_bitxor(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Shr => self.gen_shr(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Shl => self.gen_shl(ctx, ir, Some(local), lhs, rhs)?,
-                    BinOp::Eq => self.gen_cmp(ctx, ir, Some(local), CmpKind::Eq, lhs, rhs)?,
-                    BinOp::Ne => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ne, lhs, rhs)?,
-                    BinOp::Ge => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ge, lhs, rhs)?,
-                    BinOp::Gt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Gt, lhs, rhs)?,
-                    BinOp::Le => self.gen_cmp(ctx, ir, Some(local), CmpKind::Le, lhs, rhs)?,
-                    BinOp::Lt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Lt, lhs, rhs)?,
-                    _ => return Err(MonorubyErr::unsupported_operator(op)),
-                };
+                self.gen_binop(ctx, ir, op, lhs, rhs, Some(local))?;
                 if is_ret {
                     self.gen_ret(ir, Some(local));
                 } else if use_value {
@@ -765,24 +793,7 @@ impl NormalFuncInfo {
                 }
                 return Ok(());
             }
-            NodeKind::BinOp(op, box lhs, box rhs) => match op {
-                BinOp::Add => self.gen_add(ctx, ir, None, lhs, rhs)?,
-                BinOp::Sub => self.gen_sub(ctx, ir, None, lhs, rhs)?,
-                BinOp::Mul => self.gen_mul(ctx, ir, None, lhs, rhs)?,
-                BinOp::Div => self.gen_div(ctx, ir, None, lhs, rhs)?,
-                BinOp::BitOr => self.gen_bitor(ctx, ir, None, lhs, rhs)?,
-                BinOp::BitAnd => self.gen_bitand(ctx, ir, None, lhs, rhs)?,
-                BinOp::BitXor => self.gen_bitxor(ctx, ir, None, lhs, rhs)?,
-                BinOp::Shr => self.gen_shr(ctx, ir, None, lhs, rhs)?,
-                BinOp::Shl => self.gen_shl(ctx, ir, None, lhs, rhs)?,
-                BinOp::Eq => self.gen_cmp(ctx, ir, None, CmpKind::Eq, lhs, rhs)?,
-                BinOp::Ne => self.gen_cmp(ctx, ir, None, CmpKind::Ne, lhs, rhs)?,
-                BinOp::Ge => self.gen_cmp(ctx, ir, None, CmpKind::Ge, lhs, rhs)?,
-                BinOp::Gt => self.gen_cmp(ctx, ir, None, CmpKind::Gt, lhs, rhs)?,
-                BinOp::Le => self.gen_cmp(ctx, ir, None, CmpKind::Le, lhs, rhs)?,
-                BinOp::Lt => self.gen_cmp(ctx, ir, None, CmpKind::Lt, lhs, rhs)?,
-                _ => return Err(MonorubyErr::unsupported_operator(op)),
-            },
+            NodeKind::BinOp(op, box lhs, box rhs) => self.gen_binop(ctx, ir, op, lhs, rhs, None)?,
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
@@ -804,11 +815,11 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::LocalVar(ident) => {
-                let local2 = self.load_local(ident)?;
+                let local = self.load_local(ident)?;
                 if is_ret {
-                    self.gen_ret(ir, Some(local2));
+                    self.gen_ret(ir, Some(local));
                 } else if use_value {
-                    self.gen_temp_mov(ir, local2.into());
+                    self.gen_temp_mov(ir, local.into());
                 }
                 return Ok(());
             }
@@ -955,6 +966,9 @@ impl NormalFuncInfo {
             NodeKind::Integer(i) => {
                 self.gen_integer(ctx, ir, Some(local), i);
             }
+            NodeKind::Bignum(bigint) => {
+                self.gen_bigint(ctx, ir, Some(local), bigint);
+            }
             NodeKind::Float(f) => {
                 self.gen_float(ctx, ir, Some(local), f);
             }
@@ -969,24 +983,9 @@ impl NormalFuncInfo {
                     }
                 };
             }
-            NodeKind::BinOp(op, box lhs, box rhs) => match op {
-                BinOp::Add => self.gen_add(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Sub => self.gen_sub(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Mul => self.gen_mul(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Div => self.gen_div(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::BitOr => self.gen_bitor(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::BitAnd => self.gen_bitand(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::BitXor => self.gen_bitxor(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Shr => self.gen_shr(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Shl => self.gen_shl(ctx, ir, Some(local), lhs, rhs)?,
-                BinOp::Eq => self.gen_cmp(ctx, ir, Some(local), CmpKind::Eq, lhs, rhs)?,
-                BinOp::Ne => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ne, lhs, rhs)?,
-                BinOp::Ge => self.gen_cmp(ctx, ir, Some(local), CmpKind::Ge, lhs, rhs)?,
-                BinOp::Gt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Gt, lhs, rhs)?,
-                BinOp::Le => self.gen_cmp(ctx, ir, Some(local), CmpKind::Le, lhs, rhs)?,
-                BinOp::Lt => self.gen_cmp(ctx, ir, Some(local), CmpKind::Lt, lhs, rhs)?,
-                _ => return Err(MonorubyErr::unsupported_operator(op)),
-            },
+            NodeKind::BinOp(op, box lhs, box rhs) => {
+                self.gen_binop(ctx, ir, op, lhs, rhs, Some(local))?
+            }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));

@@ -1,3 +1,10 @@
+use num::BigInt;
+
+use crate::{
+    alloc::{Allocator, GC},
+    rvalue::{ObjKind, RValue},
+};
+
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
@@ -8,27 +15,31 @@ const TRUE_VALUE: u64 = 0x1c; // 0001_1100
 const FLOAT_MASK1: u64 = !(0b0110u64 << 60);
 const FLOAT_MASK2: u64 = 0b0100u64 << 60;
 
-const ZERO: u64 = (0b1000 << 60) | 0b10;
+const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RV {
+pub enum RV<'a> {
     Nil,
     Bool(bool),
     Integer(i64),
+    BigInt(&'a BigInt),
     Float(f64),
+    Object(&'a RValue),
 }
 
-impl std::fmt::Display for RV {
+impl<'a> std::fmt::Display for RV<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RV::Integer(n) => write!(f, "{}", n),
+            RV::BigInt(n) => write!(f, "{}", n),
             RV::Float(n) => write!(f, "{}", n),
             RV::Bool(b) => write!(f, "{:?}", b),
             RV::Nil => write!(f, "nil"),
+            RV::Object(rvalue) => write!(f, "{}", rvalue),
         }
     }
 }
@@ -58,19 +69,35 @@ impl std::fmt::Debug for Value {
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.unpack() {
-            RV::Integer(n) => write!(f, "{}", n),
-            RV::Float(n) => write!(f, "{}", n),
-            RV::Bool(b) => write!(f, "{:?}", b),
-            RV::Nil => write!(f, "nil"),
+        write!(f, "{}", self.unpack())
+    }
+}
+
+impl GC<RValue> for Value {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        match self.as_rvalue() {
+            Some(rvalue) => rvalue.mark(alloc),
+            None => {}
         }
     }
 }
 
 impl Value {
-    #[inline(always)]
     pub fn from(id: u64) -> Self {
         Value(std::num::NonZeroU64::new(id).unwrap())
+    }
+
+    pub(crate) fn from_ptr(ptr: *mut RValue) -> Self {
+        Value::from(ptr as u64)
+    }
+
+    pub(crate) extern "C" fn dup(&self) -> Self {
+        if self.is_packed_value() {
+            *self
+        } else {
+            let rval = self.as_rvalue().unwrap().clone();
+            rval.pack()
+        }
     }
 
     /*#[inline(always)]
@@ -78,12 +105,10 @@ impl Value {
         unsafe { Value(std::num::NonZeroU64::new_unchecked(id)) }
     }*/
 
-    #[inline(always)]
     pub fn get(&self) -> u64 {
         self.0.get()
     }
 
-    #[inline(always)]
     pub const fn nil() -> Self {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }
@@ -98,7 +123,6 @@ impl Value {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(FALSE_VALUE) })
     }*/
 
-    #[inline(always)]
     pub fn bool(b: bool) -> Self {
         if b {
             Value::from(TRUE_VALUE)
@@ -107,32 +131,42 @@ impl Value {
         }
     }
 
-    #[inline(always)]
     pub fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
     }
 
-    /*#[inline(always)]
     fn is_i63(num: i64) -> bool {
         let top = (num as u64) >> 62 ^ (num as u64) >> 63;
         top & 0b1 == 0
-    }*/
+    }
+
+    pub fn int32(num: i32) -> Self {
+        Value::fixnum(num as i64)
+    }
 
     pub fn integer(num: i64) -> Self {
-        Value::fixnum(num)
+        if Self::is_i63(num) {
+            Value::fixnum(num)
+        } else {
+            RValue::new_bigint(BigInt::from(num)).pack()
+        }
     }
 
     pub fn float(num: f64) -> Self {
         if num == 0.0 {
-            return Value::from(ZERO);
+            return Value::from(FLOAT_ZERO);
         }
         let unum = f64::to_bits(num);
         let exp = ((unum >> 60) & 0b111) + 1;
         if (exp & 0b0110) == 0b0100 {
             Value::from((unum & FLOAT_MASK1 | FLOAT_MASK2).rotate_left(3))
         } else {
-            panic!()
+            RValue::new_float(num).pack()
         }
+    }
+
+    pub fn bigint(bigint: BigInt) -> Self {
+        RValue::new_bigint(bigint).pack()
     }
 
     pub fn unpack(&self) -> RV {
@@ -141,29 +175,17 @@ impl Value {
         } else if let Some(f) = self.as_flonum() {
             RV::Float(f)
         } else if !self.is_packed_value() {
-            panic!("invalid Value: {:08x}", self.get())
+            let rvalue = self.rvalue();
+            match &rvalue.kind {
+                ObjKind::Bignum(num) => RV::BigInt(num),
+                ObjKind::Float(num) => RV::Float(*num),
+                _ => RV::Object(rvalue),
+            }
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,
                 TRUE_VALUE => RV::Bool(true),
                 FALSE_VALUE => RV::Bool(false),
-                _ => unreachable!("Illegal packed value. {:x}", self.0),
-            }
-        }
-    }
-
-    pub fn pack(&self) -> u64 {
-        if !self.is_packed_value() {
-            panic!()
-        } else if let Some(i) = self.as_fixnum() {
-            i as i64 as u64
-        } else if let Some(f) = self.as_flonum() {
-            f64::to_bits(f)
-        } else {
-            match self.0.get() {
-                NIL_VALUE => 0,
-                TRUE_VALUE => 1,
-                FALSE_VALUE => 0,
                 _ => unreachable!("Illegal packed value. {:x}", self.0),
             }
         }
@@ -180,7 +202,7 @@ impl Value {
         (v | 0x10) != 0x14
     }
 
-    fn is_packed_value(&self) -> bool {
+    pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
     }
 
@@ -203,16 +225,34 @@ impl Value {
     fn as_flonum(&self) -> Option<f64> {
         let u = self.0.get();
         if u & 0b11 == 2 {
-            if u == ZERO {
+            if u == FLOAT_ZERO {
                 return Some(0.0);
             }
             let bit = 0b10 - ((u >> 63) & 0b1);
             let num = ((u & !(0b0011u64)) | bit).rotate_right(3);
-            //eprintln!("after  unpack:{:064b}", num);
             Some(f64::from_bits(num))
         } else {
             None
         }
+    }
+
+    /// Get reference of RValue from `self`.
+    ///
+    /// return None if `self` was not a packed value.
+    pub(crate) fn as_rvalue(&self) -> Option<&RValue> {
+        if self.is_packed_value() {
+            None
+        } else {
+            Some(self.rvalue())
+        }
+    }
+
+    pub(crate) fn rvalue(&self) -> &RValue {
+        unsafe { &*(self.get() as *const RValue) }
+    }
+
+    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
+        unsafe { &mut *(self.get() as *mut RValue) }
     }
 
     /*#[inline(always)]
@@ -220,33 +260,7 @@ impl Value {
         self.0.get() & 0b11 != 0
     }
 
-    pub fn ty(&self) -> Type {
-        match self.unpack() {
-            RV::Integer(_) => Type::Integer,
-            RV::Float(_) => Type::Float,
-            RV::Bool(_) => Type::Bool,
-            RV::Nil => Type::Nil,
-        }
-    }
-
     pub fn pack(&self) -> u64 {
         self.0.get()
     }*/
 }
-
-/*impl Value {
-    pub fn as_i(&self) -> i32 {
-        match self.unpack() {
-            RV::Integer(i) => i,
-            _ => unreachable!("{:?}", self),
-        }
-    }
-
-    pub fn as_f(&self) -> f64 {
-        match self.unpack() {
-            RV::Float(f) => f,
-            _ => unreachable!(),
-        }
-    }
-}
-*/

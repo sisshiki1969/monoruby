@@ -5,12 +5,10 @@ macro_rules! cmp_ops {
       paste! {
           fn [<vm_ $op rr>](&mut self) -> CodePtr {
               let label = self.jit_gen.jit.get_current_address();
-              self.vm_get_addr_rdi(); // rdi <- lhs addr
-              self.vm_get_addr_rsi(); // rsi <- rhs addr
+              self.vm_get_rdi(); // rdi <- lhs addr
+              self.vm_get_rsi(); // rsi <- rhs addr
               self.vm_get_addr_r15(); // r15 <- ret addr
               monoasm! { self.jit_gen.jit,
-                  movq rdi, [rdi];
-                  movq rsi, [rsi];
                   movq rax, ([<cmp_ $op _values>]);
                   call rax;
                   // store the result to return reg.
@@ -32,10 +30,9 @@ macro_rules! cmp_ri_ops {
       paste! {
           fn [<vm_ $op ri>](&mut self) -> CodePtr {
               let label = self.jit_gen.jit.get_current_address();
-              self.vm_get_addr_rdi(); // rdi <- lhs addr
+              self.vm_get_rdi(); // rdi <- lhs addr
               self.vm_get_addr_r15(); // r15 <- ret addr
               monoasm! { self.jit_gen.jit,
-                  movq rdi, [rdi];
                   movq rax, ([<cmp_ $op _ri_values>]);
                   call rax;
                   // store the result to return reg.
@@ -168,10 +165,9 @@ impl Interp {
         //BcOp::Mov
         let mov = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
-        self.vm_get_addr_rdi();
+        self.vm_get_rdi();
         monoasm! { self.jit_gen.jit,
-            movq rax, [rdi];
-            movq [r15], rax;
+            movq [r15], rdi;
         };
         self.fetch_and_dispatch();
 
@@ -271,21 +267,35 @@ impl Interp {
     /// - *rdi*: absolute address of the register
     fn vm_get_addr_rdi(&mut self) {
         monoasm! { self.jit_gen.jit,
-            //addq rdi, 2;
             negq rdi;
             lea rdi, [rbp + rdi * 8 - 16];
         };
     }
 
-    /// Get absolute address of the register.
+    /// Get value of the register.
+    /// #### @args
+    /// - *rdi*: register number
+    /// #### @return
+    /// - *rdi*: value of the register
+    fn vm_get_rdi(&mut self) {
+        monoasm! { self.jit_gen.jit,
+            negq rdi;
+            lea rdi, [rbp + rdi * 8 - 16];
+            movq rdi, [rdi];
+        };
+    }
+
+    /// Get value of the register.
     /// #### @args
     /// - *rsi*: register number
     /// #### @return
-    /// - *rsi*: absolute address of the register
-    fn vm_get_addr_rsi(&mut self) {
+    /// - *rsi*: value of the register
+    fn vm_get_rsi(&mut self) {
         monoasm! { self.jit_gen.jit,
+            //addq rdi, 2;
             negq rsi;
             lea rsi, [rbp + rsi * 8 - 16];
+            movq rsi, [rsi];
         };
     }
 
@@ -299,6 +309,18 @@ impl Interp {
             negq r15;
             lea r15, [rbp + r15 * 8 - 16];
         };
+    }
+
+    fn vm_generic(&mut self, generic: DestLabel, func: u64) {
+        monoasm! { self.jit_gen.jit,
+        generic:
+            // generic path
+            movq rax, (func);
+            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
     }
 
     fn vm_fncall(
@@ -417,39 +439,27 @@ impl Interp {
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            testq rdi, 0x1;
-            jeq generic;
-            shrq rdi, 1;
+            sarq rdi, 1;
             negq rdi;
-            //shlq rdi, 1;
             lea rdi, [rdi + rdi + 1];
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (neg_value);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, neg_value as _);
         label
     }
 
     fn vm_addri(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
         monoasm! { self.jit_gen.jit,
             shlq rsi, 1;
-            movq rdi, [rdi];
             testq rdi, 0x1;
             jeq generic;
             addq rdi, rsi;
@@ -472,43 +482,27 @@ impl Interp {
     fn vm_addrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            testq rdi, 0x1;
-            jeq generic;
-            testq rsi, 0x1;
-            jeq generic;
-            //subq rdi, 1;
-            //addq rdi, rsi;
             lea rdi, [rdi + rsi - 1];
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (add_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, add_values as _);
         label
     }
 
     fn vm_subri(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
+        self.vm_get_rdi(); // rdi <- lhs addr
         self.vm_get_addr_r15(); // r15 <- ret addr
         monoasm! { self.jit_gen.jit,
             shlq rsi, 1;
             addq rsi, 1;
-            movq rdi, [rdi];
             testq rdi, 0x1;
             jeq generic;
             subq rdi, rsi;
@@ -516,56 +510,33 @@ impl Interp {
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (sub_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, sub_values as _);
         label
     }
 
     fn vm_subrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            testq rdi, 0x1;
-            jeq generic;
-            testq rsi, 0x1;
-            jeq generic;
             subq rdi, rsi;
             addq rdi, 1;
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (sub_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, sub_values as _);
         label
     }
 
     fn vm_mulrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
             movq rax, (mul_values);
             call rax;
             // store the result to return reg.
@@ -577,12 +548,10 @@ impl Interp {
 
     fn vm_divrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
             movq rax, (div_values);
             call rax;
             // store the result to return reg.
@@ -595,88 +564,49 @@ impl Interp {
     fn vm_bitorrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            testq rdi, 0x1;
-            jeq generic;
-            testq rsi, 0x1;
-            jeq generic;
             orq rdi, rsi;
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (bitor_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, bitor_values as _);
         label
     }
 
     fn vm_bitandrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            testq rdi, 0x1;
-            jeq generic;
-            testq rsi, 0x1;
-            jeq generic;
             andq rdi, rsi;
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (bitand_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, bitand_values as _);
         label
     }
 
     fn vm_bitxorrr(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let generic = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            testq rdi, 0x1;
-            jeq generic;
-            testq rsi, 0x1;
-            jeq generic;
             xorq rdi, rsi;
             addq rdi, 1;
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (bitxor_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic, bitxor_values as _);
         label
     }
 
@@ -688,78 +618,26 @@ impl Interp {
         let to_shr = self.jit_gen.jit.label();
         let shl = self.jit_gen.jit.label();
         let shr = self.jit_gen.jit.label();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            /*testq rdi, 0x1;
-            jeq generic_shl;
-            testq rsi, 0x1;
-            jeq generic_shl;
-            movq rcx, rsi;
-            sarq rcx, 1;
-            js to_shr;
-        shl:
-            sarq rdi, 1;
-            salq rdi, rcx;
-            shlq rdi, 1;
-            orq rdi, 1;
-            movq [r15], rdi;*/
-        };
-        //self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic_shl:
-            // generic path
-            movq rax, (shl_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic_shl, shl_values as _);
         monoasm! { self.jit_gen.jit,
         to_shr:
             negq rcx;
             jmp shr;
-            };
+        };
 
         let shr_label = self.jit_gen.jit.get_current_address();
-        self.vm_get_addr_rdi(); // rdi <- lhs addr
-        self.vm_get_addr_rsi(); // rsi <- rhs addr
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        monoasm! { self.jit_gen.jit,
-            movq rdi, [rdi];
-            movq rsi, [rsi];
-            /*testq rdi, 0x1;
-            jeq generic_shr;
-            testq rsi, 0x1;
-            jeq generic_shr;
-            movq rcx, rsi;
-            sarq rcx, 1;
-            js to_shl;
-        shr:
-            sarq rdi, 1;
-            sarq rdi, rcx;
-            shlq rdi, 1;
-            orq rdi, 1;
-            movq [r15], rdi;*/
-        };
-        //self.fetch_and_dispatch();
-        monoasm! { self.jit_gen.jit,
-        generic_shr:
-            // generic path
-            movq rax, (shr_values);
-            call rax;
-            // store the result to return reg.
-            movq [r15], rax;
-        };
-        self.fetch_and_dispatch();
+        self.vm_generic(generic_shr, shr_values as _);
         monoasm! { self.jit_gen.jit,
         to_shl:
             negq rcx;
             jmp shl;
-                };
+        };
         (shl_label, shr_label)
     }
 

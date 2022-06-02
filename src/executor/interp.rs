@@ -161,8 +161,9 @@ impl Interp {
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let main = globals.func[globals.get_main_func()].as_normal();
         let mut eval = Self::new(main);
-        eval.jit_gen.exec_toplevel(globals)(&mut eval, globals)
-            .ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
+        let f = eval.jit_gen.exec_toplevel(globals);
+        let res = f(&mut eval, globals);
+        res.ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
     }
 
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {

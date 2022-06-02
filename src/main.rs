@@ -1,7 +1,9 @@
 #![feature(box_patterns)]
+pub use alloc::*;
+pub use fxhash::FxHashMap;
 pub use monoasm::CodePtr;
 pub use ruruby_parse::*;
-use std::collections::HashMap;
+//use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 #[cfg(not(debug_assertions))]
@@ -10,12 +12,12 @@ use std::time::*;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
-mod ast;
+mod alloc;
 mod executor;
-mod type_infer;
+mod rvalue;
 mod value;
-pub use ast::*;
 use executor::*;
+use rvalue::*;
 use value::*;
 
 use clap;
@@ -279,6 +281,34 @@ mod test {
     }
 
     #[test]
+    fn test_bigint() {
+        for lhs in [
+            "0", "53785",
+            "690426",
+            //"-43256",
+            //"24829482958347598570210950349530597028472983429873",
+            //"-9287498247923872987422938429384792832444298372384728725482",
+        ] {
+            for rhs in [
+                "17",
+                "3454",
+                "25084",
+                "234234645",
+                //"2352354645657876868978696835652452546462456245646",
+            ] {
+                for op in ["+", "-", "*", "/", "&", "|", "^"] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                }
+            }
+        }
+    }
+
+    /*#[test]
+    fn test_big() {
+        run_test("0 + 2352354645657876868978696835652452546462456245646");
+    }*/
+
+    #[test]
     fn test_shift() {
         run_test("157 << 1");
         run_test("157 << -1");
@@ -286,6 +316,8 @@ mod test {
         run_test("157 >> -1");
         run_test("157 >> 64");
         run_test("157 << -64");
+        run_test("157 << 54");
+        run_test("157 >> -54");
         // run_test("157 << 64");
         // run_test("157 >> -64");
     }

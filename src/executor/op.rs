@@ -1,7 +1,8 @@
 use super::*;
 
+use num::BigInt;
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Shl, Shr, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Sub};
 
 //
 // Generic operations.
@@ -12,7 +13,13 @@ macro_rules! binop_values {
         paste! {
             pub(super) extern "C" fn [<$op _values>](lhs: Value, rhs: Value) -> Value {
                 match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.$op(&rhs)),
+                    (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.[<checked_ $op>](rhs){
+                        Some(res) => Value::integer(res),
+                        None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
+                    }
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
@@ -35,6 +42,9 @@ macro_rules! int_binop_values {
             pub(super) extern "C" fn [<$op _values>](lhs: Value, rhs: Value) -> Value {
                 match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.$op(&rhs)),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     _ => unreachable!(),
                 }
             }

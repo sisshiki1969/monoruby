@@ -655,7 +655,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#3e93bdf7d5c59051a9730fdba591cfa602002011"
+source = "git+https://github.com/sisshiki1969/monoasm.git#9f1ff8f59d42fc5ade739727fd3c5a6f2b8332a8"
 dependencies = [
  "libc",
  "monoasm_macro",
@@ -667,7 +667,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#3e93bdf7d5c59051a9730fdba591cfa602002011"
+source = "git+https://github.com/sisshiki1969/monoasm.git#9f1ff8f59d42fc5ade739727fd3c5a6f2b8332a8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -681,8 +681,10 @@ dependencies = [
  "ariadne",
  "chumsky",
  "clap",
+ "fxhash",
  "monoasm",
  "monoasm_macro",
+ "num",
  "paste",
  "ruruby-parse",
  "rustyline",
