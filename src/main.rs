@@ -2,6 +2,7 @@
 pub use alloc::*;
 pub use fxhash::FxHashMap;
 pub use monoasm::CodePtr;
+use num::BigInt;
 pub use ruruby_parse::*;
 //use std::collections::HashMap;
 use std::fs::File;
@@ -149,7 +150,7 @@ pub fn run_test(code: &str) {
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();
 
-    assert_eq!(interp_val, jit_val);
+    assert!(Value::eq(interp_val, jit_val));
 
     //dbg!(&stmt);
     /*let mut hir = HirContext::new();
@@ -164,7 +165,7 @@ pub fn run_test(code: &str) {
 
     let ruby_res = run_ruby(&all_codes);
 
-    assert_eq!(jit_val.unpack(), ruby_res);
+    assert!(Value::eq(jit_val, ruby_res));
 }
 
 fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
@@ -178,7 +179,7 @@ fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     jit_val
 }
 
-fn run_ruby(code: &Vec<String>) -> RV {
+fn run_ruby(code: &Vec<String>) -> Value {
     use std::process::Command;
     let code = code
         .iter()
@@ -204,18 +205,20 @@ fn run_ruby(code: &Vec<String>) -> RV {
                 .last()
                 .unwrap();
             if let Ok(n) = res.parse::<i64>() {
-                RV::Integer(n)
+                Value::integer(n)
+            } else if let Ok(n) = res.parse::<BigInt>() {
+                Value::bigint(n)
             } else if let Ok(n) = res.parse::<f64>() {
-                RV::Float(n)
+                Value::float(n)
             } else if res == "true" {
-                RV::Bool(true)
+                Value::bool(true)
             } else if res == "false" {
-                RV::Bool(false)
+                Value::bool(false)
             } else if res == "nil" {
-                RV::Nil
+                Value::nil()
             } else {
                 eprintln!("Ruby: {:?}", res);
-                RV::Bool(false)
+                Value::bool(false)
             }
         }
         Err(err) => {
@@ -283,30 +286,37 @@ mod test {
     #[test]
     fn test_bigint() {
         for lhs in [
-            "0", "53785",
+            "0",
+            "53785",
             "690426",
-            //"-43256",
-            //"24829482958347598570210950349530597028472983429873",
-            //"-9287498247923872987422938429384792832444298372384728725482",
+            "24829482958347598570210950349530597028472983429873",
         ] {
             for rhs in [
                 "17",
                 "3454",
                 "25084",
                 "234234645",
-                //"2352354645657876868978696835652452546462456245646",
+                "2352354645657876868978696835652452546462456245646",
             ] {
                 for op in ["+", "-", "*", "/", "&", "|", "^"] {
                     run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
+                    run_test(&format!("-{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
                 }
             }
         }
     }
 
-    /*#[test]
-    fn test_big() {
-        run_test("0 + 2352354645657876868978696835652452546462456245646");
-    }*/
+    #[test]
+    fn test_int_bigint() {
+        run_test("4611686018427387903"); // max number of 63bit signed int.
+        run_test("4611686018427387903 + 1");
+        run_test("4611686018400000000 + 27387904");
+        run_test("-4611686018427387904"); // min number of 63bit signed int.
+        run_test("-4611686018427387904 - 1");
+        run_test("-4611686018400000001 - 27387904");
+    }
 
     #[test]
     fn test_shift() {
@@ -391,6 +401,23 @@ mod test {
                 end
             end;
             fib 40
+            "#,
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_factorial() {
+        run_test(
+            r#"
+            def fact(x)
+                if x <= 1 then
+                    1
+                else
+                    x * fact(x-1)
+                end
+            end;
+            fact 4000
             "#,
         );
     }

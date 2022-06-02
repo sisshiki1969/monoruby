@@ -177,24 +177,28 @@ impl JitGen {
         );
     }
 
-    fn fast_add(&mut self, exit: DestLabel, ret: u16) {
+    fn fast_add(&mut self, exit: DestLabel, generic: DestLabel, ret: u16) {
         monoasm!(self.jit,
             // fastpath
-            subq rdi, 1;
-            addq rdi, rsi;
+            movq rax, rdi;
+            subq rax, 1;
+            addq rax, rsi;
+            jo generic;
             // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
+            movq [rbp - (conv(ret))], rax;
             jmp exit;
         );
     }
 
-    fn fast_sub(&mut self, exit: DestLabel, ret: u16) {
+    fn fast_sub(&mut self, exit: DestLabel, generic: DestLabel, ret: u16) {
         monoasm!(self.jit,
             // fastpath
-            subq rdi, rsi;
-            addq rdi, 1;
+            movq rax, rdi;
+            subq rax, rsi;
+            jo generic;
+            addq rax, 1;
             // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
+            movq [rbp - (conv(ret))], rax;
             jmp exit;
         );
     }
@@ -514,19 +518,19 @@ impl JitGen {
                 }
                 BcOp::Const(ret, id) => {
                     let v = store.get_literal(id);
-                    if v.is_packed_value() {
-                        monoasm!(self.jit,
-                          movq rax, (v.get());
-                          movq [rbp - (conv(ret))], rax;
-                        );
-                    } else {
+                    //if v.is_packed_value() {
+                    monoasm!(self.jit,
+                      movq rax, (v.get());
+                      movq [rbp - (conv(ret))], rax;
+                    );
+                    /*} else {
                         monoasm!(self.jit,
                           movq rdi, (v.get());
                           movq rax, (Value::dup);
                           call rax;
                           movq [rbp - (conv(ret))], rax;
                         );
-                    }
+                    }*/
                 }
                 BcOp::Nil(ret) => {
                     monoasm!(self.jit,
@@ -547,7 +551,7 @@ impl JitGen {
                     let exit = self.jit.label();
                     self.load_binary_args(lhs, rhs);
                     self.guard_rdi_rsi_fixnum(generic);
-                    self.fast_add(exit, ret);
+                    self.fast_add(exit, generic, ret);
                     self.generic(generic, exit, ret, add_values as _);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
@@ -559,7 +563,7 @@ impl JitGen {
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.fast_add(exit, ret);
+                    self.fast_add(exit, generic, ret);
                     self.generic(generic, exit, ret, add_values as _);
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
@@ -567,7 +571,7 @@ impl JitGen {
                     let exit = self.jit.label();
                     self.load_binary_args(lhs, rhs);
                     self.guard_rdi_rsi_fixnum(generic);
-                    self.fast_sub(exit, ret);
+                    self.fast_sub(exit, generic, ret);
                     self.generic(generic, exit, ret, sub_values as _);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
@@ -579,7 +583,7 @@ impl JitGen {
                         movq rsi, (rhs);
                     );
                     self.guard_rdi_fixnum(generic);
-                    self.fast_sub(exit, ret);
+                    self.fast_sub(exit, generic, ret);
                     self.generic(generic, exit, ret, sub_values as _);
                 }
 

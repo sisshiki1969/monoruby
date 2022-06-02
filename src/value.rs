@@ -63,7 +63,7 @@ impl<'a> std::fmt::Display for RV<'a> {
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.unpack())
+        write!(f, "{:?}", self.unpack())
     }
 }
 
@@ -83,6 +83,22 @@ impl GC<RValue> for Value {
 }
 
 impl Value {
+    pub fn eq(lhs: Self, rhs: Self) -> bool {
+        if lhs == rhs {
+            return true;
+        }
+        match (lhs.as_rvalue(), rhs.as_rvalue()) {
+            (Some(lhs), Some(rhs)) => match (&lhs.kind, &rhs.kind) {
+                (ObjKind::Bignum(lhs), ObjKind::Bignum(rhs)) => lhs == rhs,
+                (ObjKind::Float(lhs), ObjKind::Float(rhs)) => lhs == rhs,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+impl Value {
     pub fn from(id: u64) -> Self {
         Value(std::num::NonZeroU64::new(id).unwrap())
     }
@@ -95,7 +111,7 @@ impl Value {
         if self.is_packed_value() {
             *self
         } else {
-            let rval = self.as_rvalue().unwrap().clone();
+            let rval = self.rvalue().clone();
             rval.pack()
         }
     }
@@ -166,7 +182,11 @@ impl Value {
     }
 
     pub fn bigint(bigint: BigInt) -> Self {
-        RValue::new_bigint(bigint).pack()
+        if let Ok(i) = i64::try_from(&bigint) {
+            Value::integer(i)
+        } else {
+            RValue::new_bigint(bigint).pack()
+        }
     }
 
     pub fn unpack(&self) -> RV {

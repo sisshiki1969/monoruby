@@ -457,7 +457,7 @@ impl NormalFuncInfo {
             };
             ir.push(BcIr::Integer(reg, i));
         } else {
-            self.gen_const(ctx, ir, dst, Value::fixnum(i));
+            self.gen_const(ctx, ir, dst, Value::integer(i));
         }
     }
 
@@ -772,7 +772,7 @@ impl NormalFuncInfo {
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
+                    //NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
                     NodeKind::Float(f) => self.gen_float(ctx, ir, None, -f),
                     _ => {
                         self.gen_expr(ctx, ir, rhs, true, false)?;

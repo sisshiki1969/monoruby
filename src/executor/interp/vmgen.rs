@@ -462,8 +462,10 @@ impl Interp {
             shlq rsi, 1;
             testq rdi, 0x1;
             jeq generic;
-            addq rdi, rsi;
-            movq [r15], rdi;
+            movq rax, rdi;
+            addq rax, rsi;
+            jo generic;
+            movq [r15], rax;
         };
         self.fetch_and_dispatch();
         monoasm! { self.jit_gen.jit,
@@ -487,8 +489,11 @@ impl Interp {
         self.vm_get_addr_r15(); // r15 <- ret addr
         self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            lea rdi, [rdi + rsi - 1];
-            movq [r15], rdi;
+            movq rax, rdi;
+            subq rax, 1;
+            addq rax, rsi;
+            jo generic;
+            movq [r15], rax;
         };
         self.fetch_and_dispatch();
         self.vm_generic(generic, add_values as _);
@@ -505,9 +510,11 @@ impl Interp {
             addq rsi, 1;
             testq rdi, 0x1;
             jeq generic;
-            subq rdi, rsi;
-            addq rdi, 1;
-            movq [r15], rdi;
+            movq rax, rdi;
+            subq rax, rsi;
+            jo generic;
+            addq rax, 1;
+            movq [r15], rax;
         };
         self.fetch_and_dispatch();
         self.vm_generic(generic, sub_values as _);
@@ -522,9 +529,11 @@ impl Interp {
         self.vm_get_addr_r15(); // r15 <- ret addr
         self.jit_gen.guard_rdi_rsi_fixnum(generic);
         monoasm! { self.jit_gen.jit,
-            subq rdi, rsi;
-            addq rdi, 1;
-            movq [r15], rdi;
+            movq rax, rdi;
+            subq rax, rsi;
+            jo generic;
+            addq rax, 1;
+            movq [r15], rax;
         };
         self.fetch_and_dispatch();
         self.vm_generic(generic, sub_values as _);
