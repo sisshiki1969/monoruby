@@ -1,9 +1,7 @@
+use crate::*;
 use num::BigInt;
 
-use crate::{
-    alloc::{Allocator, GC},
-    rvalue::{ObjKind, RValue},
-};
+use crate::alloc::{Allocator, GC};
 
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
@@ -43,23 +41,6 @@ impl<'a> std::fmt::Display for RV<'a> {
         }
     }
 }
-
-/*impl RV {
-    pub fn pack(&self) -> u64 {
-        match self {
-            Self::Integer(i) => *i as i64 as u64,
-            Self::Float(f) => f64::to_bits(*f),
-            Self::Bool(b) => {
-                if *b {
-                    1
-                } else {
-                    0
-                }
-            }
-            Self::Nil => 0,
-        }
-    }
-}*/
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,6 +86,28 @@ impl Value {
 
     pub(crate) fn from_ptr(ptr: *mut RValue) -> Self {
         Value::from(ptr as u64)
+    }
+
+    pub(crate) fn class(&self) -> u32 {
+        if let Some(_) = self.as_fixnum() {
+            INTEGER_CLASS
+        } else if let Some(_) = self.as_flonum() {
+            FLOAT_CLASS
+        } else if !self.is_packed_value() {
+            let rvalue = self.rvalue();
+            match &rvalue.kind {
+                ObjKind::Bignum(_) => INTEGER_CLASS,
+                ObjKind::Float(_) => FLOAT_CLASS,
+                _ => rvalue.class(),
+            }
+        } else {
+            match self.0.get() {
+                NIL_VALUE => NIL_CLASS,
+                TRUE_VALUE => TRUE_CLASS,
+                FALSE_VALUE => FALSE_CLASS,
+                _ => unreachable!("Illegal packed value. {:x}", self.0),
+            }
+        }
     }
 
     pub(crate) extern "C" fn dup(&self) -> Self {

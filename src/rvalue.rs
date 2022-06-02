@@ -76,9 +76,13 @@ impl RValue {
         self as *const RValue as u64
     }
 
+    pub(crate) fn class(&self) -> u32 {
+        self.flags.class()
+    }
+
     pub(crate) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
-            flags: RVFlag::new(),
+            flags: RVFlag::new(INTEGER_CLASS),
             kind: ObjKind::Bignum(bigint),
             var_table: None,
         }
@@ -86,7 +90,7 @@ impl RValue {
 
     pub(crate) fn new_float(f: f64) -> Self {
         RValue {
-            flags: RVFlag::new(),
+            flags: RVFlag::new(FLOAT_CLASS),
             kind: ObjKind::Float(f),
             var_table: None,
         }
@@ -110,15 +114,23 @@ union RVFlag {
     next: Option<std::ptr::NonNull<RValue>>,
 }
 
-impl std::default::Default for RVFlag {
-    fn default() -> Self {
-        Self { flag: 1 }
-    }
-}
+pub const NIL_CLASS: u32 = 1;
+pub const TRUE_CLASS: u32 = 2;
+pub const FALSE_CLASS: u32 = 3;
+pub const INTEGER_CLASS: u32 = 4;
+pub const FLOAT_CLASS: u32 = 5;
 
 impl RVFlag {
-    fn new() -> Self {
-        RVFlag { flag: 1 }
+    fn new(class: u32) -> Self {
+        RVFlag {
+            flag: (class as u64) << 32 | 1,
+        }
+    }
+
+    fn class(&self) -> u32 {
+        let flag = unsafe { self.flag };
+        assert!((flag & 0b1) == 1);
+        (flag >> 32) as u32
     }
 }
 

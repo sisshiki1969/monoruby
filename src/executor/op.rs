@@ -80,7 +80,7 @@ pub(super) extern "C" fn shr_values(lhs: Value, rhs: Value) -> Value {
         } else {
             lhs.checked_shl(-rhs as u64 as u32).unwrap_or(0)
         }),
-        _ => unreachable!(),
+        (lhs, rhs) => unreachable!("{:?} >> {:?}", lhs, rhs),
     }
 }
 
@@ -91,7 +91,7 @@ pub(super) extern "C" fn shl_values(lhs: Value, rhs: Value) -> Value {
         } else {
             lhs.checked_shr(-rhs as u64 as u32).unwrap_or(0)
         }),
-        _ => unreachable!(),
+        (lhs, rhs) => unreachable!("{:?} << {:?}", lhs, rhs),
     }
 }
 
@@ -109,7 +109,7 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                    _ => unreachable!(),
+                    (lhs, rhs) => unreachable!("{:?} cmp {:?}", lhs, rhs),
                 };
                 Value::bool(b)
             }
