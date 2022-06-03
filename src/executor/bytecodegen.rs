@@ -453,19 +453,13 @@ impl NormalFuncInfo {
         BcLocal(local)
     }
 
-    fn gen_integer(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
-        if let Ok(i) = i32::try_from(i) {
-            let reg = match dst {
-                Some(local) => local.into(),
-                None => self.push().into(),
-            };
-            ir.push(BcIr::Integer(reg, i));
-        } else {
-            self.gen_const(ctx, ir, dst, Value::integer(i));
-        }
-    }
-
-    fn gen_const(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, v: Value) {
+    fn gen_literal(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        dst: Option<BcLocal>,
+        v: Value,
+    ) {
         let reg = match dst {
             Some(local) => local.into(),
             None => self.push().into(),
@@ -474,8 +468,30 @@ impl NormalFuncInfo {
         ir.push(BcIr::Const(reg, id));
     }
 
+    fn gen_integer(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
+        if let Ok(i) = i32::try_from(i) {
+            let reg = match dst {
+                Some(local) => local.into(),
+                None => self.push().into(),
+            };
+            ir.push(BcIr::Integer(reg, i));
+        } else {
+            self.gen_literal(ctx, ir, dst, Value::integer(i));
+        }
+    }
+
     fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
-        self.gen_const(ctx, ir, dst, Value::float(f));
+        self.gen_literal(ctx, ir, dst, Value::float(f));
+    }
+
+    fn gen_string(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        dst: Option<BcLocal>,
+        b: Vec<u8>,
+    ) {
+        self.gen_literal(ctx, ir, dst, Value::string(b));
     }
 
     fn gen_bigint(
@@ -485,7 +501,7 @@ impl NormalFuncInfo {
         dst: Option<BcLocal>,
         bigint: BigInt,
     ) {
-        self.gen_const(ctx, ir, dst, Value::bigint(bigint));
+        self.gen_literal(ctx, ir, dst, Value::bigint(bigint));
     }
 
     fn gen_nil(&mut self, ir: &mut IrContext, dst: Option<BcLocal>) {
@@ -762,17 +778,14 @@ impl NormalFuncInfo {
         }
         match expr.kind {
             NodeKind::Nil => self.gen_nil(ir, None),
-            NodeKind::Bool(b) => self.gen_const(ctx, ir, None, Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_literal(ctx, ir, None, Value::bool(b)),
             NodeKind::SelfValue => self.gen_temp_mov(ir, BcReg::Self_),
             NodeKind::Integer(i) => {
                 self.gen_integer(ctx, ir, None, i);
             }
-            NodeKind::Bignum(bigint) => {
-                self.gen_bigint(ctx, ir, None, bigint);
-            }
-            NodeKind::Float(f) => {
-                self.gen_float(ctx, ir, None, f);
-            }
+            NodeKind::Bignum(bigint) => self.gen_bigint(ctx, ir, None, bigint),
+            NodeKind::Float(f) => self.gen_float(ctx, ir, None, f),
+            NodeKind::String(s) => self.gen_string(ctx, ir, None, s.into_bytes()),
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
@@ -965,17 +978,12 @@ impl NormalFuncInfo {
     ) -> Result<()> {
         match rhs.kind {
             NodeKind::Nil => self.gen_nil(ir, Some(local)),
-            NodeKind::Bool(b) => self.gen_const(ctx, ir, Some(local), Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_literal(ctx, ir, Some(local), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(ir, local.into(), BcReg::Self_),
-            NodeKind::Integer(i) => {
-                self.gen_integer(ctx, ir, Some(local), i);
-            }
-            NodeKind::Bignum(bigint) => {
-                self.gen_bigint(ctx, ir, Some(local), bigint);
-            }
-            NodeKind::Float(f) => {
-                self.gen_float(ctx, ir, Some(local), f);
-            }
+            NodeKind::Integer(i) => self.gen_integer(ctx, ir, Some(local), i),
+            NodeKind::Bignum(bigint) => self.gen_bigint(ctx, ir, Some(local), bigint),
+            NodeKind::Float(f) => self.gen_float(ctx, ir, Some(local), f),
+            NodeKind::String(s) => self.gen_string(ctx, ir, Some(local), s.into_bytes()),
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {

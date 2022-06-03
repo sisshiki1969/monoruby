@@ -91,6 +91,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
+        RValue {
+            flags: RVFlag::new(STRING_CLASS),
+            kind: ObjKind::Bytes(bytes),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -115,6 +123,7 @@ pub const TRUE_CLASS: u32 = 2;
 pub const FALSE_CLASS: u32 = 3;
 pub const INTEGER_CLASS: u32 = 4;
 pub const FLOAT_CLASS: u32 = 5;
+pub const STRING_CLASS: u32 = 6;
 
 impl RVFlag {
     fn new(class: u32) -> Self {
@@ -134,6 +143,7 @@ impl RVFlag {
 pub enum ObjKind {
     Bignum(BigInt),
     Float(f64),
+    Bytes(Vec<u8>),
     Invalid,
     Dummy(u64, u64, u64, u64, u64),
 }

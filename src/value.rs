@@ -47,6 +47,7 @@ impl Value {
             (Some(lhs), Some(rhs)) => match (&lhs.kind, &rhs.kind) {
                 (ObjKind::Bignum(lhs), ObjKind::Bignum(rhs)) => lhs == rhs,
                 (ObjKind::Float(lhs), ObjKind::Float(rhs)) => lhs == rhs,
+                (ObjKind::Bytes(lhs), ObjKind::Bytes(rhs)) => lhs == rhs,
                 _ => false,
             },
             _ => false,
@@ -69,12 +70,7 @@ impl Value {
         } else if let Some(_) = self.as_flonum() {
             FLOAT_CLASS
         } else if !self.is_packed_value() {
-            let rvalue = self.rvalue();
-            match &rvalue.kind {
-                ObjKind::Bignum(_) => INTEGER_CLASS,
-                ObjKind::Float(_) => FLOAT_CLASS,
-                _ => rvalue.class(),
-            }
+            self.rvalue().class()
         } else {
             match self.0.get() {
                 NIL_VALUE => NIL_CLASS,
@@ -167,6 +163,10 @@ impl Value {
         }
     }
 
+    pub fn string(b: Vec<u8>) -> Self {
+        RValue::new_bytes(b).pack()
+    }
+
     pub fn unpack(&self) -> RV {
         if let Some(i) = self.as_fixnum() {
             RV::Integer(i)
@@ -177,6 +177,7 @@ impl Value {
             match &rvalue.kind {
                 ObjKind::Bignum(num) => RV::BigInt(num),
                 ObjKind::Float(num) => RV::Float(*num),
+                ObjKind::Bytes(b) => RV::String(b),
                 _ => RV::Object(rvalue),
             }
         } else {
@@ -263,24 +264,46 @@ impl Value {
     }*/
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum RV<'a> {
     Nil,
     Bool(bool),
     Integer(i64),
     BigInt(&'a BigInt),
     Float(f64),
+    String(&'a Vec<u8>),
     Object(&'a RValue),
+}
+
+impl<'a> std::fmt::Debug for RV<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RV::Nil => write!(f, "nil"),
+            RV::Bool(b) => write!(f, "{:?}", b),
+            RV::Integer(n) => write!(f, "Integer({})", n),
+            RV::BigInt(n) => write!(f, "Bignum({})", n),
+            RV::Float(n) => write!(f, "{}", n),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => write!(f, "\"{}\"", s),
+                Err(_) => write!(f, "{:?}", s),
+            },
+            RV::Object(rvalue) => write!(f, "{}", rvalue),
+        }
+    }
 }
 
 impl<'a> std::fmt::Display for RV<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RV::Nil => write!(f, "nil"),
+            RV::Bool(b) => write!(f, "{:?}", b),
             RV::Integer(n) => write!(f, "{}", n),
             RV::BigInt(n) => write!(f, "{}", n),
             RV::Float(n) => write!(f, "{}", n),
-            RV::Bool(b) => write!(f, "{:?}", b),
-            RV::Nil => write!(f, "nil"),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => write!(f, "{}", s),
+                Err(_) => write!(f, "{:?}", s),
+            },
             RV::Object(rvalue) => write!(f, "{}", rvalue),
         }
     }
