@@ -2,7 +2,6 @@ use super::*;
 use crate::executor::interp::{BcPc, BcPcBase};
 use num::BigInt;
 use paste::paste;
-use std::hash::Hash;
 
 ///
 /// ID of function.
@@ -35,7 +34,12 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl Funcs {
     fn new() -> Self {
-        Self(vec![])
+        Self(vec![FuncInfo::new_normal(
+            None,
+            FuncId(0),
+            vec![],
+            Node::new_nil(Loc(0, 0)),
+        )])
     }
 
     fn next_func_id(&self) -> FuncId {
@@ -81,7 +85,7 @@ pub struct MethodDefId(pub u32);
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
-    func_map: FxHashMap<IdentId, FuncId>,
+    func_map: HashMap<IdentId, FuncId>,
     pub main: Option<FuncId>,
     /// method define info.
     method_def_info: Vec<MethodDefInfo>,
@@ -128,7 +132,7 @@ impl FnStore {
     pub fn new() -> Self {
         Self {
             functions: Funcs::new(),
-            func_map: FxHashMap::default(),
+            func_map: HashMap::default(),
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
@@ -368,7 +372,7 @@ pub(super) struct NormalFuncInfo {
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
-    locals: FxHashMap<IdentId, u16>,
+    locals: HashMap<IdentId, u16>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -384,7 +388,7 @@ impl NormalFuncInfo {
             name_id,
             bytecode: vec![],
             args: args.clone(),
-            locals: FxHashMap::default(),
+            locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
             ast: Some(ast),

@@ -1,3 +1,5 @@
+use std::io::stdout;
+
 use super::*;
 
 //
@@ -6,6 +8,7 @@ use super::*;
 
 pub fn init_builtins(globals: &mut Globals) {
     globals.add_builtin_func("puts", puts, 1);
+    globals.add_builtin_func("print", print, 3);
     globals.add_builtin_func("assert", assert, 2);
 }
 
@@ -27,9 +30,19 @@ impl std::ops::Index<usize> for Arg {
 }
 
 extern "C" fn puts(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+    eprintln!("puts {:?} {:?}", arg, len);
     for offset in 0..len {
-        println!("{}", arg[offset]);
+        println!("{:?}", arg[offset]);
     }
+    Value::nil()
+}
+
+extern "C" fn print(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+    eprintln!("print {:?} {:?}", arg, len);
+    for offset in 0..len {
+        print!("{}", arg[offset]);
+    }
+    stdout().flush().unwrap();
     Value::nil()
 }
 

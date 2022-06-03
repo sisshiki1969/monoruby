@@ -8,8 +8,6 @@ pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
                               //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
-                              //const BOOL_MASK1: u64 = 0b0011_0000;
-                              //const BOOL_MASK2: u64 = 0xffff_ffff_ffff_ffcf;
 const FLOAT_MASK1: u64 = !(0b0110u64 << 60);
 const FLOAT_MASK2: u64 = 0b0100u64 << 60;
 
@@ -18,29 +16,6 @@ const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RV<'a> {
-    Nil,
-    Bool(bool),
-    Integer(i64),
-    BigInt(&'a BigInt),
-    Float(f64),
-    Object(&'a RValue),
-}
-
-impl<'a> std::fmt::Display for RV<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RV::Integer(n) => write!(f, "{}", n),
-            RV::BigInt(n) => write!(f, "{}", n),
-            RV::Float(n) => write!(f, "{}", n),
-            RV::Bool(b) => write!(f, "{:?}", b),
-            RV::Nil => write!(f, "nil"),
-            RV::Object(rvalue) => write!(f, "{}", rvalue),
-        }
-    }
-}
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -286,4 +261,27 @@ impl Value {
     pub fn pack(&self) -> u64 {
         self.0.get()
     }*/
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RV<'a> {
+    Nil,
+    Bool(bool),
+    Integer(i64),
+    BigInt(&'a BigInt),
+    Float(f64),
+    Object(&'a RValue),
+}
+
+impl<'a> std::fmt::Display for RV<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RV::Integer(n) => write!(f, "{}", n),
+            RV::BigInt(n) => write!(f, "{}", n),
+            RV::Float(n) => write!(f, "{}", n),
+            RV::Bool(b) => write!(f, "{:?}", b),
+            RV::Nil => write!(f, "nil"),
+            RV::Object(rvalue) => write!(f, "{}", rvalue),
+        }
+    }
 }

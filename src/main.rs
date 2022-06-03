@@ -1,6 +1,6 @@
 #![feature(box_patterns)]
 pub use alloc::*;
-pub use fxhash::FxHashMap;
+pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;
 use num::BigInt;
 pub use ruruby_parse::*;
@@ -306,6 +306,12 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_call() {
+        run_test("print 1"); // max number of 63bit signed int.
     }
 
     #[test]

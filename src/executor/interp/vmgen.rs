@@ -60,6 +60,7 @@ extern "C" fn find_method(
             get_func_data(interp, globals, func_id, data);
             EncodedCallInfo::new(func_id, args, len)
         }
+        // If error occurs, return 0.
         None => EncodedCallInfo::none(),
     }
 }
@@ -333,6 +334,7 @@ impl Interp {
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
         let loop_exit = self.jit_gen.jit.label();
+        let entry_return = self.jit_gen.entry_return;
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
@@ -340,6 +342,8 @@ impl Interp {
             lea rcx, [rip + func_offset]; // rcx: &mut usize
             movq rax, (find_method);
             call rax;       // rax <- EncodedCallInfo
+            testq rax, rax;
+            jeq entry_return;
 
             pushq r13;
             pushq r15;

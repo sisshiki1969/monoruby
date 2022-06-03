@@ -17,7 +17,7 @@ pub struct JitGen {
     class_version: DestLabel,
     pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
-    entry_return: DestLabel,
+    pub entry_return: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {

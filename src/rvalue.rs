@@ -1,7 +1,7 @@
 use crate::*;
 use num::BigInt;
 
-pub type ValueTable = FxHashMap<IdentId, Value>;
+pub type ValueTable = HashMap<IdentId, Value>;
 
 /// Heap-allocated objects.
 #[derive(Clone)]
@@ -19,11 +19,7 @@ impl std::fmt::Debug for RValue {
 
 impl std::fmt::Display for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
-            ObjKind::Bignum(num) => write!(f, "{}", num),
-            ObjKind::Float(num) => write!(f, "{}", num),
-            _ => write!(f, "{:?}", self),
-        }
+        write!(f, "{}", self.kind)
     }
 }
 
@@ -140,4 +136,14 @@ pub enum ObjKind {
     Float(f64),
     Invalid,
     Dummy(u64, u64, u64, u64, u64),
+}
+
+impl std::fmt::Display for ObjKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            ObjKind::Bignum(num) => write!(f, "{}", num),
+            ObjKind::Float(num) => write!(f, "{}", num),
+            _ => write!(f, "{:?}", self),
+        }
+    }
 }

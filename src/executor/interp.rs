@@ -83,7 +83,7 @@ impl EncodedCallInfo {
     }
 
     fn none() -> Self {
-        Self(-1i64 as u64)
+        Self(0)
     }
 }
 
