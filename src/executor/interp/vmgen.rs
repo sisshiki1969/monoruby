@@ -54,14 +54,15 @@ extern "C" fn find_method(
     globals: &mut Globals,
     callsite_id: CallsiteId,
     data: &mut FuncData,
-) -> EncodedCallInfo {
+) -> Option<EncodedCallInfo> {
     match interp.find_method(globals, callsite_id) {
         Some((func_id, args, len)) => {
             get_func_data(interp, globals, func_id, data);
-            EncodedCallInfo::new(func_id, args, len)
+            let info = EncodedCallInfo::new(func_id, args, len);
+            Some(info)
         }
         // If error occurs, return 0.
-        None => EncodedCallInfo::none(),
+        None => None,
     }
 }
 
@@ -72,7 +73,7 @@ extern "C" fn get_func_data(
     data: &mut FuncData,
 ) {
     let label = globals.func[func_id].jit_label().unwrap();
-    data.address = label.0;
+    data.address = label.as_ptr();
     data.offset = globals.func[func_id].stack_offset();
     data.pc = globals.func[func_id].inst_pc();
 }

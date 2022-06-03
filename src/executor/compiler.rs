@@ -38,12 +38,12 @@ extern "C" fn get_func_absolute_address(
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
-) -> CodePtr {
+) -> Option<CodePtr> {
     let func_id = match globals.get_method(func_name) {
         Some(id) => id,
         None => {
             interp.error = Some(MonorubyErr::method_not_found(func_name));
-            return CodePtr::default();
+            return None;
         }
     };
 
@@ -51,15 +51,15 @@ extern "C" fn get_func_absolute_address(
     let arity = info.arity();
     if arity != args_len {
         interp.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
-        return CodePtr::default();
+        return None;
     }
     match info.jit_label() {
-        Some(dest) => dest,
+        Some(dest) => Some(dest),
         None => {
             let mut info = std::mem::take(&mut globals.func[func_id]);
             let label = interp.jit_gen.jit_compile(&mut info, &globals.func);
             globals.func[func_id] = info;
-            label
+            Some(label)
         }
     }
 }
@@ -377,7 +377,7 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            movq rax, (main.0);
+            movq rax, (main.as_ptr());
             call rax;
             popq r12;
             popq rbx;

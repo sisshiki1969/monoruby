@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use super::compiler::JitGen;
 use super::*;
 use monoasm::*;
@@ -69,21 +71,20 @@ impl std::default::Default for BcPc {
 #[repr(C)]
 struct FuncData {
     offset: usize,
-    address: u64,
+    address: *mut u8,
     pc: BcPc,
 }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-struct EncodedCallInfo(u64);
+struct EncodedCallInfo(NonZeroU64);
 
 impl EncodedCallInfo {
     fn new(func_id: FuncId, args: u16, len: u16) -> Self {
-        Self((func_id.0 as u64) + ((args as u64) << 48) + ((len as u64) << 32))
-    }
-
-    fn none() -> Self {
-        Self(0)
+        Self(
+            NonZeroU64::new((func_id.0 as u64) + ((args as u64) << 48) + ((len as u64) << 32))
+                .unwrap(),
+        )
     }
 }
 
@@ -176,7 +177,7 @@ impl Interp {
         globals.func.precompile(&mut eval.jit_gen, vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
-            unsafe { std::mem::transmute(entry.0) };
+            unsafe { std::mem::transmute(entry.as_ptr()) };
         match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
             None => Err(eval.error.unwrap()),
