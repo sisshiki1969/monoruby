@@ -237,55 +237,66 @@ impl JitGen {
         self.generic(generic, exit, ret, bitxor_values as _);
     }
 
+    fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
+        let zero = self.jit.label();
+        monoasm!(self.jit,
+        under:
+            testq rdi, rdi;
+            jns zero;
+            xorq rdi, rdi;
+            subq rdi, 1;
+            jmp after;
+        zero:
+            xorq rdi, rdi;
+            jmp after;
+        );
+    }
+
     fn generic_shr(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
         let shl = self.jit.label();
         let after = self.jit.label();
-        let zero = self.jit.label();
+        let under = self.jit.label();
         monoasm!(self.jit,
             // fastpath
-            sarq rdi, 1;
             movq rcx, rsi;
             sarq rcx, 1;
             js shl;
             cmpq rcx, 64;
-            jge zero;
+            jge under;
             sarq rdi, rcx;
         after:
-            shlq rdi, 1;
             orq rdi, 1;
             // store the result to return reg.
             movq [rbp - (conv(ret))], rdi;
             jmp exit;
         shl:
             negq rcx;
-            // TODO: we must check overflow
-            cmpq rcx, 64;
-            jge zero;
+            lzcntq rax, rdi;
+            cmpq rcx, rax;
+            jgt generic;
+            subq rdi, 1;
             salq rdi, rcx;
             jmp after;
-        zero:
-            xorq rdi, rdi;
-            jmp after;
         );
+        self.shift_under(under, after);
         self.generic(generic, exit, ret, shr_values as _);
     }
 
     fn generic_shl(&mut self, generic: DestLabel, exit: DestLabel, ret: u16) {
         let shr = self.jit.label();
         let after = self.jit.label();
-        let zero = self.jit.label();
+        let under = self.jit.label();
         monoasm!(self.jit,
             // fastpath
-            sarq rdi, 1;
             movq rcx, rsi;
             sarq rcx, 1;
             js shr;
-            // TODO: we must check overflow
-            cmpq rcx, 64;
-            jge zero;
+            lzcntq rax, rdi;
+            cmpq rcx, rax;
+            jgt generic;
+            subq rdi, 1;
             salq rdi, rcx;
         after:
-            shlq rdi, 1;
             orq rdi, 1;
             // store the result to return reg.
             movq [rbp - (conv(ret))], rdi;
@@ -293,13 +304,11 @@ impl JitGen {
         shr:
             negq rcx;
             cmpq rcx, 64;
-            jge zero;
+            jge under;
             sarq rdi, rcx;
             jmp after;
-        zero:
-            xorq rdi, rdi;
-            jmp after;
         );
+        self.shift_under(under, after);
         self.generic(generic, exit, ret, shl_values as _);
     }
 

@@ -2,7 +2,7 @@ use super::*;
 
 use num::{BigInt, Integer, ToPrimitive};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Shl, Shr, Sub};
 
 //
 // Generic operations.
@@ -75,24 +75,64 @@ int_binop_values!(bitor, bitand, bitxor);
 
 pub(super) extern "C" fn shr_values(lhs: Value, rhs: Value) -> Value {
     match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
-            lhs.checked_shr(rhs as u64 as u32).unwrap_or(0)
-        } else {
-            lhs.checked_shl(-rhs as u64 as u32).unwrap_or(0)
-        }),
+        (RV::Integer(lhs), RV::Integer(rhs)) => {
+            if rhs >= 0 {
+                int_shr(lhs, rhs as u64 as u32)
+            } else {
+                int_shl(lhs, -rhs as u64 as u32)
+            }
+        }
+        (RV::BigInt(lhs), RV::Integer(rhs)) => {
+            if rhs >= 0 {
+                bigint_shr(lhs, rhs as u64 as u32)
+            } else {
+                bigint_shl(lhs, -rhs as u64 as u32)
+            }
+        }
         (lhs, rhs) => unreachable!("{:?} >> {:?}", lhs, rhs),
     }
 }
 
 pub(super) extern "C" fn shl_values(lhs: Value, rhs: Value) -> Value {
     match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(if rhs >= 0 {
-            lhs.checked_shl(rhs as u64 as u32).unwrap_or(0)
-        } else {
-            lhs.checked_shr(-rhs as u64 as u32).unwrap_or(0)
-        }),
+        (RV::Integer(lhs), RV::Integer(rhs)) => {
+            if rhs >= 0 {
+                int_shl(lhs, rhs as u64 as u32)
+            } else {
+                int_shr(lhs, -rhs as u64 as u32)
+            }
+        }
+        (RV::BigInt(lhs), RV::Integer(rhs)) => {
+            if rhs >= 0 {
+                bigint_shl(lhs, rhs as u64 as u32)
+            } else {
+                bigint_shr(lhs, -rhs as u64 as u32)
+            }
+        }
         (lhs, rhs) => unreachable!("{:?} << {:?}", lhs, rhs),
     }
+}
+
+fn int_shr(lhs: i64, rhs: u32) -> Value {
+    Value::integer(
+        lhs.checked_shr(rhs)
+            .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
+    )
+}
+
+fn int_shl(lhs: i64, rhs: u32) -> Value {
+    match lhs.checked_shl(rhs) {
+        Some(res) => Value::integer(res),
+        None => bigint_shl(&BigInt::from(lhs), rhs),
+    }
+}
+
+fn bigint_shr(lhs: &BigInt, rhs: u32) -> Value {
+    Value::bigint(lhs.shr(rhs))
+}
+
+fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
+    Value::bigint(lhs.shl(rhs))
 }
 
 macro_rules! cmp_values {

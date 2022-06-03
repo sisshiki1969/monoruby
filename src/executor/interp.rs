@@ -179,7 +179,7 @@ impl Interp {
             unsafe { std::mem::transmute(entry.0) };
         match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
-            None => Err(MonorubyErr::Unimplemented(format!("_"))),
+            None => Err(eval.error.unwrap()),
         }
     }
 }

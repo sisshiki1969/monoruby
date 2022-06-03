@@ -326,16 +326,16 @@ mod test {
 
     #[test]
     fn test_shift() {
-        run_test("157 << 1");
-        run_test("157 << -1");
-        run_test("157 >> 1");
-        run_test("157 >> -1");
-        run_test("157 >> 64");
-        run_test("157 << -64");
-        run_test("157 << 54");
-        run_test("157 >> -54");
-        // run_test("157 << 64");
-        // run_test("157 >> -64");
+        for lhs in ["157"] {
+            for rhs in ["1", "54", "64"] {
+                for op in ["<<", ">>"] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
+                    run_test(&format!("-{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                }
+            }
+        }
     }
 
     #[test]
