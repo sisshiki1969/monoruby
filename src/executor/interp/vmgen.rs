@@ -130,6 +130,7 @@ impl Interp {
             //       +-------------+
             //       |             |
             //
+            movq [rsp - 0x20], (NIL_VALUE);
             movq rax, [rip + func_address];
             call rax;
             popq r15;
@@ -355,7 +356,8 @@ impl Interp {
             movzxw r14, rax;    // r14 <- len
             shlq r14, 3;
             lea rdx, [rsp - 0x28];
-            movq [rsp - 0x20], (NIL_VALUE); // set self
+            movq rax, [rbp - 16];
+            movq [rsp - 0x20], rax; // set self
         };
         self.vm_get_addr_rdi(); // rdi <- *args
 

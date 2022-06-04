@@ -364,6 +364,7 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
+            movq [rsp - 0x20], (NIL_VALUE);
             movq rax, (main.as_ptr());
             call rax;
             popq r12;
@@ -674,7 +675,8 @@ impl JitGen {
                     let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
                     // set self
                     monoasm!(self.jit,
-                        movq [rsp - 0x20], (NIL_VALUE);
+                        movq rax, [rbp - 16];
+                        movq [rsp - 0x20], rax;
                     );
                     // set arguments
                     for i in 0..len {
