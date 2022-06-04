@@ -31,7 +31,7 @@ fn conv(reg: u16) -> i64 {
 ///
 /// Get an absolute address of the given method.
 ///
-/// If no method was found, return null pointer.
+/// If no method was found, return None (==0u64).
 ///
 extern "C" fn get_func_absolute_address(
     interp: &mut Interp,
@@ -39,21 +39,8 @@ extern "C" fn get_func_absolute_address(
     func_name: IdentId,
     args_len: usize,
 ) -> Option<CodePtr> {
-    let func_id = match globals.get_method(func_name) {
-        Some(id) => id,
-        None => {
-            interp.error = Some(MonorubyErr::method_not_found(func_name));
-            return None;
-        }
-    };
-
-    let info = &globals.func[func_id];
-    let arity = info.arity();
-    if arity != args_len {
-        interp.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
-        return None;
-    }
-    match info.jit_label() {
+    let func_id = interp.get_method(globals, func_name, args_len)?;
+    match globals.func[func_id].jit_label() {
         Some(dest) => Some(dest),
         None => {
             let mut info = std::mem::take(&mut globals.func[func_id]);
@@ -685,6 +672,11 @@ impl JitGen {
                         name, args, len, ..
                     } = store[id];
                     let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
+                    // set self
+                    monoasm!(self.jit,
+                        movq [rsp - 0x20], (NIL_VALUE);
+                    );
+                    // set arguments
                     for i in 0..len {
                         let reg = args + i;
                         monoasm!(self.jit,

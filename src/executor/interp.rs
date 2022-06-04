@@ -125,6 +125,27 @@ impl Interp {
         }
     }
 
+    pub fn get_method(
+        &mut self,
+        globals: &Globals,
+        func_name: IdentId,
+        args_len: usize,
+    ) -> Option<FuncId> {
+        let func_id = match globals.get_method(func_name) {
+            Some(id) => id,
+            None => {
+                self.error = Some(MonorubyErr::method_not_found(func_name));
+                return None;
+            }
+        };
+        let arity = globals.func[func_id].arity();
+        if arity != args_len {
+            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
+            return None;
+        }
+        Some(func_id)
+    }
+
     fn find_method(
         &mut self,
         globals: &mut Globals,
@@ -139,24 +160,15 @@ impl Interp {
         let func_id = if version == self.class_version {
             cached_func
         } else {
-            match globals.get_method(name) {
-                Some(func_id) => {
-                    globals.func[callsite_id].cache = (self.class_version, func_id);
-                    func_id
+            match self.get_method(globals, name, len as usize) {
+                Some(id) => {
+                    globals.func[callsite_id].cache = (self.class_version, id);
+                    id
                 }
-                None => {
-                    self.error = Some(MonorubyErr::method_not_found(name));
-                    return None;
-                }
+                None => return None,
             }
         };
-        let info = &globals.func[func_id];
-        if info.arity() != len as usize {
-            self.error = Some(MonorubyErr::wrong_arguments(info.arity(), len as usize));
-            None
-        } else {
-            Some((func_id, args, len))
-        }
+        Some((func_id, args, len))
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {

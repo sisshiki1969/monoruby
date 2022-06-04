@@ -20,6 +20,10 @@ impl Arg {
     pub fn new(ptr: *const Value) -> Self {
         Self(ptr)
     }
+
+    pub fn self_value(&self) -> Value {
+        unsafe { *self.0.add(1) }
+    }
 }
 
 impl std::ops::Index<usize> for Arg {
