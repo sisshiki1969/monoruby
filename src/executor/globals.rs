@@ -1,5 +1,20 @@
 use super::*;
 
+// Integer#chr
+extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+    let b = match arg[0].as_fixnum() {
+        Some(i) => {
+            if let Ok(res) = u8::try_from(i) {
+                res
+            } else {
+                unreachable!()
+            }
+        }
+        _ => unreachable!(),
+    };
+    Value::string(vec![b])
+}
+
 //
 /// Store of functions.
 ///
@@ -9,6 +24,8 @@ pub struct Globals {
     pub func: FnStore,
     /// identifier table.
     pub id_store: IdentifierTable,
+    /// class table.
+    pub class: ClassStore,
 }
 
 impl Globals {
@@ -16,8 +33,16 @@ impl Globals {
         let mut globals = Self {
             func: FnStore::new(),
             id_store,
+            class: ClassStore::new(),
         };
         builtins::init_builtins(&mut globals);
+        assert_eq!(NIL_CLASS, globals.class.add_class());
+        assert_eq!(TRUE_CLASS, globals.class.add_class());
+        assert_eq!(FALSE_CLASS, globals.class.add_class());
+        assert_eq!(INTEGER_CLASS, globals.class.add_class());
+        assert_eq!(FLOAT_CLASS, globals.class.add_class());
+        assert_eq!(STRING_CLASS, globals.class.add_class());
+        globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
         globals
     }
 
@@ -31,15 +56,59 @@ impl Globals {
     }
 
     pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
-        self.func.get(name).cloned()
+        self.class.get_method(0, name)
     }
 
-    pub fn add_builtin_func(&mut self, name: &str, address: BuiltinFn, arity: usize) -> FuncId {
+    pub fn define_global_builtin_func(
+        &mut self,
+        name: &str,
+        address: BuiltinFn,
+        arity: usize,
+    ) -> FuncId {
+        self.define_builtin_func(0, name, address, arity)
+    }
+
+    pub fn define_builtin_func(
+        &mut self,
+        class_id: u32,
+        name: &str,
+        address: BuiltinFn,
+        arity: usize,
+    ) -> FuncId {
         let name_id = self.get_ident_id(name);
-        self.func.add_builtin_func(name_id, address, arity)
+        let func_id = self.func.add_builtin_func(name_id, address, arity);
+        self.class.add_method(class_id, name_id, func_id);
+        func_id
     }
 
     pub fn compile_main(&mut self, ast: Node) -> Result<()> {
         self.func.compile_main(ast, &self.id_store)
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct ClassStore {
+    classes: Vec<HashMap<IdentId, FuncId>>,
+}
+
+impl ClassStore {
+    fn new() -> Self {
+        Self {
+            classes: vec![HashMap::default()],
+        }
+    }
+
+    pub fn add_class(&mut self) -> u32 {
+        let id = self.classes.len();
+        self.classes.push(HashMap::default());
+        id as u32
+    }
+
+    pub fn add_method(&mut self, class_id: u32, name: IdentId, func: FuncId) {
+        self.classes[class_id as usize].insert(name, func);
+    }
+
+    pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
+        self.classes[class_id as usize].get(&name).cloned()
     }
 }

@@ -85,7 +85,6 @@ pub struct MethodDefId(pub u32);
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
-    func_map: HashMap<IdentId, FuncId>,
     pub main: Option<FuncId>,
     /// method define info.
     method_def_info: Vec<MethodDefInfo>,
@@ -132,20 +131,11 @@ impl FnStore {
     pub fn new() -> Self {
         Self {
             functions: Funcs::new(),
-            func_map: HashMap::default(),
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
             literals: vec![],
         }
-    }
-
-    pub fn insert(&mut self, func_name: IdentId, func_id: FuncId) {
-        self.func_map.insert(func_name, func_id);
-    }
-
-    pub fn get(&self, name: IdentId) -> Option<&FuncId> {
-        self.func_map.get(&name)
     }
 
     fn len(&self) -> usize {
@@ -217,9 +207,7 @@ impl FnStore {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        let id = self.functions.add_builtin_func(name_id, address, arity);
-        self.func_map.insert(name_id, id);
-        id
+        self.functions.add_builtin_func(name_id, address, arity)
     }
 }
 

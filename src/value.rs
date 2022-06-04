@@ -213,7 +213,7 @@ impl Value {
         self.0.get() & 0b1 == 1
     }
 
-    fn as_fixnum(&self) -> Option<i64> {
+    pub fn as_fixnum(&self) -> Option<i64> {
         if self.is_fnum() {
             Some(self.as_fnum())
         } else {

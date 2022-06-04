@@ -70,7 +70,7 @@ extern "C" fn define_method(
     func_name: IdentId,
     func_id: FuncId,
 ) {
-    globals.func.insert(func_name, func_id);
+    globals.class.add_method(0, func_name, func_id);
 }
 
 pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals) {

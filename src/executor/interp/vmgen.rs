@@ -84,7 +84,7 @@ extern "C" fn get_constant(_interp: &mut Interp, globals: &mut Globals, const_id
 
 extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
     let MethodDefInfo { name, func } = globals.func[def_id];
-    globals.func.insert(name, func);
+    globals.class.add_method(0, name, func);
     interp.class_version += 1;
 }
 
