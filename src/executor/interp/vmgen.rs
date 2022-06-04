@@ -314,12 +314,20 @@ impl Interp {
         };
     }
 
-    fn vm_generic(&mut self, generic: DestLabel, func: u64) {
+    fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
+        self.jit_gen.jit.bind_label(generic);
+        self.jit_gen.call_unop(func);
         monoasm! { self.jit_gen.jit,
-        generic:
-            // generic path
-            movq rax, (func);
-            call rax;
+            // store the result to return reg.
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+    }
+
+    fn vm_generic_binop(&mut self, generic: DestLabel, func: u64) {
+        self.jit_gen.jit.bind_label(generic);
+        self.jit_gen.call_binop(func);
+        monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
         };
@@ -457,7 +465,7 @@ impl Interp {
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, neg_value as _);
+        self.vm_generic_unop(generic, neg_value as _);
         label
     }
 
@@ -480,8 +488,9 @@ impl Interp {
         generic:
             // generic path
             addq rsi, 1;
-            movq rax, (add_values);
-            call rax;
+        };
+        self.jit_gen.call_binop(add_values as _);
+        monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
         };
@@ -504,7 +513,7 @@ impl Interp {
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, add_values as _);
+        self.vm_generic_binop(generic, add_values as _);
         label
     }
 
@@ -525,7 +534,7 @@ impl Interp {
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, sub_values as _);
+        self.vm_generic_binop(generic, sub_values as _);
         label
     }
 
@@ -544,7 +553,7 @@ impl Interp {
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, sub_values as _);
+        self.vm_generic_binop(generic, sub_values as _);
         label
     }
 
@@ -553,9 +562,8 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.call_binop(mul_values as _);
         monoasm! { self.jit_gen.jit,
-            movq rax, (mul_values);
-            call rax;
             // store the result to return reg.
             movq [r15], rax;
         };
@@ -568,9 +576,8 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
+        self.jit_gen.call_binop(div_values as _);
         monoasm! { self.jit_gen.jit,
-            movq rax, (div_values);
-            call rax;
             // store the result to return reg.
             movq [r15], rax;
         };
@@ -590,7 +597,7 @@ impl Interp {
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, bitor_values as _);
+        self.vm_generic_binop(generic, bitor_values as _);
         label
     }
 
@@ -606,7 +613,7 @@ impl Interp {
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, bitand_values as _);
+        self.vm_generic_binop(generic, bitand_values as _);
         label
     }
 
@@ -623,7 +630,7 @@ impl Interp {
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
-        self.vm_generic(generic, bitxor_values as _);
+        self.vm_generic_binop(generic, bitxor_values as _);
         label
     }
 
@@ -638,7 +645,7 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.vm_generic(generic_shl, shl_values as _);
+        self.vm_generic_binop(generic_shl, shl_values as _);
         monoasm! { self.jit_gen.jit,
         to_shr:
             negq rcx;
@@ -649,7 +656,7 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.vm_generic(generic_shr, shr_values as _);
+        self.vm_generic_binop(generic_shr, shr_values as _);
         monoasm! { self.jit_gen.jit,
         to_shl:
             negq rcx;
