@@ -65,7 +65,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes);
+                        run_repl(&code, &mut all_codes, args.jit);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -102,7 +102,7 @@ fn exec(code: &str, jit: bool) -> Result<(), MonorubyErr> {
     Ok(())
 }
 
-fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
+fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
     let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
         Ok(ast) => ast,
         Err(err) => {
@@ -113,15 +113,17 @@ fn repl_exec(code: &str) -> Result<Value, MonorubyErr> {
     let mut store = Globals::new(res.id_store);
     store.compile_main(res.node)?;
 
-    let interp_val = Interp::eval_toplevel(&mut store);
-    eprintln!("interp: {:?}", interp_val);
+    if !jit_flag {
+        let interp_val = Interp::eval_toplevel(&mut store.clone());
+        eprintln!("interp: {:?}", interp_val);
+    }
 
     jitcompiler(&mut store)
 }
 
-fn run_repl(code: &str, all_codes: &mut Vec<String>) {
+fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
     all_codes.push(code.to_string());
-    if let Err(err) = repl_exec(&all_codes.join(";")) {
+    if let Err(err) = repl_exec(&all_codes.join(";"), jit_flag) {
         eprintln!("{:?}", err);
         all_codes.pop();
     };
@@ -559,6 +561,16 @@ mod test {
         def f(a)
           a
         end
+        f(7)
+        "#,
+        );
+    }
+
+    #[test]
+    fn test5b() {
+        run_test(
+            r#"
+        def f(a); a; end
         f(7)
         "#,
         );

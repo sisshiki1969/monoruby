@@ -8,7 +8,7 @@ use super::*;
 
 pub fn init_builtins(globals: &mut Globals) {
     globals.add_builtin_func("puts", puts, 1);
-    globals.add_builtin_func("print", print, 3);
+    globals.add_builtin_func("print", print, 1);
     globals.add_builtin_func("assert", assert, 2);
 }
 
