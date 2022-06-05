@@ -222,6 +222,7 @@ impl Interp {
         self.dispatch[152] = self.vm_bitxorrr();
         self.dispatch[153] = shr;
         self.dispatch[154] = shl;
+        self.dispatch[155] = self.vm_concat();
 
         self.jit_gen.jit.finalize();
         entry
@@ -314,6 +315,18 @@ impl Interp {
         };
     }
 
+    fn vm_store_r15_if_nonzero(&mut self, exit: DestLabel) {
+        monoasm! { self.jit_gen.jit,
+            testq r15, r15;
+            jeq exit;
+        };
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
+            movq [r15], rax;
+        exit:
+        };
+    }
+
     fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
         self.jit_gen.jit.bind_label(generic);
         self.jit_gen.call_unop(func);
@@ -332,6 +345,19 @@ impl Interp {
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
+    }
+
+    fn vm_concat(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        let exit = self.jit_gen.jit.label();
+        self.vm_get_addr_rdi();
+        monoasm! { self.jit_gen.jit,
+            movq rax, (concatenate_string);
+            call rax;
+        };
+        self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+        label
     }
 
     fn vm_fncall(
@@ -406,11 +432,7 @@ impl Interp {
             cmpq r15, (-1);
             jeq exit;
         };
-        self.vm_get_addr_r15();
-        monoasm! { self.jit_gen.jit,
-            movq [r15], rax;
-        exit:
-        };
+        self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
     }

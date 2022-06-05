@@ -30,6 +30,7 @@ pub(super) enum BcIr {
     Mov(BcReg, BcReg),                             // dst, offset
     FnCall(IdentId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
     MethodDef(IdentId, FuncId),
+    ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
 
 ///
@@ -105,6 +106,8 @@ pub(super) enum BcOp {
     FnCall(u16, CallsiteId),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),
+    /// concatenate strings(ret, args, args_len)
+    ConcatStr(u16, u16, u16),
 }
 
 fn enc_wl(opcode: u16, op1: u16, op2: u32) -> u64 {
@@ -177,6 +180,7 @@ impl BcOp {
             BitXor(op1, op2, op3) => enc_www(152, *op1, *op2, *op3),
             Shr(op1, op2, op3) => enc_www(153, *op1, *op2, *op3),
             Shl(op1, op2, op3) => enc_www(154, *op1, *op2, *op3),
+            ConcatStr(op1, op2, op3) => enc_www(155, *op1, *op2, *op3),
         }
     }
 
@@ -224,6 +228,7 @@ impl BcOp {
                 152 => Self::BitXor(op1, op2, op3),
                 153 => Self::Shr(op1, op2, op3),
                 154 => Self::Shl(op1, op2, op3),
+                155 => Self::ConcatStr(op1, op2, op3),
                 _ => unreachable!(),
             }
         }

@@ -81,11 +81,11 @@ impl Value {
         }
     }
 
-    pub(crate) extern "C" fn dup(&self) -> Self {
-        if self.is_packed_value() {
-            *self
+    pub(crate) extern "C" fn dup(val: Value) -> Self {
+        if val.is_packed_value() {
+            val
         } else {
-            let rval = self.rvalue().clone();
+            let rval = val.rvalue().clone();
             rval.pack()
         }
     }

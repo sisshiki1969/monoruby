@@ -639,6 +639,10 @@ impl NormalFuncInfo {
                     let name = globals.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
+                BcOp::ConcatStr(ret, args, len) => match ret {
+                    0 => eprintln!("_ = concat(%{}; {})", args, len),
+                    ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
+                },
             }
         }
         eprintln!("------------------------------------");
@@ -946,6 +950,21 @@ impl NormalFuncInfo {
                     // TODO: This should be a Symbol.
                     self.gen_nil(ir, None);
                 }
+                return Ok(());
+            }
+            NodeKind::InterporatedString(nodes) => {
+                let len = nodes.len();
+                let arg = self.next_reg();
+                for expr in nodes {
+                    eprintln!("{:?}", &expr.kind);
+                    self.gen_expr(ctx, ir, expr, true, false)?;
+                }
+                self.temp -= len as u16;
+                let ret = match use_value {
+                    true => Some(self.push().into()),
+                    false => None,
+                };
+                ir.push(BcIr::ConcatStr(ret, arg, len));
                 return Ok(());
             }
             _ => return Err(MonorubyErr::unsupported_node(expr.kind)),
@@ -1517,6 +1536,10 @@ impl NormalFuncInfo {
                 }
                 BcIr::MethodDef(name, func_id) => {
                     BcOp::MethodDef(store.add_method_def(*name, *func_id))
+                }
+                BcIr::ConcatStr(ret, arg, len) => {
+                    let ret = ret.map_or(0, |ret| self.get_index(&ret));
+                    BcOp::ConcatStr(ret, self.get_index(&BcReg::from(*arg)), *len as u16)
                 }
             };
             ops.push(op.to_u64());

@@ -6,7 +6,7 @@
 
 size = 600 # ARGV[0].to_i
 
-#puts "P4\n#{size} #{size}"
+puts "P4\n#{size} #{size}"
 
 #ITER = 49                           # Iterations - 1 for easy for..in looping
 #LIMIT_SQUARED = 4.0                 # Presquared limit

@@ -278,3 +278,19 @@ pub(super) extern "C" fn neg_value(
     };
     Some(v)
 }
+
+pub extern "C" fn concatenate_string(arg: *mut Value, len: usize) -> Value {
+    let mut res = vec![];
+    for i in 0..len {
+        let v = unsafe { *arg.sub(i) };
+        match v.unpack() {
+            RV::Nil => res.extend("nil".bytes()),
+            RV::Bool(b) => res.extend(format!("{}", b).bytes()),
+            RV::Integer(i) => res.extend(format!("{}", i).bytes()),
+            RV::BigInt(b) => res.extend(format!("{}", b).bytes()),
+            RV::String(b) => res.extend(b),
+            _ => unimplemented!(),
+        };
+    }
+    Value::string(res)
+}

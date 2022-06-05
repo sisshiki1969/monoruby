@@ -68,6 +68,28 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
+extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
+    let mut res = match lhs.unpack() {
+        RV::Nil => b"nil".to_vec(),
+        RV::Bool(b) => format!("{}", b).into_bytes(),
+        RV::Integer(i) => format!("{}", i).into_bytes(),
+        RV::BigInt(b) => format!("{}", b).into_bytes(),
+        RV::Float(f) => format!("{}", f).into_bytes(),
+        RV::String(b) => b.clone(),
+        _ => unimplemented!(),
+    };
+    match rhs.unpack() {
+        RV::Nil => res.extend("nil".bytes()),
+        RV::Bool(b) => res.extend(format!("{}", b).bytes()),
+        RV::Integer(i) => res.extend(format!("{}", i).bytes()),
+        RV::BigInt(b) => res.extend(format!("{}", b).bytes()),
+        RV::Float(f) => res.extend(format!("{}", f).bytes()),
+        RV::String(b) => res.extend(b),
+        _ => unimplemented!(),
+    };
+    Value::string(res)
+}
+
 impl JitGen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
@@ -103,7 +125,7 @@ impl JitGen {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, ((regs + regs % 2) * 8);
+            subq rsp, ((regs + regs % 2) * 8 + 16);
         );
     }
 
@@ -538,19 +560,19 @@ impl JitGen {
                 }
                 BcOp::Const(ret, id) => {
                     let v = store.get_literal(id);
-                    //if v.is_packed_value() {
-                    monoasm!(self.jit,
-                      movq rax, (v.get());
-                      movq [rbp - (conv(ret))], rax;
-                    );
-                    /*} else {
+                    if v.is_packed_value() {
+                        monoasm!(self.jit,
+                          movq rax, (v.get());
+                          movq [rbp - (conv(ret))], rax;
+                        );
+                    } else {
                         monoasm!(self.jit,
                           movq rdi, (v.get());
                           movq rax, (Value::dup);
                           call rax;
                           movq [rbp - (conv(ret))], rax;
                         );
-                    }*/
+                    }
                 }
                 BcOp::Nil(ret) => {
                     monoasm!(self.jit,
@@ -673,6 +695,19 @@ impl JitGen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
+                }
+                BcOp::ConcatStr(ret, arg, len) => {
+                    monoasm!(self.jit,
+                        lea rdi, [rbp - (conv(arg))];
+                        movq rsi, (len);
+                        movq rax, (concatenate_string);
+                        call rax;
+                    );
+                    if ret != 0 {
+                        monoasm!(self.jit,
+                            movq [rbp - (conv(ret))], rax;
+                        );
+                    }
                 }
                 BcOp::FnCall(ret, id) => {
                     // set arguments to a callee stack.
