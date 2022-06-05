@@ -81,6 +81,10 @@ impl Value {
         }
     }
 
+    pub extern "C" fn get_class(val: Value) -> u32 {
+        val.class()
+    }
+
     pub(crate) extern "C" fn dup(val: Value) -> Self {
         if val.is_packed_value() {
             val

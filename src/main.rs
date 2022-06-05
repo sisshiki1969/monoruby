@@ -154,17 +154,6 @@ pub fn run_test(code: &str) {
 
     assert!(Value::eq(interp_val, jit_val));
 
-    //dbg!(&stmt);
-    /*let mut hir = HirContext::new();
-    match hir.from_ast(&ast) {
-        Ok(_) => {}
-        Err(err) => panic!("Error in compiling AST. {:?}", err),
-    };
-    let now = Instant::now();
-    let eval_res = Evaluator::eval_toplevel(&hir);
-    eprintln!("eval: {:?} elapsed:{:?}", eval_res, now.elapsed());
-    */
-
     let ruby_res = run_ruby(&all_codes);
 
     assert!(Value::eq(jit_val, ruby_res));
@@ -218,6 +207,9 @@ fn run_ruby(code: &Vec<String>) -> Value {
                 Value::bool(false)
             } else if res == "nil" {
                 Value::nil()
+            } else if res.starts_with('"') {
+                let s = res.trim_matches('"').to_string();
+                Value::string(s.into_bytes())
             } else {
                 eprintln!("Ruby: {:?}", res);
                 Value::bool(false)
@@ -641,6 +633,15 @@ mod test {
         run_test(
             r#"
             puts 100
+        "#,
+        );
+    }
+
+    #[test]
+    fn test9a() {
+        run_test(
+            r#"
+            64.chr
         "#,
         );
     }

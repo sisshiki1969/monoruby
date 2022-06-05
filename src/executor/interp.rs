@@ -73,6 +73,7 @@ struct FuncData {
     offset: usize,
     address: *mut u8,
     pc: BcPc,
+    ret: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -128,10 +129,11 @@ impl Interp {
     pub fn get_method(
         &mut self,
         globals: &Globals,
+        class_id: u32,
         func_name: IdentId,
         args_len: usize,
     ) -> Option<FuncId> {
-        let func_id = match globals.get_method(func_name) {
+        let func_id = match globals.get_method(class_id, func_name) {
             Some(id) => id,
             None => {
                 self.error = Some(MonorubyErr::method_not_found(func_name));
@@ -150,25 +152,28 @@ impl Interp {
         &mut self,
         globals: &mut Globals,
         callsite_id: CallsiteId,
-    ) -> Option<(FuncId, u16, u16)> {
+        receiver: Value,
+    ) -> Option<(FuncId, u16, u16, u16)> {
         let CallsiteInfo {
+            ret,
             name,
             args,
             len,
-            cache: (version, cached_func),
+            cache: (version, cached_class_id, cached_func),
         } = globals.func[callsite_id];
-        let func_id = if version == self.class_version {
+        let recv_class = receiver.class();
+        let func_id = if version == self.class_version && cached_class_id == recv_class {
             cached_func
         } else {
-            match self.get_method(globals, name, len as usize) {
+            match self.get_method(globals, recv_class, name, len as usize) {
                 Some(id) => {
-                    globals.func[callsite_id].cache = (self.class_version, id);
+                    globals.func[callsite_id].cache = (self.class_version, recv_class, id);
                     id
                 }
                 None => return None,
             }
         };
-        Some((func_id, args, len))
+        Some((func_id, args, len, ret))
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {

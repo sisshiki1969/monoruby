@@ -27,8 +27,8 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, lhs, rhs
     Ret(BcReg),
-    Mov(BcReg, BcReg),                             // dst, offset
-    FnCall(IdentId, Option<BcReg>, BcTemp, usize), // (id, ret, args, args_len)
+    Mov(BcReg, BcReg),                                        // dst, offset
+    MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
     MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
@@ -102,8 +102,8 @@ pub(super) enum BcOp {
     Ret(u16),
     /// move(%dst, %src)
     Mov(u16, u16),
-    /// func call(%ret, callsite_id)  if there is no return register, %ret = 0.
-    FnCall(u16, CallsiteId),
+    /// func call(%recv, callsite_id)
+    MethodCall(u16, CallsiteId),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
@@ -146,7 +146,7 @@ impl BcOp {
     pub fn to_u64(&self) -> u64 {
         use BcOp::*;
         match self {
-            FnCall(op1, op2) => enc_wl(1, *op1, op2.0),
+            MethodCall(op1, op2) => enc_wl(1, *op1, op2.0),
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
             CondBr(op1, op2) => enc_wl(4, *op1, *op2 as u32),
@@ -154,6 +154,7 @@ impl BcOp {
             Integer(op1, op2) => enc_wl(6, *op1, *op2 as u32),
             Const(op1, op2) => enc_wl(7, *op1, *op2),
             Nil(op1) => enc_w(8, *op1),
+
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
             Sub(op1, op2, op3) => enc_www(131, *op1, *op2, *op3),
@@ -189,7 +190,7 @@ impl BcOp {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::FnCall(op1, CallsiteId(op2)),
+                1 => Self::MethodCall(op1, CallsiteId(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(op1, op2 as i32),

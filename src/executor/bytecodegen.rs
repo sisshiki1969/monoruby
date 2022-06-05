@@ -62,10 +62,16 @@ impl Funcs {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CallsiteInfo {
+    /// Return register. 0 for none.
+    pub ret: u16,
+    /// Name of function.
     pub name: IdentId,
+    /// Argument register.
     pub args: u16,
+    /// Length of arguments.
     pub len: u16,
-    pub cache: (usize, FuncId),
+    /// Inline method cache.
+    pub cache: (usize, u32, FuncId), //(version, class_id, func_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -617,8 +623,9 @@ impl NormalFuncInfo {
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp::FnCall(ret, id) => {
+                BcOp::MethodCall(recv, id) => {
                     let CallsiteInfo {
+                        ret,
                         name,
                         args,
                         len,
@@ -627,10 +634,10 @@ impl NormalFuncInfo {
                     let name = globals.get_name(name);
                     match ret {
                         0 => {
-                            eprintln!("_ = call {}(%{}; {})", name, args, len)
+                            eprintln!("_ = %{}.call {}(%{}; {})", recv, name, args, len)
                         }
                         ret => {
-                            eprintln!("%{:?} = call {}(%{}; {})", ret, name, args, len)
+                            eprintln!("%{:?} = %{}.call {}(%{}; {})", ret, recv, name, args, len)
                         }
                     }
                 }
@@ -837,14 +844,20 @@ impl NormalFuncInfo {
                 method,
                 arglist,
                 safe_nav: false,
-            } if receiver.kind == NodeKind::SelfValue => {
+            } => {
                 let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
                     None
                 };
-                ir.push(BcIr::FnCall(method, ret, arg, len));
+                if receiver.kind == NodeKind::SelfValue {
+                    ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len));
+                } else {
+                    self.gen_expr(ctx, ir, receiver, true, false)?;
+                    let recv = self.pop().into();
+                    ir.push(BcIr::MethodCall(recv, method, ret, arg, len));
+                }
                 return Ok(());
             }
             NodeKind::FuncCall {
@@ -858,7 +871,7 @@ impl NormalFuncInfo {
                 } else {
                     None
                 };
-                ir.push(BcIr::FnCall(method, ret, arg, len));
+                ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len));
                 return Ok(());
             }
             NodeKind::Ident(method) => {
@@ -868,7 +881,7 @@ impl NormalFuncInfo {
                 } else {
                     None
                 };
-                ir.push(BcIr::FnCall(method, ret, arg, len));
+                ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len));
                 return Ok(());
             }
             NodeKind::If {
@@ -956,7 +969,6 @@ impl NormalFuncInfo {
                 let len = nodes.len();
                 let arg = self.next_reg();
                 for expr in nodes {
-                    eprintln!("{:?}", &expr.kind);
                     self.gen_expr(ctx, ir, expr, true, false)?;
                 }
                 self.temp -= len as u16;
@@ -1031,10 +1043,21 @@ impl NormalFuncInfo {
                 method,
                 arglist,
                 safe_nav: false,
-            } if receiver.kind == NodeKind::SelfValue => {
+            } => {
                 let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
-                let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
-                ir.push(inst);
+                if receiver.kind == NodeKind::SelfValue {
+                    ir.push(BcIr::MethodCall(
+                        BcReg::Self_,
+                        method,
+                        Some(local.into()),
+                        arg,
+                        len,
+                    ));
+                } else {
+                    self.gen_expr(ctx, ir, receiver, true, false)?;
+                    let recv = self.pop().into();
+                    ir.push(BcIr::MethodCall(recv, method, Some(local.into()), arg, len));
+                }
             }
             NodeKind::FuncCall {
                 method,
@@ -1042,7 +1065,7 @@ impl NormalFuncInfo {
                 safe_nav: false,
             } => {
                 let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
-                let inst = BcIr::FnCall(method, Some(local.into()), arg, len);
+                let inst = BcIr::MethodCall(BcReg::Self_, method, Some(local.into()), arg, len);
                 ir.push(inst);
             }
             NodeKind::Return(_) => unreachable!(),
@@ -1410,15 +1433,20 @@ impl NormalFuncInfo {
     fn add_callsite(
         &self,
         store: &mut FnStore,
+        ret: Option<BcReg>,
         name: IdentId,
         args: BcTemp,
         len: usize,
     ) -> CallsiteId {
         let info = CallsiteInfo {
+            ret: match ret {
+                None => 0,
+                Some(ret) => self.get_index(&ret),
+            },
             name,
             args: self.get_index(&BcReg::from(args)),
             len: len as u16,
-            cache: (usize::MAX, FuncId::default()),
+            cache: (usize::MAX, 0, FuncId::default()),
         };
         let id = store.callsite_info.len();
         store.callsite_info.push(info);
@@ -1529,10 +1557,10 @@ impl NormalFuncInfo {
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
-                BcIr::FnCall(id, ret, args, len) => {
-                    let id = self.add_callsite(store, *id, *args, *len);
-                    let ret = ret.map_or(0, |ret| self.get_index(&ret));
-                    BcOp::FnCall(ret, id)
+                BcIr::MethodCall(recv, id, ret, args, len) => {
+                    let id = self.add_callsite(store, *ret, *id, *args, *len);
+                    let recv = self.get_index(recv);
+                    BcOp::MethodCall(recv, id)
                 }
                 BcIr::MethodDef(name, func_id) => {
                     BcOp::MethodDef(store.add_method_def(*name, *func_id))

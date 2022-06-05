@@ -55,7 +55,10 @@ impl Globals {
         self.id_store.get_ident_id(name)
     }
 
-    pub fn get_method(&self, name: IdentId) -> Option<FuncId> {
+    pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
+        if let Some(func_id) = self.class.get_method(class_id, name) {
+            return Some(func_id);
+        }
         self.class.get_method(0, name)
     }
 

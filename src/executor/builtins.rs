@@ -42,7 +42,12 @@ extern "C" fn puts(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usiz
 
 extern "C" fn print(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
     for offset in 0..len {
-        print!("{}", arg[offset]);
+        match arg[offset].unpack() {
+            RV::String(bytes) => {
+                std::io::stdout().write(bytes).unwrap();
+            }
+            _ => print!("{}", arg[offset]),
+        };
     }
     stdout().flush().unwrap();
     Value::nil()

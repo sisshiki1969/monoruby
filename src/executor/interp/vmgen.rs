@@ -54,10 +54,12 @@ extern "C" fn find_method(
     globals: &mut Globals,
     callsite_id: CallsiteId,
     data: &mut FuncData,
+    receiver: Value,
 ) -> Option<EncodedCallInfo> {
-    match interp.find_method(globals, callsite_id) {
-        Some((func_id, args, len)) => {
+    match interp.find_method(globals, callsite_id, receiver) {
+        Some((func_id, args, len, ret)) => {
             get_func_data(interp, globals, func_id, data);
+            data.ret = ret as usize;
             let info = EncodedCallInfo::new(func_id, args, len);
             Some(info)
         }
@@ -99,6 +101,7 @@ impl Interp {
         let func_offset = self.jit_gen.jit.const_i64(0);
         let func_address = self.jit_gen.jit.const_i64(0);
         let func_pc = self.jit_gen.jit.const_i64(0);
+        let func_ret = self.jit_gen.jit.const_i64(0);
 
         monoasm! { self.jit_gen.jit,
             pushq rbx;
@@ -184,7 +187,7 @@ impl Interp {
 
         let (shl, shr) = self.vm_shift();
 
-        self.dispatch[1] = self.vm_fncall(func_offset, func_address, func_pc);
+        self.dispatch[1] = self.vm_method_call(func_offset, func_address, func_pc, func_ret);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
         self.dispatch[4] = self.vm_condbr(branch);
@@ -360,29 +363,32 @@ impl Interp {
         label
     }
 
-    fn vm_fncall(
+    fn vm_method_call(
         &mut self,
         func_offset: DestLabel,
         func_address: DestLabel,
         func_pc: DestLabel,
+        ret: DestLabel,
     ) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
         let loop_exit = self.jit_gen.jit.label();
         let entry_return = self.jit_gen.entry_return;
+        self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rip + func_offset]; // rcx: &mut usize
+            lea rcx, [rip + func_offset]; // rcx: &mut FuncData
+            movq r8, [r15]; // r8: receiver:Value
             movq rax, (find_method);
             call rax;       // rax <- EncodedCallInfo
             testq rax, rax;
             jeq entry_return;
 
             pushq r13;
-            pushq r15;
+            pushq [rip + ret];
             movq r13, [rip + func_pc];    // r13: BcPc
             shrq rax, 32;
             movl rdi, rax;
@@ -390,7 +396,7 @@ impl Interp {
             movzxw r14, rax;    // r14 <- len
             shlq r14, 3;
             lea rdx, [rsp - 0x28];
-            movq rax, [rbp - 16];
+            movq rax, [r15];
             movq [rsp - 0x20], rax; // set self
         };
         self.vm_get_addr_rdi(); // rdi <- *args
@@ -428,9 +434,8 @@ impl Interp {
             call rax;
             popq r15;
             popq r13;
-            movsxl r15, r15;
-            cmpq r15, (-1);
-            jeq exit;
+            testq rax, rax;
+            jeq entry_return;
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();

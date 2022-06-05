@@ -38,8 +38,9 @@ extern "C" fn get_func_absolute_address(
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
+    receiver: Value,
 ) -> Option<CodePtr> {
-    let func_id = interp.get_method(globals, func_name, args_len)?;
+    let func_id = interp.get_method(globals, receiver.class(), func_name, args_len)?;
     match globals.func[func_id].jit_label() {
         Some(dest) => Some(dest),
         None => {
@@ -709,7 +710,7 @@ impl JitGen {
                         );
                     }
                 }
-                BcOp::FnCall(ret, id) => {
+                BcOp::MethodCall(recv, id) => {
                     // set arguments to a callee stack.
                     //
                     //       +-------------+
@@ -728,12 +729,25 @@ impl JitGen {
                     //       |             |
                     //
                     let CallsiteInfo {
-                        name, args, len, ..
+                        ret,
+                        name,
+                        args,
+                        len,
+                        ..
                     } = store[id];
+                    if recv != 0 {
+                        monoasm!(self.jit,
+                            movq rdi, [rbp - (conv(recv))];
+                            movq rax, (Value::get_class);
+                            call rax;
+                            movq r15, rax;  // r15: receiver class_id
+                        );
+                    }
+
                     let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
                     // set self
                     monoasm!(self.jit,
-                        movq rax, [rbp - 16];
+                        movq rax, [rbp - (conv(recv))];
                         movq [rsp - 0x20], rax;
                     );
                     // set arguments
@@ -746,20 +760,30 @@ impl JitGen {
                     }
                     let l1 = self.jit.label();
                     let exit = self.jit.label();
+                    let slow_path = self.jit.label();
                     let saved_class_version = self.jit.const_i64(-1);
+                    let saved_recv_class = self.jit.const_i64(0);
                     let class_version = self.class_version;
                     let entry_find_method = self.entry_find_method;
                     let entry_panic = self.entry_panic;
                     let entry_return = self.entry_return;
+                    if recv != 0 {
+                        monoasm!(self.jit,
+                            cmpq r15, [rip + saved_recv_class];
+                            jne slow_path;
+                        );
+                    }
                     monoasm!(self.jit,
                         movq rax, [rip + class_version];
                         cmpq [rip + saved_class_version], rax;
                         jeq l1;
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
+                    slow_path:
                         subq rsp, (sp_max);
                         movq rdx, (u32::from(name)); // IdentId
                         movq rcx, (len as usize); // args_len: usize
+                        movq r8, [rbp - (conv(recv))]; // receiver: Value
                         call entry_find_method;
                         // absolute address was returned to rax.
                         addq rsp, (sp_max);
@@ -774,6 +798,7 @@ impl JitGen {
                         movl [rdi], rax;
                         movq rax, [rip + class_version];
                         movq [rip + saved_class_version], rax;
+                        movq [rip + saved_recv_class], r15;
                     l1:
                         // patch point
                         call entry_panic;
