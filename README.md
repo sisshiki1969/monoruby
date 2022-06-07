@@ -9,31 +9,31 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 - virtual machine executer written in x86-64 assembly (yes, we support only x86-64!).
 
-- a compact and fast JIT compiler. (internally using self-made dynamic assembler *monoasm* (<https://github.com/sisshiki1969/monoasm>))
+- a compact and fast JIT compiler. (internally using self-made dynamic assembler *monoasm* (https://github.com/sisshiki1969/monoasm))
 
 - currently, supports only Integer(including Bignum), Float, String, and boolean, nil.
 
 ## Benchmark
 
-- app_fib.rb (fib 42)
+- app_fib.rb (fib 40)
 
 |     impl         | time(sec)  |
 |:----------------:|-----------:|
-|  monoruby --jit  |   2.461    |
-|  monoruby        |  15.827    |
-|  ruby(3.2.0dev)  |  15.225    |
-|  ruby --yjit     |   3.902    |
-|  ruby --mjit     |   5.020    |
+|  monoruby --jit  |   0.906    |
+|  monoruby        |   5.766    |
+|  ruby(3.2.0dev)  |   5.726    |
+|  ruby --yjit     |   1.468    |
+|  ruby --mjit     |   1.929    |
 
 - so_mandelbrot.rb
 
 |     impl         | time(sec)  |
 |:----------------:|-----------:|
-|  monoruby --jit  |   0.799    |
-|  monoruby        |   1.139    |
-|  ruby(3.2.0dev)  |   1.851    |
-|  ruby --yjit     |   1.264    |
-|  ruby --mjit     |   1.137    |
+|  monoruby --jit  |   0.775    |
+|  monoruby        |   1.155    |
+|  ruby(3.2.0dev)  |   1.797    |
+|  ruby --yjit     |   1.287    |
+|  ruby --mjit     |   1.351    |
 
 ## How to run
 
