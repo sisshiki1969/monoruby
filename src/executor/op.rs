@@ -52,7 +52,7 @@ pub(super) extern "C" fn div_values(
     rhs: Value,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.div_floor(&rhs)),
+        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.div_floor(rhs)),
         (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).div_floor(rhs)),
         (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
         (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.div_floor(&BigInt::from(rhs))),

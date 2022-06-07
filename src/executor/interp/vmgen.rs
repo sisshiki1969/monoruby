@@ -90,9 +90,9 @@ extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: 
     interp.class_version += 1;
 }
 
-extern "C" fn eprintln(data: u64) {
+/*extern "C" fn eprintln(data: u64) {
     eprintln!("{:016x}", data);
-}
+}*/
 
 impl Interp {
     pub(super) fn construct_vm(&mut self) -> CodePtr {

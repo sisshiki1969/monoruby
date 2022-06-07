@@ -64,7 +64,7 @@ impl Value {
         Value::from(ptr as u64)
     }
 
-    pub(crate) fn class(&self) -> u32 {
+    pub fn class(&self) -> u32 {
         if let Some(_) = self.as_fixnum() {
             INTEGER_CLASS
         } else if let Some(_) = self.as_flonum() {
@@ -200,10 +200,10 @@ impl Value {
         self.0.get() == NIL_VALUE
     }*/
 
-    pub fn to_bool(&self) -> bool {
+    /*pub fn to_bool(&self) -> bool {
         let v = self.0.get();
         (v | 0x10) != 0x14
-    }
+    }*/
 
     pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
@@ -254,9 +254,9 @@ impl Value {
         unsafe { &*(self.get() as *const RValue) }
     }
 
-    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
+    /*pub(crate) fn rvalue_mut(&self) -> &mut RValue {
         unsafe { &mut *(self.get() as *mut RValue) }
-    }
+    }*/
 
     /*#[inline(always)]
     fn is_packed_num(&self) -> bool {

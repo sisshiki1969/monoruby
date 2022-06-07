@@ -69,7 +69,7 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
-extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
+/*extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
     let mut res = match lhs.unpack() {
         RV::Nil => b"nil".to_vec(),
         RV::Bool(b) => format!("{}", b).into_bytes(),
@@ -89,7 +89,7 @@ extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
         _ => unimplemented!(),
     };
     Value::string(res)
-}
+}*/
 
 impl JitGen {
     pub fn new() -> Self {
@@ -432,17 +432,20 @@ impl JitGen {
         };
         func.set_jit_label(label);
         self.jit.finalize();
-        #[cfg(feature = "emit-asm")]
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         {
             eprintln!("jit compile: {:?}", func.id());
-            let (start, code_end, end) = self.jit.code_block.last().unwrap();
-            eprintln!(
-                "offset:{:?} code: {} bytes  data: {} bytes",
-                start,
-                *code_end - *start,
-                *end - *code_end
-            );
-            eprintln!("{}", self.jit.dump_code().unwrap());
+            #[cfg(any(feature = "emit-asm"))]
+            {
+                let (start, code_end, end) = self.jit.code_block.last().unwrap();
+                eprintln!(
+                    "offset:{:?} code: {} bytes  data: {} bytes",
+                    start,
+                    *code_end - *start,
+                    *end - *code_end
+                );
+                eprintln!("{}", self.jit.dump_code().unwrap());
+            }
             eprintln!("jit compile elapsed:{:?}", now.elapsed());
         }
         label

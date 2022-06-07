@@ -12,6 +12,7 @@ license = "MIT"
 [features]
 emit-asm = []
 emit-bc = []
+log-jit = []
 
 [dependencies]
 clap = { version = "3.1.0", features = ["derive"] }

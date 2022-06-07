@@ -199,7 +199,9 @@ impl FnStore {
     fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let ir = info.compile_ast(self)?;
-        info.ir_to_bytecode(ir, id_store, self);
+        info.ir_to_bytecode(ir, self);
+        #[cfg(feature = "emit-bc")]
+        info.dump(id_store, self);
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         self[func_id].inst_pc = BcPcBase::new(self[func_id].as_normal()) + 0;
@@ -1456,7 +1458,7 @@ impl NormalFuncInfo {
     pub(crate) fn ir_to_bytecode(
         &mut self,
         ir: IrContext,
-        id_store: &IdentifierTable,
+        //id_store: &IdentifierTable,
         store: &mut FnStore,
     ) {
         let mut ops = vec![];
@@ -1573,7 +1575,5 @@ impl NormalFuncInfo {
             ops.push(op.to_u64());
         }
         self.bytecode = ops;
-        #[cfg(feature = "emit-bc")]
-        self.dump(id_store, store);
     }
 }

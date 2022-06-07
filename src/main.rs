@@ -1,4 +1,5 @@
 #![feature(box_patterns)]
+#![feature(int_roundings)]
 pub use alloc::*;
 pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;

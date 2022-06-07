@@ -93,7 +93,7 @@ impl EncodedCallInfo {
 /// Bytecode interpreter.
 ///
 pub struct Interp {
-    cur_fn: FuncId,
+    _cur_fn: FuncId,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<CodePtr>,
@@ -117,7 +117,7 @@ impl Interp {
         };
         let dispatch = vec![entry_panic; 256];
         Self {
-            cur_fn: main.id,
+            _cur_fn: main.id,
             jit_gen,
             error: None,
             dispatch,

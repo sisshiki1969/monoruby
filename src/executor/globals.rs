@@ -1,7 +1,7 @@
 use super::*;
 
 // Integer#chr
-extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
     let b = match arg.self_value().as_fixnum() {
         Some(i) => {
             if let Ok(res) = u8::try_from(i) {
@@ -54,6 +54,10 @@ impl Globals {
     pub fn get_ident_id(&mut self, name: &str) -> IdentId {
         self.id_store.get_ident_id(name)
     }
+
+    /*pub fn get_ident_name(&self, id: IdentId) -> &str {
+        self.id_store.get_name(id)
+    }*/
 
     pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {

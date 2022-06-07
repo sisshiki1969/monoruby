@@ -17,9 +17,9 @@ pub fn init_builtins(globals: &mut Globals) {
 pub struct Arg(*const Value);
 
 impl Arg {
-    pub fn new(ptr: *const Value) -> Self {
+    /*pub fn new(ptr: *const Value) -> Self {
         Self(ptr)
-    }
+    }*/
 
     pub fn self_value(&self) -> Value {
         unsafe { *self.0.add(1) }
