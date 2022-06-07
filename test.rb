@@ -5,4 +5,7 @@ def fib(x)
       fib(x-1)+fib(x-2)
   end
 end;
-puts fib 40
+
+for x in 0..9
+   fib 34
+end
