@@ -93,7 +93,7 @@ impl EncodedCallInfo {
 /// Bytecode interpreter.
 ///
 pub struct Interp {
-    _cur_fn: FuncId,
+    pub sourceinfo: SourceInfoRef,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<CodePtr>,
@@ -117,7 +117,7 @@ impl Interp {
         };
         let dispatch = vec![entry_panic; 256];
         Self {
-            _cur_fn: main.id,
+            sourceinfo: main.sourceinfo.clone(),
             jit_gen,
             error: None,
             dispatch,
@@ -136,13 +136,22 @@ impl Interp {
         let func_id = match globals.get_method(class_id, func_name) {
             Some(id) => id,
             None => {
-                self.error = Some(MonorubyErr::method_not_found(func_name));
+                self.error = Some(MonorubyErr::method_not_found(
+                    func_name,
+                    Loc::default(),
+                    self.sourceinfo.clone(),
+                ));
                 return None;
             }
         };
         let arity = globals.func[func_id].arity();
         if arity != args_len {
-            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
+            self.error = Some(MonorubyErr::wrong_arguments(
+                arity,
+                args_len,
+                Loc::default(),
+                self.sourceinfo.clone(),
+            ));
             return None;
         }
         Some(func_id)

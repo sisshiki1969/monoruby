@@ -33,12 +33,13 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 }
 
 impl Funcs {
-    fn new() -> Self {
+    fn new(sourceinfo: SourceInfoRef) -> Self {
         Self(vec![FuncInfo::new_normal(
             None,
             FuncId(0),
             vec![],
             Node::new_nil(Loc(0, 0)),
+            sourceinfo,
         )])
     }
 
@@ -46,9 +47,16 @@ impl Funcs {
         FuncId(self.0.len() as u32)
     }
 
-    fn add_normal_func(&mut self, name: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> FuncId {
+    fn add_normal_func(
+        &mut self,
+        name: Option<IdentId>,
+        args: Vec<IdentId>,
+        ast: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> FuncId {
         let fid = self.next_func_id();
-        self.0.push(FuncInfo::new_normal(name, fid, args, ast));
+        self.0
+            .push(FuncInfo::new_normal(name, fid, args, ast, sourceinfo));
         fid
     }
 
@@ -136,7 +144,7 @@ impl std::ops::IndexMut<CallsiteId> for FnStore {
 impl FnStore {
     pub fn new() -> Self {
         Self {
-            functions: Funcs::new(),
+            functions: Funcs::new(SourceInfoRef::default()),
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
@@ -183,8 +191,15 @@ impl FnStore {
 }
 
 impl FnStore {
-    pub(super) fn compile_main(&mut self, ast: Node, id_store: &IdentifierTable) -> Result<()> {
-        let mut fid = self.functions.add_normal_func(None, vec![], ast);
+    pub(super) fn compile_script(
+        &mut self,
+        ast: Node,
+        id_store: &IdentifierTable,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<()> {
+        let mut fid = self
+            .functions
+            .add_normal_func(None, vec![], ast, sourceinfo.clone());
         self.main = Some(fid);
 
         while self.len() > fid.0 as usize {
@@ -249,8 +264,14 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    fn new_normal(name: Option<IdentId>, func_id: FuncId, args: Vec<IdentId>, ast: Node) -> Self {
-        let info = NormalFuncInfo::new(func_id, name, args, ast);
+    fn new_normal(
+        name: Option<IdentId>,
+        func_id: FuncId,
+        args: Vec<IdentId>,
+        ast: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        let info = NormalFuncInfo::new(func_id, name, args, ast, sourceinfo);
         Self {
             id: info.id,
             name,
@@ -381,6 +402,8 @@ pub(super) struct NormalFuncInfo {
     name_id: Option<IdentId>,
     /// Bytecode.
     bytecode: Vec<u64>,
+    /// Source map.
+    sourcemap: Vec<Loc>,
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
@@ -391,19 +414,28 @@ pub(super) struct NormalFuncInfo {
     reg_num: u16,
     /// AST.
     ast: Option<Node>,
+    pub sourceinfo: SourceInfoRef,
 }
 
 impl NormalFuncInfo {
-    pub fn new(id: FuncId, name_id: Option<IdentId>, args: Vec<IdentId>, ast: Node) -> Self {
+    pub fn new(
+        id: FuncId,
+        name_id: Option<IdentId>,
+        args: Vec<IdentId>,
+        ast: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
         let mut info = NormalFuncInfo {
             id,
             name_id,
             bytecode: vec![],
+            sourcemap: vec![],
             args: args.clone(),
             locals: HashMap::default(),
             temp: 0,
             reg_num: 0,
             ast: Some(ast),
+            sourceinfo,
         };
         args.into_iter().for_each(|name| {
             info.add_local(name);
@@ -444,10 +476,14 @@ impl NormalFuncInfo {
         self.temp -= len as u16;
     }
 
-    fn load_local(&mut self, ident: IdentId) -> Result<BcLocal> {
+    fn load_local(&mut self, ident: IdentId, loc: Loc) -> Result<BcLocal> {
         match self.locals.get(&ident) {
             Some(local) => Ok(BcLocal(*local)),
-            None => Err(MonorubyErr::undefined_local(ident)),
+            None => Err(MonorubyErr::undefined_local(
+                ident,
+                loc,
+                self.sourceinfo.clone(),
+            )),
         }
     }
 
@@ -770,7 +806,13 @@ impl NormalFuncInfo {
             BinOp::Gt => self.gen_cmp(ctx, ir, dst, CmpKind::Gt, lhs, rhs, loc)?,
             BinOp::Le => self.gen_cmp(ctx, ir, dst, CmpKind::Le, lhs, rhs, loc)?,
             BinOp::Lt => self.gen_cmp(ctx, ir, dst, CmpKind::Lt, lhs, rhs, loc)?,
-            _ => return Err(MonorubyErr::unsupported_operator(op)),
+            _ => {
+                return Err(MonorubyErr::unsupported_operator(
+                    op,
+                    loc,
+                    self.sourceinfo.clone(),
+                ))
+            }
         };
         Ok(())
     }
@@ -819,7 +861,7 @@ impl NormalFuncInfo {
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 let local = match lhs.kind {
                     NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
-                    _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
+                    _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
                 };
                 self.gen_binop(ctx, ir, op, lhs, rhs, Some(local), loc)?;
                 if is_ret {
@@ -845,7 +887,9 @@ impl NormalFuncInfo {
                                 self.gen_store_expr(ctx, ir, local, rhs, use_value)?;
                             }
                         }
-                        _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
+                        _ => {
+                            return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone()))
+                        }
                     }
                 } else {
                     self.gen_mul_assign(ctx, ir, mlhs, mrhs, use_value, is_ret)?;
@@ -853,7 +897,7 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::LocalVar(ident) => {
-                let local = self.load_local(ident)?;
+                let local = self.load_local(ident, loc)?;
                 if is_ret {
                     self.gen_ret(ir, Some(local));
                 } else if use_value {
@@ -943,7 +987,9 @@ impl NormalFuncInfo {
             NodeKind::Break(box val) => {
                 let (_kind, break_pos, ret_reg) = match ir.loops.last() {
                     Some(data) => data.clone(),
-                    None => return Err(MonorubyErr::escape_from_eval()),
+                    None => {
+                        return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
+                    }
                 };
                 match ret_reg {
                     Some(reg) => {
@@ -957,7 +1003,7 @@ impl NormalFuncInfo {
             }
             NodeKind::Return(box expr) => {
                 if let Some(local) = is_local(&expr) {
-                    let local = self.load_local(local)?;
+                    let local = self.load_local(local, expr.loc)?;
                     self.gen_ret(ir, Some(local));
                 } else {
                     self.gen_expr(ctx, ir, expr, true, false)?;
@@ -1000,7 +1046,7 @@ impl NormalFuncInfo {
                 ir.push(BcIr::ConcatStr(ret, arg, len), Loc::default());
                 return Ok(());
             }
-            _ => return Err(MonorubyErr::unsupported_node(expr.kind)),
+            _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
         if !use_value {
             self.pop();
@@ -1048,7 +1094,9 @@ impl NormalFuncInfo {
                             self.gen_store_expr(ctx, ir, src, rhs, false)?;
                             self.gen_mov(ir, local.into(), src.into());
                         }
-                        _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
+                        _ => {
+                            return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone()))
+                        }
                     }
                 } else {
                     self.gen_mul_assign(ctx, ir, mlhs, mrhs, true, false)?;
@@ -1057,7 +1105,7 @@ impl NormalFuncInfo {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local2 = self.load_local(ident)?;
+                let local2 = self.load_local(ident, loc)?;
                 self.gen_mov(ir, local.into(), local2.into());
             }
             NodeKind::MethodCall {
@@ -1122,10 +1170,18 @@ impl NormalFuncInfo {
         for param in params {
             match param.kind {
                 ParamKind::Param(name) => args.push(name),
-                _ => return Err(MonorubyErr::unsupported_parameter_kind(param.kind)),
+                _ => {
+                    return Err(MonorubyErr::unsupported_parameter_kind(
+                        param.kind,
+                        param.loc,
+                        self.sourceinfo.clone(),
+                    ))
+                }
             }
         }
-        let func_id = ctx.functions.add_normal_func(Some(name), args, node);
+        let func_id =
+            ctx.functions
+                .add_normal_func(Some(name), args, node, self.sourceinfo.clone());
         ir.push(BcIr::MethodDef(name, func_id), Loc::default());
         Ok(())
     }
@@ -1336,7 +1392,7 @@ impl NormalFuncInfo {
                     let local = self.find_local(lhs);
                     self.gen_mov(ir, local.into(), temp_reg.into());
                 }
-                _ => return Err(MonorubyErr::unsupported_lhs(lhs.kind)),
+                _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
             }
             temp_reg += 1;
         }
@@ -1598,5 +1654,6 @@ impl NormalFuncInfo {
             ops.push(op.to_u64());
         }
         self.bytecode = ops;
+        self.sourcemap = ir.sourcemap;
     }
 }

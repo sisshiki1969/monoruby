@@ -19,53 +19,110 @@ type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Interp, &mut Globals, Arg, usize) -> Value;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum MonorubyErr {
+pub struct MonorubyErr {
+    pub kind: MonorubyErrKind,
+    pub loc: Loc,
+    pub sourceinfo: SourceInfoRef,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MonorubyErrKind {
     UndefinedLocal(IdentId),
     MethodNotFound(IdentId),
     WrongArguments(String),
-    Syntax(ParseErr),
+    Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
 }
 
 impl MonorubyErr {
+    pub fn show_loc(&self) {
+        let loc = self.loc;
+        self.sourceinfo.show_loc(&loc);
+    }
+
     pub fn parse(error: ParseErr) -> MonorubyErr {
-        MonorubyErr::Syntax(error)
+        MonorubyErr {
+            kind: MonorubyErrKind::Syntax(error.kind),
+            loc: error.loc,
+            sourceinfo: error.source_info,
+        }
     }
 
-    pub fn escape_from_eval() -> MonorubyErr {
-        MonorubyErr::Syntax2("can't escape from eval.".to_string())
+    pub fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn undefined_local(ident: IdentId) -> MonorubyErr {
-        MonorubyErr::UndefinedLocal(ident)
+    pub fn undefined_local(ident: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::UndefinedLocal(ident),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn method_not_found(name: IdentId) -> MonorubyErr {
-        MonorubyErr::MethodNotFound(name)
+    pub fn method_not_found(name: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::MethodNotFound(name),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
-        MonorubyErr::WrongArguments(format!(
-            "number of arguments mismatch. expected:{} actual:{}",
-            expected, actual
-        ))
+    pub fn wrong_arguments(
+        expected: usize,
+        actual: usize,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::WrongArguments(format!(
+                "number of arguments mismatch. expected:{} actual:{}",
+                expected, actual
+            )),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn unsupported_parameter_kind(param: ParamKind) -> MonorubyErr {
-        MonorubyErr::Unimplemented(format!("unsupported parameter kind {:?}", param))
+    pub fn unsupported_parameter_kind(
+        param: ParamKind,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Unimplemented(format!("unsupported parameter kind {:?}", param)),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn unsupported_operator(op: BinOp) -> MonorubyErr {
-        MonorubyErr::Unimplemented(format!("unsupported operator {:?}", op))
+    pub fn unsupported_operator(op: BinOp, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Unimplemented(format!("unsupported operator {:?}", op)),
+            loc,
+            sourceinfo,
+        }
     }
 
-    pub fn unsupported_lhs(lhs: NodeKind) -> MonorubyErr {
-        MonorubyErr::Unimplemented(format!("unsupported lhs {:?}", lhs))
+    pub fn unsupported_lhs(lhs: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),
+            loc: lhs.loc,
+            sourceinfo,
+        }
     }
 
-    pub fn unsupported_node(expr: NodeKind) -> MonorubyErr {
-        MonorubyErr::Unimplemented(format!("unsupported nodekind {:?}", expr))
+    pub fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Unimplemented(format!("unsupported nodekind {:?}", expr.kind)),
+            loc: expr.loc,
+            sourceinfo,
+        }
     }
 }
 

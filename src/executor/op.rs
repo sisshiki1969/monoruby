@@ -29,7 +29,11 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
                     _ => {
-                        interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id($op_str)));
+                        interp.error = Some(MonorubyErr::method_not_found(
+                            globals.get_ident_id($op_str),
+                            Loc::default(),
+                            interp.sourceinfo.clone()
+                        ));
                         return None;
                     }
                 };
@@ -62,7 +66,11 @@ pub(super) extern "C" fn div_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
         _ => {
-            interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id("/")));
+            interp.error = Some(MonorubyErr::method_not_found(
+                globals.get_ident_id("/"),
+                Loc::default(),
+                interp.sourceinfo.clone(),
+            ));
             return None;
         }
     };
@@ -84,7 +92,11 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     _ => {
-                        interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id($op_str)));
+                        interp.error = Some(MonorubyErr::method_not_found(
+                            globals.get_ident_id($op_str),
+                            Loc::default(),
+                            interp.sourceinfo.clone()
+                        ));
                         return None;
                     }
                 };
@@ -122,7 +134,11 @@ pub(super) extern "C" fn shr_values(
             }
         }
         (_lhs, _rhs) => {
-            interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id(">>")));
+            interp.error = Some(MonorubyErr::method_not_found(
+                globals.get_ident_id(">>"),
+                Loc::default(),
+                interp.sourceinfo.clone(),
+            ));
             return None;
         }
     };
@@ -151,7 +167,11 @@ pub(super) extern "C" fn shl_values(
             }
         }
         (_lhs, _rhs) => {
-            interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id("<<")));
+            interp.error = Some(MonorubyErr::method_not_found(
+                globals.get_ident_id("<<"),
+                Loc::default(),
+                interp.sourceinfo.clone(),
+            ));
             return None;
         }
     };
@@ -272,7 +292,11 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::float(-lhs),
         RV::BigInt(lhs) => Value::bigint(-lhs),
         _ => {
-            interp.error = Some(MonorubyErr::method_not_found(globals.get_ident_id("@-")));
+            interp.error = Some(MonorubyErr::method_not_found(
+                globals.get_ident_id("@-"),
+                Loc::default(),
+                interp.sourceinfo.clone(),
+            ));
             return None;
         }
     };

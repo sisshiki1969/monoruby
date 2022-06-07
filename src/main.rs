@@ -85,47 +85,34 @@ fn main() {
 }
 
 fn exec(code: &str, jit: bool) -> Result<(), MonorubyErr> {
-    let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
-        Ok(ast) => ast,
-        Err(err) => {
-            err.source_info.show_loc(&err.loc);
-            return Err(MonorubyErr::parse(err));
-        }
-    };
-    let mut store = Globals::new(res.id_store);
-    store.compile_main(res.node)?;
+    let mut globals = Globals::new();
+    globals.compile_script(code.to_string(), std::path::Path::new("REPL"), "eval")?;
     if !jit {
-        let interp_val = Interp::eval_toplevel(&mut store);
+        let interp_val = Interp::eval_toplevel(&mut globals);
         eprintln!("interp: {:?}", interp_val);
     } else {
-        let _ = jitcompiler(&mut store);
+        let _ = jitcompiler(&mut globals);
     }
     Ok(())
 }
 
 fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
-    let res = match Parser::parse_program(code.to_string(), std::path::Path::new("REPL"), "eval") {
-        Ok(ast) => ast,
-        Err(err) => {
-            err.source_info.show_loc(&err.loc);
-            return Err(MonorubyErr::parse(err));
-        }
-    };
-    let mut store = Globals::new(res.id_store);
-    store.compile_main(res.node)?;
+    let mut globals = Globals::new();
+    globals.compile_script(code.to_string(), std::path::Path::new("REPL"), "eval")?;
 
     if !jit_flag {
-        let interp_val = Interp::eval_toplevel(&mut store.clone());
+        let interp_val = Interp::eval_toplevel(&mut globals.clone());
         eprintln!("interp: {:?}", interp_val);
     }
 
-    jitcompiler(&mut store)
+    jitcompiler(&mut globals)
 }
 
 fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
     all_codes.push(code.to_string());
     if let Err(err) = repl_exec(&all_codes.join(";"), jit_flag) {
         eprintln!("{:?}", err);
+        err.show_loc();
         all_codes.pop();
     };
 }
@@ -134,21 +121,22 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let all_codes = vec![code.to_string()];
-    let res = Parser::parse_program(code.to_string(), std::path::Path::new(""), "")
-        .unwrap_or_else(|err| panic!("Error in parsing. {:?}", err));
-    let mut store = Globals::new(res.id_store);
-    store
-        .compile_main(res.node)
-        .unwrap_or_else(|err| panic!("Error in compiling AST. {:?}", err));
+    let mut globals = Globals::new();
+    globals
+        .compile_script(code.to_string(), std::path::Path::new(""), "")
+        .unwrap_or_else(|err| {
+            err.show_loc();
+            panic!("Error in compiling AST. {:?}", err)
+        });
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut store.clone());
+    let interp_val = Interp::eval_toplevel(&mut globals.clone());
     #[cfg(not(debug_assertions))]
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let jit_val = jitcompiler(&mut store);
+    let jit_val = jitcompiler(&mut globals);
 
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();

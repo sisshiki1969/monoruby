@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::*;
 
 // Integer#chr
@@ -29,10 +31,10 @@ pub struct Globals {
 }
 
 impl Globals {
-    pub fn new(id_store: IdentifierTable) -> Self {
+    pub fn new() -> Self {
         let mut globals = Self {
             func: FnStore::new(),
-            id_store,
+            id_store: IdentifierTable::new(),
             class: ClassStore::new(),
         };
         builtins::init_builtins(&mut globals);
@@ -88,8 +90,22 @@ impl Globals {
         func_id
     }
 
-    pub fn compile_main(&mut self, ast: Node) -> Result<()> {
-        self.func.compile_main(ast, &self.id_store)
+    pub fn compile_script(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        context_name: &str,
+    ) -> Result<()> {
+        let id_table = std::mem::take(&mut self.id_store);
+        let res = match Parser::parse_program(code, path.into(), context_name, id_table) {
+            Ok(res) => {
+                self.id_store = res.id_store;
+                self.func
+                    .compile_script(res.node, &self.id_store, res.source_info)
+            }
+            Err(err) => Err(MonorubyErr::parse(err)),
+        };
+        res
     }
 }
 
