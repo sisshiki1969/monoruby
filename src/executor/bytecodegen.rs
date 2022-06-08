@@ -399,7 +399,7 @@ pub(super) struct NormalFuncInfo {
     /// Bytecode.
     bytecode: Vec<u64>,
     /// Source map.
-    sourcemap: Vec<Loc>,
+    pub sourcemap: Vec<Loc>,
     /// the name of arguments.
     args: Vec<IdentId>,
     /// local variables.
@@ -591,7 +591,7 @@ impl NormalFuncInfo {
     fn dump(&self, globals: &IdentifierTable, store: &FnStore) {
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} args:{:?}",
+            "{:?} name:{} args:{:?} bc:{:?}",
             self.id,
             match self.name_id {
                 Some(name_id) => globals.get_name(name_id),
@@ -600,7 +600,8 @@ impl NormalFuncInfo {
             self.args
                 .iter()
                 .map(|id| globals.get_name(*id))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            BcPcBase::new(self)
         );
         for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);

@@ -12,7 +12,7 @@ use bytecodegen::*;
 pub use compiler::*;
 pub use globals::*;
 use inst::*;
-pub use interp::Interp;
+pub use interp::*;
 use op::*;
 
 type Result<T> = std::result::Result<T, MonorubyErr>;
@@ -35,12 +35,9 @@ pub enum MonorubyErrKind {
 }
 
 impl MonorubyErr {
-    pub fn show_loc(&self) {
-        match self.loc.first() {
-            Some((loc, sourceinfo)) => {
-                sourceinfo.show_loc(loc);
-            }
-            None => {}
+    pub fn show_all_loc(&self) {
+        for (loc, sourceinfo) in &self.loc {
+            sourceinfo.show_loc(loc);
         }
     }
 }

@@ -81,7 +81,7 @@ extern "C" fn get_func_data(
 }
 
 extern "C" fn get_constant(_interp: &mut Interp, globals: &mut Globals, const_id: u32) -> Value {
-    globals.func.get_literal(const_id)
+    Value::dup(globals.func.get_literal(const_id))
 }
 
 extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
@@ -112,10 +112,11 @@ impl Interp {
 
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
-                            // rdx: FuncId
+            movl r13, rdx;  // rdx: FuncId
             lea rcx, [rip + func_offset];
             movq rax, (get_func_data);
             call rax;
+            movl [rsp - 0x14], r13;
             movq r13, [rip + func_pc];    // r13: BcPc
             //
             //       +-------------+
@@ -332,7 +333,7 @@ impl Interp {
 
     fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
         self.jit_gen.jit.bind_label(generic);
-        self.jit_gen.call_unop(func);
+        self.jit_gen.call_unop(func, self.jit_gen.vm_return);
         monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -342,7 +343,7 @@ impl Interp {
 
     fn vm_generic_binop(&mut self, generic: DestLabel, func: u64) {
         self.jit_gen.jit.bind_label(generic);
-        self.jit_gen.call_binop(func);
+        self.jit_gen.call_binop(func, self.jit_gen.vm_return);
         monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -374,7 +375,7 @@ impl Interp {
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
         let loop_exit = self.jit_gen.jit.label();
-        let entry_return = self.jit_gen.entry_return;
+        let vm_return = self.jit_gen.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // rdx: CallsiteId
@@ -385,11 +386,12 @@ impl Interp {
             movq rax, (find_method);
             call rax;       // rax <- EncodedCallInfo
             testq rax, rax;
-            jeq entry_return;
+            jeq vm_return;
 
             pushq r13;
             pushq [rip + ret];
             movq r13, [rip + func_pc];    // r13: BcPc
+            movl [rsp - 0x14], rax;
             shrq rax, 32;
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
@@ -404,7 +406,9 @@ impl Interp {
         monoasm! { self.jit_gen.jit,
             //
             //       +-------------+
-            //  0x00 |             | <- rsp
+            // +0x08 |     pc      |
+            //       +-------------+
+            //  0x00 |   ret reg   | <- rsp
             //       +-------------+
             // -0x08 | return addr |
             //       +-------------+
@@ -435,7 +439,7 @@ impl Interp {
             popq r15;
             popq r13;
             testq rax, rax;
-            jeq entry_return;
+            jeq vm_return;
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
@@ -516,7 +520,8 @@ impl Interp {
             // generic path
             addq rsi, 1;
         };
-        self.jit_gen.call_binop(add_values as _);
+        self.jit_gen
+            .call_binop(add_values as _, self.jit_gen.vm_return);
         monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -589,7 +594,8 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.jit_gen.call_binop(mul_values as _);
+        self.jit_gen
+            .call_binop(mul_values as _, self.jit_gen.vm_return);
         monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -603,7 +609,8 @@ impl Interp {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.jit_gen.call_binop(div_values as _);
+        self.jit_gen
+            .call_binop(div_values as _, self.jit_gen.vm_return);
         monoasm! { self.jit_gen.jit,
             // store the result to return reg.
             movq [r15], rax;

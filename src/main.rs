@@ -101,8 +101,13 @@ fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
     globals.compile_script(code.to_string(), std::path::Path::new("REPL"), "eval")?;
 
     if !jit_flag {
-        let interp_val = Interp::eval_toplevel(&mut globals.clone());
-        eprintln!("interp: {:?}", interp_val);
+        match Interp::eval_toplevel(&mut globals.clone()) {
+            Ok(val) => eprintln!("interp: {:?}", val),
+            Err(err) => {
+                eprintln!("{:?}", err.kind);
+                err.show_all_loc();
+            }
+        }
     }
 
     jitcompiler(&mut globals)
@@ -112,7 +117,7 @@ fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
     all_codes.push(code.to_string());
     if let Err(err) = repl_exec(&all_codes.join(";"), jit_flag) {
         eprintln!("{:?}", err);
-        err.show_loc();
+        err.show_all_loc();
         all_codes.pop();
     };
 }
@@ -125,7 +130,7 @@ pub fn run_test(code: &str) {
     globals
         .compile_script(code.to_string(), std::path::Path::new(""), "")
         .unwrap_or_else(|err| {
-            err.show_loc();
+            err.show_all_loc();
             panic!("Error in compiling AST. {:?}", err)
         });
     #[cfg(not(debug_assertions))]

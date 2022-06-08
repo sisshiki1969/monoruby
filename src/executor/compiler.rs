@@ -17,7 +17,8 @@ pub struct JitGen {
     class_version: DestLabel,
     pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
-    pub entry_return: DestLabel,
+    pub jit_return: DestLabel,
+    pub vm_return: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -69,6 +70,26 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
+extern "C" fn get_error_location(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    func_id: FuncId,
+    pc: BcPc,
+) {
+    let normal_info = globals.func[func_id].as_normal();
+    let sourceinfo = normal_info.sourceinfo.clone();
+    let bc_base = globals.func[func_id].inst_pc();
+    //eprintln!("{:?} {:?} {:?}", func_id, bc_base, pc);
+    let loc = normal_info.sourcemap[pc - bc_base];
+    match &mut interp.error {
+        Some(err) => {
+            err.loc.push((loc, sourceinfo));
+        }
+        None => unreachable!(),
+    };
+    //sourceinfo.show_loc(&loc);
+}
+
 /*extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
     let mut res = match lhs.unpack() {
         RV::Nil => b"nil".to_vec(),
@@ -97,7 +118,8 @@ impl JitGen {
         let class_version = jit.const_i64(0);
         let entry_panic = jit.label();
         let entry_find_method = jit.label();
-        let entry_return = jit.label();
+        let jit_return = jit.label();
+        let vm_return = jit.label();
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -109,7 +131,17 @@ impl JitGen {
             movq rsi, r12;
             movq rax, (get_func_absolute_address);
             jmp rax;
-        entry_return:
+        vm_return:
+            movq r15, rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [rbp - 0x4];
+            movq rcx, r13;
+            subq rcx, 8;
+            movq rax, (get_error_location);
+            call rax;
+            movq rax, r15;
+        jit_return:
             leave;
             ret;
         );
@@ -118,7 +150,8 @@ impl JitGen {
             class_version,
             entry_panic,
             entry_find_method,
-            entry_return,
+            jit_return,
+            vm_return,
         }
     }
 
@@ -165,8 +198,7 @@ impl JitGen {
         );
     }
 
-    pub(super) fn call_unop(&mut self, func: u64) {
-        let entry_return = self.entry_return;
+    pub(super) fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
@@ -178,8 +210,7 @@ impl JitGen {
         );
     }
 
-    pub(super) fn call_binop(&mut self, func: u64) {
-        let entry_return = self.entry_return;
+    pub(super) fn call_binop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;
@@ -193,7 +224,7 @@ impl JitGen {
     }
 
     fn generic_op(&mut self, ret: u16, func: u64) {
-        self.call_binop(func);
+        self.call_binop(func, self.jit_return);
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
@@ -202,7 +233,7 @@ impl JitGen {
 
     fn generic_op2(&mut self, generic: DestLabel, exit: DestLabel, ret: u16, func: u64) {
         self.jit.bind_label(generic);
-        self.call_binop(func);
+        self.call_binop(func, self.vm_return);
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
@@ -346,7 +377,7 @@ impl JitGen {
     }
 
     ///
-    /// ## stack layout for JIT-ed code (jut after prologue).
+    /// ## stack layout for JIT-ed code (just after prologue).
     ///
     ///~~~text
     ///       +-------------+
@@ -587,7 +618,7 @@ impl JitGen {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(src))];
                     );
-                    self.call_unop(neg_value as _);
+                    self.call_unop(neg_value as _, self.jit_return);
                     monoasm!(self.jit,
                         movq [rbp - (conv(dst))], rax;
                     );
@@ -769,7 +800,7 @@ impl JitGen {
                     let class_version = self.class_version;
                     let entry_find_method = self.entry_find_method;
                     let entry_panic = self.entry_panic;
-                    let entry_return = self.entry_return;
+                    let entry_return = self.jit_return;
                     if recv != 0 {
                         monoasm!(self.jit,
                             cmpq r15, [rip + saved_recv_class];

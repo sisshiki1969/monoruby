@@ -11,6 +11,7 @@ mod vmgen;
 /// Program counter base.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub(crate) struct BcPcBase(*const u64);
 
 impl std::ops::Add<usize> for BcPcBase {
@@ -43,6 +44,15 @@ pub struct BcPc(*const u64);
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
     fn sub(self, rhs: BcPcBase) -> usize {
+        let offset = unsafe { self.0.offset_from(rhs.0) };
+        assert!(offset >= 0);
+        offset as usize
+    }
+}
+
+impl std::ops::Sub<BcPc> for BcPc {
+    type Output = usize;
+    fn sub(self, rhs: BcPc) -> usize {
         let offset = unsafe { self.0.offset_from(rhs.0) };
         assert!(offset >= 0);
         offset as usize
