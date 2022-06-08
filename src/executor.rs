@@ -21,8 +21,7 @@ pub type BuiltinFn = extern "C" fn(&mut Interp, &mut Globals, Arg, usize) -> Val
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
     pub kind: MonorubyErrKind,
-    pub loc: Loc,
-    pub sourceinfo: SourceInfoRef,
+    pub loc: Vec<(Loc, SourceInfoRef)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,58 +36,27 @@ pub enum MonorubyErrKind {
 
 impl MonorubyErr {
     pub fn show_loc(&self) {
-        let loc = self.loc;
-        self.sourceinfo.show_loc(&loc);
+        match self.loc.first() {
+            Some((loc, sourceinfo)) => {
+                sourceinfo.show_loc(loc);
+            }
+            None => {}
+        }
     }
+}
 
+// Parser level errors.
+impl MonorubyErr {
     pub fn parse(error: ParseErr) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::Syntax(error.kind),
-            loc: error.loc,
-            sourceinfo: error.source_info,
+            loc: vec![(error.loc, error.source_info)],
         }
     }
+}
 
-    pub fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        MonorubyErr {
-            kind: MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
-            loc,
-            sourceinfo,
-        }
-    }
-
-    pub fn undefined_local(ident: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        MonorubyErr {
-            kind: MonorubyErrKind::UndefinedLocal(ident),
-            loc,
-            sourceinfo,
-        }
-    }
-
-    pub fn method_not_found(name: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        MonorubyErr {
-            kind: MonorubyErrKind::MethodNotFound(name),
-            loc,
-            sourceinfo,
-        }
-    }
-
-    pub fn wrong_arguments(
-        expected: usize,
-        actual: usize,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> MonorubyErr {
-        MonorubyErr {
-            kind: MonorubyErrKind::WrongArguments(format!(
-                "number of arguments mismatch. expected:{} actual:{}",
-                expected, actual
-            )),
-            loc,
-            sourceinfo,
-        }
-    }
-
+// Bytecode compiler level errors.
+impl MonorubyErr {
     pub fn unsupported_parameter_kind(
         param: ParamKind,
         loc: Loc,
@@ -96,32 +64,62 @@ impl MonorubyErr {
     ) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::Unimplemented(format!("unsupported parameter kind {:?}", param)),
-            loc,
-            sourceinfo,
+            loc: vec![(loc, sourceinfo)],
         }
     }
 
     pub fn unsupported_operator(op: BinOp, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::Unimplemented(format!("unsupported operator {:?}", op)),
-            loc,
-            sourceinfo,
+            loc: vec![(loc, sourceinfo)],
         }
     }
 
     pub fn unsupported_lhs(lhs: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),
-            loc: lhs.loc,
-            sourceinfo,
+            loc: vec![(lhs.loc, sourceinfo)],
         }
     }
 
     pub fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::Unimplemented(format!("unsupported nodekind {:?}", expr.kind)),
-            loc: expr.loc,
-            sourceinfo,
+            loc: vec![(expr.loc, sourceinfo)],
+        }
+    }
+
+    pub fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
+            loc: vec![(loc, sourceinfo)],
+        }
+    }
+
+    pub fn undefined_local(ident: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::UndefinedLocal(ident),
+            loc: vec![(loc, sourceinfo)],
+        }
+    }
+}
+
+// Executor level errors.
+impl MonorubyErr {
+    pub fn method_not_found(name: IdentId) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::MethodNotFound(name),
+            loc: vec![],
+        }
+    }
+
+    pub fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::WrongArguments(format!(
+                "number of arguments mismatch. expected:{} actual:{}",
+                expected, actual
+            )),
+            loc: vec![],
         }
     }
 }
