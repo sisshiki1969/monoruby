@@ -136,22 +136,13 @@ impl Interp {
         let func_id = match globals.get_method(class_id, func_name) {
             Some(id) => id,
             None => {
-                self.error = Some(MonorubyErr::method_not_found(
-                    func_name,
-                    Loc::default(),
-                    self.sourceinfo.clone(),
-                ));
+                self.error = Some(MonorubyErr::method_not_found(func_name));
                 return None;
             }
         };
         let arity = globals.func[func_id].arity();
         if arity != args_len {
-            self.error = Some(MonorubyErr::wrong_arguments(
-                arity,
-                args_len,
-                Loc::default(),
-                self.sourceinfo.clone(),
-            ));
+            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
             return None;
         }
         Some(func_id)
