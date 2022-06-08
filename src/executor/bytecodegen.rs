@@ -345,9 +345,7 @@ enum LoopKind {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IrContext {
     /// bytecode IR.
-    ir: Vec<BcIr>,
-    /// source map.
-    sourcemap: Vec<Loc>,
+    ir: Vec<(BcIr, Loc)>,
     /// destination labels.
     labels: Vec<Option<InstId>>,
     /// loop information.
@@ -358,15 +356,13 @@ impl IrContext {
     pub(crate) fn new() -> Self {
         Self {
             ir: vec![],
-            sourcemap: vec![],
             labels: vec![],
             loops: vec![],
         }
     }
 
     fn push(&mut self, op: BcIr, loc: Loc) {
-        self.ir.push(op);
-        self.sourcemap.push(loc);
+        self.ir.push((op, loc));
     }
 
     /// get new destination label.
@@ -1541,7 +1537,8 @@ impl NormalFuncInfo {
         store: &mut FnStore,
     ) {
         let mut ops = vec![];
-        for (idx, inst) in ir.ir.iter().enumerate() {
+        let mut locs = vec![];
+        for (idx, (inst, loc)) in ir.ir.iter().enumerate() {
             let op = match inst {
                 BcIr::Br(dst) => {
                     let dst = ir.labels[*dst].unwrap().0 as i32;
@@ -1652,8 +1649,9 @@ impl NormalFuncInfo {
                 }
             };
             ops.push(op.to_u64());
+            locs.push(*loc);
         }
         self.bytecode = ops;
-        self.sourcemap = ir.sourcemap;
+        self.sourcemap = locs;
     }
 }
