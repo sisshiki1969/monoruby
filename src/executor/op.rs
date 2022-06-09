@@ -1,6 +1,6 @@
 use super::*;
 
-use num::{BigInt, Integer, ToPrimitive};
+use num::{BigInt, Integer, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Shl, Shr, Sub};
 
@@ -56,15 +56,69 @@ pub(super) extern "C" fn div_values(
     rhs: Value,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.div_floor(rhs)),
-        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).div_floor(rhs)),
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
-        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.div_floor(&BigInt::from(rhs))),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.div_floor(rhs)),
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.div(&(rhs as f64))),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
+        (RV::Integer(lhs), RV::Integer(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::integer(lhs.div_floor(rhs))
+        }
+        (RV::Integer(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::bigint(BigInt::from(lhs).div_floor(rhs))
+        }
+        (RV::Integer(lhs), RV::Float(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::float((lhs as f64).div(&rhs))
+        }
+        (RV::BigInt(lhs), RV::Integer(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
+        }
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::bigint(lhs.div_floor(rhs))
+        }
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::float((lhs.to_f64().unwrap()).div(&rhs))
+        }
+        (RV::Float(lhs), RV::Integer(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::float(lhs.div(&(rhs as f64)))
+        }
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::float(lhs.div(&rhs.to_f64().unwrap()))
+        }
+        (RV::Float(lhs), RV::Float(rhs)) => {
+            if rhs.is_zero() {
+                interp.error = Some(MonorubyErr::divide_by_zero());
+                return None;
+            }
+            Value::float(lhs.div(&rhs))
+        }
         _ => {
             interp.error = Some(MonorubyErr::method_not_found(IdentId::_DIV));
             return None;

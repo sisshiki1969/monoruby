@@ -32,6 +32,7 @@ pub enum MonorubyErrKind {
     Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
+    DivideByZero,
 }
 
 impl MonorubyErr {
@@ -116,6 +117,13 @@ impl MonorubyErr {
                 "number of arguments mismatch. expected:{} actual:{}",
                 expected, actual
             )),
+            loc: vec![],
+        }
+    }
+
+    pub fn divide_by_zero() -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::DivideByZero,
             loc: vec![],
         }
     }

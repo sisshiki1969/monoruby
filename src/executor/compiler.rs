@@ -862,27 +862,27 @@ impl JitGen {
                 BcOp::Br(disp) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      jmp dest;
+                        jmp dest;
                     );
                 }
                 BcOp::CondBr(cond_, disp) => {
                     let cond_ = conv(cond_);
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      movq rax, [rbp - (cond_)];
-                      orq rax, 0x10;
-                      cmpq rax, (FALSE_VALUE);
-                      jne dest;
+                        movq rax, [rbp - (cond_)];
+                        orq rax, 0x10;
+                        cmpq rax, (FALSE_VALUE);
+                        jne dest;
                     );
                 }
                 BcOp::CondNotBr(cond_, disp) => {
                     let cond_ = conv(cond_);
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
-                      cmpq rax, [rbp - (cond_)];
-                      orq rax, 0x10;
-                      cmpq rax, (FALSE_VALUE);
-                      jeq dest;
+                        cmpq rax, [rbp - (cond_)];
+                        orq rax, 0x10;
+                        cmpq rax, (FALSE_VALUE);
+                        jeq dest;
                     );
                 }
             }
