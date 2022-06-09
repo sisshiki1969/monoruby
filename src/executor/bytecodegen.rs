@@ -639,42 +639,11 @@ impl NormalFuncInfo {
                 BcOp::BitXor(dst, lhs, rhs) => eprintln!("%{} = %{} ^ %{}", dst, lhs, rhs),
                 BcOp::Shr(dst, lhs, rhs) => eprintln!("%{} = %{} >> %{}", dst, lhs, rhs),
                 BcOp::Shl(dst, lhs, rhs) => eprintln!("%{} = %{} << %{}", dst, lhs, rhs),
-                BcOp::Eq(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Eq, rhs)
+                BcOp::Cmp(kind, dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, kind, rhs)
                 }
-                BcOp::Ne(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ne, rhs)
-                }
-                BcOp::Gt(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Gt, rhs)
-                }
-                BcOp::Ge(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Ge, rhs)
-                }
-                BcOp::Lt(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Lt, rhs)
-                }
-                BcOp::Le(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, CmpKind::Le, rhs)
-                }
-
-                BcOp::Eqri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Eq, rhs)
-                }
-                BcOp::Neri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ne, rhs)
-                }
-                BcOp::Gtri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Gt, rhs)
-                }
-                BcOp::Geri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Ge, rhs)
-                }
-                BcOp::Ltri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Lt, rhs)
-                }
-                BcOp::Leri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, CmpKind::Le, rhs)
+                BcOp::Cmpri(kind, dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, kind, rhs)
                 }
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
@@ -741,6 +710,7 @@ impl NormalFuncInfo {
         if self.temp == 1 {
             self.gen_ret(&mut ir, None);
         };
+        assert_eq!(0, self.temp);
         Ok(ir)
     }
 
@@ -976,13 +946,13 @@ impl NormalFuncInfo {
                 let succ_pos = ir.new_label();
                 let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
                 ir.gen_condbr(cond, then_pos);
-                self.gen_expr(ctx, ir, id_store, else_, use_value, false)?;
+                self.gen_expr(ctx, ir, id_store, else_, use_value, is_ret)?;
                 ir.gen_br(succ_pos);
                 if use_value {
                     self.pop();
                 }
                 ir.apply_label(then_pos);
-                self.gen_expr(ctx, ir, id_store, then_, use_value, false)?;
+                self.gen_expr(ctx, ir, id_store, then_, use_value, is_ret)?;
                 ir.apply_label(succ_pos);
                 return Ok(());
             }
@@ -1648,27 +1618,13 @@ impl NormalFuncInfo {
                     let dst = self.get_index(dst);
                     let lhs = self.get_index(lhs);
                     let rhs = self.get_index(rhs);
-                    match kind {
-                        CmpKind::Eq => BcOp::Eq(dst, lhs, rhs),
-                        CmpKind::Ne => BcOp::Ne(dst, lhs, rhs),
-                        CmpKind::Gt => BcOp::Gt(dst, lhs, rhs),
-                        CmpKind::Ge => BcOp::Ge(dst, lhs, rhs),
-                        CmpKind::Lt => BcOp::Lt(dst, lhs, rhs),
-                        CmpKind::Le => BcOp::Le(dst, lhs, rhs),
-                    }
+                    BcOp::Cmp(*kind, dst, lhs, rhs)
                 }
                 BcIr::Cmpri(kind, dst, lhs, rhs) => {
                     let dst = self.get_index(dst);
                     let lhs = self.get_index(lhs);
                     let rhs = *rhs;
-                    match kind {
-                        CmpKind::Eq => BcOp::Eqri(dst, lhs, rhs),
-                        CmpKind::Ne => BcOp::Neri(dst, lhs, rhs),
-                        CmpKind::Gt => BcOp::Gtri(dst, lhs, rhs),
-                        CmpKind::Ge => BcOp::Geri(dst, lhs, rhs),
-                        CmpKind::Lt => BcOp::Ltri(dst, lhs, rhs),
-                        CmpKind::Le => BcOp::Leri(dst, lhs, rhs),
-                    }
+                    BcOp::Cmpri(*kind, dst, lhs, rhs)
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),

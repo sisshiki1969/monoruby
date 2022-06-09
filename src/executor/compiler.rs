@@ -528,7 +528,7 @@ impl JitGen {
 
     fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> CodePtr {
         macro_rules! cmp {
-            ($lhs:ident, $rhs:ident, $ret:ident, $cmp:ident, $generic:ident) => {{
+            ($lhs:ident, $rhs:ident, $ret:ident, $set:ident, $generic:ident) => {{
                 let generic = self.jit.label();
                 let exit = self.jit.label();
                 self.load_binary_args($lhs, $rhs);
@@ -538,7 +538,7 @@ impl JitGen {
                     // fastpath
                     xorq rax,rax;
                     cmpq rdi, rsi;
-                    $cmp rax;
+                    $set rax;
                     shlq rax, 3;
                     orq rax, (FALSE_VALUE);
                     jmp exit;
@@ -713,18 +713,22 @@ impl JitGen {
                     self.guard_rdi_rsi_fixnum(generic);
                     self.generic_shl(generic, exit, ret);
                 }
-                BcOp::Eq(ret, lhs, rhs) => cmp!(lhs, rhs, ret, seteq, cmp_eq_values),
-                BcOp::Ne(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setne, cmp_ne_values),
-                BcOp::Ge(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setge, cmp_ge_values),
-                BcOp::Gt(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setgt, cmp_gt_values),
-                BcOp::Le(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setle, cmp_le_values),
-                BcOp::Lt(ret, lhs, rhs) => cmp!(lhs, rhs, ret, setlt, cmp_lt_values),
-                BcOp::Eqri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, seteq, cmp_eq_values),
-                BcOp::Neri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, setne, cmp_ne_values),
-                BcOp::Geri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, setge, cmp_ge_values),
-                BcOp::Gtri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, setgt, cmp_gt_values),
-                BcOp::Leri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, setle, cmp_le_values),
-                BcOp::Ltri(ret, lhs, rhs) => cmp_ri!(lhs, rhs, ret, setlt, cmp_lt_values),
+                BcOp::Cmp(kind, ret, lhs, rhs) => match kind {
+                    CmpKind::Eq => cmp!(lhs, rhs, ret, seteq, cmp_eq_values),
+                    CmpKind::Ne => cmp!(lhs, rhs, ret, setne, cmp_ne_values),
+                    CmpKind::Ge => cmp!(lhs, rhs, ret, setge, cmp_ge_values),
+                    CmpKind::Gt => cmp!(lhs, rhs, ret, setgt, cmp_gt_values),
+                    CmpKind::Le => cmp!(lhs, rhs, ret, setle, cmp_le_values),
+                    CmpKind::Lt => cmp!(lhs, rhs, ret, setlt, cmp_lt_values),
+                },
+                BcOp::Cmpri(kind, ret, lhs, rhs) => match kind {
+                    CmpKind::Eq => cmp_ri!(lhs, rhs, ret, seteq, cmp_eq_values),
+                    CmpKind::Ne => cmp_ri!(lhs, rhs, ret, setne, cmp_ne_values),
+                    CmpKind::Ge => cmp_ri!(lhs, rhs, ret, setge, cmp_ge_values),
+                    CmpKind::Gt => cmp_ri!(lhs, rhs, ret, setgt, cmp_gt_values),
+                    CmpKind::Le => cmp_ri!(lhs, rhs, ret, setle, cmp_le_values),
+                    CmpKind::Lt => cmp_ri!(lhs, rhs, ret, setlt, cmp_lt_values),
+                },
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,
                       movq rax, [rbp - (conv(src))];

@@ -76,30 +76,10 @@ pub(super) enum BcOp {
     Shr(u16, u16, u16),
     /// shl(%ret, %lhs, %rhs)
     Shl(u16, u16, u16),
-    /// eq(%ret, %lhs, %rhs)
-    Eq(u16, u16, u16),
-    /// ne(%ret, %lhs, %rhs)
-    Ne(u16, u16, u16),
-    /// lt(%ret, %lhs, %rhs)
-    Lt(u16, u16, u16),
-    /// le(%ret, %lhs, %rhs)
-    Le(u16, u16, u16),
-    /// gt(%ret, %lhs, %rhs)
-    Gt(u16, u16, u16),
-    /// ge(%ret, %lhs, %rhs)
-    Ge(u16, u16, u16),
-    /// eqri(%ret, %lhs, rhs: i16)
-    Eqri(u16, u16, i16),
-    /// neri(%ret, %lhs, rhs: i16)
-    Neri(u16, u16, i16),
-    /// ltri(%ret, %lhs, rhs: i16)
-    Ltri(u16, u16, i16),
-    /// leri(%ret, %lhs, rhs: i16)
-    Leri(u16, u16, i16),
-    /// gtri(%ret, %lhs, rhs: i16)
-    Gtri(u16, u16, i16),
-    /// geri(%ret, %lhs, rhs: i16)
-    Geri(u16, u16, i16),
+    /// cmp(%ret, %lhs, %rhs)
+    Cmp(CmpKind, u16, u16, u16),
+    /// cmpri(%ret, %lhs, rhs: i16)
+    Cmpri(CmpKind, u16, u16, i16),
     /// return(%ret)
     Ret(u16),
     /// move(%dst, %src)
@@ -163,20 +143,10 @@ impl BcOp {
             Sub(op1, op2, op3) => enc_www(131, *op1, *op2, *op3),
             Mul(op1, op2, op3) => enc_www(132, *op1, *op2, *op3),
             Div(op1, op2, op3) => enc_www(133, *op1, *op2, *op3),
-            Eq(op1, op2, op3) => enc_www(134, *op1, *op2, *op3),
-            Ne(op1, op2, op3) => enc_www(135, *op1, *op2, *op3),
-            Lt(op1, op2, op3) => enc_www(136, *op1, *op2, *op3),
-            Le(op1, op2, op3) => enc_www(137, *op1, *op2, *op3),
-            Gt(op1, op2, op3) => enc_www(138, *op1, *op2, *op3),
-            Ge(op1, op2, op3) => enc_www(139, *op1, *op2, *op3),
+            Cmp(kind, op1, op2, op3) => enc_www(134 + *kind as u16, *op1, *op2, *op3),
             Addri(op1, op2, op3) => enc_wwsw(140, *op1, *op2, *op3),
             Subri(op1, op2, op3) => enc_wwsw(141, *op1, *op2, *op3),
-            Eqri(op1, op2, op3) => enc_wwsw(142, *op1, *op2, *op3),
-            Neri(op1, op2, op3) => enc_wwsw(143, *op1, *op2, *op3),
-            Ltri(op1, op2, op3) => enc_wwsw(144, *op1, *op2, *op3),
-            Leri(op1, op2, op3) => enc_wwsw(145, *op1, *op2, *op3),
-            Gtri(op1, op2, op3) => enc_wwsw(146, *op1, *op2, *op3),
-            Geri(op1, op2, op3) => enc_wwsw(147, *op1, *op2, *op3),
+            Cmpri(kind, op1, op2, op3) => enc_wwsw(142 + *kind as u16, *op1, *op2, *op3),
             Ret(op1) => enc_w(148, *op1),
             Mov(op1, op2) => enc_ww(149, *op1, *op2),
             BitOr(op1, op2, op3) => enc_www(150, *op1, *op2, *op3),
@@ -212,20 +182,20 @@ impl BcOp {
                 131 => Self::Sub(op1, op2, op3),
                 132 => Self::Mul(op1, op2, op3),
                 133 => Self::Div(op1, op2, op3),
-                134 => Self::Eq(op1, op2, op3),
-                135 => Self::Ne(op1, op2, op3),
-                136 => Self::Lt(op1, op2, op3),
-                137 => Self::Le(op1, op2, op3),
-                138 => Self::Gt(op1, op2, op3),
-                139 => Self::Ge(op1, op2, op3),
+                134 => Self::Cmp(CmpKind::Eq, op1, op2, op3),
+                135 => Self::Cmp(CmpKind::Ne, op1, op2, op3),
+                136 => Self::Cmp(CmpKind::Lt, op1, op2, op3),
+                137 => Self::Cmp(CmpKind::Le, op1, op2, op3),
+                138 => Self::Cmp(CmpKind::Gt, op1, op2, op3),
+                139 => Self::Cmp(CmpKind::Ge, op1, op2, op3),
                 140 => Self::Addri(op1, op2, op3 as i16),
                 141 => Self::Subri(op1, op2, op3 as i16),
-                142 => Self::Eqri(op1, op2, op3 as i16),
-                143 => Self::Neri(op1, op2, op3 as i16),
-                144 => Self::Ltri(op1, op2, op3 as i16),
-                145 => Self::Leri(op1, op2, op3 as i16),
-                146 => Self::Gtri(op1, op2, op3 as i16),
-                147 => Self::Geri(op1, op2, op3 as i16),
+                142 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16),
+                143 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16),
+                144 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16),
+                145 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16),
+                146 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16),
+                147 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16),
                 148 => Self::Ret(op1),
                 149 => Self::Mov(op1, op2),
                 150 => Self::BitOr(op1, op2, op3),
@@ -242,12 +212,12 @@ impl BcOp {
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum CmpKind {
-    Eq,
-    Ne,
-    Ge,
-    Gt,
-    Le,
-    Lt,
+    Eq = 0,
+    Ne = 1,
+    Lt = 2,
+    Le = 3,
+    Gt = 4,
+    Ge = 5,
 }
 
 impl std::fmt::Debug for CmpKind {
