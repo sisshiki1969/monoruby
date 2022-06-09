@@ -7,7 +7,7 @@ use crate::alloc::{Allocator, GC};
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
-                              //const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
+const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 const FLOAT_MASK1: u64 = !(0b0110u64 << 60);
 const FLOAT_MASK2: u64 = 0b0100u64 << 60;
 
@@ -71,6 +71,8 @@ impl Value {
             FLOAT_CLASS
         } else if !self.is_packed_value() {
             self.rvalue().class()
+        } else if self.is_packed_symbol() {
+            SYMBOL_CLASS
         } else {
             match self.0.get() {
                 NIL_VALUE => NIL_CLASS,
@@ -171,6 +173,10 @@ impl Value {
         RValue::new_bytes(b).pack()
     }
 
+    pub fn symbol(id: IdentId) -> Self {
+        Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
+    }
+
     pub fn unpack(&self) -> RV {
         if let Some(i) = self.as_fixnum() {
             RV::Integer(i)
@@ -184,6 +190,8 @@ impl Value {
                 ObjKind::Bytes(b) => RV::String(b),
                 _ => RV::Object(rvalue),
             }
+        } else if self.is_packed_symbol() {
+            RV::Symbol(self.as_packed_symbol())
         } else {
             match self.0.get() {
                 NIL_VALUE => RV::Nil,
@@ -239,6 +247,14 @@ impl Value {
         }
     }
 
+    fn is_packed_symbol(&self) -> bool {
+        self.get() & 0xff == TAG_SYMBOL
+    }
+
+    fn as_packed_symbol(&self) -> IdentId {
+        IdentId::from((self.get() >> 32) as u32)
+    }
+
     /// Get reference of RValue from `self`.
     ///
     /// return None if `self` was not a packed value.
@@ -261,10 +277,6 @@ impl Value {
     /*#[inline(always)]
     fn is_packed_num(&self) -> bool {
         self.0.get() & 0b11 != 0
-    }
-
-    pub fn pack(&self) -> u64 {
-        self.0.get()
     }*/
 }
 
@@ -275,6 +287,7 @@ pub enum RV<'a> {
     Integer(i64),
     BigInt(&'a BigInt),
     Float(f64),
+    Symbol(IdentId),
     String(&'a Vec<u8>),
     Object(&'a RValue),
 }
@@ -287,6 +300,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Integer(n) => write!(f, "Integer({})", n),
             RV::BigInt(n) => write!(f, "Bignum({})", n),
             RV::Float(n) => write!(f, "{}", n),
+            RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{}\"", s),
                 Err(_) => write!(f, "{:?}", s),
@@ -304,6 +318,7 @@ impl<'a> std::fmt::Display for RV<'a> {
             RV::Integer(n) => write!(f, "{}", n),
             RV::BigInt(n) => write!(f, "{}", n),
             RV::Float(n) => write!(f, "{}", n),
+            RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "{}", s),
                 Err(_) => write!(f, "{:?}", s),

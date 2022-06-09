@@ -593,7 +593,13 @@ impl JitGen {
                       movq [rbp - (conv(ret))], (i);
                     );
                 }
-                BcOp::Const(ret, id) => {
+                BcOp::Symbol(ret, id) => {
+                    let i = Value::symbol(id).get();
+                    monoasm!(self.jit,
+                      movq [rbp - (conv(ret))], (i);
+                    );
+                }
+                BcOp::Literal(ret, id) => {
                     let v = store.get_literal(id);
                     if v.is_packed_value() {
                         monoasm!(self.jit,

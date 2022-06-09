@@ -162,12 +162,12 @@ impl FnStore {
         MethodDefId(id as u32)
     }
 
-    /// get a constant.
+    /// get a value of literal.
     pub(super) fn get_literal(&self, id: u32) -> Value {
         self.literals[id as usize]
     }
 
-    /// register a new constant.
+    /// register a new literal.
     fn new_literal(&mut self, val: Value) -> u32 {
         let constants = self.literals.len();
         self.literals.push(val);
@@ -212,8 +212,8 @@ impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId, id_store: &mut IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
-        let ir = info.compile_ast(self)?;
-        info.ir_to_bytecode(ir, id_store, self);
+        let ir = info.compile_ast(self, id_store)?;
+        info.ir_to_bytecode(ir, self);
         #[cfg(feature = "emit-bc")]
         info.dump(id_store, self);
         let regs = info.total_reg_num();
@@ -508,7 +508,7 @@ impl NormalFuncInfo {
             None => self.push().into(),
         };
         let id = ctx.new_literal(v);
-        ir.push(BcIr::Const(reg, id), Loc::default());
+        ir.push(BcIr::Literal(reg, id), Loc::default());
     }
 
     fn gen_integer(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, i: i64) {
@@ -525,6 +525,14 @@ impl NormalFuncInfo {
 
     fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
         self.gen_literal(ctx, ir, dst, Value::float(f));
+    }
+
+    fn gen_symbol(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, sym: IdentId) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => self.push().into(),
+        };
+        ir.push(BcIr::Symbol(reg, sym), Loc::default());
     }
 
     fn gen_string(
@@ -587,7 +595,7 @@ impl NormalFuncInfo {
         self.gen_mov(ir, lhs.into(), rhs);
     }
 
-    fn dump(&self, globals: &IdentifierTable, store: &FnStore) {
+    fn dump(&self, id_store: &IdentifierTable, store: &FnStore) {
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?} bc:{:?}",
@@ -612,7 +620,8 @@ impl NormalFuncInfo {
                     eprintln!("condnbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
-                BcOp::Const(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
+                BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
+                BcOp::Literal(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
                 BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
@@ -678,7 +687,7 @@ impl NormalFuncInfo {
                         len,
                         cache: _,
                     } = store[id];
-                    let name = globals.get_name(name);
+                    let name = id_store.get_name(name);
                     match ret {
                         0 => {
                             eprintln!("_ = %{}.call {}(%{}; {})", recv, name, args, len)
@@ -690,7 +699,7 @@ impl NormalFuncInfo {
                 }
                 BcOp::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
-                    let name = globals.get_name(name);
+                    let name = id_store.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
                 BcOp::ConcatStr(ret, args, len) => match ret {
@@ -721,10 +730,14 @@ pub fn is_local(node: &Node) -> Option<&String> {
 }
 
 impl NormalFuncInfo {
-    fn compile_ast(&mut self, ctx: &mut FnStore) -> Result<IrContext> {
+    fn compile_ast(
+        &mut self,
+        ctx: &mut FnStore,
+        id_store: &mut IdentifierTable,
+    ) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
-        self.gen_expr(ctx, &mut ir, ast, true, true)?;
+        self.gen_expr(ctx, &mut ir, id_store, ast, true, true)?;
         if self.temp == 1 {
             self.gen_ret(&mut ir, None);
         };
@@ -735,6 +748,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
         use_value: bool,
@@ -745,17 +759,17 @@ impl NormalFuncInfo {
             None => Node::new_nil(Loc(0, 0)),
         };
         for node in nodes.into_iter() {
-            self.gen_expr(ctx, ir, node, false, false)?;
+            self.gen_expr(ctx, ir, id_store, node, false, false)?;
         }
         match ret {
             Some(ret) => {
-                self.gen_store_expr(ctx, ir, ret, last, use_value)?;
+                self.gen_store_expr(ctx, ir, id_store, ret, last, use_value)?;
                 if is_ret {
                     self.gen_ret(ir, ret.into());
                 }
             }
             None => {
-                self.gen_expr(ctx, ir, last, use_value, is_ret)?;
+                self.gen_expr(ctx, ir, id_store, last, use_value, is_ret)?;
             }
         }
         Ok(())
@@ -766,9 +780,10 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcTemp> {
-        self.gen_expr(ctx, ir, expr, true, false)?;
+        self.gen_expr(ctx, ir, id_store, expr, true, false)?;
         Ok(self.pop())
     }
 
@@ -777,6 +792,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         op: BinOp,
         lhs: Node,
         rhs: Node,
@@ -784,21 +800,21 @@ impl NormalFuncInfo {
         loc: Loc,
     ) -> Result<()> {
         match op {
-            BinOp::Add => self.gen_add(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Sub => self.gen_sub(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Mul => self.gen_mul(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Div => self.gen_div(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::BitOr => self.gen_bitor(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::BitAnd => self.gen_bitand(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::BitXor => self.gen_bitxor(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Shr => self.gen_shr(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Shl => self.gen_shl(ctx, ir, dst, lhs, rhs, loc)?,
-            BinOp::Eq => self.gen_cmp(ctx, ir, dst, CmpKind::Eq, lhs, rhs, loc)?,
-            BinOp::Ne => self.gen_cmp(ctx, ir, dst, CmpKind::Ne, lhs, rhs, loc)?,
-            BinOp::Ge => self.gen_cmp(ctx, ir, dst, CmpKind::Ge, lhs, rhs, loc)?,
-            BinOp::Gt => self.gen_cmp(ctx, ir, dst, CmpKind::Gt, lhs, rhs, loc)?,
-            BinOp::Le => self.gen_cmp(ctx, ir, dst, CmpKind::Le, lhs, rhs, loc)?,
-            BinOp::Lt => self.gen_cmp(ctx, ir, dst, CmpKind::Lt, lhs, rhs, loc)?,
+            BinOp::Add => self.gen_add(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Sub => self.gen_sub(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Mul => self.gen_mul(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Div => self.gen_div(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::BitOr => self.gen_bitor(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::BitAnd => self.gen_bitand(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::BitXor => self.gen_bitxor(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Shr => self.gen_shr(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Shl => self.gen_shl(ctx, ir, id_store, dst, lhs, rhs, loc)?,
+            BinOp::Eq => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Eq, lhs, rhs, loc)?,
+            BinOp::Ne => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Ne, lhs, rhs, loc)?,
+            BinOp::Ge => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Ge, lhs, rhs, loc)?,
+            BinOp::Gt => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Gt, lhs, rhs, loc)?,
+            BinOp::Le => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Le, lhs, rhs, loc)?,
+            BinOp::Lt => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Lt, lhs, rhs, loc)?,
             _ => {
                 return Err(MonorubyErr::unsupported_operator(
                     op,
@@ -815,6 +831,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         expr: Node,
         use_value: bool,
         is_ret: bool,
@@ -837,6 +854,10 @@ impl NormalFuncInfo {
             NodeKind::Integer(i) => {
                 self.gen_integer(ctx, ir, None, i);
             }
+            NodeKind::Symbol(sym) => {
+                let sym = id_store.get_ident_id_from_string(sym);
+                self.gen_symbol(ir, None, sym);
+            }
             NodeKind::Bignum(bigint) => self.gen_bigint(ctx, ir, None, bigint),
             NodeKind::Float(f) => self.gen_float(ctx, ir, None, f),
             NodeKind::String(s) => self.gen_string(ctx, ir, None, s.into_bytes()),
@@ -846,7 +867,7 @@ impl NormalFuncInfo {
                     //NodeKind::Integer(i) => self.gen_integer(ctx, ir, None, -i),
                     NodeKind::Float(f) => self.gen_float(ctx, ir, None, -f),
                     _ => {
-                        self.gen_expr(ctx, ir, rhs, true, false)?;
+                        self.gen_expr(ctx, ir, id_store, rhs, true, false)?;
                         self.gen_neg(ir, None, loc);
                     }
                 };
@@ -856,7 +877,7 @@ impl NormalFuncInfo {
                     NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
                 };
-                self.gen_binop(ctx, ir, op, lhs, rhs, Some(local), loc)?;
+                self.gen_binop(ctx, ir, id_store, op, lhs, rhs, Some(local), loc)?;
                 if is_ret {
                     self.gen_ret(ir, Some(local));
                 } else if use_value {
@@ -865,7 +886,7 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, ir, op, lhs, rhs, None, loc)?
+                self.gen_binop(ctx, ir, id_store, op, lhs, rhs, None, loc)?
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -874,10 +895,10 @@ impl NormalFuncInfo {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                             let local = self.find_local(&lhs);
                             if is_ret {
-                                self.gen_store_expr(ctx, ir, local, rhs, false)?;
+                                self.gen_store_expr(ctx, ir, id_store, local, rhs, false)?;
                                 self.gen_ret(ir, Some(local));
                             } else {
-                                self.gen_store_expr(ctx, ir, local, rhs, use_value)?;
+                                self.gen_store_expr(ctx, ir, id_store, local, rhs, use_value)?;
                             }
                         }
                         _ => {
@@ -885,7 +906,7 @@ impl NormalFuncInfo {
                         }
                     }
                 } else {
-                    self.gen_mul_assign(ctx, ir, mlhs, mrhs, use_value, is_ret)?;
+                    self.gen_mul_assign(ctx, ir, id_store, mlhs, mrhs, use_value, is_ret)?;
                 }
                 return Ok(());
             }
@@ -904,16 +925,17 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
                     None
                 };
+                let method = id_store.get_ident_id_from_string(method);
                 if receiver.kind == NodeKind::SelfValue {
                     ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
                 } else {
-                    self.gen_expr(ctx, ir, receiver, true, false)?;
+                    self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
                     let recv = self.pop().into();
                     ir.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
                 }
@@ -924,22 +946,24 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
                     None
                 };
+                let method = id_store.get_ident_id_from_string(method);
                 ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
                 return Ok(());
             }
             NodeKind::Ident(method) => {
-                let (arg, len) = self.check_fast_call_inner(ctx, ir, vec![])?;
+                let (arg, len) = self.check_fast_call_inner(ctx, ir, id_store, vec![])?;
                 let ret = if use_value {
                     Some(self.push().into())
                 } else {
                     None
                 };
+                let method = id_store.get_ident_id_from_string(method);
                 ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
                 return Ok(());
             }
@@ -950,15 +974,15 @@ impl NormalFuncInfo {
             } => {
                 let then_pos = ir.new_label();
                 let succ_pos = ir.new_label();
-                let cond = self.gen_temp_expr(ctx, ir, cond)?.into();
+                let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
                 ir.gen_condbr(cond, then_pos);
-                self.gen_expr(ctx, ir, else_, use_value, false)?;
+                self.gen_expr(ctx, ir, id_store, else_, use_value, false)?;
                 ir.gen_br(succ_pos);
                 if use_value {
                     self.pop();
                 }
                 ir.apply_label(then_pos);
-                self.gen_expr(ctx, ir, then_, use_value, false)?;
+                self.gen_expr(ctx, ir, id_store, then_, use_value, false)?;
                 ir.apply_label(succ_pos);
                 return Ok(());
             }
@@ -968,14 +992,14 @@ impl NormalFuncInfo {
                 cond_op,
             } => {
                 assert!(cond_op);
-                return self.gen_while(ctx, ir, cond, body, use_value);
+                return self.gen_while(ctx, ir, id_store, cond, body, use_value);
             }
             NodeKind::For {
                 param,
                 box iter,
                 body,
             } => {
-                return self.gen_for(ctx, ir, param, iter, body, use_value);
+                return self.gen_for(ctx, ir, id_store, param, iter, body, use_value);
             }
             NodeKind::Break(box val) => {
                 let (_kind, break_pos, ret_reg) = match ir.loops.last() {
@@ -986,7 +1010,7 @@ impl NormalFuncInfo {
                 };
                 match ret_reg {
                     Some(reg) => {
-                        let temp = self.gen_temp_expr(ctx, ir, val)?;
+                        let temp = self.gen_temp_expr(ctx, ir, id_store, val)?;
                         self.gen_mov(ir, reg, temp.into())
                     }
                     None => {}
@@ -999,13 +1023,13 @@ impl NormalFuncInfo {
                     let local = self.load_local(local, expr.loc)?;
                     self.gen_ret(ir, Some(local));
                 } else {
-                    self.gen_expr(ctx, ir, expr, true, false)?;
+                    self.gen_expr(ctx, ir, id_store, expr, true, false)?;
                     self.gen_ret(ir, None);
                 }
                 return Ok(());
             }
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, ir, nodes, None, use_value, is_ret)
+                return self.gen_comp_stmts(ctx, ir, id_store, nodes, None, use_value, is_ret)
             }
             NodeKind::Begin {
                 box body,
@@ -1014,11 +1038,11 @@ impl NormalFuncInfo {
                 ensure: None,
             } => {
                 assert!(rescue.len() == 0);
-                self.gen_expr(ctx, ir, body, use_value, is_ret)?;
+                self.gen_expr(ctx, ir, id_store, body, use_value, is_ret)?;
                 return Ok(());
             }
             NodeKind::MethodDef(name, params, box node, _lv) => {
-                self.gen_method_def(ctx, ir, name, params, node)?;
+                self.gen_method_def(ctx, ir, id_store, name, params, node)?;
                 if use_value {
                     // TODO: This should be a Symbol.
                     self.gen_nil(ir, None);
@@ -1029,7 +1053,7 @@ impl NormalFuncInfo {
                 let len = nodes.len();
                 let arg = self.next_reg();
                 for expr in nodes {
-                    self.gen_expr(ctx, ir, expr, true, false)?;
+                    self.gen_expr(ctx, ir, id_store, expr, true, false)?;
                 }
                 self.temp -= len as u16;
                 let ret = match use_value {
@@ -1051,6 +1075,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         local: BcLocal,
         rhs: Node,
         use_value: bool,
@@ -1061,6 +1086,10 @@ impl NormalFuncInfo {
             NodeKind::Bool(b) => self.gen_literal(ctx, ir, Some(local), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(ir, local.into(), BcReg::Self_),
             NodeKind::Integer(i) => self.gen_integer(ctx, ir, Some(local), i),
+            NodeKind::Symbol(sym) => {
+                let sym = id_store.get_ident_id_from_string(sym);
+                self.gen_symbol(ir, Some(local), sym)
+            }
             NodeKind::Bignum(bigint) => self.gen_bigint(ctx, ir, Some(local), bigint),
             NodeKind::Float(f) => self.gen_float(ctx, ir, Some(local), f),
             NodeKind::String(s) => self.gen_string(ctx, ir, Some(local), s.into_bytes()),
@@ -1070,13 +1099,13 @@ impl NormalFuncInfo {
                     NodeKind::Integer(i) => self.gen_integer(ctx, ir, Some(local), -i),
                     NodeKind::Float(f) => self.gen_float(ctx, ir, Some(local), -f),
                     _ => {
-                        self.gen_store_expr(ctx, ir, local, rhs, false)?;
+                        self.gen_store_expr(ctx, ir, id_store, local, rhs, false)?;
                         self.gen_neg(ir, Some(local), loc);
                     }
                 };
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, ir, op, lhs, rhs, Some(local), loc)?
+                self.gen_binop(ctx, ir, id_store, op, lhs, rhs, Some(local), loc)?
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -1084,7 +1113,7 @@ impl NormalFuncInfo {
                     match lhs.kind {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                             let src = self.find_local(&lhs);
-                            self.gen_store_expr(ctx, ir, src, rhs, false)?;
+                            self.gen_store_expr(ctx, ir, id_store, src, rhs, false)?;
                             self.gen_mov(ir, local.into(), src.into());
                         }
                         _ => {
@@ -1092,7 +1121,7 @@ impl NormalFuncInfo {
                         }
                     }
                 } else {
-                    self.gen_mul_assign(ctx, ir, mlhs, mrhs, true, false)?;
+                    self.gen_mul_assign(ctx, ir, id_store, mlhs, mrhs, true, false)?;
                     let temp = self.pop().into();
                     self.gen_mov(ir, local.into(), temp);
                 }
@@ -1107,14 +1136,15 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
+                let method = id_store.get_ident_id_from_string(method);
                 if receiver.kind == NodeKind::SelfValue {
                     ir.push(
                         BcIr::MethodCall(BcReg::Self_, method, Some(local.into()), arg, len),
                         loc,
                     );
                 } else {
-                    self.gen_expr(ctx, ir, receiver, true, false)?;
+                    self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
                     let recv = self.pop().into();
                     ir.push(
                         BcIr::MethodCall(recv, method, Some(local.into()), arg, len),
@@ -1127,17 +1157,18 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, arglist)?;
+                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
+                let method = id_store.get_ident_id_from_string(method);
                 let inst = BcIr::MethodCall(BcReg::Self_, method, Some(local.into()), arg, len);
                 ir.push(inst, loc);
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, ir, nodes, Some(local), use_value, false)
+                return self.gen_comp_stmts(ctx, ir, id_store, nodes, Some(local), use_value, false)
             }
             _ => {
                 let ret = self.next_reg();
-                self.gen_expr(ctx, ir, rhs, true, false)?;
+                self.gen_expr(ctx, ir, id_store, rhs, true, false)?;
                 self.gen_mov(ir, local.into(), ret.into());
                 if !use_value {
                     self.pop();
@@ -1155,6 +1186,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         name: String,
         params: Vec<FormalParam>,
         node: Node,
@@ -1175,6 +1207,7 @@ impl NormalFuncInfo {
         let func_id =
             ctx.functions
                 .add_normal_func(Some(name.clone()), args, node, self.sourceinfo.clone());
+        let name = id_store.get_ident_id_from_string(name);
         ir.push(BcIr::MethodDef(name, func_id), Loc::default());
         Ok(())
     }
@@ -1183,11 +1216,12 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<BcTemp> {
         let arg = self.next_reg();
         for arg in args {
-            self.gen_expr(ctx, ir, arg, true, false)?;
+            self.gen_expr(ctx, ir, id_store, arg, true, false)?;
         }
         Ok(arg)
     }
@@ -1196,23 +1230,25 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
         assert!(arglist.kw_args.len() == 0);
         assert!(arglist.hash_splat.len() == 0);
         assert!(arglist.block.is_none());
         assert!(!arglist.delegate);
-        self.check_fast_call_inner(ctx, ir, arglist.args)
+        self.check_fast_call_inner(ctx, ir, id_store, arglist.args)
     }
 
     fn check_fast_call_inner(
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
         let len = args.len();
-        let arg = self.gen_args(ctx, ir, args)?;
+        let arg = self.gen_args(ctx, ir, id_store, args)?;
         self.temp -= len as u16;
         Ok((arg, len))
     }
@@ -1221,6 +1257,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
         rhs: Node,
@@ -1233,17 +1270,17 @@ impl NormalFuncInfo {
             }
             (Some(lhs), None) => {
                 let lhs = self.find_local(lhs).into();
-                let rhs = self.gen_temp_expr(ctx, ir, rhs)?.into();
+                let rhs = self.gen_temp_expr(ctx, ir, id_store, rhs)?.into();
                 (lhs, rhs)
             }
             (None, Some(rhs)) => {
-                let lhs = self.gen_temp_expr(ctx, ir, lhs)?.into();
+                let lhs = self.gen_temp_expr(ctx, ir, id_store, lhs)?.into();
                 let rhs = self.find_local(rhs).into();
                 (lhs, rhs)
             }
             (None, None) => {
-                self.gen_expr(ctx, ir, lhs, true, false)?;
-                self.gen_expr(ctx, ir, rhs, true, false)?;
+                self.gen_expr(ctx, ir, id_store, lhs, true, false)?;
+                self.gen_expr(ctx, ir, id_store, rhs, true, false)?;
                 let rhs = self.pop().into();
                 let lhs = self.pop().into();
                 (lhs, rhs)
@@ -1260,12 +1297,13 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
     ) -> Result<(BcReg, BcReg)> {
         let lhs = match is_local(&lhs) {
             Some(lhs) => self.find_local(lhs).into(),
-            None => self.gen_temp_expr(ctx, ir, lhs)?.into(),
+            None => self.gen_temp_expr(ctx, ir, id_store, lhs)?.into(),
         };
         let dst = match dst {
             None => self.push().into(),
@@ -1282,12 +1320,13 @@ macro_rules! gen_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 ir: &mut IrContext,
+                id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
             ) -> Result<()> {
-                let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
+                let (dst, lhs, rhs) = self.gen_binary(ctx, ir, id_store, dst, lhs, rhs)?;
                 ir.push(BcIr::$inst(dst, lhs, rhs), loc);
                 Ok(())
             }
@@ -1306,16 +1345,17 @@ macro_rules! gen_ri_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 ir: &mut IrContext,
+                id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
             ) -> Result<()> {
                 if let Some(i) = is_smi(&rhs) {
-                    let (dst, lhs) = self.gen_singular(ctx, ir, dst, lhs)?;
+                    let (dst, lhs) = self.gen_singular(ctx, ir, id_store, dst, lhs)?;
                     ir.push(BcIr::[<$inst ri>](dst, lhs, i), loc);
                 } else {
-                    let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
+                    let (dst, lhs, rhs) = self.gen_binary(ctx, ir, id_store, dst, lhs, rhs)?;
                     ir.push(BcIr::$inst(dst, lhs, rhs), loc);
                 }
                 Ok(())
@@ -1346,6 +1386,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         kind: CmpKind,
         lhs: Node,
@@ -1353,10 +1394,10 @@ impl NormalFuncInfo {
         loc: Loc,
     ) -> Result<()> {
         if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(ctx, ir, dst, lhs)?;
+            let (dst, lhs) = self.gen_singular(ctx, ir, id_store, dst, lhs)?;
             ir.push(BcIr::Cmpri(kind, dst, lhs, i), loc);
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(ctx, ir, dst, lhs, rhs)?;
+            let (dst, lhs, rhs) = self.gen_binary(ctx, ir, id_store, dst, lhs, rhs)?;
             ir.push(BcIr::Cmp(kind, dst, lhs, rhs), loc);
         }
         Ok(())
@@ -1366,6 +1407,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         mlhs: Vec<Node>,
         mrhs: Vec<Node>,
         use_value: bool,
@@ -1376,7 +1418,7 @@ impl NormalFuncInfo {
         let mut temp_reg = self.next_reg();
         // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
-            self.gen_expr(ctx, ir, rhs, true, false)?;
+            self.gen_expr(ctx, ir, id_store, rhs, true, false)?;
         }
         // Assign values to left-hand side expressions.
         for lhs in mlhs {
@@ -1404,6 +1446,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         param: Vec<String>,
         iter: Node,
         body: BlockInfo,
@@ -1430,8 +1473,8 @@ impl NormalFuncInfo {
         {
             let loop_entry = ir.new_label();
             let loop_exit = ir.new_label();
-            self.gen_store_expr(ctx, ir, counter, start, false)?;
-            self.gen_temp_expr(ctx, ir, end)?;
+            self.gen_store_expr(ctx, ir, id_store, counter, start, false)?;
+            self.gen_temp_expr(ctx, ir, id_store, end)?;
             let end = self.push().into();
 
             ir.apply_label(loop_entry);
@@ -1440,7 +1483,7 @@ impl NormalFuncInfo {
             ir.gen_condbr(dst, loop_exit);
             self.pop();
 
-            self.gen_expr(ctx, ir, *body.body, false, false)?;
+            self.gen_expr(ctx, ir, id_store, *body.body, false, false)?;
 
             ir.push(BcIr::Addri(counter.into(), counter.into(), 1), loc);
             ir.gen_br(loop_entry);
@@ -1463,6 +1506,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
         cond: Node,
         body: Node,
         use_value: bool,
@@ -1479,9 +1523,9 @@ impl NormalFuncInfo {
             },
         ));
         ir.apply_label(cond_pos);
-        let cond = self.gen_temp_expr(ctx, ir, cond)?.into();
+        let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
         ir.gen_condnotbr(cond, succ_pos);
-        self.gen_expr(ctx, ir, body, false, false)?;
+        self.gen_expr(ctx, ir, id_store, body, false, false)?;
         ir.gen_br(cond_pos);
         ir.apply_label(succ_pos);
 
@@ -1527,12 +1571,7 @@ impl NormalFuncInfo {
         CallsiteId(id as u32)
     }
 
-    pub(crate) fn ir_to_bytecode(
-        &mut self,
-        ir: IrContext,
-        id_store: &mut IdentifierTable,
-        store: &mut FnStore,
-    ) {
+    pub(crate) fn ir_to_bytecode(&mut self, ir: IrContext, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in ir.ir.iter().enumerate() {
@@ -1550,7 +1589,8 @@ impl NormalFuncInfo {
                     BcOp::CondNotBr(self.get_index(reg), dst - idx as i32 - 1)
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
-                BcIr::Const(reg, num) => BcOp::Const(self.get_index(reg), *num),
+                BcIr::Symbol(reg, name) => BcOp::Symbol(self.get_index(reg), *name),
+                BcIr::Literal(reg, num) => BcOp::Literal(self.get_index(reg), *num),
                 BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
                 BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
                 BcIr::Add(dst, lhs, rhs) => BcOp::Add(
@@ -1633,14 +1673,12 @@ impl NormalFuncInfo {
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
                 BcIr::MethodCall(recv, name, ret, args, len) => {
-                    let name_id = id_store.get_ident_id(name);
-                    let id = self.add_callsite(store, *ret, name_id, *args, *len);
+                    let id = self.add_callsite(store, *ret, *name, *args, *len);
                     let recv = self.get_index(recv);
                     BcOp::MethodCall(recv, id)
                 }
                 BcIr::MethodDef(name, func_id) => {
-                    let name_id = id_store.get_ident_id(name);
-                    BcOp::MethodDef(store.add_method_def(name_id, *func_id))
+                    BcOp::MethodDef(store.add_method_def(*name, *func_id))
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let ret = ret.map_or(0, |ret| self.get_index(&ret));

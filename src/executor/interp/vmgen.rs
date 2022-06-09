@@ -80,8 +80,8 @@ extern "C" fn get_func_data(
     data.pc = globals.func[func_id].inst_pc();
 }
 
-extern "C" fn get_constant(_interp: &mut Interp, globals: &mut Globals, const_id: u32) -> Value {
-    Value::dup(globals.func.get_literal(const_id))
+extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
+    Value::dup(globals.func.get_literal(literal_id))
 }
 
 extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
@@ -194,7 +194,7 @@ impl Interp {
         self.dispatch[4] = self.vm_condbr(branch);
         self.dispatch[5] = self.vm_condnotbr(branch);
         self.dispatch[6] = self.vm_integer();
-        self.dispatch[7] = self.vm_constant();
+        self.dispatch[7] = self.vm_literal();
         self.dispatch[8] = self.vm_nil();
 
         self.dispatch[129] = self.vm_neg();
@@ -468,14 +468,14 @@ impl Interp {
         label
     }
 
-    fn vm_constant(&mut self) -> CodePtr {
+    fn vm_literal(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
-            movq rdx, rdi;  // const_id
+            movq rdx, rdi;  // literal_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (get_constant);
+            movq rax, (get_literal);
             call rax;
             movq [r15], rax;
         };
@@ -705,7 +705,7 @@ impl Interp {
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         monoasm! { self.jit_gen.jit,
-            movq rdx, rdi;  // const_id
+            movq rdx, rdi;  // method_def_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (define_method);

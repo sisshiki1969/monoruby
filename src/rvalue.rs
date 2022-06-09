@@ -124,6 +124,7 @@ pub const FALSE_CLASS: u32 = 3;
 pub const INTEGER_CLASS: u32 = 4;
 pub const FLOAT_CLASS: u32 = 5;
 pub const STRING_CLASS: u32 = 6;
+pub const SYMBOL_CLASS: u32 = 7;
 
 impl RVFlag {
     fn new(class: u32) -> Self {

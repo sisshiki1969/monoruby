@@ -9,7 +9,8 @@ pub(super) enum BcIr {
     CondBr(BcReg, usize),
     CondNotBr(BcReg, usize),
     Integer(BcReg, i32),
-    Const(BcReg, u32),
+    Symbol(BcReg, IdentId),
+    Literal(BcReg, u32),
     Nil(BcReg),
     Neg(BcReg, BcReg),                 // ret, src
     Add(BcReg, BcReg, BcReg),          // ret, lhs, rhs
@@ -26,9 +27,9 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, dst, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, dst, lhs, rhs
     Ret(BcReg),
-    Mov(BcReg, BcReg),                                       // dst, offset
-    MethodCall(BcReg, String, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
-    MethodDef(String, FuncId),
+    Mov(BcReg, BcReg),                                        // dst, offset
+    MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
+    MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
 
@@ -45,8 +46,10 @@ pub(super) enum BcOp {
     CondNotBr(u16, i32),
     /// integer(%reg, i32)
     Integer(u16, i32),
-    /// constant(%ret, constant_id)
-    Const(u16, u32),
+    /// Symbol(%reg, IdentId)
+    Symbol(u16, IdentId),
+    /// literal(%ret, literal_id)
+    Literal(u16, u32),
     /// nil(%reg)
     Nil(u16),
     /// negate(%ret, %src)
@@ -151,8 +154,9 @@ impl BcOp {
             CondBr(op1, op2) => enc_wl(4, *op1, *op2 as u32),
             CondNotBr(op1, op2) => enc_wl(5, *op1, *op2 as u32),
             Integer(op1, op2) => enc_wl(6, *op1, *op2 as u32),
-            Const(op1, op2) => enc_wl(7, *op1, *op2),
+            Literal(op1, op2) => enc_wl(7, *op1, *op2),
             Nil(op1) => enc_w(8, *op1),
+            Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
@@ -195,8 +199,9 @@ impl BcOp {
                 4 => Self::CondBr(op1, op2 as i32),
                 5 => Self::CondNotBr(op1, op2 as i32),
                 6 => Self::Integer(op1, op2 as i32),
-                7 => Self::Const(op1, op2),
+                7 => Self::Literal(op1, op2),
                 8 => Self::Nil(op1),
+                9 => Self::Symbol(op1, IdentId::from(op2)),
                 _ => unreachable!(),
             }
         } else {
