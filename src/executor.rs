@@ -41,6 +41,14 @@ impl MonorubyErr {
             sourceinfo.show_loc(loc);
         }
     }
+
+    pub fn show_loc(&self) {
+        if let Some((loc, sourceinfo)) = self.loc.first() {
+            sourceinfo.show_loc(loc);
+        } else {
+            eprintln!("location not defined.");
+        }
+    }
 }
 
 // Parser level errors.

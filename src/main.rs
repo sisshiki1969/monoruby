@@ -46,17 +46,17 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            let _ = exec(&code, args.jit).unwrap();
+            exec(&code, args.jit, std::path::Path::new("REPL"), "eval");
         }
         return;
     }
 
     match args.file {
-        Some(file) => {
-            let mut file = File::open(file).unwrap();
+        Some(file_name) => {
+            let mut file = File::open(file_name.clone()).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            let _ = exec(&code, args.jit).unwrap();
+            exec(&code, args.jit, &std::path::Path::new(&file_name), "eval");
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -84,16 +84,25 @@ fn main() {
     }
 }
 
-fn exec(code: &str, jit: bool) -> Result<(), MonorubyErr> {
+fn exec(code: &str, jit: bool, path: &std::path::Path, context_name: &str) {
     let mut globals = Globals::new();
-    globals.compile_script(code.to_string(), std::path::Path::new("REPL"), "eval")?;
-    if !jit {
-        let interp_val = Interp::eval_toplevel(&mut globals);
-        eprintln!("interp: {:?}", interp_val);
-    } else {
-        let _ = jitcompiler(&mut globals);
+    let mut res = globals
+        .compile_script(code.to_string(), path, context_name)
+        .map(|()| Value::nil());
+    if res.is_ok() {
+        res = if !jit {
+            Interp::eval_toplevel(&mut globals)
+        } else {
+            jitcompiler(&mut globals)
+        };
     }
-    Ok(())
+    match res {
+        Ok(val) => eprintln!("jit({:?}) {:?}", jit, val),
+        Err(err) => {
+            eprintln!("{:?}", err.kind);
+            err.show_loc();
+        }
+    };
 }
 
 fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
@@ -116,7 +125,7 @@ fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
 fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
     all_codes.push(code.to_string());
     if let Err(err) = repl_exec(&all_codes.join(";"), jit_flag) {
-        eprintln!("{:?}", err);
+        eprintln!("{:?}", err.kind);
         err.show_all_loc();
         all_codes.pop();
     };

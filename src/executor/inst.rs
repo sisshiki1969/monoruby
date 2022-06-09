@@ -24,8 +24,8 @@ pub(super) enum BcIr {
     BitXor(BcReg, BcReg, BcReg),       // ret, lhs, rhs
     Shr(BcReg, BcReg, BcReg),          // ret, lhs, rhs
     Shl(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, lhs, rhs
-    Cmpri(CmpKind, BcReg, BcReg, i16), // kind, lhs, rhs
+    Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, dst, lhs, rhs
+    Cmpri(CmpKind, BcReg, BcReg, i16), // kind, dst, lhs, rhs
     Ret(BcReg),
     Mov(BcReg, BcReg),                                        // dst, offset
     MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
