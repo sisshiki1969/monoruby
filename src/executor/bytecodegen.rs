@@ -49,8 +49,8 @@ impl Funcs {
 
     fn add_normal_func(
         &mut self,
-        name: Option<IdentId>,
-        args: Vec<IdentId>,
+        name: Option<String>,
+        args: Vec<String>,
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
@@ -60,10 +60,9 @@ impl Funcs {
         fid
     }
 
-    fn add_builtin_func(&mut self, name_id: IdentId, address: BuiltinFn, arity: usize) -> FuncId {
+    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: usize) -> FuncId {
         let id = self.next_func_id();
-        self.0
-            .push(FuncInfo::new_builtin(id, name_id, address, arity));
+        self.0.push(FuncInfo::new_builtin(id, name, address, arity));
         id
     }
 }
@@ -194,7 +193,7 @@ impl FnStore {
     pub(super) fn compile_script(
         &mut self,
         ast: Node,
-        id_store: &IdentifierTable,
+        id_store: &mut IdentifierTable,
         sourceinfo: SourceInfoRef,
     ) -> Result<()> {
         let mut fid = self
@@ -211,10 +210,10 @@ impl FnStore {
     }
 
     /// Generate bytecode for a function which has *func_id*.
-    fn compile_func(&mut self, func_id: FuncId, id_store: &IdentifierTable) -> Result<()> {
+    fn compile_func(&mut self, func_id: FuncId, id_store: &mut IdentifierTable) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let ir = info.compile_ast(self)?;
-        info.ir_to_bytecode(ir, self);
+        info.ir_to_bytecode(ir, id_store, self);
         #[cfg(feature = "emit-bc")]
         info.dump(id_store, self);
         let regs = info.total_reg_num();
@@ -226,11 +225,11 @@ impl FnStore {
 
     pub(super) fn add_builtin_func(
         &mut self,
-        name_id: IdentId,
+        name: String,
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        self.functions.add_builtin_func(name_id, address, arity)
+        self.functions.add_builtin_func(name, address, arity)
     }
 }
 
@@ -251,7 +250,7 @@ pub struct FuncInfo {
     /// ID of this function.
     id: FuncId,
     /// name of this function.
-    name: Option<IdentId>,
+    name: Option<String>,
     /// arity of this function.
     arity: usize,
     /// address of JIT function.
@@ -265,13 +264,13 @@ pub struct FuncInfo {
 
 impl FuncInfo {
     fn new_normal(
-        name: Option<IdentId>,
+        name: Option<String>,
         func_id: FuncId,
-        args: Vec<IdentId>,
+        args: Vec<String>,
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = NormalFuncInfo::new(func_id, name, args, ast, sourceinfo);
+        let info = NormalFuncInfo::new(func_id, name.clone(), args, ast, sourceinfo);
         Self {
             id: info.id,
             name,
@@ -283,7 +282,7 @@ impl FuncInfo {
         }
     }
 
-    fn new_builtin(id: FuncId, name: IdentId, address: BuiltinFn, arity: usize) -> Self {
+    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
         Self {
             id,
             name: Some(name),
@@ -395,15 +394,15 @@ impl IrContext {
 pub(super) struct NormalFuncInfo {
     /// ID of this function.
     pub(super) id: FuncId,
-    name_id: Option<IdentId>,
+    name: Option<String>,
     /// Bytecode.
     bytecode: Vec<u64>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
-    args: Vec<IdentId>,
+    args: Vec<String>,
     /// local variables.
-    locals: HashMap<IdentId, u16>,
+    locals: HashMap<String, u16>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -416,14 +415,14 @@ pub(super) struct NormalFuncInfo {
 impl NormalFuncInfo {
     pub fn new(
         id: FuncId,
-        name_id: Option<IdentId>,
-        args: Vec<IdentId>,
+        name: Option<String>,
+        args: Vec<String>,
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let mut info = NormalFuncInfo {
             id,
-            name_id,
+            name,
             bytecode: vec![],
             sourcemap: vec![],
             args: args.clone(),
@@ -472,26 +471,26 @@ impl NormalFuncInfo {
         self.temp -= len as u16;
     }
 
-    fn load_local(&mut self, ident: IdentId, loc: Loc) -> Result<BcLocal> {
-        match self.locals.get(&ident) {
+    fn load_local(&mut self, ident: &str, loc: Loc) -> Result<BcLocal> {
+        match self.locals.get(ident) {
             Some(local) => Ok(BcLocal(*local)),
             None => Err(MonorubyErr::undefined_local(
-                ident,
+                ident.to_owned(),
                 loc,
                 self.sourceinfo.clone(),
             )),
         }
     }
 
-    fn find_local(&mut self, ident: IdentId) -> BcLocal {
-        match self.locals.get(&ident) {
+    fn find_local(&mut self, ident: &str) -> BcLocal {
+        match self.locals.get(ident) {
             Some(local) => BcLocal(*local),
-            None => self.add_local(ident.clone()),
+            None => self.add_local(ident.to_owned()),
         }
     }
 
     /// Add a variable identifier without checking duplicates.
-    fn add_local(&mut self, ident: IdentId) -> BcLocal {
+    fn add_local(&mut self, ident: String) -> BcLocal {
         let local = self.locals.len() as u16;
         assert!(self.locals.insert(ident, local).is_none());
         BcLocal(local)
@@ -593,14 +592,11 @@ impl NormalFuncInfo {
         eprintln!(
             "{:?} name:{} args:{:?} bc:{:?}",
             self.id,
-            match self.name_id {
-                Some(name_id) => globals.get_name(name_id),
+            match &self.name {
+                Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            self.args
-                .iter()
-                .map(|id| globals.get_name(*id))
-                .collect::<Vec<_>>(),
+            self.args.iter().collect::<Vec<_>>(),
             BcPcBase::new(self)
         );
         for (i, inst) in self.bytecode.iter().enumerate() {
@@ -716,9 +712,9 @@ pub fn is_smi(node: &Node) -> Option<i16> {
     None
 }
 
-pub fn is_local(node: &Node) -> Option<IdentId> {
-    if let NodeKind::LocalVar(id) = &node.kind {
-        Some(*id)
+pub fn is_local(node: &Node) -> Option<&String> {
+    if let NodeKind::LocalVar(name) = &node.kind {
+        Some(name)
     } else {
         None
     }
@@ -856,7 +852,7 @@ impl NormalFuncInfo {
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                let local = match lhs.kind {
+                let local = match &lhs.kind {
                     NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
                 };
@@ -876,7 +872,7 @@ impl NormalFuncInfo {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     match lhs.kind {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                            let local = self.find_local(lhs);
+                            let local = self.find_local(&lhs);
                             if is_ret {
                                 self.gen_store_expr(ctx, ir, local, rhs, false)?;
                                 self.gen_ret(ir, Some(local));
@@ -894,7 +890,7 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::LocalVar(ident) => {
-                let local = self.load_local(ident, loc)?;
+                let local = self.load_local(&ident, loc)?;
                 if is_ret {
                     self.gen_ret(ir, Some(local));
                 } else if use_value {
@@ -1087,7 +1083,7 @@ impl NormalFuncInfo {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     match lhs.kind {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                            let src = self.find_local(lhs);
+                            let src = self.find_local(&lhs);
                             self.gen_store_expr(ctx, ir, src, rhs, false)?;
                             self.gen_mov(ir, local.into(), src.into());
                         }
@@ -1102,7 +1098,7 @@ impl NormalFuncInfo {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local2 = self.load_local(ident, loc)?;
+                let local2 = self.load_local(&ident, loc)?;
                 self.gen_mov(ir, local.into(), local2.into());
             }
             NodeKind::MethodCall {
@@ -1159,7 +1155,7 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
-        name: IdentId,
+        name: String,
         params: Vec<FormalParam>,
         node: Node,
     ) -> Result<()> {
@@ -1178,7 +1174,7 @@ impl NormalFuncInfo {
         }
         let func_id =
             ctx.functions
-                .add_normal_func(Some(name), args, node, self.sourceinfo.clone());
+                .add_normal_func(Some(name.clone()), args, node, self.sourceinfo.clone());
         ir.push(BcIr::MethodDef(name, func_id), Loc::default());
         Ok(())
     }
@@ -1386,7 +1382,7 @@ impl NormalFuncInfo {
         for lhs in mlhs {
             match lhs.kind {
                 NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
-                    let local = self.find_local(lhs);
+                    let local = self.find_local(&lhs);
                     self.gen_mov(ir, local.into(), temp_reg.into());
                 }
                 _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
@@ -1408,13 +1404,13 @@ impl NormalFuncInfo {
         &mut self,
         ctx: &mut FnStore,
         ir: &mut IrContext,
-        param: Vec<IdentId>,
+        param: Vec<String>,
         iter: Node,
         body: BlockInfo,
         use_value: bool,
     ) -> Result<()> {
         assert_eq!(1, param.len());
-        let counter = self.find_local(param[0]);
+        let counter = self.find_local(&param[0]);
         let break_pos = ir.new_label();
         ir.loops.push((
             LoopKind::For,
@@ -1534,7 +1530,7 @@ impl NormalFuncInfo {
     pub(crate) fn ir_to_bytecode(
         &mut self,
         ir: IrContext,
-        //id_store: &IdentifierTable,
+        id_store: &mut IdentifierTable,
         store: &mut FnStore,
     ) {
         let mut ops = vec![];
@@ -1636,13 +1632,15 @@ impl NormalFuncInfo {
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
-                BcIr::MethodCall(recv, id, ret, args, len) => {
-                    let id = self.add_callsite(store, *ret, *id, *args, *len);
+                BcIr::MethodCall(recv, name, ret, args, len) => {
+                    let name_id = id_store.get_ident_id(name);
+                    let id = self.add_callsite(store, *ret, name_id, *args, *len);
                     let recv = self.get_index(recv);
                     BcOp::MethodCall(recv, id)
                 }
                 BcIr::MethodDef(name, func_id) => {
-                    BcOp::MethodDef(store.add_method_def(*name, *func_id))
+                    let name_id = id_store.get_ident_id(name);
+                    BcOp::MethodDef(store.add_method_def(name_id, *func_id))
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let ret = ret.map_or(0, |ret| self.get_index(&ret));

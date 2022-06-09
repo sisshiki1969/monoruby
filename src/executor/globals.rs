@@ -84,24 +84,19 @@ impl Globals {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
+        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = self.get_ident_id(name);
-        let func_id = self.func.add_builtin_func(name_id, address, arity);
         self.class.add_method(class_id, name_id, func_id);
         func_id
     }
 
-    pub fn compile_script(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-        context_name: &str,
-    ) -> Result<()> {
+    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<()> {
         let id_table = std::mem::take(&mut self.id_store);
-        let res = match Parser::parse_program(code, path.into(), context_name, id_table) {
+        let res = match Parser::parse_program(code, path.into(), id_table) {
             Ok(res) => {
                 self.id_store = res.id_store;
                 self.func
-                    .compile_script(res.node, &self.id_store, res.source_info)
+                    .compile_script(res.node, &mut self.id_store, res.source_info)
             }
             Err(err) => Err(MonorubyErr::parse(err)),
         };

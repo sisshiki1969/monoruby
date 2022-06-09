@@ -26,7 +26,7 @@ pub struct MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    UndefinedLocal(IdentId),
+    UndefinedLocal(String),
     MethodNotFound(IdentId),
     WrongArguments(String),
     Syntax(ParseErrKind),
@@ -102,7 +102,7 @@ impl MonorubyErr {
         }
     }
 
-    pub fn undefined_local(ident: IdentId, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub fn undefined_local(ident: String, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::UndefinedLocal(ident),
             loc: vec![(loc, sourceinfo)],

@@ -46,7 +46,7 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            exec(&code, args.jit, std::path::Path::new("REPL"), "eval");
+            exec(&code, args.jit, std::path::Path::new("REPL"));
         }
         return;
     }
@@ -56,7 +56,7 @@ fn main() {
             let mut file = File::open(file_name.clone()).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            exec(&code, args.jit, &std::path::Path::new(&file_name), "eval");
+            exec(&code, args.jit, &std::path::Path::new(&file_name));
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -84,10 +84,10 @@ fn main() {
     }
 }
 
-fn exec(code: &str, jit: bool, path: &std::path::Path, context_name: &str) {
+fn exec(code: &str, jit: bool, path: &std::path::Path) {
     let mut globals = Globals::new();
     let mut res = globals
-        .compile_script(code.to_string(), path, context_name)
+        .compile_script(code.to_string(), path)
         .map(|()| Value::nil());
     if res.is_ok() {
         res = if !jit {
@@ -107,7 +107,7 @@ fn exec(code: &str, jit: bool, path: &std::path::Path, context_name: &str) {
 
 fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
     let mut globals = Globals::new();
-    globals.compile_script(code.to_string(), std::path::Path::new("REPL"), "eval")?;
+    globals.compile_script(code.to_string(), std::path::Path::new("REPL"))?;
 
     if !jit_flag {
         match Interp::eval_toplevel(&mut globals.clone()) {
@@ -137,7 +137,7 @@ pub fn run_test(code: &str) {
     let all_codes = vec![code.to_string()];
     let mut globals = Globals::new();
     globals
-        .compile_script(code.to_string(), std::path::Path::new(""), "")
+        .compile_script(code.to_string(), std::path::Path::new(""))
         .unwrap_or_else(|err| {
             err.show_all_loc();
             panic!("Error in compiling AST. {:?}", err)

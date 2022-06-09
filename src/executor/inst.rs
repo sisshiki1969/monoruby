@@ -1,5 +1,4 @@
 use super::*;
-use ruruby_parse::IdentId;
 
 ///
 /// bytecode Ir.
@@ -27,9 +26,9 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, dst, lhs, rhs
     Cmpri(CmpKind, BcReg, BcReg, i16), // kind, dst, lhs, rhs
     Ret(BcReg),
-    Mov(BcReg, BcReg),                                        // dst, offset
-    MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
-    MethodDef(IdentId, FuncId),
+    Mov(BcReg, BcReg),                                       // dst, offset
+    MethodCall(BcReg, String, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
+    MethodDef(String, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
 
