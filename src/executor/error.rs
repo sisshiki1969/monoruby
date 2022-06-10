@@ -14,6 +14,7 @@ pub enum MonorubyErrKind {
     Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
+    UninitConst(IdentId),
     DivideByZero,
 }
 
@@ -114,6 +115,13 @@ impl MonorubyErr {
     pub fn divide_by_zero() -> MonorubyErr {
         MonorubyErr {
             kind: MonorubyErrKind::DivideByZero,
+            loc: vec![],
+        }
+    }
+
+    pub fn uninitialized_constant(name: IdentId) -> MonorubyErr {
+        MonorubyErr {
+            kind: MonorubyErrKind::UninitConst(name),
             loc: vec![],
         }
     }

@@ -17,7 +17,6 @@ pub struct JitGen {
     class_version: DestLabel,
     pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
-    pub jit_return: DestLabel,
     pub vm_return: DestLabel,
 }
 
@@ -34,14 +33,16 @@ fn conv(reg: u16) -> i64 {
 ///
 /// If no method was found, return None (==0u64).
 ///
-extern "C" fn get_func_absolute_address(
+extern "C" fn get_func_address(
     interp: &mut Interp,
     globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
+    funcid_patch: &mut FuncId,
 ) -> Option<CodePtr> {
     let func_id = interp.get_method(globals, receiver.class(), func_name, args_len)?;
+    *funcid_patch = func_id;
     match globals.func[func_id].jit_label() {
         Some(dest) => Some(dest),
         None => {
@@ -76,10 +77,6 @@ extern "C" fn get_error_location(
     func_id: FuncId,
     pc: BcPc,
 ) {
-    /*eprintln!("func_id:{:?} error:{:?}", func_id, interp.error);
-    if func_id.0 == 0 {
-        return;
-    }*/
     let normal_info = globals.func[func_id].as_normal();
     let sourceinfo = normal_info.sourceinfo.clone();
     let bc_base = globals.func[func_id].inst_pc();
@@ -109,7 +106,7 @@ impl JitGen {
         entry_find_method:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (get_func_absolute_address);
+            movq rax, (get_func_address);
             jmp  rax;
         vm_return:
             // check call_kind.
@@ -136,7 +133,6 @@ impl JitGen {
             class_version,
             entry_panic,
             entry_find_method,
-            jit_return,
             vm_return,
         }
     }
@@ -210,7 +206,7 @@ impl JitGen {
     }
 
     fn generic_op(&mut self, ret: u16, func: u64) {
-        self.call_binop(func, self.jit_return);
+        self.call_binop(func, self.vm_return);
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
@@ -614,7 +610,7 @@ impl JitGen {
                     }
                 }
                 BcOp::LoadConst(ret, id) => {
-                    let jit_return = self.jit_return;
+                    let jit_return = self.vm_return;
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
                       movq rdi, rbx;  // &mut Interp
@@ -638,7 +634,7 @@ impl JitGen {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(src))];
                     );
-                    self.call_unop(neg_value as _, self.jit_return);
+                    self.call_unop(neg_value as _, self.vm_return);
                     monoasm!(self.jit,
                         movq [rbp - (conv(dst))], rax;
                     );
@@ -805,7 +801,6 @@ impl JitGen {
                     let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
                     monoasm!(self.jit,
                         // set meta
-                        //movl [rsp - 0x14], func_id;
                         movl [rsp - 0x18], 1;
                         // set self
                         movq rax, [rbp - (conv(recv))];
@@ -820,6 +815,7 @@ impl JitGen {
                         );
                     }
                     let l1 = self.jit.label();
+                    let l2 = self.jit.label();
                     let exit = self.jit.label();
                     let slow_path = self.jit.label();
                     let saved_class_version = self.jit.const_i64(-1);
@@ -827,7 +823,7 @@ impl JitGen {
                     let class_version = self.class_version;
                     let entry_find_method = self.entry_find_method;
                     let entry_panic = self.entry_panic;
-                    let entry_return = self.jit_return;
+                    let entry_return = self.vm_return;
                     if recv != 0 {
                         monoasm!(self.jit,
                             cmpq r15, [rip + saved_recv_class];
@@ -845,6 +841,8 @@ impl JitGen {
                         movq rdx, (u32::from(name)); // IdentId
                         movq rcx, (len as usize); // args_len: usize
                         movq r8, [rbp - (conv(recv))]; // receiver: Value
+                        lea r9, [rip + l2];
+                        subq r9, 4; // &mut FuncId
                         call entry_find_method;
                         // absolute address was returned to rax.
                         addq rsp, (sp_max);
@@ -861,6 +859,9 @@ impl JitGen {
                         movq [rip + saved_class_version], rax;
                         movq [rip + saved_recv_class], r15;
                     l1:
+                        // set meta/func_id slot to FuncId of the callee.
+                        movl [rsp - 0x14], 0;
+                    l2:
                         // patch point
                         call entry_panic;
                     exit:

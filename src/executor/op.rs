@@ -365,7 +365,7 @@ pub extern "C" fn get_constant(
     match globals.get_constant(name) {
         Some(v) => Some(v),
         None => {
-            interp.error = Some(MonorubyErr::method_not_found(name));
+            interp.error = Some(MonorubyErr::uninitialized_constant(name));
             None
         }
     }

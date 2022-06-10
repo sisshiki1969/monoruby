@@ -105,27 +105,43 @@ fn exec(code: &str, jit: bool, path: &std::path::Path) {
     };
 }
 
-fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
+fn repl_exec(code: &str, jit_flag: bool) -> Result<(), MonorubyErr> {
     let mut globals = Globals::new();
-    globals.compile_script(code.to_string(), std::path::Path::new("REPL"))?;
+    match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("{}", globals.get_error_message(&err));
+            err.show_all_loc();
+            return Err(err);
+        }
+    };
 
     if !jit_flag {
-        match Interp::eval_toplevel(&mut globals.clone()) {
-            Ok(val) => eprintln!("interp: {:?}", val),
+        let mut globals2 = globals.clone();
+        match Interp::eval_toplevel(&mut globals2) {
+            Ok(val) => eprintln!("vm: {:?}", val),
             Err(err) => {
-                eprintln!("{:?}", err.kind);
+                eprintln!("vm:{}", globals2.get_error_message(&err));
                 err.show_all_loc();
             }
         }
     }
-    jitcompiler(&mut globals)
+    match jitcompiler(&mut globals) {
+        Ok(val) => {
+            eprintln!("jit: {:?}", val);
+            Ok(())
+        }
+        Err(err) => {
+            eprintln!("jit:{}", globals.get_error_message(&err));
+            err.show_all_loc();
+            Err(err)
+        }
+    }
 }
 
 fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
     all_codes.push(code.to_string());
-    if let Err(err) = repl_exec(&all_codes.join(";"), jit_flag) {
-        eprintln!("{:?}", err.kind);
-        err.show_all_loc();
+    if let Err(_) = repl_exec(&all_codes.join(";"), jit_flag) {
         all_codes.pop();
     };
 }
@@ -167,8 +183,6 @@ fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     let jit_val = Interp::jit_exec_toplevel(gen);
     #[cfg(not(debug_assertions))]
     eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
-    #[cfg(debug_assertions)]
-    eprintln!("jit: {:?}", jit_val);
     jit_val
 }
 

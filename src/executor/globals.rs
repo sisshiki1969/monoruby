@@ -62,9 +62,9 @@ impl Globals {
         self.id_store.get_ident_id(name)
     }
 
-    /*pub fn get_ident_name(&self, id: IdentId) -> &str {
+    pub fn get_ident_name(&self, id: IdentId) -> &str {
         self.id_store.get_name(id)
-    }*/
+    }
 
     pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {
@@ -114,6 +114,27 @@ impl Globals {
             Err(err) => Err(MonorubyErr::parse(err)),
         };
         res
+    }
+}
+
+impl Globals {
+    pub fn get_error_message(&self, err: &MonorubyErr) -> String {
+        match &err.kind {
+            MonorubyErrKind::UndefinedLocal(ident) => {
+                format!("undefined local variable or method `{}'", ident)
+            }
+            MonorubyErrKind::MethodNotFound(name) => {
+                format!("undefined method `{}'", self.get_ident_name(*name))
+            }
+            MonorubyErrKind::WrongArguments(name) => name.to_string(),
+            MonorubyErrKind::Syntax(kind) => format!("{:?}", kind),
+            MonorubyErrKind::Syntax2(msg) => msg.to_string(),
+            MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
+            MonorubyErrKind::UninitConst(name) => {
+                format!("uninitialized constant {}", self.get_ident_name(*name))
+            }
+            MonorubyErrKind::DivideByZero => format!("divided by 0"),
+        }
     }
 }
 
