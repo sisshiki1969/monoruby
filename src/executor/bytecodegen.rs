@@ -510,6 +510,10 @@ impl NormalFuncInfo {
         ir.push(BcIr::LoadConst(reg, name), loc);
     }
 
+    fn gen_store_const(&mut self, ir: &mut IrContext, src: BcReg, name: IdentId, loc: Loc) {
+        ir.push(BcIr::StoreConst(src, name), loc);
+    }
+
     fn gen_literal(
         &mut self,
         ctx: &mut FnStore,
@@ -727,9 +731,6 @@ impl NormalFuncInfo {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
         self.gen_expr(ctx, &mut ir, id_store, ast, true, true)?;
-        if self.temp >= 1 {
-            self.gen_ret(&mut ir, None);
-        };
         assert_eq!(0, self.temp);
         Ok(ir)
     }
@@ -863,17 +864,27 @@ impl NormalFuncInfo {
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                let local = match &lhs.kind {
-                    NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => self.find_local(lhs),
+                match &lhs.kind {
+                    NodeKind::LocalVar(lhs_) | NodeKind::Ident(lhs_) => {
+                        let local = self.find_local(lhs_);
+                        self.gen_binop(ctx, ir, id_store, op, lhs, rhs, Some(local), loc)?;
+                        if is_ret {
+                            self.gen_ret(ir, Some(local));
+                        } else if use_value {
+                            self.gen_temp_mov(ir, local.into());
+                        }
+                        return Ok(());
+                    }
+                    NodeKind::Const { toplevel, name } => {
+                        assert!(!toplevel);
+                        let name = id_store.get_ident_id(name);
+                        let src = self.next_reg();
+                        let lhs_loc = lhs.loc;
+                        self.gen_binop(ctx, ir, id_store, op, lhs, rhs, None, loc)?;
+                        self.gen_store_const(ir, src.into(), name, lhs_loc);
+                    }
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
                 };
-                self.gen_binop(ctx, ir, id_store, op, lhs, rhs, Some(local), loc)?;
-                if is_ret {
-                    self.gen_ret(ir, Some(local));
-                } else if use_value {
-                    self.gen_temp_mov(ir, local.into());
-                }
-                return Ok(());
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(ctx, ir, id_store, op, lhs, rhs, None, loc)?
@@ -890,15 +901,22 @@ impl NormalFuncInfo {
                             } else {
                                 self.gen_store_expr(ctx, ir, id_store, local, rhs, use_value)?;
                             }
+                            return Ok(());
+                        }
+                        NodeKind::Const { toplevel, name } => {
+                            assert!(!toplevel);
+                            let name = id_store.get_ident_id_from_string(name);
+                            let src = self.next_reg();
+                            self.gen_expr(ctx, ir, id_store, rhs, true, false)?;
+                            self.gen_store_const(ir, src.into(), name, loc);
                         }
                         _ => {
                             return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone()))
                         }
                     }
                 } else {
-                    self.gen_mul_assign(ctx, ir, id_store, mlhs, mrhs, use_value, is_ret)?;
+                    return self.gen_mul_assign(ctx, ir, id_store, mlhs, mrhs, use_value, is_ret);
                 }
-                return Ok(());
             }
             NodeKind::LocalVar(ident) => {
                 let local = self.load_local(&ident, loc)?;
@@ -934,6 +952,9 @@ impl NormalFuncInfo {
                     let recv = self.pop().into();
                     ir.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
                 }
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
                 return Ok(());
             }
             NodeKind::FuncCall {
@@ -949,6 +970,9 @@ impl NormalFuncInfo {
                 };
                 let method = id_store.get_ident_id_from_string(method);
                 ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
                 return Ok(());
             }
             NodeKind::Ident(method) => {
@@ -972,9 +996,11 @@ impl NormalFuncInfo {
                 let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
                 ir.gen_condbr(cond, then_pos);
                 self.gen_expr(ctx, ir, id_store, else_, use_value, is_ret)?;
-                ir.gen_br(succ_pos);
-                if use_value {
-                    self.pop();
+                if !is_ret {
+                    ir.gen_br(succ_pos);
+                    if use_value {
+                        self.pop();
+                    }
                 }
                 ir.apply_label(then_pos);
                 self.gen_expr(ctx, ir, id_store, then_, use_value, is_ret)?;
@@ -987,14 +1013,22 @@ impl NormalFuncInfo {
                 cond_op,
             } => {
                 assert!(cond_op);
-                return self.gen_while(ctx, ir, id_store, cond, body, use_value);
+                self.gen_while(ctx, ir, id_store, cond, body, use_value)?;
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
+                return Ok(());
             }
             NodeKind::For {
                 param,
                 box iter,
                 body,
             } => {
-                return self.gen_for(ctx, ir, id_store, param, iter, body, use_value);
+                self.gen_for(ctx, ir, id_store, param, iter, body, use_value)?;
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
+                return Ok(());
             }
             NodeKind::Break(box val) => {
                 let (_kind, break_pos, ret_reg) = match ir.loops.last() {
@@ -1042,6 +1076,9 @@ impl NormalFuncInfo {
                     // TODO: This should be a Symbol.
                     self.gen_nil(ir, None);
                 }
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
                 return Ok(());
             }
             NodeKind::InterporatedString(nodes) => {
@@ -1056,11 +1093,16 @@ impl NormalFuncInfo {
                     false => None,
                 };
                 ir.push(BcIr::ConcatStr(ret, arg, len), Loc::default());
+                if is_ret {
+                    self.gen_ret(ir, None);
+                }
                 return Ok(());
             }
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
-        if !use_value {
+        if is_ret {
+            self.gen_ret(ir, None);
+        } else if !use_value {
             self.pop();
         }
         Ok(())

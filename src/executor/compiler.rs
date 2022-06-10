@@ -623,7 +623,14 @@ impl JitGen {
                     );
                 }
                 BcOp::StoreConst(ret, id) => {
-                    unimplemented!()
+                    monoasm!(self.jit,
+                      movq rdx, (id.get());  // name: IdentId
+                      movq rcx, [rbp - (conv(ret))];  // name: IdentId
+                      movq rdi, rbx;  // &mut Interp
+                      movq rsi, r12;  // &mut Globals
+                      movq rax, (set_constant);
+                      call rax;
+                    );
                 }
                 BcOp::Nil(ret) => {
                     monoasm!(self.jit,

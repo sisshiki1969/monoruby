@@ -370,3 +370,17 @@ pub extern "C" fn get_constant(
         }
     }
 }
+
+pub extern "C" fn set_constant(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+    val: Value,
+) {
+    if globals.set_constant(name, val).is_some() {
+        eprintln!(
+            "warning: already initialized constant {}",
+            globals.get_ident_name(name)
+        )
+    }
+}

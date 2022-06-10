@@ -86,17 +86,20 @@ fn main() {
 
 fn exec(code: &str, jit: bool, path: &std::path::Path) {
     let mut globals = Globals::new();
-    let mut res = globals
-        .compile_script(code.to_string(), path)
-        .map(|()| Value::nil());
-    if res.is_ok() {
-        res = if !jit {
-            Interp::eval_toplevel(&mut globals)
-        } else {
-            jitcompiler(&mut globals)
-        };
-    }
-    match res {
+    match globals.compile_script(code.to_string(), path) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("{:?}", globals.get_error_message(&err));
+            err.show_loc();
+            return;
+        }
+    };
+
+    match if !jit {
+        Interp::eval_toplevel(&mut globals)
+    } else {
+        jitcompiler(&mut globals)
+    } {
         Ok(val) => eprintln!("jit({:?}) {:?}", jit, val),
         Err(err) => {
             eprintln!("{:?}", err.kind);
@@ -182,7 +185,7 @@ fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     let now = Instant::now();
     let jit_val = Interp::jit_exec_toplevel(gen);
     #[cfg(not(debug_assertions))]
-    eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
+    eprintln!("jit: elapsed:{:?}", now.elapsed());
     jit_val
 }
 

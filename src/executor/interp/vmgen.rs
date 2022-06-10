@@ -201,6 +201,7 @@ impl Interp {
         self.dispatch[8] = self.vm_nil();
         self.dispatch[9] = self.vm_symbol();
         self.dispatch[10] = self.vm_load_const();
+        self.dispatch[11] = self.vm_store_const();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[130] = self.vm_addrr();
@@ -517,6 +518,21 @@ impl Interp {
             testq rax, rax;
             jeq  entry_return;
             movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_store_const(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
+            movq rdx, rdi;  // name: IdentId
+            movq rcx, [r15];  // val: Value
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (set_constant);
+            call rax;
         };
         self.fetch_and_dispatch();
         label

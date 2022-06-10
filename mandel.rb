@@ -8,8 +8,8 @@ size = 600 # ARGV[0].to_i
 
 puts "P4\n#{size} #{size}"
 
-#ITER = 49                           # Iterations - 1 for easy for..in looping
-#LIMIT_SQUARED = 4.0                 # Presquared limit
+ITER = 49                           # Iterations - 1 for easy for..in looping
+LIMIT_SQUARED = 4.0                 # Presquared limit
 
 byte_acc = 0
 bit_num = 0
@@ -27,12 +27,12 @@ for y in 0..count_size
 
     # To make use of the for..in code, we use a dummy variable,
     # like one would in C
-    for dummy in 0..49
+    for dummy in 0..ITER
       tr = zr*zr - zi*zi + cr
       ti = 2*zr*zi + ci
       zr, zi = tr, ti
 
-      if (zr*zr+zi*zi) > 4.0
+      if (zr*zr+zi*zi) > LIMIT_SQUARED
         escape = true
         break
       end
