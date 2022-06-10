@@ -356,3 +356,17 @@ pub extern "C" fn concatenate_string(arg: *mut Value, len: usize) -> Value {
     }
     Value::string(res)
 }
+
+pub extern "C" fn get_constant(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Option<Value> {
+    match globals.get_constant(name) {
+        Some(v) => Some(v),
+        None => {
+            interp.error = Some(MonorubyErr::method_not_found(name));
+            None
+        }
+    }
+}

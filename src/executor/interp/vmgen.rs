@@ -116,7 +116,9 @@ impl Interp {
             lea rcx, [rip + func_offset];
             movq rax, (get_func_data);
             call rax;
+            // set meta func_id/call_kind
             movl [rsp - 0x14], r13;
+            movl [rsp - 0x18], 0;
             movq r13, [rip + func_pc];    // r13: BcPc
             //
             //       +-------------+
@@ -134,6 +136,7 @@ impl Interp {
             //       +-------------+
             //       |             |
             //
+            // set self
             movq [rsp - 0x20], (NIL_VALUE);
             movq rax, [rip + func_address];
             call rax;
@@ -196,6 +199,8 @@ impl Interp {
         self.dispatch[6] = self.vm_integer();
         self.dispatch[7] = self.vm_literal();
         self.dispatch[8] = self.vm_nil();
+        self.dispatch[9] = self.vm_symbol();
+        self.dispatch[10] = self.vm_load_const();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[130] = self.vm_addrr();
@@ -391,6 +396,7 @@ impl Interp {
             pushq r13;
             pushq [rip + ret];
             movq r13, [rip + func_pc];    // r13: BcPc
+            // set meta/func_id
             movl [rsp - 0x14], rax;
             shrq rax, 32;
             movl rdi, rax;
@@ -398,8 +404,11 @@ impl Interp {
             movzxw r14, rax;    // r14 <- len
             shlq r14, 3;
             lea rdx, [rsp - 0x28];
+            // set self (= receiver)
             movq rax, [r15];
-            movq [rsp - 0x20], rax; // set self
+            movq [rsp - 0x20], rax;
+            // set meta/call_kind = 0(VM)
+            movl [rsp - 0x18], 0;
         };
         self.vm_get_addr_rdi(); // rdi <- *args
 
@@ -418,7 +427,7 @@ impl Interp {
             //       +-------------+
             // -0x20 |     %0      |
             //       +-------------+
-            // -0x28 | %1(1st arg) |
+            // -0x28 | %1(1st arg) | <- rdx
             //       +-------------+
             //       |             |
             //
@@ -468,6 +477,18 @@ impl Interp {
         label
     }
 
+    fn vm_symbol(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
+            shlq rdi, 32;
+            orq rdi, (TAG_SYMBOL);
+            movq [r15], rdi;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_literal(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -477,6 +498,24 @@ impl Interp {
             movq rsi, r12;  // &mut Globals
             movq rax, (get_literal);
             call rax;
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_load_const(&mut self) -> CodePtr {
+        let label = self.jit_gen.jit.get_current_address();
+        let entry_return = self.jit_gen.vm_return;
+        self.vm_get_addr_r15();
+        monoasm! { self.jit_gen.jit,
+            movq rdx, rdi;  // name: IdentId
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (get_constant);
+            call rax;
+            testq rax, rax;
+            jeq  entry_return;
             movq [r15], rax;
         };
         self.fetch_and_dispatch();

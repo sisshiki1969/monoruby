@@ -118,7 +118,6 @@ fn repl_exec(code: &str, jit_flag: bool) -> Result<Value, MonorubyErr> {
             }
         }
     }
-
     jitcompiler(&mut globals)
 }
 

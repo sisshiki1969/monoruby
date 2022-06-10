@@ -181,7 +181,7 @@ impl FnStore {
                     func.set_jit_label(vm_entry);
                 }
                 FuncKind::Builtin { abs_address } => {
-                    let label = jit.jit_compile_builtin(*abs_address, func.arity());
+                    let label = jit.wrap_builtin(*abs_address, func.arity());
                     func.set_jit_label(label);
                 }
             };
@@ -496,6 +496,20 @@ impl NormalFuncInfo {
         BcLocal(local)
     }
 
+    fn gen_load_const(
+        &mut self,
+        ir: &mut IrContext,
+        dst: Option<BcLocal>,
+        name: IdentId,
+        loc: Loc,
+    ) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => self.push().into(),
+        };
+        ir.push(BcIr::LoadConst(reg, name), loc);
+    }
+
     fn gen_literal(
         &mut self,
         ctx: &mut FnStore,
@@ -621,7 +635,13 @@ impl NormalFuncInfo {
                 }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
                 BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
-                BcOp::Literal(reg, id) => eprintln!("%{} = constants[{}]", reg, id),
+                BcOp::Literal(reg, id) => eprintln!("%{} = literal[{}]", reg, id),
+                BcOp::LoadConst(reg, id) => {
+                    eprintln!("%{} = const[{}]", reg, id_store.get_name(id))
+                }
+                BcOp::StoreConst(reg, id) => {
+                    eprintln!("const[{}] = %{}", id_store.get_name(id), reg)
+                }
                 BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
@@ -707,7 +727,7 @@ impl NormalFuncInfo {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut self.ast).unwrap();
         self.gen_expr(ctx, &mut ir, id_store, ast, true, true)?;
-        if self.temp == 1 {
+        if self.temp >= 1 {
             self.gen_ret(&mut ir, None);
         };
         assert_eq!(0, self.temp);
@@ -888,6 +908,11 @@ impl NormalFuncInfo {
                     self.gen_temp_mov(ir, local.into());
                 }
                 return Ok(());
+            }
+            NodeKind::Const { toplevel, name } => {
+                assert!(!toplevel);
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_load_const(ir, None, name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -1099,6 +1124,12 @@ impl NormalFuncInfo {
             NodeKind::LocalVar(ident) => {
                 let local2 = self.load_local(&ident, loc)?;
                 self.gen_mov(ir, local.into(), local2.into());
+            }
+            NodeKind::Const { toplevel, name } => {
+                assert!(!toplevel);
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_load_const(ir, local.into(), name, loc);
+                return Ok(());
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -1561,6 +1592,8 @@ impl NormalFuncInfo {
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
                 BcIr::Symbol(reg, name) => BcOp::Symbol(self.get_index(reg), *name),
                 BcIr::Literal(reg, num) => BcOp::Literal(self.get_index(reg), *num),
+                BcIr::LoadConst(reg, id) => BcOp::LoadConst(self.get_index(reg), *id),
+                BcIr::StoreConst(reg, id) => BcOp::StoreConst(self.get_index(reg), *id),
                 BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
                 BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
                 BcIr::Add(dst, lhs, rhs) => BcOp::Add(

@@ -76,10 +76,13 @@ extern "C" fn get_error_location(
     func_id: FuncId,
     pc: BcPc,
 ) {
+    /*eprintln!("func_id:{:?} error:{:?}", func_id, interp.error);
+    if func_id.0 == 0 {
+        return;
+    }*/
     let normal_info = globals.func[func_id].as_normal();
     let sourceinfo = normal_info.sourceinfo.clone();
     let bc_base = globals.func[func_id].inst_pc();
-    //eprintln!("{:?} {:?} {:?}", func_id, bc_base, pc);
     let loc = normal_info.sourcemap[pc - bc_base];
     match &mut interp.error {
         Some(err) => {
@@ -87,30 +90,7 @@ extern "C" fn get_error_location(
         }
         None => unreachable!(),
     };
-    //sourceinfo.show_loc(&loc);
 }
-
-/*extern "C" fn concat(lhs: Value, rhs: Value) -> Value {
-    let mut res = match lhs.unpack() {
-        RV::Nil => b"nil".to_vec(),
-        RV::Bool(b) => format!("{}", b).into_bytes(),
-        RV::Integer(i) => format!("{}", i).into_bytes(),
-        RV::BigInt(b) => format!("{}", b).into_bytes(),
-        RV::Float(f) => format!("{}", f).into_bytes(),
-        RV::String(b) => b.clone(),
-        _ => unimplemented!(),
-    };
-    match rhs.unpack() {
-        RV::Nil => res.extend("nil".bytes()),
-        RV::Bool(b) => res.extend(format!("{}", b).bytes()),
-        RV::Integer(i) => res.extend(format!("{}", i).bytes()),
-        RV::BigInt(b) => res.extend(format!("{}", b).bytes()),
-        RV::Float(f) => res.extend(format!("{}", f).bytes()),
-        RV::String(b) => res.extend(b),
-        _ => unimplemented!(),
-    };
-    Value::string(res)
-}*/
 
 impl JitGen {
     pub fn new() -> Self {
@@ -130,8 +110,13 @@ impl JitGen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (get_func_absolute_address);
-            jmp rax;
+            jmp  rax;
         vm_return:
+            // check call_kind.
+            movl r15, [rbp - 8];
+            testq r15, r15;
+            jne  jit_return;
+            // save return value
             movq r15, rax;
             movq rdi, rbx;
             movq rsi, r12;
@@ -140,6 +125,7 @@ impl JitGen {
             subq rcx, 8;
             movq rax, (get_error_location);
             call rax;
+            // restore return value
             movq rax, r15;
         jit_return:
             leave;
@@ -384,10 +370,10 @@ impl JitGen {
     /// +0x08 | return addr |
     ///       +-------------+
     ///  0x00 |  prev rbp   | <- rbp
-    ///       +-------------+
-    /// -0x08 |    meta     |
-    ///       +-------------+
-    /// -0x10 |     %0      |
+    ///       +-------------+       +-------+-------+-------+-------+
+    /// -0x08 |    meta     |  meta | 0:VM 1:JIT 2: |    FuncId     |
+    ///       +-------------+       +-------+-------+-------+-------+
+    /// -0x10 |     %0      |             48      32      16       0
     ///       +-------------+
     /// -0x18 |     %1      |
     ///       +-------------+
@@ -434,6 +420,17 @@ impl JitGen {
         let main = self.jit_compile(&mut info, &globals.func);
         globals.func[main_id] = info;
         let entry = self.jit.label();
+        //       +-------------+
+        // -0x00 |             | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |  (old rbp)  |
+        //       +-------------+
+        // -0x18 |    meta     |
+        //       +-------------+
+        // -0x20 |     %0      |
+        //       +-------------+
         monoasm!(self.jit,
         entry:
             pushq rbp;
@@ -441,6 +438,8 @@ impl JitGen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
+            movl [rsp - 0x14], (main_id.0);
+            movl [rsp - 0x18], 1;
             movq [rsp - 0x20], (NIL_VALUE);
             movq rax, (main.as_ptr());
             call rax;
@@ -457,9 +456,7 @@ impl JitGen {
         let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
-            FuncKind::Builtin { abs_address } => {
-                self.jit_compile_builtin(*abs_address, func.arity())
-            }
+            FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address, func.arity()),
         };
         func.set_jit_label(label);
         self.jit.finalize();
@@ -482,10 +479,10 @@ impl JitGen {
         label
     }
 
-    pub fn jit_compile_builtin(&mut self, abs_address: u64, arity: usize) -> CodePtr {
+    pub fn wrap_builtin(&mut self, abs_address: u64, arity: usize) -> CodePtr {
         //
         // generate a wrapper for a builtin function which has C ABI.
-        // stack layout at the point of just after execution of call instruction.
+        // stack layout at the point of just after a wrapper was called.
         //
         //       +-------------+
         //  0x00 | return addr | <- rsp
@@ -510,10 +507,10 @@ impl JitGen {
         let label = self.jit.get_current_address();
         let offset = (arity + arity % 2) * 8 + 16;
         monoasm!(self.jit,
+            lea  rdx, [rsp - 0x20];
             pushq rbp;
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [rsp - 0x18];
             movq rcx, (arity);
             movq rax, (abs_address);
             movq rbp, rsp;
@@ -594,9 +591,10 @@ impl JitGen {
                     );
                 }
                 BcOp::Symbol(ret, id) => {
-                    let i = Value::symbol(id).get();
+                    let sym = Value::symbol(id).get();
                     monoasm!(self.jit,
-                      movq [rbp - (conv(ret))], (i);
+                      movq rax, (sym);
+                      movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::Literal(ret, id) => {
@@ -614,6 +612,22 @@ impl JitGen {
                           movq [rbp - (conv(ret))], rax;
                         );
                     }
+                }
+                BcOp::LoadConst(ret, id) => {
+                    let jit_return = self.jit_return;
+                    monoasm!(self.jit,
+                      movq rdx, (id.get());  // name: IdentId
+                      movq rdi, rbx;  // &mut Interp
+                      movq rsi, r12;  // &mut Globals
+                      movq rax, (get_constant);
+                      call rax;
+                      testq rax, rax;
+                      jeq  jit_return;
+                      movq [rbp - (conv(ret))], rax;
+                    );
+                }
+                BcOp::StoreConst(ret, id) => {
+                    unimplemented!()
                 }
                 BcOp::Nil(ret) => {
                     monoasm!(self.jit,
@@ -789,8 +803,11 @@ impl JitGen {
                     }
 
                     let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
-                    // set self
                     monoasm!(self.jit,
+                        // set meta
+                        //movl [rsp - 0x14], func_id;
+                        movl [rsp - 0x18], 1;
+                        // set self
                         movq rax, [rbp - (conv(recv))];
                         movq [rsp - 0x20], rax;
                     );

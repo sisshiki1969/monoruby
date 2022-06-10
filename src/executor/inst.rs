@@ -11,6 +11,8 @@ pub(super) enum BcIr {
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, u32),
+    LoadConst(BcReg, IdentId),
+    StoreConst(BcReg, IdentId),
     Nil(BcReg),
     Neg(BcReg, BcReg),                 // ret, src
     Add(BcReg, BcReg, BcReg),          // ret, lhs, rhs
@@ -50,6 +52,8 @@ pub(super) enum BcOp {
     Symbol(u16, IdentId),
     /// literal(%ret, literal_id)
     Literal(u16, u32),
+    LoadConst(u16, IdentId),
+    StoreConst(u16, IdentId),
     /// nil(%reg)
     Nil(u16),
     /// negate(%ret, %src)
@@ -137,6 +141,8 @@ impl BcOp {
             Literal(op1, op2) => enc_wl(7, *op1, *op2),
             Nil(op1) => enc_w(8, *op1),
             Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
+            LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
+            StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
@@ -172,6 +178,8 @@ impl BcOp {
                 7 => Self::Literal(op1, op2),
                 8 => Self::Nil(op1),
                 9 => Self::Symbol(op1, IdentId::from(op2)),
+                10 => Self::LoadConst(op1, IdentId::from(op2)),
+                11 => Self::StoreConst(op1, IdentId::from(op2)),
                 _ => unreachable!(),
             }
         } else {

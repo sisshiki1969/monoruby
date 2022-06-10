@@ -28,6 +28,8 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
+    /// constants table.
+    pub constants: HashMap<IdentId, Value>,
 }
 
 impl Globals {
@@ -36,7 +38,10 @@ impl Globals {
             func: FnStore::new(),
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
+            constants: HashMap::default(),
         };
+        let name = globals.get_ident_id("Process");
+        globals.set_constant(name, Value::int32(42));
         builtins::init_builtins(&mut globals);
         assert_eq!(NIL_CLASS, globals.class.add_class());
         assert_eq!(TRUE_CLASS, globals.class.add_class());
@@ -66,6 +71,14 @@ impl Globals {
             return Some(func_id);
         }
         self.class.get_method(0, name)
+    }
+
+    pub fn get_constant(&self, name: IdentId) -> Option<Value> {
+        self.constants.get(&name).cloned()
+    }
+
+    pub fn set_constant(&mut self, name: IdentId, val: Value) -> Option<Value> {
+        self.constants.insert(name, val)
     }
 
     pub fn define_global_builtin_func(
