@@ -64,7 +64,7 @@ impl Value {
         Value::from(ptr as u64)
     }
 
-    pub fn class(&self) -> u32 {
+    pub fn class(&self) -> ClassId {
         if let Some(_) = self.as_fixnum() {
             INTEGER_CLASS
         } else if let Some(_) = self.as_flonum() {
@@ -83,7 +83,7 @@ impl Value {
         }
     }
 
-    pub extern "C" fn get_class(val: Value) -> u32 {
+    pub extern "C" fn get_class(val: Value) -> ClassId {
         val.class()
     }
 

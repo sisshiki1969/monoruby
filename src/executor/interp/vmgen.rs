@@ -86,7 +86,7 @@ extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_i
 
 extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
     let MethodDefInfo { name, func } = globals.func[def_id];
-    globals.class.add_method(0, name, func);
+    globals.class.add_method(ClassId::default(), name, func);
     interp.class_version += 1;
 }
 

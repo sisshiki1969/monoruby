@@ -137,7 +137,7 @@ impl Interp {
     pub fn get_method(
         &mut self,
         globals: &Globals,
-        class_id: u32,
+        class_id: ClassId,
         func_name: IdentId,
         args_len: usize,
     ) -> Option<FuncId> {

@@ -72,7 +72,7 @@ impl RValue {
         self as *const RValue as u64
     }
 
-    pub(crate) fn class(&self) -> u32 {
+    pub(crate) fn class(&self) -> ClassId {
         self.flags.class()
     }
 
@@ -118,25 +118,18 @@ union RVFlag {
     next: Option<std::ptr::NonNull<RValue>>,
 }
 
-pub const NIL_CLASS: u32 = 1;
-pub const TRUE_CLASS: u32 = 2;
-pub const FALSE_CLASS: u32 = 3;
-pub const INTEGER_CLASS: u32 = 4;
-pub const FLOAT_CLASS: u32 = 5;
-pub const STRING_CLASS: u32 = 6;
-pub const SYMBOL_CLASS: u32 = 7;
-
 impl RVFlag {
-    fn new(class: u32) -> Self {
+    fn new(class: ClassId) -> Self {
+        let class: u32 = class.into();
         RVFlag {
             flag: (class as u64) << 32 | 1,
         }
     }
 
-    fn class(&self) -> u32 {
+    fn class(&self) -> ClassId {
         let flag = unsafe { self.flag };
         assert!((flag & 0b1) == 1);
-        (flag >> 32) as u32
+        ClassId::new((flag >> 32) as u32)
     }
 }
 

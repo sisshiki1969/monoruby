@@ -2,6 +2,14 @@ use std::path::PathBuf;
 
 use super::*;
 
+pub const NIL_CLASS: ClassId = ClassId::new(1);
+pub const TRUE_CLASS: ClassId = ClassId::new(2);
+pub const FALSE_CLASS: ClassId = ClassId::new(3);
+pub const INTEGER_CLASS: ClassId = ClassId::new(4);
+pub const FLOAT_CLASS: ClassId = ClassId::new(5);
+pub const STRING_CLASS: ClassId = ClassId::new(6);
+pub const SYMBOL_CLASS: ClassId = ClassId::new(7);
+
 // Integer#chr
 extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
     let b = match arg.self_value().as_fixnum() {
@@ -66,11 +74,11 @@ impl Globals {
         self.id_store.get_name(id)
     }
 
-    pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
+    pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {
             return Some(func_id);
         }
-        self.class.get_method(0, name)
+        self.class.get_method(ClassId::new(0), name)
     }
 
     pub fn get_constant(&self, name: IdentId) -> Option<Value> {
@@ -87,12 +95,12 @@ impl Globals {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        self.define_builtin_func(0, name, address, arity)
+        self.define_builtin_func(ClassId(0), name, address, arity)
     }
 
     pub fn define_builtin_func(
         &mut self,
-        class_id: u32,
+        class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         arity: usize,
@@ -138,29 +146,77 @@ impl Globals {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(transparent)]
+pub struct ClassId(u32);
+
+impl ClassId {
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl std::default::Default for ClassId {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+impl Into<u32> for ClassId {
+    fn into(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassInfo {
+    methods: HashMap<IdentId, FuncId>,
+}
+
+impl ClassInfo {
+    fn new() -> Self {
+        Self {
+            methods: HashMap::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClassStore {
-    classes: Vec<HashMap<IdentId, FuncId>>,
+    classes: Vec<ClassInfo>,
+}
+
+impl std::ops::Index<ClassId> for ClassStore {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &Self::Output {
+        &self.classes[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for ClassStore {
+    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
+        &mut self.classes[index.0 as usize]
+    }
 }
 
 impl ClassStore {
     fn new() -> Self {
         Self {
-            classes: vec![HashMap::default()],
+            classes: vec![ClassInfo::new()],
         }
     }
 
-    pub fn add_class(&mut self) -> u32 {
+    pub fn add_class(&mut self) -> ClassId {
         let id = self.classes.len();
-        self.classes.push(HashMap::default());
-        id as u32
+        self.classes.push(ClassInfo::new());
+        ClassId(id as u32)
     }
 
-    pub fn add_method(&mut self, class_id: u32, name: IdentId, func: FuncId) {
-        self.classes[class_id as usize].insert(name, func);
+    pub fn add_method(&mut self, class_id: ClassId, name: IdentId, func: FuncId) {
+        self[class_id].methods.insert(name, func);
     }
 
-    pub fn get_method(&self, class_id: u32, name: IdentId) -> Option<FuncId> {
-        self.classes[class_id as usize].get(&name).cloned()
+    pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        self[class_id].methods.get(&name).cloned()
     }
 }

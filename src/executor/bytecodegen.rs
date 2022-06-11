@@ -78,7 +78,7 @@ pub struct CallsiteInfo {
     /// Length of arguments.
     pub len: u16,
     /// Inline method cache.
-    pub cache: (usize, u32, FuncId), //(version, class_id, func_id)
+    pub cache: (usize, ClassId, FuncId), //(version, class_id, func_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1634,7 +1634,7 @@ impl NormalFuncInfo {
             name,
             args: self.get_index(&BcReg::from(args)),
             len: len as u16,
-            cache: (usize::MAX, 0, FuncId::default()),
+            cache: (usize::MAX, ClassId::default(), FuncId::default()),
         };
         let id = store.callsite_info.len();
         store.callsite_info.push(info);
