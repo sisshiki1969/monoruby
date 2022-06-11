@@ -938,8 +938,13 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
+                let ret = if use_value {
+                    Some(self.push().into())
+                } else {
+                    None
+                };
                 return self.gen_method_call(
-                    ctx, ir, id_store, method, receiver, arglist, use_value, is_ret, loc,
+                    ctx, ir, id_store, method, receiver, arglist, ret, is_ret, loc,
                 );
             }
             NodeKind::FuncCall {
@@ -947,13 +952,21 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                return self
-                    .gen_func_call(ctx, ir, id_store, method, arglist, use_value, is_ret, loc);
+                let ret = if use_value {
+                    Some(self.push().into())
+                } else {
+                    None
+                };
+                return self.gen_func_call(ctx, ir, id_store, method, arglist, ret, is_ret, loc);
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
-                return self
-                    .gen_func_call(ctx, ir, id_store, method, arglist, use_value, is_ret, loc);
+                let ret = if use_value {
+                    Some(self.push().into())
+                } else {
+                    None
+                };
+                return self.gen_func_call(ctx, ir, id_store, method, arglist, ret, is_ret, loc);
             }
             NodeKind::If {
                 box cond,
@@ -1149,31 +1162,18 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-                let method = id_store.get_ident_id_from_string(method);
-                if receiver.kind == NodeKind::SelfValue {
-                    ir.push(
-                        BcIr::MethodCall(BcReg::Self_, method, Some(local.into()), arg, len),
-                        loc,
-                    );
-                } else {
-                    self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
-                    let recv = self.pop().into();
-                    ir.push(
-                        BcIr::MethodCall(recv, method, Some(local.into()), arg, len),
-                        loc,
-                    );
-                }
+                let ret = Some(local.into());
+                self.gen_method_call(
+                    ctx, ir, id_store, method, receiver, arglist, ret, false, loc,
+                )?;
             }
             NodeKind::FuncCall {
                 method,
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-                let method = id_store.get_ident_id_from_string(method);
-                let inst = BcIr::MethodCall(BcReg::Self_, method, Some(local.into()), arg, len);
-                ir.push(inst, loc);
+                let ret = Some(local.into());
+                self.gen_func_call(ctx, ir, id_store, method, arglist, ret, false, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
@@ -1274,16 +1274,11 @@ impl NormalFuncInfo {
         method: String,
         receiver: Node,
         arglist: ArgList,
-        use_value: bool,
+        ret: Option<BcReg>,
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
         let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-        let ret = if use_value {
-            Some(self.push().into())
-        } else {
-            None
-        };
         let method = id_store.get_ident_id_from_string(method);
         if receiver.kind == NodeKind::SelfValue {
             ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
@@ -1305,16 +1300,11 @@ impl NormalFuncInfo {
         id_store: &mut IdentifierTable,
         method: String,
         arglist: ArgList,
-        use_value: bool,
+        ret: Option<BcReg>,
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
         let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-        let ret = if use_value {
-            Some(self.push().into())
-        } else {
-            None
-        };
         let method = id_store.get_ident_id_from_string(method);
         ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
         if is_ret {

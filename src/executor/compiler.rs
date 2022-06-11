@@ -627,7 +627,7 @@ impl JitGen {
                 BcOp::StoreConst(ret, id) => {
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
-                      movq rcx, [rbp - (conv(ret))];  // name: IdentId
+                      movq rcx, [rbp - (conv(ret))];  // val: Value
                       movq rdi, rbx;  // &mut Interp
                       movq rsi, r12;  // &mut Globals
                       movq rax, (set_constant);

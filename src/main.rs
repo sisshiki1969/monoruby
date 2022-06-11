@@ -670,6 +670,7 @@ mod test {
         run_test(
             r#"
             64.chr
+            a = 64.chr
         "#,
         );
     }
@@ -698,11 +699,12 @@ mod test {
     #[test]
     fn test_string() {
         run_test(
-            r#"
+            r##"
             def f(x); end
+            x = " #{f 3} "
             f("windows")
             a = "linux"
-        "#,
+        "##,
         );
     }
 

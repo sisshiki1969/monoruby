@@ -36,8 +36,6 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
-    /// constants table.
-    pub constants: HashMap<IdentId, Value>,
 }
 
 impl Globals {
@@ -46,7 +44,6 @@ impl Globals {
             func: FnStore::new(),
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
-            constants: HashMap::default(),
         };
         let name = globals.get_ident_id("Process");
         globals.set_constant(name, Value::int32(42));
@@ -82,11 +79,11 @@ impl Globals {
     }
 
     pub fn get_constant(&self, name: IdentId) -> Option<Value> {
-        self.constants.get(&name).cloned()
+        self.class.get_constants(name)
     }
 
     pub fn set_constant(&mut self, name: IdentId, val: Value) -> Option<Value> {
-        self.constants.insert(name, val)
+        self.class.set_constants(name, val)
     }
 
     pub fn define_global_builtin_func(
@@ -171,18 +168,22 @@ impl Into<u32> for ClassId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     methods: HashMap<IdentId, FuncId>,
+    /// constants table.
+    constants: HashMap<IdentId, Value>,
 }
 
 impl ClassInfo {
     fn new() -> Self {
         Self {
             methods: HashMap::default(),
+            constants: HashMap::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassStore {
+    /// class table.
     classes: Vec<ClassInfo>,
 }
 
@@ -218,5 +219,13 @@ impl ClassStore {
 
     pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         self[class_id].methods.get(&name).cloned()
+    }
+
+    pub fn set_constants(&mut self, name: IdentId, val: Value) -> Option<Value> {
+        self.classes[0].constants.insert(name, val)
+    }
+
+    pub fn get_constants(&self, name: IdentId) -> Option<Value> {
+        self.classes[0].constants.get(&name).cloned()
     }
 }
