@@ -25,3 +25,4 @@ monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
 ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
 num = "0.4.0"
 fxhash = "0.2.1"
+tempfile ="3.3.0"

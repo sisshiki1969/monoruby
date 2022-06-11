@@ -938,53 +938,22 @@ impl NormalFuncInfo {
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-                let ret = if use_value {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
-                let method = id_store.get_ident_id_from_string(method);
-                if receiver.kind == NodeKind::SelfValue {
-                    ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
-                } else {
-                    self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
-                    let recv = self.pop().into();
-                    ir.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
-                }
-                if is_ret {
-                    self.gen_ret(ir, None);
-                }
-                return Ok(());
+                return self.gen_method_call(
+                    ctx, ir, id_store, method, receiver, arglist, use_value, is_ret, loc,
+                );
             }
             NodeKind::FuncCall {
                 method,
                 arglist,
                 safe_nav: false,
             } => {
-                let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
-                let ret = if use_value {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
-                let method = id_store.get_ident_id_from_string(method);
-                ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
-                if is_ret {
-                    self.gen_ret(ir, None);
-                }
-                return Ok(());
+                return self
+                    .gen_func_call(ctx, ir, id_store, method, arglist, use_value, is_ret, loc);
             }
             NodeKind::Ident(method) => {
-                let (arg, len) = self.check_fast_call_inner(ctx, ir, id_store, vec![])?;
-                let ret = if use_value {
-                    Some(self.push().into())
-                } else {
-                    None
-                };
-                let method = id_store.get_ident_id_from_string(method);
-                ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
-                return Ok(());
+                let arglist = ArgList::default();
+                return self
+                    .gen_func_call(ctx, ir, id_store, method, arglist, use_value, is_ret, loc);
             }
             NodeKind::If {
                 box cond,
@@ -1052,8 +1021,10 @@ impl NormalFuncInfo {
                     let local = self.load_local(local, expr.loc)?;
                     self.gen_ret(ir, Some(local));
                 } else {
-                    self.gen_expr(ctx, ir, id_store, expr, true, false)?;
-                    self.gen_ret(ir, None);
+                    self.gen_expr(ctx, ir, id_store, expr, true, true)?;
+                }
+                if use_value && !is_ret {
+                    unreachable!();
                 }
                 return Ok(());
             }
@@ -1071,10 +1042,9 @@ impl NormalFuncInfo {
                 return Ok(());
             }
             NodeKind::MethodDef(name, params, box node, _lv) => {
-                self.gen_method_def(ctx, ir, id_store, name, params, node)?;
+                self.gen_method_def(ctx, ir, id_store, name.clone(), params, node)?;
                 if use_value {
-                    // TODO: This should be a Symbol.
-                    self.gen_nil(ir, None);
+                    self.gen_symbol(ir, None, id_store.get_ident_id_from_string(name));
                 }
                 if is_ret {
                     self.gen_ret(ir, None);
@@ -1294,6 +1264,63 @@ impl NormalFuncInfo {
         let arg = self.gen_args(ctx, ir, id_store, args)?;
         self.temp -= len as u16;
         Ok((arg, len))
+    }
+
+    fn gen_method_call(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
+        method: String,
+        receiver: Node,
+        arglist: ArgList,
+        use_value: bool,
+        is_ret: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
+        let ret = if use_value {
+            Some(self.push().into())
+        } else {
+            None
+        };
+        let method = id_store.get_ident_id_from_string(method);
+        if receiver.kind == NodeKind::SelfValue {
+            ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
+        } else {
+            self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
+            let recv = self.pop().into();
+            ir.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
+        }
+        if is_ret {
+            self.gen_ret(ir, None);
+        }
+        return Ok(());
+    }
+
+    fn gen_func_call(
+        &mut self,
+        ctx: &mut FnStore,
+        ir: &mut IrContext,
+        id_store: &mut IdentifierTable,
+        method: String,
+        arglist: ArgList,
+        use_value: bool,
+        is_ret: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
+        let ret = if use_value {
+            Some(self.push().into())
+        } else {
+            None
+        };
+        let method = id_store.get_ident_id_from_string(method);
+        ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
+        if is_ret {
+            self.gen_ret(ir, None);
+        }
+        return Ok(());
     }
 
     fn gen_binary(

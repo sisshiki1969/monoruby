@@ -5,6 +5,8 @@ pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;
 use num::BigInt;
 pub use ruruby_parse::*;
+use std::io::Write;
+use tempfile::NamedTempFile;
 //use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
@@ -175,7 +177,7 @@ pub fn run_test(code: &str) {
 
     assert!(Value::eq(interp_val, jit_val));
 
-    let ruby_res = run_ruby(&all_codes);
+    let ruby_res = run_ruby(&all_codes, &mut globals);
 
     assert!(Value::eq(jit_val, ruby_res));
 }
@@ -189,21 +191,23 @@ fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
     jit_val
 }
 
-fn run_ruby(code: &Vec<String>) -> Value {
+fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
     use std::process::Command;
-    let code = code
-        .iter()
-        .map(|s| s.trim_matches('\n').to_owned())
-        .collect::<Vec<String>>()
-        .join(";");
+    let code = code.join(";");
+    let mut tmp_file = NamedTempFile::new().unwrap();
+    tmp_file
+        .write_all(
+            format!(
+                r#"a = ({});
+                p(a)"#,
+                code
+            )
+            .as_bytes(),
+        )
+        .unwrap();
 
-    #[cfg(not(debug_assertions))]
-    let now = Instant::now();
     let output = Command::new("ruby")
-        .args(&[
-            "-e",
-            &format!("x=(eval\"def f() {} end; f\");puts;p(x)", code),
-        ])
+        .args(&[tmp_file.path().to_string_lossy().to_string()])
         .output();
 
     let res = match &output {
@@ -229,6 +233,9 @@ fn run_ruby(code: &Vec<String>) -> Value {
             } else if res.starts_with('"') {
                 let s = res.trim_matches('"').to_string();
                 Value::string(s.into_bytes())
+            } else if res.starts_with(':') {
+                let sym = globals.get_ident_id(res.trim_matches(':'));
+                Value::symbol(sym)
             } else {
                 eprintln!("Ruby: {:?}", res);
                 Value::bool(false)
@@ -238,8 +245,6 @@ fn run_ruby(code: &Vec<String>) -> Value {
             panic!("Error occured in executing Ruby. {:?}", err);
         }
     };
-    #[cfg(not(debug_assertions))]
-    eprintln!("ruby: {} elapsed:{:?}", res, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("ruby: {}", res);
     res
@@ -601,9 +606,13 @@ mod test {
 
     #[test]
     fn test6() {
-        run_test("return 5");
-        run_test("a=5; return a");
-        run_test("a=5; b=6; return a+b");
+        run_test("def f; return 5; end; f");
+        run_test("def f; return 5; end; f()");
+        run_test("def f; return 5; end; self.f");
+        run_test("def f; return 5; end; self.f()");
+        run_test("def f; a=5; return a; end; f");
+        run_test("def f; a=5; b=6; return a+b; end; f");
+        run_test("def foo; end");
     }
 
     #[test]
@@ -670,6 +679,40 @@ mod test {
         run_test(
             r#"
             if nil then 2*5/3 else 5 end
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_const() {
+        run_test(
+            r#"
+            Const=4
+            Const+=100
+            a = Const
+            Const
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_string() {
+        run_test(
+            r#"
+            def f(x); end
+            f("windows")
+            a = "linux"
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_symbol() {
+        run_test(
+            r#"
+            def f(x); end
+            f(:windows)
+            a = :linux
         "#,
         );
     }

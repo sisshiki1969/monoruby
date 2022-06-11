@@ -688,6 +688,7 @@ dependencies = [
  "paste",
  "ruruby-parse",
  "rustyline",
+ "tempfile",
 ]
 
 [[package]]
@@ -1056,7 +1057,7 @@ dependencies = [
 [[package]]
 name = "ruruby-parse"
 version = "0.0.1"
-source = "git+https://github.com/sisshiki1969/ruruby-parse.git#03ecd2ac1ba71930273f4bede176850036e16c36"
+source = "git+https://github.com/sisshiki1969/ruruby-parse.git#25d9c6744d2e76d6f6b8da8d4bed357c0f898a3c"
 dependencies = [
  "clap",
  "console",

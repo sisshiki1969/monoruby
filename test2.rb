@@ -1,10 +1,6 @@
-def f; 1; end
-a = 0; i = 0
+i = 0
+Const = 100
 while i < 500000000
-  a = a + f
-  if i == 500
-    def f; 0; end
-  end
+  Const
   i = i + 1
 end
-puts a

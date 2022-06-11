@@ -103,7 +103,6 @@ impl EncodedCallInfo {
 /// Bytecode interpreter.
 ///
 pub struct Interp {
-    pub sourceinfo: SourceInfoRef,
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<CodePtr>,
@@ -112,7 +111,7 @@ pub struct Interp {
 }
 
 impl Interp {
-    fn new(main: &NormalFuncInfo) -> Self {
+    fn new() -> Self {
         let mut jit_gen = JitGen::new();
         let vm_entry = jit_gen.jit.label();
         // dispatch table.
@@ -127,7 +126,6 @@ impl Interp {
         };
         let dispatch = vec![entry_panic; 256];
         Self {
-            sourceinfo: main.sourceinfo.clone(),
             jit_gen,
             error: None,
             dispatch,
@@ -187,8 +185,7 @@ impl Interp {
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
-        let main = globals.func[globals.get_main_func()].as_normal();
-        let mut eval = Self::new(main);
+        let mut eval = Self::new();
         let f = eval.jit_gen.exec_toplevel(globals);
         let res = f(&mut eval, globals);
         res.ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
@@ -196,8 +193,7 @@ impl Interp {
 
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let main_id = globals.get_main_func();
-        let main = globals.func[main_id].as_normal();
-        let mut eval = Self::new(main);
+        let mut eval = Self::new();
 
         let entry = eval.construct_vm();
         let vm_entry = eval.jit_gen.jit.get_label_address(eval.vm_entry);
