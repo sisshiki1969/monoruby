@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::*;
 use num::BigInt;
 
@@ -99,6 +101,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(crate) fn new_time(time: Instant) -> Self {
+        RValue {
+            flags: RVFlag::new(TIME_CLASS),
+            kind: ObjKind::Time(time),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -138,6 +148,7 @@ pub enum ObjKind {
     Bignum(BigInt),
     Float(f64),
     Bytes(Vec<u8>),
+    Time(Instant),
     Invalid,
     Dummy(u64, u64, u64, u64, u64),
 }

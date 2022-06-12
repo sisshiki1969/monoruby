@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::{io::stdout, time::Instant};
 
 use super::*;
 
@@ -10,6 +10,10 @@ pub fn init_builtins(globals: &mut Globals) {
     globals.define_global_builtin_func("puts", puts, 1);
     globals.define_global_builtin_func("print", print, 1);
     globals.define_global_builtin_func("assert", assert, 2);
+    globals.define_global_builtin_func("respond_to?", respond_to, 1);
+    globals.define_global_builtin_func("now", now, 0);
+    globals.define_global_builtin_func("inspect", inspect, 0);
+    globals.define_global_builtin_func("write", write, 2);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,4 +62,35 @@ extern "C" fn assert(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: u
     let actual = arg[1];
     assert_eq!(expected, actual);
     Value::nil()
+}
+
+extern "C" fn respond_to(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    _arg: Arg,
+    _len: usize,
+) -> Value {
+    Value::bool(false)
+}
+
+extern "C" fn now(_vm: &mut Interp, _globals: &mut Globals, _arg: Arg, _len: usize) -> Value {
+    Value::time(Instant::now())
+}
+
+extern "C" fn inspect(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+    Value::string(format!("{}", arg.self_value()).into_bytes())
+}
+
+extern "C" fn write(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+    let name = match arg[0].unpack() {
+        RV::String(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+        v => unimplemented!("{}", v),
+    };
+    let mut file = File::create(name).unwrap();
+    let bytes = match arg[1].unpack() {
+        RV::String(bytes) => bytes.clone(),
+        _ => format!("{}", arg[0]).into_bytes(),
+    };
+    file.write_all(&bytes).unwrap();
+    Value::integer(bytes.len() as i64)
 }

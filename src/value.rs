@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::*;
 use num::BigInt;
 
@@ -175,6 +177,10 @@ impl Value {
 
     pub fn symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
+    }
+
+    pub fn time(time: Instant) -> Self {
+        RValue::new_time(time).pack()
     }
 
     pub fn unpack(&self) -> RV {

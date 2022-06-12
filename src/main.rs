@@ -29,7 +29,7 @@ use clap;
 #[derive(clap::Parser, Debug)]
 #[clap(author, version, about, long_about = None, trailing_var_arg = true)]
 struct CommandLineArgs {
-    /// one lineer. several -e's allowed. Omit [programfile]
+    /// one liner. several -e's allowed. Omit [programfile]
     #[clap(short, multiple_occurrences = true)]
     exec: Vec<String>,
     /// print the version number, then turn on verbose mode
@@ -38,6 +38,8 @@ struct CommandLineArgs {
     /// switch JIT compilation.
     #[clap(short, long)]
     jit: bool,
+    #[clap(short = 'W', default_value = "1")]
+    warning: u8,
     /// File name.
     file: Option<String>,
 }
@@ -48,7 +50,7 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            exec(&code, args.jit, std::path::Path::new("REPL"));
+            exec(&code, args.jit, args.warning, std::path::Path::new("REPL"));
         }
         return;
     }
@@ -58,7 +60,12 @@ fn main() {
             let mut file = File::open(file_name.clone()).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            exec(&code, args.jit, &std::path::Path::new(&file_name));
+            exec(
+                &code,
+                args.jit,
+                args.warning,
+                &std::path::Path::new(&file_name),
+            );
         }
         None => {
             let mut rl = Editor::<()>::new();
@@ -68,7 +75,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes, args.jit);
+                        run_repl(&code, &mut all_codes, args.jit, args.warning);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -86,8 +93,8 @@ fn main() {
     }
 }
 
-fn exec(code: &str, jit: bool, path: &std::path::Path) {
-    let mut globals = Globals::new();
+fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
+    let mut globals = Globals::new(warning);
     match globals.compile_script(code.to_string(), path) {
         Ok(_) => {}
         Err(err) => {
@@ -100,9 +107,12 @@ fn exec(code: &str, jit: bool, path: &std::path::Path) {
     match if !jit {
         Interp::eval_toplevel(&mut globals)
     } else {
-        jitcompiler(&mut globals)
+        Interp::jit_exec_toplevel(&mut globals)
     } {
-        Ok(val) => eprintln!("jit({:?}) {:?}", jit, val),
+        Ok(val) => {
+            #[cfg(debug_assertions)]
+            eprintln!("jit({:?}) {:?}", jit, val)
+        }
         Err(err) => {
             eprintln!("{:?}", err.kind);
             err.show_loc();
@@ -110,8 +120,8 @@ fn exec(code: &str, jit: bool, path: &std::path::Path) {
     };
 }
 
-fn repl_exec(code: &str, jit_flag: bool) -> Result<(), MonorubyErr> {
-    let mut globals = Globals::new();
+fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
+    let mut globals = Globals::new(warning);
     match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
         Ok(_) => {}
         Err(err) => {
@@ -131,7 +141,7 @@ fn repl_exec(code: &str, jit_flag: bool) -> Result<(), MonorubyErr> {
             }
         }
     }
-    match jitcompiler(&mut globals) {
+    match Interp::jit_exec_toplevel(&mut globals) {
         Ok(val) => {
             eprintln!("jit: {:?}", val);
             Ok(())
@@ -144,9 +154,9 @@ fn repl_exec(code: &str, jit_flag: bool) -> Result<(), MonorubyErr> {
     }
 }
 
-fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool) {
+fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool, warning: u8) {
     all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";"), jit_flag) {
+    if let Err(_) = repl_exec(&all_codes.join(";"), jit_flag, warning) {
         all_codes.pop();
     };
 }
@@ -155,7 +165,7 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let all_codes = vec![code.to_string()];
-    let mut globals = Globals::new();
+    let mut globals = Globals::new(1);
     globals
         .compile_script(code.to_string(), std::path::Path::new(""))
         .unwrap_or_else(|err| {
@@ -170,7 +180,7 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let jit_val = jitcompiler(&mut globals);
+    let jit_val = Interp::jit_exec_toplevel(&mut globals);
 
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();
@@ -180,15 +190,6 @@ pub fn run_test(code: &str) {
     let ruby_res = run_ruby(&all_codes, &mut globals);
 
     assert!(Value::eq(jit_val, ruby_res));
-}
-
-fn jitcompiler(gen: &mut Globals) -> Result<Value, MonorubyErr> {
-    #[cfg(not(debug_assertions))]
-    let now = Instant::now();
-    let jit_val = Interp::jit_exec_toplevel(gen);
-    #[cfg(not(debug_assertions))]
-    eprintln!("jit: elapsed:{:?}", now.elapsed());
-    jit_val
 }
 
 fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {

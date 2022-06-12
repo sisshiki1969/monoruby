@@ -526,7 +526,7 @@ impl Interp {
             movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (get_constant);
+            movq rax, (vm_get_constant);
             call rax;
             testq rax, rax;
             jeq  entry_return;

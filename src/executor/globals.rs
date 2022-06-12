@@ -9,6 +9,7 @@ pub const INTEGER_CLASS: ClassId = ClassId::new(4);
 pub const FLOAT_CLASS: ClassId = ClassId::new(5);
 pub const STRING_CLASS: ClassId = ClassId::new(6);
 pub const SYMBOL_CLASS: ClassId = ClassId::new(7);
+pub const TIME_CLASS: ClassId = ClassId::new(8);
 
 // Integer#chr
 extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
@@ -36,18 +37,24 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
+    pub warning: u8,
 }
 
 impl Globals {
-    pub fn new() -> Self {
+    pub fn new(warning: u8) -> Self {
         let mut globals = Self {
             func: FnStore::new(),
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
+            warning,
         };
         let name = globals.get_ident_id("Process");
         globals.set_constant(name, Value::int32(42));
+        let name = globals.get_ident_id("Time");
+        globals.set_constant(name, Value::nil());
+        let name = globals.get_ident_id("File");
         builtins::init_builtins(&mut globals);
+        globals.set_constant(name, Value::nil());
         assert_eq!(NIL_CLASS, globals.class.add_class());
         assert_eq!(TRUE_CLASS, globals.class.add_class());
         assert_eq!(FALSE_CLASS, globals.class.add_class());

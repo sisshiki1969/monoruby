@@ -616,17 +616,30 @@ impl JitGen {
                 }
                 BcOp::LoadConst(ret, id) => {
                     let jit_return = self.vm_return;
-                    let const_version = self.const_version;
+                    let cached_const_version = self.jit.const_i64(-1);
+                    let cached_value = self.jit.const_i64(0);
+                    let global_const_version = self.const_version;
+                    let slow_path = self.jit.label();
+                    let exit = self.jit.label();
                     monoasm!(self.jit,
-                      movq rdx, (id.get());  // name: ConstSiteId
-                      movq rcx, [rip + const_version]; // usize
-                      movq rdi, rbx;  // &mut Interp
-                      movq rsi, r12;  // &mut Globals
-                      movq rax, (get_constant);
-                      call rax;
-                      testq rax, rax;
-                      jeq  jit_return;
-                      movq [rbp - (conv(ret))], rax;
+                        movq rax, [rip + global_const_version];
+                        cmpq rax, [rip + cached_const_version];
+                        jne  slow_path;
+                        movq rax, [rip + cached_value];
+                        jmp  exit;
+                    slow_path:
+                        movq rdx, (id.get());  // name: ConstSiteId
+                        movq rdi, rbx;  // &mut Interp
+                        movq rsi, r12;  // &mut Globals
+                        movq rax, (get_constant);
+                        call rax;
+                        testq rax, rax;
+                        jeq  jit_return;
+                        movq [rip + cached_value], rax;
+                        movq rdi, [rip + global_const_version];
+                        movq [rip + cached_const_version], rdi;
+                    exit:
+                        movq [rbp - (conv(ret))], rax;
                     );
                 }
                 BcOp::StoreConst(ret, id) => {
@@ -835,21 +848,21 @@ impl JitGen {
                     let l2 = self.jit.label();
                     let exit = self.jit.label();
                     let slow_path = self.jit.label();
-                    let saved_class_version = self.jit.const_i64(-1);
-                    let saved_recv_class = self.jit.const_i64(0);
-                    let class_version = self.class_version;
+                    let cached_class_version = self.jit.const_i64(-1);
+                    let cacheed_recv_class = self.jit.const_i64(0);
+                    let global_class_version = self.class_version;
                     let entry_find_method = self.entry_find_method;
                     let entry_panic = self.entry_panic;
                     let entry_return = self.vm_return;
                     if recv != 0 {
                         monoasm!(self.jit,
-                            cmpq r15, [rip + saved_recv_class];
+                            cmpq r15, [rip + cacheed_recv_class];
                             jne slow_path;
                         );
                     }
                     monoasm!(self.jit,
-                        movq rax, [rip + class_version];
-                        cmpq [rip + saved_class_version], rax;
+                        movq rax, [rip + global_class_version];
+                        cmpq [rip + cached_class_version], rax;
                         jeq l1;
                         // call site stub code.
                         // push down sp to avoid destroying arguments area.
@@ -872,9 +885,9 @@ impl JitGen {
                         subq rdi, 4;
                         // apply patch.
                         movl [rdi], rax;
-                        movq rax, [rip + class_version];
-                        movq [rip + saved_class_version], rax;
-                        movq [rip + saved_recv_class], r15;
+                        movq rax, [rip + global_class_version];
+                        movq [rip + cached_class_version], rax;
+                        movq [rip + cacheed_recv_class], r15;
                     l1:
                         // set meta/func_id slot to FuncId of the callee.
                         movl [rsp - 0x14], 0;

@@ -651,6 +651,7 @@ impl NormalFuncInfo {
         self.gen_mov(ir, lhs.into(), rhs);
     }
 
+    #[cfg(feature = "emit-bc")]
     fn dump(&self, id_store: &IdentifierTable, store: &FnStore) {
         eprintln!("------------------------------------");
         eprintln!(
@@ -677,7 +678,10 @@ impl NormalFuncInfo {
                 }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
                 BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
-                BcOp::Literal(reg, id) => eprintln!("%{} = literal[{}]", reg, id),
+                BcOp::Literal(reg, id) => {
+                    let v = store.get_literal(id);
+                    eprintln!("%{} = literal[{:?}]", reg, v)
+                }
                 BcOp::LoadConst(reg, id) => {
                     let name = store[id].name;
                     eprintln!("%{} = const[{}]", reg, id_store.get_name(name))
@@ -914,7 +918,12 @@ impl NormalFuncInfo {
                         }
                         return Ok(());
                     }
-                    NodeKind::Const { toplevel, name } => {
+                    NodeKind::Const {
+                        toplevel,
+                        name,
+                        parent: _,
+                        prefix: _,
+                    } => {
                         assert!(!toplevel);
                         let name = id_store.get_ident_id(name);
                         let src = self.next_reg();
@@ -942,7 +951,12 @@ impl NormalFuncInfo {
                             }
                             return Ok(());
                         }
-                        NodeKind::Const { toplevel, name } => {
+                        NodeKind::Const {
+                            toplevel,
+                            name,
+                            parent: _,
+                            prefix: _,
+                        } => {
                             assert!(!toplevel);
                             let name = id_store.get_ident_id_from_string(name);
                             let src = self.next_reg();
@@ -966,7 +980,12 @@ impl NormalFuncInfo {
                 }
                 return Ok(());
             }
-            NodeKind::Const { toplevel, name } => {
+            NodeKind::Const {
+                toplevel,
+                name,
+                parent: _,
+                prefix: _,
+            } => {
                 assert!(!toplevel);
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(ir, None, name, loc);
@@ -1189,7 +1208,12 @@ impl NormalFuncInfo {
                 let local2 = self.load_local(&ident, loc)?;
                 self.gen_mov(ir, local.into(), local2.into());
             }
-            NodeKind::Const { toplevel, name } => {
+            NodeKind::Const {
+                toplevel,
+                name,
+                parent: _,
+                prefix: _,
+            } => {
                 assert!(!toplevel);
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(ir, local.into(), name, loc);
@@ -1317,12 +1341,13 @@ impl NormalFuncInfo {
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
-        let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
         let method = id_store.get_ident_id_from_string(method);
         if receiver.kind == NodeKind::SelfValue {
+            let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
             ir.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
         } else {
             self.gen_expr(ctx, ir, id_store, receiver, true, false)?;
+            let (arg, len) = self.check_fast_call(ctx, ir, id_store, arglist)?;
             let recv = self.pop().into();
             ir.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
         }

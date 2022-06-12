@@ -45,9 +45,41 @@ macro_rules! binop_values {
 
 binop_values!(
     (add, IdentId::_ADD),
-    (sub, IdentId::_SUB),
+    //(sub, IdentId::_SUB),
     (mul, IdentId::_MUL)
 );
+
+pub(super) extern "C" fn sub_values(
+    interp: &mut Interp,
+    _globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let v = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.checked_sub(rhs) {
+            Some(res) => Value::integer(res),
+            None => Value::bigint(BigInt::from(lhs).sub(BigInt::from(rhs))),
+        },
+        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.sub(BigInt::from(rhs))),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).sub(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.sub(rhs)),
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).sub(&rhs)),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.sub(&(rhs as f64))),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.sub(&rhs)),
+        (RV::Object(lhs), RV::Object(rhs)) => match (&lhs.kind, &rhs.kind) {
+            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => Value::float((*lhs - *rhs).as_secs_f64()),
+            _ => {
+                interp.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+                return None;
+            }
+        },
+        _ => {
+            interp.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+            return None;
+        }
+    };
+    Some(v)
+}
 
 pub(super) extern "C" fn div_values(
     interp: &mut Interp,
@@ -361,7 +393,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
     Value::string(res)
 }
 
-pub extern "C" fn get_constant(
+pub extern "C" fn vm_get_constant(
     interp: &mut Interp,
     globals: &mut Globals,
     site_id: ConstSiteId,
@@ -389,6 +421,22 @@ pub extern "C" fn get_constant(
     res
 }
 
+pub extern "C" fn get_constant(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+) -> Option<Value> {
+    let ConstSiteInfo { name, .. } = &globals.func[site_id];
+    let res = match globals.get_constant(*name) {
+        Some(v) => Some(v),
+        None => {
+            interp.error = Some(MonorubyErr::uninitialized_constant(*name));
+            None
+        }
+    };
+    res
+}
+
 pub extern "C" fn set_constant(
     _interp: &mut Interp,
     globals: &mut Globals,
@@ -397,7 +445,7 @@ pub extern "C" fn set_constant(
     const_version: &mut usize,
 ) {
     *const_version += 1;
-    if globals.set_constant(name, val).is_some() {
+    if globals.set_constant(name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",
             globals.get_ident_name(name)
