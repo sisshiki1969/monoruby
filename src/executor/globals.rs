@@ -109,13 +109,10 @@ impl Globals {
     }
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<()> {
-        let id_table = std::mem::take(&mut self.id_store);
-        let res = match Parser::parse_program(code, path.into(), id_table) {
-            Ok(res) => {
-                self.id_store = res.id_store;
-                self.func
-                    .compile_script(res.node, &mut self.id_store, res.source_info)
-            }
+        let res = match Parser::parse_program(code, path.into()) {
+            Ok(res) => self
+                .func
+                .compile_script(res.node, &mut self.id_store, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         };
         res

@@ -14,7 +14,8 @@ pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Opt
 ///
 pub struct JitGen {
     pub jit: JitMemory,
-    class_version: DestLabel,
+    pub class_version: DestLabel,
+    pub const_version: DestLabel,
     pub entry_panic: DestLabel,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
@@ -95,6 +96,7 @@ impl JitGen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i64(0);
+        let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
         let entry_find_method = jit.label();
         let jit_return = jit.label();
@@ -133,6 +135,7 @@ impl JitGen {
         Self {
             jit,
             class_version,
+            const_version,
             entry_panic,
             entry_find_method,
             vm_return,
@@ -613,8 +616,10 @@ impl JitGen {
                 }
                 BcOp::LoadConst(ret, id) => {
                     let jit_return = self.vm_return;
+                    let const_version = self.const_version;
                     monoasm!(self.jit,
-                      movq rdx, (id.get());  // name: IdentId
+                      movq rdx, (id.get());  // name: ConstSiteId
+                      movq rcx, [rip + const_version]; // usize
                       movq rdi, rbx;  // &mut Interp
                       movq rsi, r12;  // &mut Globals
                       movq rax, (get_constant);
@@ -625,9 +630,11 @@ impl JitGen {
                     );
                 }
                 BcOp::StoreConst(ret, id) => {
+                    let const_version = self.const_version;
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
                       movq rcx, [rbp - (conv(ret))];  // val: Value
+                      lea  r8, [rip + const_version];
                       movq rdi, rbx;  // &mut Interp
                       movq rsi, r12;  // &mut Globals
                       movq rax, (set_constant);

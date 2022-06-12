@@ -85,6 +85,28 @@ pub struct CallsiteInfo {
 #[repr(transparent)]
 pub struct CallsiteId(pub u32);
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstSiteInfo {
+    /// Name of constants.
+    pub name: IdentId,
+    /// Qualifier.
+    pub prefix: Vec<IdentId>,
+    /// Is toplevel?. (e.g. ::Foo)
+    pub toplevel: bool,
+    /// Inline constant cache.
+    pub cache: (usize, Option<Value>), //(version, value)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct ConstSiteId(pub u32);
+
+impl ConstSiteId {
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MethodDefInfo {
     pub name: IdentId,
@@ -103,6 +125,8 @@ pub struct FnStore {
     method_def_info: Vec<MethodDefInfo>,
     /// callsite info.
     callsite_info: Vec<CallsiteInfo>,
+    /// const access site info.
+    constsite_info: Vec<ConstSiteInfo>,
     /// literal values.
     literals: Vec<Value>,
 }
@@ -140,6 +164,19 @@ impl std::ops::IndexMut<CallsiteId> for FnStore {
     }
 }
 
+impl std::ops::Index<ConstSiteId> for FnStore {
+    type Output = ConstSiteInfo;
+    fn index(&self, index: ConstSiteId) -> &ConstSiteInfo {
+        &self.constsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ConstSiteId> for FnStore {
+    fn index_mut(&mut self, index: ConstSiteId) -> &mut ConstSiteInfo {
+        &mut self.constsite_info[index.0 as usize]
+    }
+}
+
 impl FnStore {
     pub fn new() -> Self {
         Self {
@@ -147,6 +184,7 @@ impl FnStore {
             main: None,
             method_def_info: vec![],
             callsite_info: vec![],
+            constsite_info: vec![],
             literals: vec![],
         }
     }
@@ -641,7 +679,8 @@ impl NormalFuncInfo {
                 BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
                 BcOp::Literal(reg, id) => eprintln!("%{} = literal[{}]", reg, id),
                 BcOp::LoadConst(reg, id) => {
-                    eprintln!("%{} = const[{}]", reg, id_store.get_name(id))
+                    let name = store[id].name;
+                    eprintln!("%{} = const[{}]", reg, id_store.get_name(name))
                 }
                 BcOp::StoreConst(reg, id) => {
                     eprintln!("const[{}] = %{}", id_store.get_name(id), reg)
@@ -1608,6 +1647,24 @@ impl NormalFuncInfo {
         }
     }
 
+    fn add_constsite(
+        &self,
+        store: &mut FnStore,
+        name: IdentId,
+        prefix: Vec<IdentId>,
+        toplevel: bool,
+    ) -> ConstSiteId {
+        let info = ConstSiteInfo {
+            name,
+            prefix,
+            toplevel,
+            cache: (usize::MAX, None),
+        };
+        let id = store.callsite_info.len();
+        store.constsite_info.push(info);
+        ConstSiteId(id as u32)
+    }
+
     fn add_callsite(
         &self,
         store: &mut FnStore,
@@ -1651,8 +1708,11 @@ impl NormalFuncInfo {
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
                 BcIr::Symbol(reg, name) => BcOp::Symbol(self.get_index(reg), *name),
                 BcIr::Literal(reg, num) => BcOp::Literal(self.get_index(reg), *num),
-                BcIr::LoadConst(reg, id) => BcOp::LoadConst(self.get_index(reg), *id),
-                BcIr::StoreConst(reg, id) => BcOp::StoreConst(self.get_index(reg), *id),
+                BcIr::LoadConst(reg, name) => BcOp::LoadConst(
+                    self.get_index(reg),
+                    self.add_constsite(store, *name, vec![], false),
+                ),
+                BcIr::StoreConst(reg, name) => BcOp::StoreConst(self.get_index(reg), *name),
                 BcIr::Nil(reg) => BcOp::Nil(self.get_index(reg)),
                 BcIr::Neg(dst, src) => BcOp::Neg(self.get_index(dst), self.get_index(src)),
                 BcIr::Add(dst, lhs, rhs) => BcOp::Add(

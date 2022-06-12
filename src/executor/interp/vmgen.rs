@@ -55,8 +55,9 @@ extern "C" fn find_method(
     callsite_id: CallsiteId,
     data: &mut FuncData,
     receiver: Value,
+    class_version: usize,
 ) -> Option<EncodedCallInfo> {
-    match interp.find_method(globals, callsite_id, receiver) {
+    match interp.find_method(globals, callsite_id, receiver, class_version) {
         Some((func_id, args, len, ret)) => {
             get_func_data(interp, globals, func_id, data);
             data.ret = ret as usize;
@@ -84,10 +85,15 @@ extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_i
     Value::dup(globals.func.get_literal(literal_id))
 }
 
-extern "C" fn define_method(interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
+extern "C" fn define_method(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    def_id: MethodDefId,
+    class_version: &mut usize,
+) {
     let MethodDefInfo { name, func } = globals.func[def_id];
     globals.class.add_method(ClassId::default(), name, func);
-    interp.class_version += 1;
+    *class_version += 1;
 }
 
 /*extern "C" fn eprintln(data: u64) {
@@ -378,6 +384,7 @@ impl Interp {
         ret: DestLabel,
     ) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
+        let class_version = self.jit_gen.class_version;
         let exit = self.jit_gen.jit.label();
         let loop_ = self.jit_gen.jit.label();
         let loop_exit = self.jit_gen.jit.label();
@@ -389,6 +396,7 @@ impl Interp {
             movq rsi, r12;  // rsi: &mut Globals
             lea rcx, [rip + func_offset]; // rcx: &mut FuncData
             movq r8, [r15]; // r8: receiver:Value
+            movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
             call rax;       // rax <- EncodedCallInfo
             testq rax, rax;
@@ -508,9 +516,11 @@ impl Interp {
     fn vm_load_const(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
         let entry_return = self.jit_gen.vm_return;
+        let const_version = self.jit_gen.const_version;
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
-            movq rdx, rdi;  // name: IdentId
+            movq rdx, rdi;  // name: ConstSiteId
+            movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (get_constant);
@@ -525,10 +535,12 @@ impl Interp {
 
     fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
+        let const_version = self.jit_gen.const_version;
         self.vm_get_addr_r15();
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // name: IdentId
             movq rcx, [r15];  // val: Value
+            lea  r8, [rip + const_version]; // &mut usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (set_constant);
@@ -759,8 +771,10 @@ impl Interp {
 
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit_gen.jit.get_current_address();
+        let class_version = self.jit_gen.class_version;
         monoasm! { self.jit_gen.jit,
             movq rdx, rdi;  // method_def_id
+            lea  rcx, [rip + class_version]; // &mut usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (define_method);

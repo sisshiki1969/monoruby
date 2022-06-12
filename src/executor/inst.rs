@@ -52,7 +52,7 @@ pub(super) enum BcOp {
     Symbol(u16, IdentId),
     /// literal(%ret, literal_id)
     Literal(u16, u32),
-    LoadConst(u16, IdentId),
+    LoadConst(u16, ConstSiteId),
     StoreConst(u16, IdentId),
     /// nil(%reg)
     Nil(u16),
@@ -178,7 +178,7 @@ impl BcOp {
                 7 => Self::Literal(op1, op2),
                 8 => Self::Nil(op1),
                 9 => Self::Symbol(op1, IdentId::from(op2)),
-                10 => Self::LoadConst(op1, IdentId::from(op2)),
+                10 => Self::LoadConst(op1, ConstSiteId(op2)),
                 11 => Self::StoreConst(op1, IdentId::from(op2)),
                 _ => unreachable!(),
             }

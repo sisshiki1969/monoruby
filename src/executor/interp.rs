@@ -106,7 +106,6 @@ pub struct Interp {
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
     dispatch: Vec<CodePtr>,
-    class_version: usize,
     vm_entry: DestLabel,
 }
 
@@ -129,7 +128,6 @@ impl Interp {
             jit_gen,
             error: None,
             dispatch,
-            class_version: 0,
             vm_entry,
         }
     }
@@ -161,6 +159,7 @@ impl Interp {
         globals: &mut Globals,
         callsite_id: CallsiteId,
         receiver: Value,
+        class_version: usize,
     ) -> Option<(FuncId, u16, u16, u16)> {
         let CallsiteInfo {
             ret,
@@ -170,12 +169,12 @@ impl Interp {
             cache: (version, cached_class_id, cached_func),
         } = globals.func[callsite_id];
         let recv_class = receiver.class();
-        let func_id = if version == self.class_version && cached_class_id == recv_class {
+        let func_id = if version == class_version && cached_class_id == recv_class {
             cached_func
         } else {
             match self.get_method(globals, recv_class, name, len as usize) {
                 Some(id) => {
-                    globals.func[callsite_id].cache = (self.class_version, recv_class, id);
+                    globals.func[callsite_id].cache = (class_version, recv_class, id);
                     id
                 }
                 None => return None,

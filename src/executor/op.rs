@@ -360,15 +360,29 @@ pub extern "C" fn concatenate_string(arg: *mut Value, len: usize) -> Value {
 pub extern "C" fn get_constant(
     interp: &mut Interp,
     globals: &mut Globals,
-    name: IdentId,
+    site_id: ConstSiteId,
+    const_version: usize,
 ) -> Option<Value> {
-    match globals.get_constant(name) {
+    let ConstSiteInfo {
+        name,
+        prefix,
+        toplevel,
+        cache: (cached_version, val),
+    } = &globals.func[site_id];
+    assert_eq!(0, prefix.len());
+    assert!(!toplevel);
+    if *cached_version == const_version {
+        return *val;
+    };
+    let res = match globals.get_constant(*name) {
         Some(v) => Some(v),
         None => {
-            interp.error = Some(MonorubyErr::uninitialized_constant(name));
+            interp.error = Some(MonorubyErr::uninitialized_constant(*name));
             None
         }
-    }
+    };
+    globals.func[site_id].cache = (const_version, res);
+    res
 }
 
 pub extern "C" fn set_constant(
@@ -376,7 +390,9 @@ pub extern "C" fn set_constant(
     globals: &mut Globals,
     name: IdentId,
     val: Value,
+    const_version: &mut usize,
 ) {
+    *const_version += 1;
     if globals.set_constant(name, val).is_some() {
         eprintln!(
             "warning: already initialized constant {}",
