@@ -341,7 +341,9 @@ pub(super) extern "C" fn neg_value(
     Some(v)
 }
 
-pub extern "C" fn concatenate_string(arg: *mut Value, len: usize) -> Value {
+use dtoa;
+
+pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: usize) -> Value {
     let mut res = vec![];
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
@@ -349,7 +351,9 @@ pub extern "C" fn concatenate_string(arg: *mut Value, len: usize) -> Value {
             RV::Nil => res.extend("nil".bytes()),
             RV::Bool(b) => res.extend(format!("{}", b).bytes()),
             RV::Integer(i) => res.extend(format!("{}", i).bytes()),
+            RV::Float(f) => res.extend(format!("{}", dtoa::Buffer::new().format(f)).bytes()),
             RV::BigInt(b) => res.extend(format!("{}", b).bytes()),
+            RV::Symbol(sym) => res.extend(globals.get_ident_name(sym).bytes()),
             RV::String(b) => res.extend(b),
             _ => unimplemented!(),
         };

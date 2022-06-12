@@ -769,8 +769,9 @@ impl JitGen {
                 }
                 BcOp::ConcatStr(ret, arg, len) => {
                     monoasm!(self.jit,
-                        lea rdi, [rbp - (conv(arg))];
-                        movq rsi, (len);
+                        movq rdi, r12;
+                        lea rsi, [rbp - (conv(arg))];
+                        movq rdx, (len);
                         movq rax, (concatenate_string);
                         call rax;
                     );

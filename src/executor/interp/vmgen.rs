@@ -368,6 +368,9 @@ impl Interp {
         let exit = self.jit_gen.jit.label();
         self.vm_get_addr_rdi();
         monoasm! { self.jit_gen.jit,
+            movq rdx, rsi;
+            movq rsi, rdi;
+            movq rdi, r12;
             movq rax, (concatenate_string);
             call rax;
         };

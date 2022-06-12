@@ -1660,7 +1660,7 @@ impl NormalFuncInfo {
             toplevel,
             cache: (usize::MAX, None),
         };
-        let id = store.callsite_info.len();
+        let id = store.constsite_info.len();
         store.constsite_info.push(info);
         ConstSiteId(id as u32)
     }
