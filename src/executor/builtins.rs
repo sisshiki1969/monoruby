@@ -1,4 +1,4 @@
-use std::{io::stdout, time::Instant};
+use std::time::Instant;
 
 use super::*;
 
@@ -44,16 +44,20 @@ extern "C" fn puts(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usiz
     Value::nil()
 }
 
-extern "C" fn print(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, len: usize) -> Value {
+extern "C" fn print(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Value {
     for offset in 0..len {
         match arg[offset].unpack() {
             RV::String(bytes) => {
-                std::io::stdout().write(bytes).unwrap();
+                globals.stdout.write(bytes).unwrap();
             }
-            _ => print!("{}", arg[offset]),
+            _ => {
+                globals
+                    .stdout
+                    .write(&format!("{}", arg[offset]).into_bytes())
+                    .unwrap();
+            }
         };
     }
-    stdout().flush().unwrap();
     Value::nil()
 }
 
@@ -93,4 +97,19 @@ extern "C" fn write(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: us
     };
     file.write_all(&bytes).unwrap();
     Value::integer(bytes.len() as i64)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_builtin() {
+        run_test("puts 100");
+        run_test("print '100'");
+        run_test("nil.respond_to?(:foo)");
+        run_test("Time.now; 100");
+        run_test("nil.inspect");
+        run_test(r#"File.write("/tmp/foo", "woo")"#);
+    }
 }

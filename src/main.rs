@@ -200,6 +200,7 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
         .write_all(
             format!(
                 r#"a = ({});
+                puts;
                 p(a)"#,
                 code
             )

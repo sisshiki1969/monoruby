@@ -1,3 +1,4 @@
+use std::io::{stdout, BufWriter, Stdout};
 use std::path::PathBuf;
 
 use super::*;
@@ -29,7 +30,6 @@ extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usiz
 //
 /// Store of functions.
 ///
-#[derive(Clone, PartialEq)]
 pub struct Globals {
     /// Functions.
     pub func: FnStore,
@@ -37,7 +37,10 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
+    /// warning level.
     pub warning: u8,
+    /// stdout.
+    pub stdout: BufWriter<Stdout>,
 }
 
 impl Globals {
@@ -47,6 +50,7 @@ impl Globals {
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
             warning,
+            stdout: BufWriter::new(stdout()),
         };
         let name = globals.get_ident_id("Process");
         globals.set_constant(name, Value::int32(42));
@@ -63,6 +67,16 @@ impl Globals {
         assert_eq!(STRING_CLASS, globals.class.add_class());
         globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
         globals
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            func: self.func.clone(),
+            id_store: self.id_store.clone(),
+            class: self.class.clone(),
+            warning: self.warning,
+            stdout: BufWriter::new(stdout()),
+        }
     }
 
     /// Get *FuncId* of the toplevel function.
