@@ -1551,6 +1551,15 @@ impl NormalFuncInfo {
                     let local = self.find_local(&lhs);
                     self.gen_mov(ir, local.into(), temp_reg.into());
                 }
+                NodeKind::Const {
+                    toplevel,
+                    parent,
+                    prefix,
+                    name,
+                } if !toplevel && parent.is_none() && prefix.len() == 0 => {
+                    let name = id_store.get_ident_id_from_string(name);
+                    self.gen_store_const(ir, temp_reg.into(), name, lhs.loc);
+                }
                 _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
             }
             temp_reg += 1;

@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use monoasm::*;
 use monoasm_macro::monoasm;
+use paste::paste;
 
 use super::*;
 
@@ -182,12 +183,12 @@ impl JitGen {
         );
     }
 
-    pub(super) fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
         self.guard_rdi_fixnum(generic);
         self.guard_rsi_fixnum(generic);
     }
 
-    pub(super) fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
             // check whether lhs is fixnum.
             testq rdi, 0x1;
@@ -195,7 +196,7 @@ impl JitGen {
         );
     }
 
-    pub(super) fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
+    fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
             // check whether rhs is fixnum.
             testq rsi, 0x1;
@@ -203,7 +204,7 @@ impl JitGen {
         );
     }
 
-    pub(super) fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
+    fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
@@ -215,7 +216,7 @@ impl JitGen {
         );
     }
 
-    pub(super) fn call_binop(&mut self, func: u64, entry_return: DestLabel) {
+    fn call_binop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;
@@ -594,6 +595,18 @@ impl JitGen {
             }};
         }
 
+        macro_rules! bin_ops {
+            ($op:ident, $ret:ident, $lhs:ident, $rhs:ident) => {{
+                paste! {
+                    let generic = self.jit.label();
+                    let exit = self.jit.label();
+                    self.load_binary_args($lhs, $rhs);
+                    self.guard_rdi_rsi_fixnum(generic);
+                    self.[<generic_ $op>](generic, exit, $ret);
+                }
+            }};
+        }
+
         let label = self.jit.get_current_address();
         let mut labels = vec![];
         for _ in func.bytecode() {
@@ -735,41 +748,11 @@ impl JitGen {
                     self.load_binary_args(lhs, rhs);
                     self.generic_op(ret, div_values as _);
                 }
-                BcOp::BitOr(ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let exit = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.generic_bit_or(generic, exit, ret);
-                }
-                BcOp::BitAnd(ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let exit = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.generic_bit_and(generic, exit, ret);
-                }
-                BcOp::BitXor(ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let exit = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.generic_bit_xor(generic, exit, ret);
-                }
-                BcOp::Shr(ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let exit = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.generic_shr(generic, exit, ret);
-                }
-                BcOp::Shl(ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let exit = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.generic_shl(generic, exit, ret);
-                }
+                BcOp::BitOr(ret, lhs, rhs) => bin_ops!(bit_or, ret, lhs, rhs),
+                BcOp::BitAnd(ret, lhs, rhs) => bin_ops!(bit_and, ret, lhs, rhs),
+                BcOp::BitXor(ret, lhs, rhs) => bin_ops!(bit_xor, ret, lhs, rhs),
+                BcOp::Shr(ret, lhs, rhs) => bin_ops!(shr, ret, lhs, rhs),
+                BcOp::Shl(ret, lhs, rhs) => bin_ops!(shl, ret, lhs, rhs),
                 BcOp::Cmp(kind, ret, lhs, rhs) => match kind {
                     CmpKind::Eq => cmp!(lhs, rhs, ret, seteq, cmp_eq_values),
                     CmpKind::Ne => cmp!(lhs, rhs, ret, setne, cmp_ne_values),
@@ -812,116 +795,7 @@ impl JitGen {
                         );
                     }
                 }
-                BcOp::MethodCall(recv, id) => {
-                    // set arguments to a callee stack.
-                    //
-                    //       +-------------+
-                    //  0x00 |             | <- rsp
-                    //       +-------------+
-                    // -0x08 | return addr |
-                    //       +-------------+
-                    // -0x10 |   old rbp   |
-                    //       +-------------+
-                    // -0x18 |    meta     |
-                    //       +-------------+
-                    // -0x20 |     %0      |
-                    //       +-------------+
-                    // -0x28 | %1(1st arg) |
-                    //       +-------------+
-                    //       |             |
-                    //
-                    let CallsiteInfo {
-                        ret,
-                        name,
-                        args,
-                        len,
-                        ..
-                    } = store[id];
-                    if recv != 0 {
-                        monoasm!(self.jit,
-                            movq rdi, [rbp - (conv(recv))];
-                            movq rax, (Value::get_class);
-                            call rax;
-                            movq r15, rax;  // r15: receiver class_id
-                        );
-                    }
-
-                    let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
-                    monoasm!(self.jit,
-                        // set meta
-                        movl [rsp - 0x18], 1;
-                        // set self
-                        movq rax, [rbp - (conv(recv))];
-                        movq [rsp - 0x20], rax;
-                    );
-                    // set arguments
-                    for i in 0..len {
-                        let reg = args + i;
-                        monoasm!(self.jit,
-                            movq rax, [rbp - (conv(reg))];
-                            movq [rsp - ((0x28 + i * 8) as i64)], rax;
-                        );
-                    }
-                    let l1 = self.jit.label();
-                    let l2 = self.jit.label();
-                    let exit = self.jit.label();
-                    let slow_path = self.jit.label();
-                    let cached_class_version = self.jit.const_i64(-1);
-                    let cacheed_recv_class = self.jit.const_i64(0);
-                    let global_class_version = self.class_version;
-                    let entry_find_method = self.entry_find_method;
-                    let entry_panic = self.entry_panic;
-                    let entry_return = self.vm_return;
-                    if recv != 0 {
-                        monoasm!(self.jit,
-                            cmpq r15, [rip + cacheed_recv_class];
-                            jne slow_path;
-                        );
-                    }
-                    monoasm!(self.jit,
-                        movq rax, [rip + global_class_version];
-                        cmpq [rip + cached_class_version], rax;
-                        jeq l1;
-                        // call site stub code.
-                        // push down sp to avoid destroying arguments area.
-                    slow_path:
-                        subq rsp, (sp_max);
-                        movq rdx, (u32::from(name)); // IdentId
-                        movq rcx, (len as usize); // args_len: usize
-                        movq r8, [rbp - (conv(recv))]; // receiver: Value
-                        lea r9, [rip + l2];
-                        subq r9, 4; // &mut FuncId
-                        call entry_find_method;
-                        // absolute address was returned to rax.
-                        addq rsp, (sp_max);
-                        testq rax, rax;
-                        jeq entry_return;
-                        lea rdi, [rip + exit];
-                        // calculate a displacement to the function address.
-                        subq rax, rdi;
-                        // set patch point address (= return address - 4) to rdi.
-                        subq rdi, 4;
-                        // apply patch.
-                        movl [rdi], rax;
-                        movq rax, [rip + global_class_version];
-                        movq [rip + cached_class_version], rax;
-                        movq [rip + cacheed_recv_class], r15;
-                    l1:
-                        // set meta/func_id slot to FuncId of the callee.
-                        movl [rsp - 0x14], 0;
-                    l2:
-                        // patch point
-                        call entry_panic;
-                    exit:
-                        testq rax, rax;
-                        jeq entry_return;
-                    );
-                    if ret != 0 {
-                        monoasm!(self.jit,
-                            movq [rbp - (conv(ret))], rax;
-                        );
-                    }
-                }
+                BcOp::MethodCall(recv, id) => self.jit_method_call(store, recv, id),
                 BcOp::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
@@ -964,5 +838,116 @@ impl JitGen {
             }
         }
         label
+    }
+
+    fn jit_method_call(&mut self, store: &FnStore, recv: u16, id: CallsiteId) {
+        // set arguments to a callee stack.
+        //
+        //       +-------------+
+        //  0x00 |             | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |   old rbp   |
+        //       +-------------+
+        // -0x18 |    meta     |
+        //       +-------------+
+        // -0x20 |     %0      |
+        //       +-------------+
+        // -0x28 | %1(1st arg) |
+        //       +-------------+
+        //       |             |
+        //
+        let CallsiteInfo {
+            ret,
+            name,
+            args,
+            len,
+            ..
+        } = store[id];
+        if recv != 0 {
+            monoasm!(self.jit,
+                movq rdi, [rbp - (conv(recv))];
+                movq rax, (Value::get_class);
+                call rax;
+                movq r15, rax;  // r15: receiver class_id
+            );
+        }
+
+        let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
+        monoasm!(self.jit,
+            // set meta
+            movl [rsp - 0x18], 1;
+            // set self
+            movq rax, [rbp - (conv(recv))];
+            movq [rsp - 0x20], rax;
+        );
+        // set arguments
+        for i in 0..len {
+            let reg = args + i;
+            monoasm!(self.jit,
+                movq rax, [rbp - (conv(reg))];
+                movq [rsp - ((0x28 + i * 8) as i64)], rax;
+            );
+        }
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
+        let exit = self.jit.label();
+        let slow_path = self.jit.label();
+        let cached_class_version = self.jit.const_i64(-1);
+        let cacheed_recv_class = self.jit.const_i64(0);
+        let global_class_version = self.class_version;
+        let entry_find_method = self.entry_find_method;
+        let entry_panic = self.entry_panic;
+        let entry_return = self.vm_return;
+        if recv != 0 {
+            monoasm!(self.jit,
+                cmpq r15, [rip + cacheed_recv_class];
+                jne slow_path;
+            );
+        }
+        monoasm!(self.jit,
+            movq rax, [rip + global_class_version];
+            cmpq [rip + cached_class_version], rax;
+            jeq l1;
+            // call site stub code.
+            // push down sp to avoid destroying arguments area.
+        slow_path:
+            subq rsp, (sp_max);
+            movq rdx, (u32::from(name)); // IdentId
+            movq rcx, (len as usize); // args_len: usize
+            movq r8, [rbp - (conv(recv))]; // receiver: Value
+            lea r9, [rip + l2];
+            subq r9, 4; // &mut FuncId
+            call entry_find_method;
+            // absolute address was returned to rax.
+            addq rsp, (sp_max);
+            testq rax, rax;
+            jeq entry_return;
+            lea rdi, [rip + exit];
+            // calculate a displacement to the function address.
+            subq rax, rdi;
+            // set patch point address (= return address - 4) to rdi.
+            subq rdi, 4;
+            // apply patch.
+            movl [rdi], rax;
+            movq rax, [rip + global_class_version];
+            movq [rip + cached_class_version], rax;
+            movq [rip + cacheed_recv_class], r15;
+        l1:
+            // set meta/func_id slot to FuncId of the callee.
+            movl [rsp - 0x14], 0;
+        l2:
+            // patch point
+            call entry_panic;
+        exit:
+            testq rax, rax;
+            jeq entry_return;
+        );
+        if ret != 0 {
+            monoasm!(self.jit,
+                movq [rbp - (conv(ret))], rax;
+            );
+        }
     }
 }
