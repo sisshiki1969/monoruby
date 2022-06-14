@@ -304,6 +304,11 @@ mod test {
     }
 
     #[test]
+    fn test_multi_assign() {
+        run_test("a, B = 7, 9.5; a + B");
+    }
+
+    #[test]
     fn test_bigint() {
         for lhs in [
             "0",
