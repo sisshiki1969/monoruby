@@ -1,11 +1,5 @@
-use std::num::NonZeroU64;
-
 use super::compiler::JitGen;
 use super::*;
-use monoasm::*;
-use monoasm_macro::monoasm;
-use paste::paste;
-mod vmgen;
 
 ///
 /// Program counter base.
@@ -77,58 +71,19 @@ impl std::default::Default for BcPc {
     reg as i64 * 8 + 16
 }*/
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-struct FuncData {
-    offset: usize,
-    address: *mut u8,
-    pc: BcPc,
-    ret: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-struct EncodedCallInfo(NonZeroU64);
-
-impl EncodedCallInfo {
-    fn new(func_id: FuncId, args: u16, len: u16) -> Self {
-        Self(
-            NonZeroU64::new((func_id.0 as u64) + ((args as u64) << 48) + ((len as u64) << 32))
-                .unwrap(),
-        )
-    }
-}
-
 ///
 /// Bytecode interpreter.
 ///
 pub struct Interp {
     pub jit_gen: JitGen,
     pub error: Option<MonorubyErr>,
-    dispatch: Vec<CodePtr>,
-    vm_entry: DestLabel,
 }
 
 impl Interp {
     fn new() -> Self {
-        let mut jit_gen = JitGen::new();
-        let vm_entry = jit_gen.jit.label();
-        // dispatch table.
-        let entry_panic = jit_gen.jit.get_current_address();
-        monoasm! { jit_gen.jit,
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rax, (super::compiler::unimplemented_inst);
-                call rax;
-                leave;
-                ret;
-        };
-        let dispatch = vec![entry_panic; 256];
         Self {
-            jit_gen,
+            jit_gen: JitGen::new(),
             error: None,
-            dispatch,
-            vm_entry,
         }
     }
 
@@ -154,7 +109,7 @@ impl Interp {
         Some(func_id)
     }
 
-    fn find_method(
+    pub fn find_method(
         &mut self,
         globals: &mut Globals,
         callsite_id: CallsiteId,
@@ -194,8 +149,8 @@ impl Interp {
         let main_id = globals.get_main_func();
         let mut eval = Self::new();
 
-        let entry = eval.construct_vm();
-        let vm_entry = eval.jit_gen.jit.get_label_address(eval.vm_entry);
+        let entry = eval.jit_gen.construct_vm();
+        let vm_entry = eval.jit_gen.jit.get_label_address(eval.jit_gen.vm_entry);
         globals.func.precompile(&mut eval.jit_gen, vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =

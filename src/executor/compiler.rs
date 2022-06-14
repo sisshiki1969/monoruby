@@ -5,6 +5,8 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+mod vmgen;
+
 pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Option<Value>;
 
 ///
@@ -17,8 +19,10 @@ pub struct JitGen {
     pub class_version: DestLabel,
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
+    pub vm_entry: DestLabel,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
+    pub dispatch: Vec<CodePtr>,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -101,6 +105,7 @@ impl JitGen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
+        let vm_entry = jit.label();
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -132,13 +137,26 @@ impl JitGen {
             leave;
             ret;
         );
+        // dispatch table.
+        let entry_unimpl = jit.get_current_address();
+        monoasm! { jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rax, (super::compiler::unimplemented_inst);
+                call rax;
+                leave;
+                ret;
+        };
+        let dispatch = vec![entry_unimpl; 256];
         Self {
             jit,
             class_version,
             const_version,
             entry_panic,
             entry_find_method,
+            vm_entry,
             vm_return,
+            dispatch,
         }
     }
 
