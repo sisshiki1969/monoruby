@@ -37,6 +37,7 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
+    pub error: Option<MonorubyErr>,
     /// warning level.
     pub warning: u8,
     /// stdout.
@@ -49,6 +50,7 @@ impl Globals {
             func: FnStore::new(),
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
+            error: None,
             warning,
             stdout: BufWriter::new(stdout()),
         };
@@ -74,6 +76,7 @@ impl Globals {
             func: self.func.clone(),
             id_store: self.id_store.clone(),
             class: self.class.clone(),
+            error: None,
             warning: self.warning,
             stdout: BufWriter::new(stdout()),
         }
@@ -92,11 +95,60 @@ impl Globals {
         self.id_store.get_name(id)
     }
 
-    pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    fn get_method_inner(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {
             return Some(func_id);
         }
         self.class.get_method(ClassId::new(0), name)
+    }
+
+    pub fn vm_find_method(
+        &mut self,
+        callsite_id: CallsiteId,
+        receiver: Value,
+        class_version: usize,
+    ) -> Option<(FuncId, u16, u16, u16)> {
+        let CallsiteInfo {
+            ret,
+            name,
+            args,
+            len,
+            cache: (version, cached_class_id, cached_func),
+        } = self.func[callsite_id];
+        let recv_class = receiver.class();
+        let func_id = if version == class_version && cached_class_id == recv_class {
+            cached_func
+        } else {
+            match self.get_method(recv_class, name, len as usize) {
+                Some(id) => {
+                    self.func[callsite_id].cache = (class_version, recv_class, id);
+                    id
+                }
+                None => return None,
+            }
+        };
+        Some((func_id, args, len, ret))
+    }
+
+    pub fn get_method(
+        &mut self,
+        class_id: ClassId,
+        func_name: IdentId,
+        args_len: usize,
+    ) -> Option<FuncId> {
+        let func_id = match self.get_method_inner(class_id, func_name) {
+            Some(id) => id,
+            None => {
+                self.error = Some(MonorubyErr::method_not_found(func_name));
+                return None;
+            }
+        };
+        let arity = self.func[func_id].arity();
+        if arity != args_len {
+            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
+            return None;
+        }
+        Some(func_id)
     }
 
     pub fn get_constant(&self, name: IdentId) -> Option<Value> {

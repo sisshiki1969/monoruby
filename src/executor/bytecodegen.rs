@@ -193,6 +193,10 @@ impl FnStore {
         self.functions.0.len()
     }
 
+    pub fn funcs_mut(&mut self) -> &mut Vec<FuncInfo> {
+        &mut self.functions.0
+    }
+
     fn add_method_def(&mut self, name: IdentId, func: FuncId) -> MethodDefId {
         let info = MethodDefInfo { name, func };
         let id = self.method_def_info.len();
@@ -210,20 +214,6 @@ impl FnStore {
         let constants = self.literals.len();
         self.literals.push(val);
         constants as u32
-    }
-
-    pub fn precompile(&mut self, jit: &mut JitGen, vm_entry: CodePtr) {
-        for func in &mut self.functions.0 {
-            match &func.kind {
-                FuncKind::Normal(_) => {
-                    func.set_jit_label(vm_entry);
-                }
-                FuncKind::Builtin { abs_address } => {
-                    let label = jit.wrap_builtin(*abs_address, func.arity());
-                    func.set_jit_label(label);
-                }
-            };
-        }
     }
 }
 

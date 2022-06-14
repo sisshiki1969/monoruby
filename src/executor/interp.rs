@@ -1,4 +1,4 @@
-use super::compiler::JitGen;
+use super::compiler::Codegen;
 use super::*;
 
 ///
@@ -75,89 +75,36 @@ impl std::default::Default for BcPc {
 /// Bytecode interpreter.
 ///
 pub struct Interp {
-    pub jit_gen: JitGen,
-    pub error: Option<MonorubyErr>,
+    pub codegen: Codegen,
 }
 
 impl Interp {
     fn new() -> Self {
         Self {
-            jit_gen: JitGen::new(),
-            error: None,
+            codegen: Codegen::new(),
         }
-    }
-
-    pub fn get_method(
-        &mut self,
-        globals: &Globals,
-        class_id: ClassId,
-        func_name: IdentId,
-        args_len: usize,
-    ) -> Option<FuncId> {
-        let func_id = match globals.get_method(class_id, func_name) {
-            Some(id) => id,
-            None => {
-                self.error = Some(MonorubyErr::method_not_found(func_name));
-                return None;
-            }
-        };
-        let arity = globals.func[func_id].arity();
-        if arity != args_len {
-            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
-            return None;
-        }
-        Some(func_id)
-    }
-
-    pub fn find_method(
-        &mut self,
-        globals: &mut Globals,
-        callsite_id: CallsiteId,
-        receiver: Value,
-        class_version: usize,
-    ) -> Option<(FuncId, u16, u16, u16)> {
-        let CallsiteInfo {
-            ret,
-            name,
-            args,
-            len,
-            cache: (version, cached_class_id, cached_func),
-        } = globals.func[callsite_id];
-        let recv_class = receiver.class();
-        let func_id = if version == class_version && cached_class_id == recv_class {
-            cached_func
-        } else {
-            match self.get_method(globals, recv_class, name, len as usize) {
-                Some(id) => {
-                    globals.func[callsite_id].cache = (class_version, recv_class, id);
-                    id
-                }
-                None => return None,
-            }
-        };
-        Some((func_id, args, len, ret))
     }
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let mut eval = Self::new();
-        let f = eval.jit_gen.exec_toplevel(globals);
+        let f = eval.codegen.exec_toplevel(globals);
         let res = f(&mut eval, globals);
-        res.ok_or_else(|| std::mem::take(&mut eval.error).unwrap())
+        res.ok_or_else(|| std::mem::take(&mut globals.error).unwrap())
     }
 
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let main_id = globals.get_main_func();
         let mut eval = Self::new();
 
-        let entry = eval.jit_gen.construct_vm();
-        let vm_entry = eval.jit_gen.jit.get_label_address(eval.jit_gen.vm_entry);
-        globals.func.precompile(&mut eval.jit_gen, vm_entry);
+        let entry = eval.codegen.construct_vm();
+        let vm_entry = eval.codegen.jit.get_label_address(eval.codegen.vm_entry);
+        eval.codegen.precompile(&mut globals.func, vm_entry);
 
         let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
             unsafe { std::mem::transmute(entry.as_ptr()) };
         match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
-            None => Err(eval.error.unwrap()),
+            None => Err(std::mem::take(&mut globals.error).unwrap()),
         }
     }
 }

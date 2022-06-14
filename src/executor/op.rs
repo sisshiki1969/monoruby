@@ -12,8 +12,8 @@ macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Interp,
-                _globals: &mut Globals,
+                _interp: &mut Interp,
+                globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
@@ -29,7 +29,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
                     _ => {
-                        interp.error = Some(MonorubyErr::method_not_found($op_str));
+                        globals.error = Some(MonorubyErr::method_not_found($op_str));
                         return None;
                     }
                 };
@@ -50,8 +50,8 @@ binop_values!(
 );
 
 pub(super) extern "C" fn sub_values(
-    interp: &mut Interp,
-    _globals: &mut Globals,
+    _interp: &mut Interp,
+    globals: &mut Globals,
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
@@ -69,12 +69,12 @@ pub(super) extern "C" fn sub_values(
         (RV::Object(lhs), RV::Object(rhs)) => match (&lhs.kind, &rhs.kind) {
             (ObjKind::Time(lhs), ObjKind::Time(rhs)) => Value::float((*lhs - *rhs).as_secs_f64()),
             _ => {
-                interp.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+                globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
                 return None;
             }
         },
         _ => {
-            interp.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
             return None;
         }
     };
@@ -82,77 +82,77 @@ pub(super) extern "C" fn sub_values(
 }
 
 pub(super) extern "C" fn div_values(
-    interp: &mut Interp,
-    _globals: &mut Globals,
+    _interp: &mut Interp,
+    globals: &mut Globals,
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::bigint(BigInt::from(lhs).div_floor(rhs))
         }
         (RV::Integer(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::float((lhs as f64).div(&rhs))
         }
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::bigint(lhs.div_floor(rhs))
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::float((lhs.to_f64().unwrap()).div(&rhs))
         }
         (RV::Float(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::float(lhs.div(&(rhs as f64)))
         }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::float(lhs.div(&rhs.to_f64().unwrap()))
         }
         (RV::Float(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                interp.error = Some(MonorubyErr::divide_by_zero());
+                globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
             Value::float(lhs.div(&rhs))
         }
         _ => {
-            interp.error = Some(MonorubyErr::method_not_found(IdentId::_DIV));
+            globals.error = Some(MonorubyErr::method_not_found(IdentId::_DIV));
             return None;
         }
     };
@@ -163,8 +163,8 @@ macro_rules! int_binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Interp,
-                _globals: &mut Globals,
+                _interp: &mut Interp,
+                globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
@@ -174,7 +174,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     _ => {
-                        interp.error = Some(MonorubyErr::method_not_found($op_str));
+                        globals.error = Some(MonorubyErr::method_not_found($op_str));
                         return None;
                     }
                 };
@@ -195,8 +195,8 @@ int_binop_values!(
 );
 
 pub(super) extern "C" fn shr_values(
-    interp: &mut Interp,
-    _globals: &mut Globals,
+    _interp: &mut Interp,
+    globals: &mut Globals,
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
@@ -216,7 +216,7 @@ pub(super) extern "C" fn shr_values(
             }
         }
         (_lhs, _rhs) => {
-            interp.error = Some(MonorubyErr::method_not_found(IdentId::_SHR));
+            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SHR));
             return None;
         }
     };
@@ -224,8 +224,8 @@ pub(super) extern "C" fn shr_values(
 }
 
 pub(super) extern "C" fn shl_values(
-    interp: &mut Interp,
-    _globals: &mut Globals,
+    _interp: &mut Interp,
+    globals: &mut Globals,
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
@@ -245,7 +245,7 @@ pub(super) extern "C" fn shl_values(
             }
         }
         (_lhs, _rhs) => {
-            interp.error = Some(MonorubyErr::method_not_found(IdentId::_SHL));
+            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SHL));
             return None;
         }
     };
@@ -354,8 +354,8 @@ macro_rules! cmp_ri_values {
 cmp_ri_values!(eq, ne, ge, gt, le, lt);
 
 pub(super) extern "C" fn neg_value(
-    interp: &mut Interp,
-    _globals: &mut Globals,
+    _interp: &mut Interp,
+    globals: &mut Globals,
     lhs: Value,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
@@ -366,7 +366,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::float(-lhs),
         RV::BigInt(lhs) => Value::bigint(-lhs),
         _ => {
-            interp.error = Some(MonorubyErr::method_not_found(IdentId::_UMINUS));
+            globals.error = Some(MonorubyErr::method_not_found(IdentId::_UMINUS));
             return None;
         }
     };
@@ -394,7 +394,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
 }
 
 pub extern "C" fn vm_get_constant(
-    interp: &mut Interp,
+    _interp: &mut Interp,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
@@ -413,7 +413,7 @@ pub extern "C" fn vm_get_constant(
     let res = match globals.get_constant(*name) {
         Some(v) => Some(v),
         None => {
-            interp.error = Some(MonorubyErr::uninitialized_constant(*name));
+            globals.error = Some(MonorubyErr::uninitialized_constant(*name));
             None
         }
     };
@@ -422,7 +422,7 @@ pub extern "C" fn vm_get_constant(
 }
 
 pub extern "C" fn get_constant(
-    interp: &mut Interp,
+    _interp: &mut Interp,
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
@@ -430,7 +430,7 @@ pub extern "C" fn get_constant(
     let res = match globals.get_constant(*name) {
         Some(v) => Some(v),
         None => {
-            interp.error = Some(MonorubyErr::uninitialized_constant(*name));
+            globals.error = Some(MonorubyErr::uninitialized_constant(*name));
             None
         }
     };

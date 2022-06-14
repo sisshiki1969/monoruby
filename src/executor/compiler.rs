@@ -15,7 +15,7 @@ pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Opt
 ///
 /// This generates x86-64 machine code from a bytecode.
 ///
-pub struct JitGen {
+pub struct Codegen {
     pub jit: JitMemory,
     pub class_version: DestLabel,
     pub const_version: DestLabel,
@@ -47,13 +47,13 @@ extern "C" fn get_func_address(
     receiver: Value,
     funcid_patch: &mut FuncId,
 ) -> Option<CodePtr> {
-    let func_id = interp.get_method(globals, receiver.class(), func_name, args_len)?;
+    let func_id = globals.get_method(receiver.class(), func_name, args_len)?;
     *funcid_patch = func_id;
     match globals.func[func_id].jit_label() {
         Some(dest) => Some(dest),
         None => {
             let mut info = std::mem::take(&mut globals.func[func_id]);
-            let label = interp.jit_gen.jit_compile(&mut info, &globals.func);
+            let label = interp.codegen.jit_compile(&mut info, &globals.func);
             globals.func[func_id] = info;
             Some(label)
         }
@@ -80,7 +80,7 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
 }
 
 extern "C" fn get_error_location(
-    interp: &mut Interp,
+    _interp: &mut Interp,
     globals: &mut Globals,
     func_id: FuncId,
     pc: BcPc,
@@ -89,7 +89,7 @@ extern "C" fn get_error_location(
     let sourceinfo = normal_info.sourceinfo.clone();
     let bc_base = globals.func[func_id].inst_pc();
     let loc = normal_info.sourcemap[pc - bc_base];
-    match &mut interp.error {
+    match &mut globals.error {
         Some(err) => {
             err.loc.push((loc, sourceinfo));
         }
@@ -97,7 +97,7 @@ extern "C" fn get_error_location(
     };
 }
 
-impl JitGen {
+impl Codegen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i64(0);
@@ -239,12 +239,8 @@ impl JitGen {
 
     fn generic_op2(&mut self, generic: DestLabel, exit: DestLabel, ret: u16, func: u64) {
         self.jit.bind_label(generic);
-        self.call_binop(func, self.vm_return);
-        monoasm!(self.jit,
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
-        exit:
-        );
+        self.generic_op(ret, func);
+        self.jit.bind_label(exit);
     }
 
     fn fast_add(&mut self, exit: DestLabel, generic: DestLabel, ret: u16) {
@@ -948,6 +944,22 @@ impl JitGen {
             monoasm!(self.jit,
                 movq [rbp - (conv(ret))], rax;
             );
+        }
+    }
+}
+
+impl Codegen {
+    pub fn precompile(&mut self, store: &mut FnStore, vm_entry: CodePtr) {
+        for func in store.funcs_mut().iter_mut() {
+            match &func.kind {
+                FuncKind::Normal(_) => {
+                    func.set_jit_label(vm_entry);
+                }
+                FuncKind::Builtin { abs_address } => {
+                    let label = self.wrap_builtin(*abs_address, func.arity());
+                    func.set_jit_label(label);
+                }
+            };
         }
     }
 }

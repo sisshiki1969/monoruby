@@ -82,7 +82,7 @@ extern "C" fn find_method(
     receiver: Value,
     class_version: usize,
 ) -> Option<EncodedCallInfo> {
-    match interp.find_method(globals, callsite_id, receiver, class_version) {
+    match globals.vm_find_method(callsite_id, receiver, class_version) {
         Some((func_id, args, len, ret)) => {
             get_func_data(interp, globals, func_id, data);
             data.ret = ret as usize;
@@ -125,7 +125,7 @@ extern "C" fn define_method(
     eprintln!("{:016x}", data);
 }*/
 
-impl JitGen {
+impl Codegen {
     ///
     /// Generator of virtual machine.
     ///
