@@ -6,6 +6,4 @@ def fib(x)
   end
 end;
 
-for x in 0..9
-   fib 34
-end
+fib 40

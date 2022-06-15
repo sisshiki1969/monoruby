@@ -443,8 +443,7 @@ impl Codegen {
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
             movzxw r8, rax;    // r8 <- len
-            shlq r8, 3;
-            lea rdx, [rsp - 0x28];
+            //lea rdx, [rsp - 0x28];
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;
@@ -472,16 +471,15 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
-            movq rsi, rdi;
-            subq rsi, r8;
+            testq r8, r8;
+            jeq  loop_exit;
+            //shlq r8, 3;
+            negq r8;
         loop_:
-            cmpq rdi, rsi;
-            jeq loop_exit;
-            movq rax, [rdi];
-            movq [rdx], rax;
-            subq rdi, 8;
-            subq rdx, 8;
-            jmp loop_;
+            movq rax, [rdi + r8 * 8 + 8];
+            movq [rsp + r8 * 8- 0x20], rax;
+            addq r8, 1;
+            jne  loop_;
         loop_exit:
 
             movq rax, [rip + func_address];
