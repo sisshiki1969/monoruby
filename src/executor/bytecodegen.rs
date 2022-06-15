@@ -565,12 +565,12 @@ impl NormalFuncInfo {
             };
             ir.push(BcIr::Integer(reg, i), Loc::default());
         } else {
-            self.gen_literal(ctx, ir, dst, Value::integer(i));
+            self.gen_literal(ctx, ir, dst, Value::new_integer(i));
         }
     }
 
     fn gen_float(&mut self, ctx: &mut FnStore, ir: &mut IrContext, dst: Option<BcLocal>, f: f64) {
-        self.gen_literal(ctx, ir, dst, Value::float(f));
+        self.gen_literal(ctx, ir, dst, Value::new_float(f));
     }
 
     fn gen_symbol(&mut self, ir: &mut IrContext, dst: Option<BcLocal>, sym: IdentId) {
@@ -588,7 +588,7 @@ impl NormalFuncInfo {
         dst: Option<BcLocal>,
         b: Vec<u8>,
     ) {
-        self.gen_literal(ctx, ir, dst, Value::string(b));
+        self.gen_literal(ctx, ir, dst, Value::new_string(b));
     }
 
     fn gen_bigint(
@@ -598,7 +598,7 @@ impl NormalFuncInfo {
         dst: Option<BcLocal>,
         bigint: BigInt,
     ) {
-        self.gen_literal(ctx, ir, dst, Value::bigint(bigint));
+        self.gen_literal(ctx, ir, dst, Value::new_bigint(bigint));
     }
 
     fn gen_nil(&mut self, ir: &mut IrContext, dst: Option<BcLocal>) {

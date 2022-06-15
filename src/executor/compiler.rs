@@ -572,7 +572,7 @@ impl Codegen {
                 let exit = self.jit.label();
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv($lhs))];
-                    movq rsi, (Value::integer($rhs as i64).get());
+                    movq rsi, (Value::new_integer($rhs as i64).get());
                 );
                 self.guard_rdi_fixnum(generic);
                 monoasm!(self.jit,
@@ -619,7 +619,7 @@ impl Codegen {
                     );
                 }
                 BcOp::Symbol(ret, id) => {
-                    let sym = Value::symbol(id).get();
+                    let sym = Value::new_symbol(id).get();
                     monoasm!(self.jit,
                       movq rax, (sym);
                       movq [rbp - (conv(ret))], rax;

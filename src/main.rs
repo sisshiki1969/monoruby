@@ -221,11 +221,11 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
                 .last()
                 .unwrap();
             if let Ok(n) = res.parse::<i64>() {
-                Value::integer(n)
+                Value::new_integer(n)
             } else if let Ok(n) = res.parse::<BigInt>() {
-                Value::bigint(n)
+                Value::new_bigint(n)
             } else if let Ok(n) = res.parse::<f64>() {
-                Value::float(n)
+                Value::new_float(n)
             } else if res == "true" {
                 Value::bool(true)
             } else if res == "false" {
@@ -234,10 +234,10 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
                 Value::nil()
             } else if res.starts_with('"') {
                 let s = res.trim_matches('"').to_string();
-                Value::string(s.into_bytes())
+                Value::new_string(s.into_bytes())
             } else if res.starts_with(':') {
                 let sym = globals.get_ident_id(res.trim_matches(':'));
-                Value::symbol(sym)
+                Value::new_symbol(sym)
             } else {
                 eprintln!("Ruby: {:?}", res);
                 Value::bool(false)

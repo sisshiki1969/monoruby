@@ -94,6 +94,14 @@ impl RValue {
         }
     }
 
+    pub(crate) fn new_class(id: ClassId) -> Self {
+        RValue {
+            flags: RVFlag::new(CLASS_CLASS),
+            kind: ObjKind::Class(id),
+            var_table: None,
+        }
+    }
+
     pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS),
@@ -145,6 +153,7 @@ impl RVFlag {
 
 #[derive(Debug, Clone)]
 pub enum ObjKind {
+    Class(ClassId),
     Bignum(BigInt),
     Float(f64),
     Bytes(Vec<u8>),

@@ -3,14 +3,8 @@ use std::path::PathBuf;
 
 use super::*;
 
-pub const NIL_CLASS: ClassId = ClassId::new(1);
-pub const TRUE_CLASS: ClassId = ClassId::new(2);
-pub const FALSE_CLASS: ClassId = ClassId::new(3);
-pub const INTEGER_CLASS: ClassId = ClassId::new(4);
-pub const FLOAT_CLASS: ClassId = ClassId::new(5);
-pub const STRING_CLASS: ClassId = ClassId::new(6);
-pub const SYMBOL_CLASS: ClassId = ClassId::new(7);
-pub const TIME_CLASS: ClassId = ClassId::new(8);
+mod classes;
+pub use classes::*;
 
 // Integer#chr
 extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
@@ -24,7 +18,7 @@ extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usiz
         }
         _ => unreachable!(),
     };
-    Value::string(vec![b])
+    Value::new_string(vec![b])
 }
 
 //
@@ -61,12 +55,14 @@ impl Globals {
         let name = globals.get_ident_id("File");
         builtins::init_builtins(&mut globals);
         globals.set_constant(name, Value::nil());
-        assert_eq!(NIL_CLASS, globals.class.add_class());
-        assert_eq!(TRUE_CLASS, globals.class.add_class());
-        assert_eq!(FALSE_CLASS, globals.class.add_class());
-        assert_eq!(INTEGER_CLASS, globals.class.add_class());
-        assert_eq!(FLOAT_CLASS, globals.class.add_class());
-        assert_eq!(STRING_CLASS, globals.class.add_class());
+        assert_eq!(OBJECT_CLASS, globals.define_class().as_class());
+        assert_eq!(CLASS_CLASS, globals.define_class().as_class());
+        assert_eq!(NIL_CLASS, globals.define_class().as_class());
+        assert_eq!(TRUE_CLASS, globals.define_class().as_class());
+        assert_eq!(FALSE_CLASS, globals.define_class().as_class());
+        assert_eq!(INTEGER_CLASS, globals.define_class().as_class());
+        assert_eq!(FLOAT_CLASS, globals.define_class().as_class());
+        assert_eq!(STRING_CLASS, globals.define_class().as_class());
         globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
         globals
     }
@@ -93,6 +89,13 @@ impl Globals {
 
     pub fn get_ident_name(&self, id: IdentId) -> &str {
         self.id_store.get_name(id)
+    }
+
+    fn define_class(&mut self) -> Value {
+        let id = self.class.add_class();
+        let class_obj = Value::new_empty_class(id);
+        self.class[id].set_class_obj(class_obj);
+        class_obj
     }
 
     fn get_method_inner(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
@@ -165,7 +168,7 @@ impl Globals {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
-        self.define_builtin_func(ClassId(0), name, address, arity)
+        self.define_builtin_func(ClassId::new(0), name, address, arity)
     }
 
     pub fn define_builtin_func(
@@ -210,92 +213,5 @@ impl Globals {
             }
             MonorubyErrKind::DivideByZero => format!("divided by 0"),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(transparent)]
-pub struct ClassId(u32);
-
-impl ClassId {
-    pub const fn new(id: u32) -> Self {
-        Self(id)
-    }
-}
-
-impl std::default::Default for ClassId {
-    fn default() -> Self {
-        Self(0)
-    }
-}
-
-impl Into<u32> for ClassId {
-    fn into(self) -> u32 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClassInfo {
-    methods: HashMap<IdentId, FuncId>,
-    /// constants table.
-    constants: HashMap<IdentId, Value>,
-}
-
-impl ClassInfo {
-    fn new() -> Self {
-        Self {
-            methods: HashMap::default(),
-            constants: HashMap::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClassStore {
-    /// class table.
-    classes: Vec<ClassInfo>,
-}
-
-impl std::ops::Index<ClassId> for ClassStore {
-    type Output = ClassInfo;
-    fn index(&self, index: ClassId) -> &Self::Output {
-        &self.classes[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<ClassId> for ClassStore {
-    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.classes[index.0 as usize]
-    }
-}
-
-impl ClassStore {
-    fn new() -> Self {
-        Self {
-            classes: vec![ClassInfo::new()],
-        }
-    }
-
-    pub fn add_class(&mut self) -> ClassId {
-        let id = self.classes.len();
-        self.classes.push(ClassInfo::new());
-        ClassId(id as u32)
-    }
-
-    pub fn add_method(&mut self, class_id: ClassId, name: IdentId, func: FuncId) {
-        self[class_id].methods.insert(name, func);
-    }
-
-    pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        self[class_id].methods.get(&name).cloned()
-    }
-
-    pub fn set_constants(&mut self, name: IdentId, val: Value) -> Option<Value> {
-        self.classes[0].constants.insert(name, val)
-    }
-
-    pub fn get_constants(&self, name: IdentId) -> Option<Value> {
-        self.classes[0].constants.get(&name).cloned()
     }
 }

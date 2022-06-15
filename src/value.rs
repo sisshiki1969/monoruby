@@ -142,7 +142,7 @@ impl Value {
         Value::fixnum(num as i64)
     }
 
-    pub fn integer(num: i64) -> Self {
+    pub fn new_integer(num: i64) -> Self {
         if Self::is_i63(num) {
             Value::fixnum(num)
         } else {
@@ -150,7 +150,7 @@ impl Value {
         }
     }
 
-    pub fn float(num: f64) -> Self {
+    pub fn new_float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(FLOAT_ZERO);
         }
@@ -163,23 +163,27 @@ impl Value {
         }
     }
 
-    pub fn bigint(bigint: BigInt) -> Self {
+    pub fn new_bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
-            Value::integer(i)
+            Value::new_integer(i)
         } else {
             RValue::new_bigint(bigint).pack()
         }
     }
 
-    pub fn string(b: Vec<u8>) -> Self {
+    pub fn new_empty_class(id: ClassId) -> Self {
+        RValue::new_class(id).pack()
+    }
+
+    pub fn new_string(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
     }
 
-    pub fn symbol(id: IdentId) -> Self {
+    pub fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
-    pub fn time(time: Instant) -> Self {
+    pub fn new_time(time: Instant) -> Self {
         RValue::new_time(time).pack()
     }
 
@@ -274,6 +278,16 @@ impl Value {
 
     pub(crate) fn rvalue(&self) -> &RValue {
         unsafe { &*(self.get() as *const RValue) }
+    }
+
+    pub(crate) fn as_class(&self) -> ClassId {
+        match self.unpack() {
+            RV::Object(rv) => match rv.kind {
+                ObjKind::Class(id) => id,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
     }
 
     /*pub(crate) fn rvalue_mut(&self) -> &mut RValue {

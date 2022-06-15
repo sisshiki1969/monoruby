@@ -19,15 +19,15 @@ macro_rules! binop_values {
             ) -> Option<Value> {
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.[<checked_ $op>](rhs){
-                        Some(res) => Value::integer(res),
-                        None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
+                        Some(res) => Value::new_integer(res),
+                        None => Value::new_bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
                     }
-                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
-                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
-                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
-                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).$op(&rhs)),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
                         globals.error = Some(MonorubyErr::method_not_found($op_str));
                         return None;
@@ -57,17 +57,19 @@ pub(super) extern "C" fn sub_values(
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.checked_sub(rhs) {
-            Some(res) => Value::integer(res),
-            None => Value::bigint(BigInt::from(lhs).sub(BigInt::from(rhs))),
+            Some(res) => Value::new_integer(res),
+            None => Value::new_bigint(BigInt::from(lhs).sub(BigInt::from(rhs))),
         },
-        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.sub(BigInt::from(rhs))),
-        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).sub(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.sub(rhs)),
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).sub(&rhs)),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.sub(&(rhs as f64))),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.sub(&rhs)),
+        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.sub(BigInt::from(rhs))),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).sub(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.sub(rhs)),
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).sub(&rhs)),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.sub(&(rhs as f64))),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.sub(&rhs)),
         (RV::Object(lhs), RV::Object(rhs)) => match (&lhs.kind, &rhs.kind) {
-            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => Value::float((*lhs - *rhs).as_secs_f64()),
+            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => {
+                Value::new_float((*lhs - *rhs).as_secs_f64())
+            }
             _ => {
                 globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
                 return None;
@@ -93,63 +95,63 @@ pub(super) extern "C" fn div_values(
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::integer(lhs.div_floor(rhs))
+            Value::new_integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::bigint(BigInt::from(lhs).div_floor(rhs))
+            Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
         }
         (RV::Integer(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::float((lhs as f64).div(&rhs))
+            Value::new_float((lhs as f64).div(&rhs))
         }
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
+            Value::new_bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::bigint(lhs.div_floor(rhs))
+            Value::new_bigint(lhs.div_floor(rhs))
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::float((lhs.to_f64().unwrap()).div(&rhs))
+            Value::new_float((lhs.to_f64().unwrap()).div(&rhs))
         }
         (RV::Float(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::float(lhs.div(&(rhs as f64)))
+            Value::new_float(lhs.div(&(rhs as f64)))
         }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::float(lhs.div(&rhs.to_f64().unwrap()))
+            Value::new_float(lhs.div(&rhs.to_f64().unwrap()))
         }
         (RV::Float(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
                 globals.error = Some(MonorubyErr::divide_by_zero());
                 return None;
             }
-            Value::float(lhs.div(&rhs))
+            Value::new_float(lhs.div(&rhs))
         }
         _ => {
             globals.error = Some(MonorubyErr::method_not_found(IdentId::_DIV));
@@ -169,10 +171,10 @@ macro_rules! int_binop_values {
                 rhs: Value
             ) -> Option<Value> {
                 let v = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.$op(&rhs)),
-                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::new_integer(lhs.$op(&rhs)),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
                     _ => {
                         globals.error = Some(MonorubyErr::method_not_found($op_str));
                         return None;
@@ -253,7 +255,7 @@ pub(super) extern "C" fn shl_values(
 }
 
 fn int_shr(lhs: i64, rhs: u32) -> Value {
-    Value::integer(
+    Value::new_integer(
         lhs.checked_shr(rhs)
             .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
     )
@@ -261,17 +263,17 @@ fn int_shr(lhs: i64, rhs: u32) -> Value {
 
 fn int_shl(lhs: i64, rhs: u32) -> Value {
     match lhs.checked_shl(rhs) {
-        Some(res) => Value::integer(res),
+        Some(res) => Value::new_integer(res),
         None => bigint_shl(&BigInt::from(lhs), rhs),
     }
 }
 
 fn bigint_shr(lhs: &BigInt, rhs: u32) -> Value {
-    Value::bigint(lhs.shr(rhs))
+    Value::new_bigint(lhs.shr(rhs))
 }
 
 fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
-    Value::bigint(lhs.shl(rhs))
+    Value::new_bigint(lhs.shl(rhs))
 }
 
 macro_rules! cmp_values {
@@ -360,11 +362,11 @@ pub(super) extern "C" fn neg_value(
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Integer(lhs) => match lhs.checked_neg() {
-            Some(lhs) => Value::integer(lhs),
-            None => Value::bigint(-BigInt::from(lhs)),
+            Some(lhs) => Value::new_integer(lhs),
+            None => Value::new_bigint(-BigInt::from(lhs)),
         },
-        RV::Float(lhs) => Value::float(-lhs),
-        RV::BigInt(lhs) => Value::bigint(-lhs),
+        RV::Float(lhs) => Value::new_float(-lhs),
+        RV::BigInt(lhs) => Value::new_bigint(-lhs),
         _ => {
             globals.error = Some(MonorubyErr::method_not_found(IdentId::_UMINUS));
             return None;
@@ -390,7 +392,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
             _ => unimplemented!(),
         };
     }
-    Value::string(res)
+    Value::new_string(res)
 }
 
 pub extern "C" fn vm_get_constant(

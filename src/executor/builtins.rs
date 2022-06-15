@@ -78,11 +78,11 @@ extern "C" fn respond_to(
 }
 
 extern "C" fn now(_vm: &mut Interp, _globals: &mut Globals, _arg: Arg, _len: usize) -> Value {
-    Value::time(Instant::now())
+    Value::new_time(Instant::now())
 }
 
 extern "C" fn inspect(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
-    Value::string(format!("{}", arg.self_value()).into_bytes())
+    Value::new_string(format!("{}", arg.self_value()).into_bytes())
 }
 
 extern "C" fn write(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
@@ -96,7 +96,7 @@ extern "C" fn write(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: us
         _ => format!("{}", arg[0]).into_bytes(),
     };
     file.write_all(&bytes).unwrap();
-    Value::integer(bytes.len() as i64)
+    Value::new_integer(bytes.len() as i64)
 }
 
 #[cfg(test)]
