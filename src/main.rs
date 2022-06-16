@@ -121,6 +121,25 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
 }
 
 fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
+    if !jit_flag {
+        let mut globals = Globals::new(warning);
+        match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("{}", globals.get_error_message(&err));
+                err.show_all_loc();
+                return Err(err);
+            }
+        };
+        match Interp::eval_toplevel(&mut globals) {
+            Ok(val) => eprintln!("vm: {}", globals.val_tos(val)),
+            Err(err) => {
+                eprintln!("vm:{}", globals.get_error_message(&err));
+                err.show_all_loc();
+            }
+        }
+    }
+
     let mut globals = Globals::new(warning);
     match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
         Ok(_) => {}
@@ -130,20 +149,9 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
             return Err(err);
         }
     };
-
-    if !jit_flag {
-        let mut globals2 = globals.clone();
-        match Interp::eval_toplevel(&mut globals2) {
-            Ok(val) => eprintln!("vm: {:?}", val),
-            Err(err) => {
-                eprintln!("vm:{}", globals2.get_error_message(&err));
-                err.show_all_loc();
-            }
-        }
-    }
     match Interp::jit_exec_toplevel(&mut globals) {
         Ok(val) => {
-            eprintln!("jit: {:?}", val);
+            eprintln!("jit: {}", globals.val_tos(val));
             Ok(())
         }
         Err(err) => {
@@ -238,6 +246,9 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
             } else if res.starts_with(':') {
                 let sym = globals.get_ident_id(res.trim_matches(':'));
                 Value::new_symbol(sym)
+            } else if res.starts_with(|c: char| c.is_ascii_uppercase()) {
+                let constant = globals.get_ident_id(res);
+                globals.get_constant(constant).unwrap()
             } else {
                 eprintln!("Ruby: {:?}", res);
                 Value::bool(false)
@@ -248,7 +259,7 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", res);
+    eprintln!("ruby: {}", globals.val_tos(res));
     res
 }
 

@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use crate::*;
 use num::BigInt;
 
@@ -22,12 +20,6 @@ pub struct Value(std::num::NonZeroU64);
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.unpack())
-    }
-}
-
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.unpack())
     }
 }
 
@@ -66,7 +58,7 @@ impl Value {
         Value::from(ptr as u64)
     }
 
-    pub fn class(&self) -> ClassId {
+    pub fn class_id(&self) -> ClassId {
         if let Some(_) = self.as_fixnum() {
             INTEGER_CLASS
         } else if let Some(_) = self.as_flonum() {
@@ -85,8 +77,16 @@ impl Value {
         }
     }
 
+    pub fn change_class(&mut self, new_class_id: ClassId) {
+        if !self.is_packed_value() {
+            self.rvalue_mut().change_class(new_class_id);
+        } else {
+            unreachable!("the class of primitive class can not be changed.");
+        }
+    }
+
     pub extern "C" fn get_class(val: Value) -> ClassId {
-        val.class()
+        val.class_id()
     }
 
     pub(crate) extern "C" fn dup(val: Value) -> Self {
@@ -183,7 +183,7 @@ impl Value {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
-    pub fn new_time(time: Instant) -> Self {
+    pub fn new_time(time: TimeInfo) -> Self {
         RValue::new_time(time).pack()
     }
 
@@ -290,9 +290,9 @@ impl Value {
         }
     }
 
-    /*pub(crate) fn rvalue_mut(&self) -> &mut RValue {
+    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
         unsafe { &mut *(self.get() as *mut RValue) }
-    }*/
+    }
 
     /*#[inline(always)]
     fn is_packed_num(&self) -> bool {
@@ -325,25 +325,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
                 Ok(s) => write!(f, "\"{}\"", s),
                 Err(_) => write!(f, "{:?}", s),
             },
-            RV::Object(rvalue) => write!(f, "{}", rvalue),
-        }
-    }
-}
-
-impl<'a> std::fmt::Display for RV<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RV::Nil => write!(f, "nil"),
-            RV::Bool(b) => write!(f, "{:?}", b),
-            RV::Integer(n) => write!(f, "{}", n),
-            RV::BigInt(n) => write!(f, "{}", n),
-            RV::Float(n) => write!(f, "{}", n),
-            RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
-            RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => write!(f, "{}", s),
-                Err(_) => write!(f, "{:?}", s),
-            },
-            RV::Object(rvalue) => write!(f, "{}", rvalue),
+            RV::Object(rvalue) => write!(f, "{:?}", rvalue),
         }
     }
 }

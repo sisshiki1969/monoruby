@@ -110,14 +110,14 @@ extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_i
     Value::dup(globals.func.get_literal(literal_id))
 }
 
-extern "C" fn define_method(
+extern "C" fn vm_define_method(
     _interp: &mut Interp,
     globals: &mut Globals,
     def_id: MethodDefId,
     class_version: &mut usize,
 ) {
     let MethodDefInfo { name, func } = globals.func[def_id];
-    globals.class.add_method(ClassId::default(), name, func);
+    globals.class.add_method(OBJECT_CLASS, name, func);
     *class_version += 1;
 }
 
@@ -804,7 +804,7 @@ impl Codegen {
             lea  rcx, [rip + class_version]; // &mut usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (define_method);
+            movq rax, (vm_define_method);
             call rax;
         };
         self.fetch_and_dispatch();

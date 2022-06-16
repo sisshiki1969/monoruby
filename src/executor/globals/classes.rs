@@ -35,8 +35,14 @@ impl Into<u32> for ClassId {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
-    /// class object.
-    class_object: Option<Value>,
+    /// the constant name which this class object is bound.
+    name: Option<String>,
+    /// corresponding class object.
+    object: Option<Value>,
+    /// super class.
+    super_class_id: Option<ClassId>,
+    /// is singleton class?
+    pub(super) is_singleton: Option<Value>,
     /// method table.
     methods: HashMap<IdentId, FuncId>,
     /// constants table.
@@ -44,16 +50,50 @@ pub struct ClassInfo {
 }
 
 impl ClassInfo {
-    fn new() -> Self {
+    fn new(super_class_id: Option<ClassId>) -> Self {
         Self {
-            class_object: None,
+            name: None,
+            object: None,
+            super_class_id,
+            is_singleton: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
         }
     }
 
-    pub fn set_class_obj(&mut self, class_obj: Value) {
-        self.class_object = Some(class_obj);
+    fn new_singleton(super_class_id: Option<ClassId>, base: Value) -> Self {
+        Self {
+            name: None,
+            object: None,
+            super_class_id,
+            is_singleton: Some(base),
+            methods: HashMap::default(),
+            constants: HashMap::default(),
+        }
+    }
+
+    pub(super) fn set_class_obj(&mut self, class_obj: Value) {
+        self.object = Some(class_obj);
+    }
+
+    pub(super) fn get_obj(&self) -> Value {
+        self.object.unwrap()
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        self.name = Some(name);
+    }
+
+    pub fn get_name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+
+    pub fn super_class(&self) -> Option<ClassId> {
+        self.super_class_id
+    }
+
+    pub fn is_singleton(&self) -> bool {
+        self.is_singleton.is_some()
     }
 }
 
@@ -79,13 +119,24 @@ impl std::ops::IndexMut<ClassId> for ClassStore {
 impl ClassStore {
     pub fn new() -> Self {
         Self {
-            classes: vec![ClassInfo::new()],
+            classes: vec![ClassInfo::new(None)],
         }
     }
 
-    pub fn add_class(&mut self) -> ClassId {
+    pub(super) fn add_class(&mut self, super_class: Option<ClassId>) -> ClassId {
         let id = self.classes.len();
-        self.classes.push(ClassInfo::new());
+        self.classes.push(ClassInfo::new(super_class));
+        ClassId(id as u32)
+    }
+
+    pub(super) fn add_singleton_class(
+        &mut self,
+        super_class: Option<ClassId>,
+        base: Value,
+    ) -> ClassId {
+        let id = self.classes.len();
+        self.classes
+            .push(ClassInfo::new_singleton(super_class, base));
         ClassId(id as u32)
     }
 
@@ -103,5 +154,13 @@ impl ClassStore {
 
     pub fn get_constants(&self, name: IdentId) -> Option<Value> {
         self.classes[0].constants.get(&name).cloned()
+    }
+
+    pub(super) fn get_real_class_obj(&self, val: Value) -> Value {
+        let mut id = val.class_id();
+        while self[id].is_singleton() {
+            id = self[id].get_obj().class_id();
+        }
+        self[id].get_obj()
     }
 }

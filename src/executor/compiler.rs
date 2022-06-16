@@ -47,7 +47,7 @@ extern "C" fn get_func_address(
     receiver: Value,
     funcid_patch: &mut FuncId,
 ) -> Option<CodePtr> {
-    let func_id = globals.get_method(receiver.class(), func_name, args_len)?;
+    let func_id = globals.get_method(receiver.class_id(), func_name, args_len)?;
     *funcid_patch = func_id;
     match globals.func[func_id].jit_label() {
         Some(dest) => Some(dest),
@@ -63,12 +63,10 @@ extern "C" fn get_func_address(
 extern "C" fn define_method(
     _interp: &mut Interp,
     globals: &mut Globals,
-    func_name: IdentId,
-    func_id: FuncId,
+    name: IdentId,
+    func: FuncId,
 ) {
-    globals
-        .class
-        .add_method(ClassId::new(0), func_name, func_id);
+    globals.class.add_method(OBJECT_CLASS, name, func);
 }
 
 pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals) {

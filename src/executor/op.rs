@@ -67,9 +67,12 @@ pub(super) extern "C" fn sub_values(
         (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.sub(&(rhs as f64))),
         (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.sub(&rhs)),
         (RV::Object(lhs), RV::Object(rhs)) => match (&lhs.kind, &rhs.kind) {
-            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => {
-                Value::new_float((*lhs - *rhs).as_secs_f64())
-            }
+            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => Value::new_float(
+                ((lhs.clone() - rhs.clone()).num_nanoseconds().unwrap() as f64)
+                    / 1000.0
+                    / 1000.0
+                    / 1000.0,
+            ),
             _ => {
                 globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
                 return None;
@@ -375,22 +378,11 @@ pub(super) extern "C" fn neg_value(
     Some(v)
 }
 
-use dtoa;
-
 pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: usize) -> Value {
     let mut res = vec![];
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        match v.unpack() {
-            RV::Nil => res.extend("nil".bytes()),
-            RV::Bool(b) => res.extend(format!("{}", b).bytes()),
-            RV::Integer(i) => res.extend(format!("{}", i).bytes()),
-            RV::Float(f) => res.extend(format!("{}", dtoa::Buffer::new().format(f)).bytes()),
-            RV::BigInt(b) => res.extend(format!("{}", b).bytes()),
-            RV::Symbol(sym) => res.extend(globals.get_ident_name(sym).bytes()),
-            RV::String(b) => res.extend(b),
-            _ => unimplemented!(),
-        };
+        res.extend(globals.val_tos(v).bytes());
     }
     Value::new_string(res)
 }

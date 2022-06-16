@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use crate::*;
 use num::BigInt;
 
@@ -16,12 +14,6 @@ pub struct RValue {
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.kind)
-    }
-}
-
-impl std::fmt::Display for RValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.kind)
     }
 }
 
@@ -78,6 +70,10 @@ impl RValue {
         self.flags.class()
     }
 
+    pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
+        self.flags.change_class(new_class_id);
+    }
+
     pub(crate) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
             flags: RVFlag::new(INTEGER_CLASS),
@@ -110,7 +106,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_time(time: Instant) -> Self {
+    pub(crate) fn new_time(time: TimeInfo) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS),
             kind: ObjKind::Time(time),
@@ -149,6 +145,12 @@ impl RVFlag {
         assert!((flag & 0b1) == 1);
         ClassId::new((flag >> 32) as u32)
     }
+
+    fn change_class(&mut self, new_class_id: ClassId) {
+        let lower_flag = unsafe { self.flag } & 0xffff_ffff;
+        let class: u32 = new_class_id.into();
+        self.flag = (class as u64) << 32 | lower_flag;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,17 +159,7 @@ pub enum ObjKind {
     Bignum(BigInt),
     Float(f64),
     Bytes(Vec<u8>),
-    Time(Instant),
+    Time(TimeInfo),
     Invalid,
     Dummy(u64, u64, u64, u64, u64),
-}
-
-impl std::fmt::Display for ObjKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            ObjKind::Bignum(num) => write!(f, "{}", num),
-            ObjKind::Float(num) => write!(f, "{}", num),
-            _ => write!(f, "{:?}", self),
-        }
-    }
 }

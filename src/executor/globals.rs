@@ -6,21 +6,6 @@ use super::*;
 mod classes;
 pub use classes::*;
 
-// Integer#chr
-extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
-    let b = match arg.self_value().as_fixnum() {
-        Some(i) => {
-            if let Ok(res) = u8::try_from(i) {
-                res
-            } else {
-                unreachable!()
-            }
-        }
-        _ => unreachable!(),
-    };
-    Value::new_string(vec![b])
-}
-
 //
 /// Store of functions.
 ///
@@ -48,22 +33,50 @@ impl Globals {
             warning,
             stdout: BufWriter::new(stdout()),
         };
-        let name = globals.get_ident_id("Process");
-        globals.set_constant(name, Value::int32(42));
-        let name = globals.get_ident_id("Time");
-        globals.set_constant(name, Value::nil());
-        let name = globals.get_ident_id("File");
+        assert_eq!(
+            OBJECT_CLASS,
+            globals.define_class("Object", None).as_class()
+        );
+        assert_eq!(
+            CLASS_CLASS,
+            globals.define_class_under_obj("Class").as_class()
+        );
+        assert_eq!(
+            NIL_CLASS,
+            globals.define_class_under_obj("NilClass").as_class()
+        );
+        assert_eq!(
+            TRUE_CLASS,
+            globals.define_class_under_obj("TrueClass").as_class()
+        );
+        assert_eq!(
+            FALSE_CLASS,
+            globals.define_class_under_obj("FalseClass").as_class()
+        );
+        assert_eq!(
+            INTEGER_CLASS,
+            globals.define_class_under_obj("Integer").as_class()
+        );
+        assert_eq!(
+            FLOAT_CLASS,
+            globals.define_class_under_obj("Float").as_class()
+        );
+        assert_eq!(
+            STRING_CLASS,
+            globals.define_class_under_obj("String").as_class()
+        );
+        assert_eq!(
+            SYMBOL_CLASS,
+            globals.define_class_under_obj("Symbol").as_class()
+        );
+        assert_eq!(
+            TIME_CLASS,
+            globals.define_class_under_obj("Time").as_class()
+        );
+        globals.define_class_under_obj("Process");
+        globals.define_class_under_obj("File");
         builtins::init_builtins(&mut globals);
-        globals.set_constant(name, Value::nil());
-        assert_eq!(OBJECT_CLASS, globals.define_class().as_class());
-        assert_eq!(CLASS_CLASS, globals.define_class().as_class());
-        assert_eq!(NIL_CLASS, globals.define_class().as_class());
-        assert_eq!(TRUE_CLASS, globals.define_class().as_class());
-        assert_eq!(FALSE_CLASS, globals.define_class().as_class());
-        assert_eq!(INTEGER_CLASS, globals.define_class().as_class());
-        assert_eq!(FLOAT_CLASS, globals.define_class().as_class());
-        assert_eq!(STRING_CLASS, globals.define_class().as_class());
-        globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
+
         globals
     }
 
@@ -75,6 +88,34 @@ impl Globals {
             error: None,
             warning: self.warning,
             stdout: BufWriter::new(stdout()),
+        }
+    }
+
+    pub fn val_tos(&self, val: Value) -> String {
+        match val.unpack() {
+            RV::Nil => format!("nil"),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Integer(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Symbol(id) => format!(":{}", self.get_ident_name(id)),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => format!("{}", s),
+                Err(_) => format!("{:?}", s),
+            },
+            RV::Object(rvalue) => match &rvalue.kind {
+                ObjKind::Class(class_id) => match self.class[*class_id].get_name() {
+                    Some(s) => s.to_string(),
+                    None => match self.class[*class_id].is_singleton {
+                        None => format!("#<Class:{:016x}>", val.get()),
+                        Some(base) => format!("#<Class:{}>", self.val_tos(base)),
+                    },
+                },
+
+                //self.class[*class_id].get_name().to_string(),
+                ObjKind::Time(time) => time.to_string(),
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -90,19 +131,76 @@ impl Globals {
     pub fn get_ident_name(&self, id: IdentId) -> &str {
         self.id_store.get_name(id)
     }
+    pub fn get_class_obj(&self, class_id: ClassId) -> Value {
+        self.class[class_id].get_obj()
+    }
 
-    fn define_class(&mut self) -> Value {
-        let id = self.class.add_class();
+    fn define_class_under_obj(&mut self, name: &str) -> Value {
+        self.define_class(name, Some(OBJECT_CLASS))
+    }
+
+    fn define_class(&mut self, name: &str, super_class: impl Into<Option<ClassId>>) -> Value {
+        let name_id = self.get_ident_id(name);
+        let id = self.class.add_class(super_class.into());
+        let class_obj = Value::new_empty_class(id);
+        self.class[id].set_class_obj(class_obj);
+        self.class[id].set_name(name.to_string());
+        self.set_constant(name_id, class_obj);
+        class_obj
+    }
+
+    fn new_singleton_class(
+        &mut self,
+        super_class: impl Into<Option<ClassId>>,
+        base: Value,
+    ) -> Value {
+        let id = self.class.add_singleton_class(super_class.into(), base);
         let class_obj = Value::new_empty_class(id);
         self.class[id].set_class_obj(class_obj);
         class_obj
     }
 
-    fn get_method_inner(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    pub fn get_real_class_obj(&self, val: Value) -> Value {
+        self.class.get_real_class_obj(val)
+    }
+
+    pub fn get_singleton(&mut self, original: Value) -> Value {
+        let original_id = original.as_class();
+        let singleton = self.get_singleton_id(original_id);
+        self.get_class_obj(singleton)
+    }
+
+    pub fn get_singleton_id(&mut self, original_id: ClassId) -> ClassId {
+        let mut original = self.get_class_obj(original_id);
+        let original_class_id = original.class_id();
+        if self.class[original_class_id].is_singleton() {
+            return original_class_id;
+        }
+        let super_singleton_id = match self.class[original_id].super_class() {
+            Some(id) => self.get_singleton_id(id),
+            None => CLASS_CLASS,
+        };
+
+        let mut singleton = self.new_singleton_class(Some(super_singleton_id), original);
+        let singleton_id = singleton.as_class();
+        original.change_class(singleton_id);
+        singleton.change_class(original_class_id);
+        assert_eq!(original.class_id(), singleton_id);
+        assert!(self.class[singleton_id].is_singleton());
+        singleton_id
+    }
+
+    pub fn get_method_inner(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {
             return Some(func_id);
         }
-        self.class.get_method(ClassId::new(0), name)
+        while let Some(super_class) = self.class[class_id].super_class() {
+            class_id = super_class;
+            if let Some(func_id) = self.class.get_method(class_id, name) {
+                return Some(func_id);
+            }
+        }
+        None
     }
 
     pub fn vm_find_method(
@@ -118,7 +216,7 @@ impl Globals {
             len,
             cache: (version, cached_class_id, cached_func),
         } = self.func[callsite_id];
-        let recv_class = receiver.class();
+        let recv_class = receiver.class_id();
         let func_id = if version == class_version && cached_class_id == recv_class {
             cached_func
         } else {
@@ -162,15 +260,6 @@ impl Globals {
         self.class.set_constants(name, val)
     }
 
-    pub fn define_global_builtin_func(
-        &mut self,
-        name: &str,
-        address: BuiltinFn,
-        arity: usize,
-    ) -> FuncId {
-        self.define_builtin_func(ClassId::new(0), name, address, arity)
-    }
-
     pub fn define_builtin_func(
         &mut self,
         class_id: ClassId,
@@ -178,6 +267,20 @@ impl Globals {
         address: BuiltinFn,
         arity: usize,
     ) -> FuncId {
+        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
+        let name_id = self.get_ident_id(name);
+        self.class.add_method(class_id, name_id, func_id);
+        func_id
+    }
+
+    pub fn define_builtin_singleton_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arity: usize,
+    ) -> FuncId {
+        let class_id = self.get_singleton_id(class_id);
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = self.get_ident_id(name);
         self.class.add_method(class_id, name_id, func_id);
