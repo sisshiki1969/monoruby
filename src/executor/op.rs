@@ -29,7 +29,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
-                        globals.set_error_method_not_found($op_str);
+                        globals.err_method_not_found($op_str);
                         return None;
                     }
                 };
@@ -74,12 +74,12 @@ pub(super) extern "C" fn sub_values(
                     / 1000.0,
             ),
             _ => {
-                globals.set_error_method_not_found(IdentId::_SUB);
+                globals.err_method_not_found(IdentId::_SUB);
                 return None;
             }
         },
         _ => {
-            globals.set_error_method_not_found(IdentId::_SUB);
+            globals.err_method_not_found(IdentId::_SUB);
             return None;
         }
     };
@@ -95,69 +95,69 @@ pub(super) extern "C" fn div_values(
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
         }
         (RV::Integer(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_float((lhs as f64).div(&rhs))
         }
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(rhs))
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_float((lhs.to_f64().unwrap()).div(&rhs))
         }
         (RV::Float(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&(rhs as f64)))
         }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&rhs.to_f64().unwrap()))
         }
         (RV::Float(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.set_error_divide_by_zero();
+                globals.err_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&rhs))
         }
         _ => {
-            globals.set_error_method_not_found(IdentId::_DIV);
+            globals.err_method_not_found(IdentId::_DIV);
             return None;
         }
     };
@@ -179,7 +179,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
                     _ => {
-                        globals.set_error_method_not_found($op_str);
+                        globals.err_method_not_found($op_str);
                     return None;
                     }
                 };
@@ -221,7 +221,7 @@ pub(super) extern "C" fn shr_values(
             }
         }
         (_lhs, _rhs) => {
-            globals.set_error_method_not_found(IdentId::_SHR);
+            globals.err_method_not_found(IdentId::_SHR);
             return None;
         }
     };
@@ -250,7 +250,7 @@ pub(super) extern "C" fn shl_values(
             }
         }
         (_lhs, _rhs) => {
-            globals.set_error_method_not_found(IdentId::_SHL);
+            globals.err_method_not_found(IdentId::_SHL);
             return None;
         }
     };
@@ -371,7 +371,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::new_float(-lhs),
         RV::BigInt(lhs) => Value::new_bigint(-lhs),
         _ => {
-            globals.set_error_method_not_found(IdentId::_UMINUS);
+            globals.err_method_not_found(IdentId::_UMINUS);
             return None;
         }
     };
@@ -407,7 +407,7 @@ pub extern "C" fn vm_get_constant(
     let res = match globals.get_constant(name) {
         Some(v) => Some(v),
         None => {
-            globals.set_error_uninitialized_constant(name);
+            globals.err_uninitialized_constant(name);
             None
         }
     };
@@ -424,7 +424,7 @@ pub extern "C" fn get_constant(
     let res = match globals.get_constant(name) {
         Some(v) => Some(v),
         None => {
-            globals.set_error_uninitialized_constant(name);
+            globals.err_uninitialized_constant(name);
             None
         }
     };

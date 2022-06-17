@@ -17,6 +17,7 @@ pub enum MonorubyErrKind {
     UninitConst(IdentId),
     DivideByZero,
     Range(String),
+    Type(String),
 }
 
 impl MonorubyErr {
@@ -138,5 +139,9 @@ impl MonorubyErr {
 
     pub fn uninitialized_constant(name: IdentId) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::UninitConst(name))
+    }
+
+    pub fn typeerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Type(msg))
     }
 }

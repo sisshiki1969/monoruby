@@ -99,6 +99,10 @@ impl Value {
         globals.val_tos(self)
     }
 
+    pub fn inspect(self, globals: &Globals) -> String {
+        globals.val_inspect(self)
+    }
+
     pub(crate) extern "C" fn get_class(val: Value) -> ClassId {
         val.class_id()
     }

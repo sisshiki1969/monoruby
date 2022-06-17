@@ -10,11 +10,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "write", write, 2);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
 }
 
+/// Kernel#puts
+/// - puts(*arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/class/Kernel.html#M_PUTS]
 extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
     for offset in 0..len {
         globals
@@ -26,6 +29,10 @@ extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize
     Some(Value::nil())
 }
 
+/// Kernel#print
+/// - print(*arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/class/Kernel.html#M_PRINT]
 extern "C" fn print(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -33,17 +40,10 @@ extern "C" fn print(
     len: usize,
 ) -> Option<Value> {
     for offset in 0..len {
-        match arg[offset].unpack() {
-            RV::String(bytes) => {
-                globals.stdout.write(bytes).unwrap();
-            }
-            _ => {
-                globals
-                    .stdout
-                    .write(&arg[offset].to_s(globals).into_bytes())
-                    .unwrap();
-            }
-        };
+        globals
+            .stdout
+            .write(&arg[offset].to_s(globals).into_bytes())
+            .unwrap();
     }
     Some(Value::nil())
 }
@@ -60,6 +60,10 @@ extern "C" fn assert(
     Some(Value::nil())
 }
 
+/// Object#respond_to?
+/// - respond_to?(name, include_all = false) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/class/Object.html#I_RESPOND_TO--3F]
 extern "C" fn respond_to(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -77,30 +81,18 @@ extern "C" fn respond_to(
     ))
 }
 
+/// Object#inspect
+/// - inspect -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/class/Object.html#I_INSPECT]
 extern "C" fn inspect(
     _vm: &mut Interp,
     globals: &mut Globals,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let s = arg.self_value().to_s(globals);
+    let s = arg.self_value().inspect(globals);
     Some(Value::new_string(s.into_bytes()))
-}
-
-extern "C" fn write(
-    _vm: &mut Interp,
-    globals: &mut Globals,
-    arg: Arg,
-    _len: usize,
-) -> Option<Value> {
-    let name = match arg[0].unpack() {
-        RV::String(bytes) => String::from_utf8(bytes.clone()).unwrap(),
-        _ => unimplemented!("{}", arg[0].to_s(globals)),
-    };
-    let mut file = File::create(name).unwrap();
-    let bytes = arg[1].to_s(globals).into_bytes();
-    file.write_all(&bytes).unwrap();
-    Some(Value::new_integer(bytes.len() as i64))
 }
 
 extern "C" fn class(

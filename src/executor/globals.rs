@@ -59,22 +59,30 @@ impl Globals {
         self.error = Some(err);
     }
 
-    pub fn set_error_method_not_found(&mut self, name: IdentId) {
+    pub fn err_method_not_found(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::method_not_found(name))
     }
 
-    pub fn set_error_divide_by_zero(&mut self) {
+    pub fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    pub fn set_error_uninitialized_constant(&mut self, name: IdentId) {
+    pub fn err_uninitialized_constant(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::uninitialized_constant(name));
     }
 
-    pub fn set_error_char_out_of_range(&mut self, val: Value) {
+    pub fn err_char_out_of_range(&mut self, val: Value) {
         self.set_error(MonorubyErr::range(format!(
             "{} out of char range",
             self.val_tos(val)
+        )));
+    }
+
+    pub fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into {}",
+            actual.get_name(self),
+            expect.get_name(self),
         )));
     }
 
@@ -100,21 +108,33 @@ impl Globals {
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => format!(":{}", self.get_ident_name(id)),
+            RV::Symbol(id) => self.get_ident_name(id).to_string(),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("{}", s),
+                Ok(s) => s,
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match &rvalue.kind {
-                ObjKind::Class(class_id) => match self.class[*class_id].get_name() {
-                    Some(s) => s.to_string(),
-                    None => match self.class[*class_id].is_singleton {
-                        None => format!("#<Class:{:016x}>", val.get()),
-                        Some(base) => format!("#<Class:{}>", self.val_tos(base)),
-                    },
-                },
+                ObjKind::Class(class_id) => class_id.get_name(self),
+                ObjKind::Time(time) => time.to_string(),
+                _ => unreachable!(),
+            },
+        }
+    }
 
-                //self.class[*class_id].get_name().to_string(),
+    pub fn val_inspect(&self, val: Value) -> String {
+        match val.unpack() {
+            RV::Nil => format!("nil"),
+            RV::Bool(b) => format!("{:?}", b),
+            RV::Integer(n) => format!("{}", n),
+            RV::BigInt(n) => format!("{}", n),
+            RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
+            RV::Symbol(id) => format!(":{}", self.get_ident_name(id)),
+            RV::String(s) => match String::from_utf8(s.to_vec()) {
+                Ok(s) => format!("\"{}\"", s),
+                Err(_) => format!("{:?}", s),
+            },
+            RV::Object(rvalue) => match &rvalue.kind {
+                ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
                 _ => unreachable!(),
             },
@@ -320,6 +340,7 @@ impl Globals {
             }
             MonorubyErrKind::DivideByZero => format!("divided by 0"),
             MonorubyErrKind::Range(msg) => msg.to_string(),
+            MonorubyErrKind::Type(msg) => msg.to_string(),
         }
     }
 }

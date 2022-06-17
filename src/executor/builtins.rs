@@ -1,6 +1,7 @@
 use super::*;
 
 mod class;
+mod file;
 mod integer;
 mod object;
 mod time;
@@ -53,12 +54,13 @@ pub fn init_builtins(globals: &mut Globals) {
         globals.define_class_under_obj("Time").as_class()
     );
     globals.define_class_under_obj("Process");
-    globals.define_class_under_obj("File");
+    let file_class = globals.define_class_under_obj("File").as_class();
 
     object::init(globals);
     integer::init(globals);
     class::init(globals);
     time::init(globals);
+    file::init(globals, file_class);
 }
 
 #[derive(Debug, Clone, Copy)]

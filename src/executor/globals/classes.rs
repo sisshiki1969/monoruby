@@ -34,8 +34,26 @@ impl Into<u32> for ClassId {
 }
 
 impl ClassId {
+    /// Get *ClassId* of the super classof *self*.
     pub fn super_class(self, globals: &Globals) -> Option<ClassId> {
         globals.get_super_class(self)
+    }
+
+    /// Get object for *ClassId*.
+    pub fn get_obj(self, globals: &Globals) -> Value {
+        globals.get_class_obj(self)
+    }
+
+    /// Get class name of *ClassId*.
+    pub fn get_name(self, globals: &Globals) -> String {
+        let val = self.get_obj(globals);
+        match globals.class[self].get_name() {
+            Some(s) => s.to_string(),
+            None => match globals.class[self].is_singleton {
+                None => format!("#<Class:{:016x}>", val.get()),
+                Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
+            },
+        }
     }
 }
 
