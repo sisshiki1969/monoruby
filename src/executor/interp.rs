@@ -89,7 +89,7 @@ impl Interp {
         let mut eval = Self::new();
         let f = eval.codegen.exec_toplevel(globals);
         let res = f(&mut eval, globals);
-        res.ok_or_else(|| std::mem::take(&mut globals.error).unwrap())
+        res.ok_or_else(|| globals.take_error().unwrap())
     }
 
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
@@ -104,7 +104,7 @@ impl Interp {
             unsafe { std::mem::transmute(entry.as_ptr()) };
         match addr(&mut eval, globals, main_id) {
             Some(val) => Ok(val),
-            None => Err(std::mem::take(&mut globals.error).unwrap()),
+            None => Err(globals.take_error().unwrap()),
         }
     }
 }

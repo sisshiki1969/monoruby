@@ -9,16 +9,20 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 // Integer#chr
-extern "C" fn chr(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
     let b = match arg.self_value().as_fixnum() {
         Some(i) => {
             if let Ok(res) = u8::try_from(i) {
                 res
             } else {
-                unreachable!()
+                globals.set_error_char_out_of_range(arg.self_value());
+                return None;
             }
         }
-        _ => unreachable!(),
+        _ => {
+            globals.set_error_char_out_of_range(arg.self_value());
+            return None;
+        }
     };
-    Value::new_string(vec![b])
+    Some(Value::new_string(vec![b]))
 }

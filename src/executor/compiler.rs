@@ -87,12 +87,7 @@ extern "C" fn get_error_location(
     let sourceinfo = normal_info.sourceinfo.clone();
     let bc_base = globals.func[func_id].inst_pc();
     let loc = normal_info.sourcemap[pc - bc_base];
-    match &mut globals.error {
-        Some(err) => {
-            err.loc.push((loc, sourceinfo));
-        }
-        None => unreachable!(),
-    };
+    globals.push_error_location(loc, sourceinfo);
 }
 
 impl Codegen {
@@ -493,7 +488,7 @@ impl Codegen {
         label
     }
 
-    pub fn wrap_builtin(&mut self, abs_address: u64, arity: usize) -> CodePtr {
+    pub fn wrap_builtin(&mut self, abs_address: u64, arity: i32) -> CodePtr {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after a wrapper was called.

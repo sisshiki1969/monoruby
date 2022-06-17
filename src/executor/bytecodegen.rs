@@ -60,7 +60,7 @@ impl Funcs {
         fid
     }
 
-    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: usize) -> FuncId {
+    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: i32) -> FuncId {
         let id = self.next_func_id();
         self.0.push(FuncInfo::new_builtin(id, name, address, arity));
         id
@@ -247,7 +247,7 @@ impl FnStore {
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         self[func_id].inst_pc = BcPcBase::new(self[func_id].as_normal()) + 0;
-        self[func_id].stack_offset = (regs + regs % 2) * 8 + 16;
+        self[func_id].stack_offset = ((regs + regs % 2) * 8 + 16) as i64;
         Ok(())
     }
 
@@ -255,7 +255,7 @@ impl FnStore {
         &mut self,
         name: String,
         address: BuiltinFn,
-        arity: usize,
+        arity: i32,
     ) -> FuncId {
         self.functions.add_builtin_func(name, address, arity)
     }
@@ -280,11 +280,12 @@ pub struct FuncInfo {
     /// name of this function.
     name: Option<String>,
     /// arity of this function.
-    arity: usize,
+    /// -1 for variable numbers.
+    arity: i32,
     /// address of JIT function.
     jit_label: Option<CodePtr>,
     /// stack offset
-    stack_offset: usize,
+    stack_offset: i64,
     /// the address of program counter
     inst_pc: BcPc,
     pub(super) kind: FuncKind,
@@ -302,7 +303,7 @@ impl FuncInfo {
         Self {
             id: info.id,
             name,
-            arity: info.args.len(),
+            arity: info.args.len() as i32,
             jit_label: None,
             stack_offset: 0,
             inst_pc: BcPc::default(),
@@ -310,13 +311,17 @@ impl FuncInfo {
         }
     }
 
-    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: usize) -> Self {
+    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
         Self {
             id,
             name: Some(name),
             arity,
             jit_label: None,
-            stack_offset: (arity + arity % 2) * 8 + 16,
+            stack_offset: if arity == -1 {
+                -1
+            } else {
+                (arity + arity % 2) as i64 * 8 + 16
+            },
             inst_pc: BcPc::default(),
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
@@ -328,11 +333,11 @@ impl FuncInfo {
         self.id
     }
 
-    pub(super) fn arity(&self) -> usize {
+    pub(super) fn arity(&self) -> i32 {
         self.arity
     }
 
-    pub(super) fn stack_offset(&self) -> usize {
+    pub(super) fn stack_offset(&self) -> i64 {
         self.stack_offset
     }
 

@@ -10,10 +10,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(TIME_CLASS, "now", now, 0);
 }
 
-extern "C" fn now(_vm: &mut Interp, _globals: &mut Globals, _arg: Arg, _len: usize) -> Value {
+extern "C" fn now(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east(9 * 3600));
     let time_info = TimeInfo::Local(t);
-    Value::new_time(time_info)
+    Some(Value::new_time(time_info))
 }
 
 #[derive(Clone, Debug, PartialEq)]

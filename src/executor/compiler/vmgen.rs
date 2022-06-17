@@ -6,7 +6,7 @@ use std::num::NonZeroU64;
 #[derive(Debug, Clone)]
 #[repr(C)]
 struct FuncData {
-    offset: usize,
+    offset: i64,
     address: *mut u8,
     pc: BcPc,
     ret: usize,

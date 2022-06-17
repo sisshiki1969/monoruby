@@ -29,7 +29,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
-                        globals.error = Some(MonorubyErr::method_not_found($op_str));
+                        globals.set_error_method_not_found($op_str);
                         return None;
                     }
                 };
@@ -74,12 +74,12 @@ pub(super) extern "C" fn sub_values(
                     / 1000.0,
             ),
             _ => {
-                globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+                globals.set_error_method_not_found(IdentId::_SUB);
                 return None;
             }
         },
         _ => {
-            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SUB));
+            globals.set_error_method_not_found(IdentId::_SUB);
             return None;
         }
     };
@@ -95,69 +95,69 @@ pub(super) extern "C" fn div_values(
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
         }
         (RV::Integer(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_float((lhs as f64).div(&rhs))
         }
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(rhs))
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_float((lhs.to_f64().unwrap()).div(&rhs))
         }
         (RV::Float(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&(rhs as f64)))
         }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&rhs.to_f64().unwrap()))
         }
         (RV::Float(lhs), RV::Float(rhs)) => {
             if rhs.is_zero() {
-                globals.error = Some(MonorubyErr::divide_by_zero());
+                globals.set_error_divide_by_zero();
                 return None;
             }
             Value::new_float(lhs.div(&rhs))
         }
         _ => {
-            globals.error = Some(MonorubyErr::method_not_found(IdentId::_DIV));
+            globals.set_error_method_not_found(IdentId::_DIV);
             return None;
         }
     };
@@ -179,8 +179,8 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
                     _ => {
-                        globals.error = Some(MonorubyErr::method_not_found($op_str));
-                        return None;
+                        globals.set_error_method_not_found($op_str);
+                    return None;
                     }
                 };
                 Some(v)
@@ -221,7 +221,7 @@ pub(super) extern "C" fn shr_values(
             }
         }
         (_lhs, _rhs) => {
-            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SHR));
+            globals.set_error_method_not_found(IdentId::_SHR);
             return None;
         }
     };
@@ -250,7 +250,7 @@ pub(super) extern "C" fn shl_values(
             }
         }
         (_lhs, _rhs) => {
-            globals.error = Some(MonorubyErr::method_not_found(IdentId::_SHL));
+            globals.set_error_method_not_found(IdentId::_SHL);
             return None;
         }
     };
@@ -371,7 +371,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::new_float(-lhs),
         RV::BigInt(lhs) => Value::new_bigint(-lhs),
         _ => {
-            globals.error = Some(MonorubyErr::method_not_found(IdentId::_UMINUS));
+            globals.set_error_method_not_found(IdentId::_UMINUS);
             return None;
         }
     };
@@ -382,7 +382,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
     let mut res = vec![];
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res.extend(globals.val_tos(v).bytes());
+        res.extend(v.to_s(globals).bytes());
     }
     Value::new_string(res)
 }
@@ -398,16 +398,16 @@ pub extern "C" fn vm_get_constant(
         prefix,
         toplevel,
         cache: (cached_version, val),
-    } = &globals.func[site_id];
+    } = globals.func[site_id].clone();
     assert_eq!(0, prefix.len());
     assert!(!toplevel);
-    if *cached_version == const_version {
-        return *val;
+    if cached_version == const_version {
+        return val;
     };
-    let res = match globals.get_constant(*name) {
+    let res = match globals.get_constant(name) {
         Some(v) => Some(v),
         None => {
-            globals.error = Some(MonorubyErr::uninitialized_constant(*name));
+            globals.set_error_uninitialized_constant(name);
             None
         }
     };
@@ -420,11 +420,11 @@ pub extern "C" fn get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    let ConstSiteInfo { name, .. } = &globals.func[site_id];
-    let res = match globals.get_constant(*name) {
+    let ConstSiteInfo { name, .. } = globals.func[site_id].clone();
+    let res = match globals.get_constant(name) {
         Some(v) => Some(v),
         None => {
-            globals.error = Some(MonorubyErr::uninitialized_constant(*name));
+            globals.set_error_uninitialized_constant(name);
             None
         }
     };

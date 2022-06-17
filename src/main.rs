@@ -98,7 +98,7 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
     match globals.compile_script(code.to_string(), path) {
         Ok(_) => {}
         Err(err) => {
-            eprintln!("{:?}", globals.get_error_message(&err));
+            eprintln!("{:?}", err.get_error_message(&globals));
             err.show_loc();
             return;
         }
@@ -126,15 +126,15 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
         match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
             Ok(_) => {}
             Err(err) => {
-                eprintln!("{}", globals.get_error_message(&err));
+                eprintln!("{}", err.get_error_message(&globals));
                 err.show_all_loc();
                 return Err(err);
             }
         };
         match Interp::eval_toplevel(&mut globals) {
-            Ok(val) => eprintln!("vm: {}", globals.val_tos(val)),
+            Ok(val) => eprintln!("vm: {}", val.to_s(&globals)),
             Err(err) => {
-                eprintln!("vm:{}", globals.get_error_message(&err));
+                eprintln!("vm:{}", err.get_error_message(&globals));
                 err.show_all_loc();
             }
         }
@@ -144,18 +144,18 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
     match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
         Ok(_) => {}
         Err(err) => {
-            eprintln!("{}", globals.get_error_message(&err));
+            eprintln!("{}", err.get_error_message(&globals));
             err.show_all_loc();
             return Err(err);
         }
     };
     match Interp::jit_exec_toplevel(&mut globals) {
         Ok(val) => {
-            eprintln!("jit: {}", globals.val_tos(val));
+            eprintln!("jit: {}", val.to_s(&globals));
             Ok(())
         }
         Err(err) => {
-            eprintln!("jit:{}", globals.get_error_message(&err));
+            eprintln!("jit:{}", err.get_error_message(&globals));
             err.show_all_loc();
             Err(err)
         }
@@ -259,7 +259,7 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", globals.val_tos(res));
+    eprintln!("ruby: {}", res.to_s(&globals));
     res
 }
 

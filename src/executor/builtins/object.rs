@@ -15,14 +15,19 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
 }
 
-extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Value {
+extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
     for offset in 0..len {
-        println!("{}", globals.val_tos(arg[offset]));
+        println!("{}", arg[offset].to_s(globals));
     }
-    Value::nil()
+    Some(Value::nil())
 }
 
-extern "C" fn print(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Value {
+extern "C" fn print(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
     for offset in 0..len {
         match arg[offset].unpack() {
             RV::String(bytes) => {
@@ -31,49 +36,76 @@ extern "C" fn print(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usiz
             _ => {
                 globals
                     .stdout
-                    .write(&globals.val_tos(arg[offset]).into_bytes())
+                    .write(&arg[offset].to_s(globals).into_bytes())
                     .unwrap();
             }
         };
     }
-    Value::nil()
+    Some(Value::nil())
 }
 
-extern "C" fn assert(_vm: &mut Interp, _globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+extern "C" fn assert(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
     assert_eq!(expected, actual);
-    Value::nil()
+    Some(Value::nil())
 }
 
-extern "C" fn respond_to(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+extern "C" fn respond_to(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
     let class_id = arg.self_value().class_id();
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => globals.get_ident_id(String::from_utf8_lossy(b).as_ref()),
         _ => unimplemented!(),
     };
-    Value::bool(globals.get_method_inner(class_id, name).is_some())
+    Some(Value::bool(
+        globals.get_method_inner(class_id, name).is_some(),
+    ))
 }
 
-extern "C" fn inspect(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Value {
-    let s = globals.val_tos(arg.self_value());
-    Value::new_string(s.into_bytes())
+extern "C" fn inspect(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let s = arg.self_value().to_s(globals);
+    Some(Value::new_string(s.into_bytes()))
 }
 
-extern "C" fn write(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Value {
+extern "C" fn write(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.clone()).unwrap(),
-        _ => unimplemented!("{}", globals.val_tos(arg[0])),
+        _ => unimplemented!("{}", arg[0].to_s(globals)),
     };
     let mut file = File::create(name).unwrap();
-    let bytes = globals.val_tos(arg[1]).into_bytes();
+    let bytes = arg[1].to_s(globals).into_bytes();
     file.write_all(&bytes).unwrap();
-    Value::new_integer(bytes.len() as i64)
+    Some(Value::new_integer(bytes.len() as i64))
 }
 
-extern "C" fn class(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Value {
-    globals.get_real_class_obj(arg.self_value())
+extern "C" fn class(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    Some(arg.self_value().get_real_class_obj(globals))
 }
 
 extern "C" fn singleton_class(
@@ -81,8 +113,8 @@ extern "C" fn singleton_class(
     globals: &mut Globals,
     arg: Arg,
     _len: usize,
-) -> Value {
-    globals.get_singleton(arg.self_value())
+) -> Option<Value> {
+    Some(arg.self_value().get_singleton(globals))
 }
 
 #[cfg(test)]

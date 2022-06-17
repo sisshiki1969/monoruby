@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use super::*;
 
 mod classes;
+mod error;
 pub use classes::*;
+pub use error::*;
 
 //
 /// Store of functions.
@@ -16,7 +18,7 @@ pub struct Globals {
     pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
-    pub error: Option<MonorubyErr>,
+    error: Option<MonorubyErr>,
     /// warning level.
     pub warning: u8,
     /// stdout.
@@ -90,7 +92,50 @@ impl Globals {
             stdout: BufWriter::new(stdout()),
         }
     }
+}
 
+//
+// error handlers
+//
+impl Globals {
+    fn set_error(&mut self, err: MonorubyErr) {
+        self.error = Some(err);
+    }
+
+    pub fn set_error_method_not_found(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::method_not_found(name))
+    }
+
+    pub fn set_error_divide_by_zero(&mut self) {
+        self.set_error(MonorubyErr::divide_by_zero());
+    }
+
+    pub fn set_error_uninitialized_constant(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::uninitialized_constant(name));
+    }
+
+    pub fn set_error_char_out_of_range(&mut self, val: Value) {
+        self.set_error(MonorubyErr::range(format!(
+            "{} out of char range",
+            self.val_tos(val)
+        )));
+    }
+
+    pub fn take_error(&mut self) -> Option<MonorubyErr> {
+        std::mem::take(&mut self.error)
+    }
+
+    pub fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        match &mut self.error {
+            Some(err) => {
+                err.loc.push((loc, sourceinfo));
+            }
+            None => unreachable!(),
+        };
+    }
+}
+
+impl Globals {
     pub fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
@@ -131,8 +176,13 @@ impl Globals {
     pub fn get_ident_name(&self, id: IdentId) -> &str {
         self.id_store.get_name(id)
     }
+
     pub fn get_class_obj(&self, class_id: ClassId) -> Value {
         self.class[class_id].get_obj()
+    }
+
+    pub fn get_super_class(&self, class_id: ClassId) -> Option<ClassId> {
+        self.class[class_id].super_class()
     }
 
     fn define_class_under_obj(&mut self, name: &str) -> Value {
@@ -153,21 +203,15 @@ impl Globals {
         &mut self,
         super_class: impl Into<Option<ClassId>>,
         base: Value,
-    ) -> Value {
+    ) -> (Value, ClassId) {
         let id = self.class.add_singleton_class(super_class.into(), base);
         let class_obj = Value::new_empty_class(id);
         self.class[id].set_class_obj(class_obj);
-        class_obj
+        (class_obj, id)
     }
 
     pub fn get_real_class_obj(&self, val: Value) -> Value {
         self.class.get_real_class_obj(val)
-    }
-
-    pub fn get_singleton(&mut self, original: Value) -> Value {
-        let original_id = original.as_class();
-        let singleton = self.get_singleton_id(original_id);
-        self.get_class_obj(singleton)
     }
 
     pub fn get_singleton_id(&mut self, original_id: ClassId) -> ClassId {
@@ -176,17 +220,20 @@ impl Globals {
         if self.class[original_class_id].is_singleton() {
             return original_class_id;
         }
-        let super_singleton_id = match self.class[original_id].super_class() {
+        let super_singleton_id = match original_id.super_class(self) {
             Some(id) => self.get_singleton_id(id),
             None => CLASS_CLASS,
         };
 
-        let mut singleton = self.new_singleton_class(Some(super_singleton_id), original);
-        let singleton_id = singleton.as_class();
+        let (mut singleton, singleton_id) =
+            self.new_singleton_class(Some(super_singleton_id), original);
         original.change_class(singleton_id);
         singleton.change_class(original_class_id);
-        assert_eq!(original.class_id(), singleton_id);
-        assert!(self.class[singleton_id].is_singleton());
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(original.class_id(), singleton_id);
+            assert!(self.class[singleton_id].is_singleton());
+        }
         singleton_id
     }
 
@@ -194,7 +241,7 @@ impl Globals {
         if let Some(func_id) = self.class.get_method(class_id, name) {
             return Some(func_id);
         }
-        while let Some(super_class) = self.class[class_id].super_class() {
+        while let Some(super_class) = class_id.super_class(self) {
             class_id = super_class;
             if let Some(func_id) = self.class.get_method(class_id, name) {
                 return Some(func_id);
@@ -245,8 +292,8 @@ impl Globals {
             }
         };
         let arity = self.func[func_id].arity();
-        if arity != args_len {
-            self.error = Some(MonorubyErr::wrong_arguments(arity, args_len));
+        if arity != -1 && (arity as usize) != args_len {
+            self.error = Some(MonorubyErr::wrong_arguments(arity as usize, args_len));
             return None;
         }
         Some(func_id)
@@ -265,7 +312,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: usize,
+        arity: i32,
     ) -> FuncId {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = self.get_ident_id(name);
@@ -278,7 +325,7 @@ impl Globals {
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
-        arity: usize,
+        arity: i32,
     ) -> FuncId {
         let class_id = self.get_singleton_id(class_id);
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
@@ -299,7 +346,7 @@ impl Globals {
 }
 
 impl Globals {
-    pub fn get_error_message(&self, err: &MonorubyErr) -> String {
+    pub(self) fn get_error_message(&self, err: &MonorubyErr) -> String {
         match &err.kind {
             MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
@@ -315,6 +362,7 @@ impl Globals {
                 format!("uninitialized constant {}", self.get_ident_name(*name))
             }
             MonorubyErrKind::DivideByZero => format!("divided by 0"),
+            MonorubyErrKind::Range(msg) => msg.to_string(),
         }
     }
 }

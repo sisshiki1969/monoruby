@@ -33,6 +33,12 @@ impl Into<u32> for ClassId {
     }
 }
 
+impl ClassId {
+    pub fn super_class(self, globals: &Globals) -> Option<ClassId> {
+        globals.get_super_class(self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     /// the constant name which this class object is bound.
@@ -88,7 +94,7 @@ impl ClassInfo {
         self.name.as_ref()
     }
 
-    pub fn super_class(&self) -> Option<ClassId> {
+    pub(super) fn super_class(&self) -> Option<ClassId> {
         self.super_class_id
     }
 

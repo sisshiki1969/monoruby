@@ -85,7 +85,21 @@ impl Value {
         }
     }
 
-    pub extern "C" fn get_class(val: Value) -> ClassId {
+    pub fn get_singleton(self, globals: &mut Globals) -> Value {
+        let original_id = self.as_class();
+        let singleton = globals.get_singleton_id(original_id);
+        globals.get_class_obj(singleton)
+    }
+
+    pub fn get_real_class_obj(self, globals: &Globals) -> Value {
+        globals.get_real_class_obj(self)
+    }
+
+    pub fn to_s(self, globals: &Globals) -> String {
+        globals.val_tos(self)
+    }
+
+    pub(crate) extern "C" fn get_class(val: Value) -> ClassId {
         val.class_id()
     }
 
