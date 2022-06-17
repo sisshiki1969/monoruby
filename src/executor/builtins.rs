@@ -12,6 +12,49 @@ pub use time::TimeInfo;
 //
 
 pub fn init_builtins(globals: &mut Globals) {
+    assert_eq!(
+        OBJECT_CLASS,
+        globals.define_class("Object", None).as_class()
+    );
+    assert_eq!(
+        CLASS_CLASS,
+        globals.define_class_under_obj("Class").as_class()
+    );
+    assert_eq!(
+        NIL_CLASS,
+        globals.define_class_under_obj("NilClass").as_class()
+    );
+    assert_eq!(
+        TRUE_CLASS,
+        globals.define_class_under_obj("TrueClass").as_class()
+    );
+    assert_eq!(
+        FALSE_CLASS,
+        globals.define_class_under_obj("FalseClass").as_class()
+    );
+    assert_eq!(
+        INTEGER_CLASS,
+        globals.define_class_under_obj("Integer").as_class()
+    );
+    assert_eq!(
+        FLOAT_CLASS,
+        globals.define_class_under_obj("Float").as_class()
+    );
+    assert_eq!(
+        STRING_CLASS,
+        globals.define_class_under_obj("String").as_class()
+    );
+    assert_eq!(
+        SYMBOL_CLASS,
+        globals.define_class_under_obj("Symbol").as_class()
+    );
+    assert_eq!(
+        TIME_CLASS,
+        globals.define_class_under_obj("Time").as_class()
+    );
+    globals.define_class_under_obj("Process");
+    globals.define_class_under_obj("File");
+
     object::init(globals);
     integer::init(globals);
     class::init(globals);

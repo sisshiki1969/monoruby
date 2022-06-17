@@ -35,50 +35,7 @@ impl Globals {
             warning,
             stdout: BufWriter::new(stdout()),
         };
-        assert_eq!(
-            OBJECT_CLASS,
-            globals.define_class("Object", None).as_class()
-        );
-        assert_eq!(
-            CLASS_CLASS,
-            globals.define_class_under_obj("Class").as_class()
-        );
-        assert_eq!(
-            NIL_CLASS,
-            globals.define_class_under_obj("NilClass").as_class()
-        );
-        assert_eq!(
-            TRUE_CLASS,
-            globals.define_class_under_obj("TrueClass").as_class()
-        );
-        assert_eq!(
-            FALSE_CLASS,
-            globals.define_class_under_obj("FalseClass").as_class()
-        );
-        assert_eq!(
-            INTEGER_CLASS,
-            globals.define_class_under_obj("Integer").as_class()
-        );
-        assert_eq!(
-            FLOAT_CLASS,
-            globals.define_class_under_obj("Float").as_class()
-        );
-        assert_eq!(
-            STRING_CLASS,
-            globals.define_class_under_obj("String").as_class()
-        );
-        assert_eq!(
-            SYMBOL_CLASS,
-            globals.define_class_under_obj("Symbol").as_class()
-        );
-        assert_eq!(
-            TIME_CLASS,
-            globals.define_class_under_obj("Time").as_class()
-        );
-        globals.define_class_under_obj("Process");
-        globals.define_class_under_obj("File");
         builtins::init_builtins(&mut globals);
-
         globals
     }
 
@@ -185,11 +142,11 @@ impl Globals {
         self.class[class_id].super_class()
     }
 
-    fn define_class_under_obj(&mut self, name: &str) -> Value {
+    pub fn define_class_under_obj(&mut self, name: &str) -> Value {
         self.define_class(name, Some(OBJECT_CLASS))
     }
 
-    fn define_class(&mut self, name: &str, super_class: impl Into<Option<ClassId>>) -> Value {
+    pub fn define_class(&mut self, name: &str, super_class: impl Into<Option<ClassId>>) -> Value {
         let name_id = self.get_ident_id(name);
         let id = self.class.add_class(super_class.into());
         let class_obj = Value::new_empty_class(id);
