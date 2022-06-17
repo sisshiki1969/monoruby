@@ -89,6 +89,7 @@ impl Interp {
         let mut eval = Self::new();
         let f = eval.codegen.exec_toplevel(globals);
         let res = f(&mut eval, globals);
+        globals.stdout.flush().unwrap();
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 
@@ -96,15 +97,12 @@ impl Interp {
         let main_id = globals.get_main_func();
         let mut eval = Self::new();
 
-        let entry = eval.codegen.construct_vm();
+        let f = eval.codegen.construct_vm();
         let vm_entry = eval.codegen.jit.get_label_address(eval.codegen.vm_entry);
         eval.codegen.precompile(&mut globals.func, vm_entry);
 
-        let addr: fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> =
-            unsafe { std::mem::transmute(entry.as_ptr()) };
-        match addr(&mut eval, globals, main_id) {
-            Some(val) => Ok(val),
-            None => Err(globals.take_error().unwrap()),
-        }
+        let res = f(&mut eval, globals, main_id);
+        globals.stdout.flush().unwrap();
+        res.ok_or_else(|| globals.take_error().unwrap())
     }
 }

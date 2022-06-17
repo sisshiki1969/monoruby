@@ -395,14 +395,13 @@ impl Codegen {
 
     /// ## ABI of JIT-compiled code.
     ///
+    /// ### argument registers:
+    ///  - rdi: number pf args
+    ///
     /// ### global registers:
     ///  - rbx: &mut Interp
     ///  - r12: &mut Globals
     ///  - r13: pc (dummy for JIT-ed code)
-    ///
-    /// ### stack_offset:
-    ///
-    ///  - \[rip + func_offset\]: (not used, hard-coded.)
     ///
     /// ## stack layout when just after the code is called
     /// ~~~text
@@ -450,6 +449,7 @@ impl Codegen {
             movl [rsp - 0x14], (main_id.0);
             movl [rsp - 0x18], 1;
             movq [rsp - 0x20], (NIL_VALUE);
+            xorq rdi, rdi;
             movq rax, (main.as_ptr());
             call rax;
             popq r12;
@@ -465,7 +465,7 @@ impl Codegen {
         let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
-            FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address, func.arity()),
+            FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
         };
         func.set_jit_label(label);
         self.jit.finalize();
@@ -488,7 +488,7 @@ impl Codegen {
         label
     }
 
-    pub fn wrap_builtin(&mut self, abs_address: u64, arity: i32) -> CodePtr {
+    pub fn wrap_builtin(&mut self, abs_address: u64) -> CodePtr {
         //
         // generate a wrapper for a builtin function which has C ABI.
         // stack layout at the point of just after a wrapper was called.
@@ -505,6 +505,8 @@ impl Codegen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
+        // argument registers:
+        //   rdi: number of args
         //
         // global registers:
         //   rbx: &mut Interp
@@ -514,16 +516,24 @@ impl Codegen {
         //   stack_offset: [rip + func_offset] (not used, because we can hard-code it.)
         //
         let label = self.jit.get_current_address();
-        let offset = (arity + arity % 2) * 8 + 16;
+        // calculate stack offset
+        monoasm!(self.jit,
+            movq rcx, rdi;
+            movq rax, rdi;
+            andq rax, (0b01);
+            addq rax, rdi;
+            shlq rax, 3;
+            addq rax, 16;
+        );
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
             pushq rbp;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rcx, (arity);
-            movq rax, (abs_address);
+            //movq rcx, (arity);
             movq rbp, rsp;
-            subq rsp, (offset);
+            subq rsp, rax;
+            movq rax, (abs_address);
             // fn(&mut Interp, &mut Globals, *const Value, len:usize)
             call rax;
             leave;
@@ -847,6 +857,9 @@ impl Codegen {
         //       +-------------+
         //       |             |
         //
+        // argument registers:
+        //   rdi: args len
+        //
         let CallsiteInfo {
             ret,
             name,
@@ -924,6 +937,7 @@ impl Codegen {
             movq [rip + cached_class_version], rax;
             movq [rip + cacheed_recv_class], r15;
         l1:
+            movq rdi, (len);
             // set meta/func_id slot to FuncId of the callee.
             movl [rsp - 0x14], 0;
         l2:
@@ -949,7 +963,7 @@ impl Codegen {
                     func.set_jit_label(vm_entry);
                 }
                 FuncKind::Builtin { abs_address } => {
-                    let label = self.wrap_builtin(*abs_address, func.arity());
+                    let label = self.wrap_builtin(*abs_address);
                     func.set_jit_label(label);
                 }
             };

@@ -6,6 +6,7 @@ use std::num::NonZeroU64;
 #[derive(Debug, Clone)]
 #[repr(C)]
 struct FuncData {
+    /// stack offset. (only used in calling vm_entry)
     offset: i64,
     address: *mut u8,
     pc: BcPc,
@@ -129,7 +130,7 @@ impl Codegen {
     ///
     /// Generator of virtual machine.
     ///
-    pub fn construct_vm(&mut self) -> CodePtr {
+    pub fn construct_vm(&mut self) -> fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> {
         let vm_entry = self.vm_entry;
         let entry = self.jit.get_current_address();
         let func_offset = self.jit.const_i64(0);
@@ -182,6 +183,9 @@ impl Codegen {
             ret;
             //
             // VM entry
+            //
+            // argument registers:
+            //   rdi: args len
             //
             // global registers:
             //   rbx: &mut Interp
@@ -269,7 +273,7 @@ impl Codegen {
         self.dispatch[155] = self.vm_concat();
 
         self.jit.finalize();
-        entry
+        unsafe { std::mem::transmute(entry.as_ptr()) }
     }
 
     ///
@@ -471,12 +475,14 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
+            movq rcx, rdi;
+            movq rdi, r8;
             testq r8, r8;
             jeq  loop_exit;
             //shlq r8, 3;
             negq r8;
         loop_:
-            movq rax, [rdi + r8 * 8 + 8];
+            movq rax, [rcx + r8 * 8 + 8];
             movq [rsp + r8 * 8- 0x20], rax;
             addq r8, 1;
             jne  loop_;

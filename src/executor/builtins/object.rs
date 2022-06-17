@@ -5,8 +5,8 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_func(OBJECT_CLASS, "puts", puts, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "print", print, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
     globals.define_builtin_func(OBJECT_CLASS, "assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
@@ -17,7 +17,11 @@ pub(super) fn init(globals: &mut Globals) {
 
 extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
     for offset in 0..len {
-        println!("{}", arg[offset].to_s(globals));
+        globals
+            .stdout
+            .write(&arg[offset].to_s(globals).into_bytes())
+            .unwrap();
+        globals.stdout.write(b"\n").unwrap();
     }
     Some(Value::nil())
 }
