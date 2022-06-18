@@ -1,3 +1,0 @@
-puts Symbol.singleton_class
-puts Symbol.singleton_class
-puts Symbol.singleton_class

@@ -7,33 +7,35 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 ## Features
 
-- virtual machine executer written in x86-64 assembly (yes, we support only x86-64!).
+- register-based bytecode.
+- bytecode executer (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
+- a compact and fast JIT compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
 
-- a compact and fast JIT compiler. (internally using self-made dynamic assembler *monoasm* (https://github.com/sisshiki1969/monoasm))
+## Status of this project
 
-- currently, supports only Integer(including Bignum), Float, String, and boolean, nil.
+This project still remains in early-alpha stage. Currently, only the functionalities described below are implemented.
+
+- literals: integer, float, string, symbol
+- classes: Integer, Float, String, Symbol, Class
+- superclass and singleton class asnd methods
+- local variables
+- if-then-elsif-end statement
+- for-in statement
+- while statement
+- method definition
 
 ## Benchmark
 
-- app_fib.rb (fib 40)
+- measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
+- shown in iteration/sec (the higher, the better).
 
-|     impl         | time(sec)  |
-|:----------------:|-----------:|
-|  monoruby --jit  |   0.906    |
-|  monoruby        |   5.766    |
-|  ruby(3.2.0dev)  |   5.726    |
-|  ruby --yjit     |   1.468    |
-|  ruby --mjit     |   1.929    |
-
-- so_mandelbrot.rb
-
-|     impl         | time(sec)  |
-|:----------------:|-----------:|
-|  monoruby --jit  |   0.775    |
-|  monoruby        |   1.155    |
-|  ruby(3.2.0dev)  |   1.797    |
-|  ruby --yjit     |   1.287    |
-|  ruby --mjit     |   1.351    |
+|   impl \ bench   | app_fib (fib 40)  | so_mandelbrot  |
+|:----------------:|------------------:|---------------:|
+|  monoruby --jit  |      1.401        |     1.339      |
+|  monoruby        |      0.174        |     0.910      |
+|  ruby(3.2.0dev)  |      0.202        |     0.673      |
+|  ruby --yjit     |      0.816        |     0.897      |
+|  ruby --mjit     |      0.566        |     0.754      |
 
 ## How to run
 
@@ -43,13 +45,13 @@ Please be aware that **only nightly version of Rust works** for monoruby.
 To run ruby program file on monoruby,
 
 ```sh
-% cargo run test.rb
+% cargo run app_fib.rb
 ```
 
 or
 
 ```sh
-% cargo run --release -- test.rb
+% cargo run --release -- app_fib.rb
 ```
 
 one liner
