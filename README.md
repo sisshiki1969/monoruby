@@ -15,9 +15,8 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 This project still remains in early-alpha stage. Currently, only the functionalities described below are implemented.
 
-- literals: integer, float, string, symbol
 - classes: Integer, Float, String, Symbol, Class
-- superclass and singleton class asnd methods
+- superclass and singleton class and methods
 - local variables
 - if-then-elsif-end statement
 - for-in statement
