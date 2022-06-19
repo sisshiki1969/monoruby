@@ -721,7 +721,7 @@ impl Codegen {
                     self.load_binary_args(lhs, rhs);
                     self.guard_rdi_rsi_fixnum(generic);
                     self.fast_add(exit, generic, ret);
-                    self.generic_op2(generic, exit, ret, add_values as _);
+                    self.side_generic_op(generic, exit, ret, add_values as _);
                 }
                 BcOp::Addri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
@@ -753,7 +753,7 @@ impl Codegen {
                     );
                     self.guard_rdi_fixnum(generic);
                     self.fast_sub(exit, generic, ret);
-                    self.generic_op2(generic, exit, ret, sub_values as _);
+                    self.side_generic_op(generic, exit, ret, sub_values as _);
                 }
 
                 BcOp::Mul(ret, lhs, rhs) => {
@@ -909,19 +909,19 @@ impl Codegen {
                 movq [rsp - ((0x28 + i * 8) as i64)], rax;
             );
         }
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
         let exit = self.jit.label();
+        let patch_fid = self.jit.label();
+        let patch_adr = self.jit.label();
         let slow_path = self.jit.label();
         let cached_class_version = self.jit.const_i64(-1);
-        let cacheed_recv_class = self.jit.const_i64(0);
+        let cached_recv_class = self.jit.const_i64(0);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
         let entry_return = self.vm_return;
         if recv != 0 {
             monoasm!(self.jit,
-                cmpq r15, [rip + cacheed_recv_class];
+                cmpq r15, [rip + cached_recv_class];
                 jne slow_path;
             );
         }
@@ -929,14 +929,14 @@ impl Codegen {
             movq rax, [rip + global_class_version];
             cmpq [rip + cached_class_version], rax;
             jne slow_path;
-        l1:
+        exit:
             movq rdi, (len);
             // set meta/func_id slot to FuncId of the callee.
             movl [rsp - 0x14], 0;
-        l2:
+        patch_fid:
             // patch point
             call entry_panic;
-        exit:
+        patch_adr:
             testq rax, rax;
             jeq entry_return;
         );
@@ -955,14 +955,14 @@ impl Codegen {
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (len as usize); // args_len: usize
             movq r8, [rbp - (conv(recv))]; // receiver: Value
-            lea r9, [rip + l2];
+            lea r9, [rip + patch_fid];
             subq r9, 4; // &mut FuncId
             call entry_find_method;
             // absolute address was returned to rax.
             addq rsp, (sp_max);
             testq rax, rax;
             jeq entry_return;
-            lea rdi, [rip + exit];
+            lea rdi, [rip + patch_adr];
             // calculate a displacement to the function address.
             subq rax, rdi;
             // set patch point address (= return address - 4) to rdi.
@@ -971,8 +971,8 @@ impl Codegen {
             movl [rdi], rax;
             movq rax, [rip + global_class_version];
             movq [rip + cached_class_version], rax;
-            movq [rip + cacheed_recv_class], r15;
-            jmp l1;
+            movq [rip + cached_recv_class], r15;
+            jmp exit;
         );
         self.jit.select(0);
     }
