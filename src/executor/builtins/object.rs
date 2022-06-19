@@ -22,7 +22,7 @@ extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize
     for offset in 0..len {
         globals
             .stdout
-            .write(&arg[offset].to_s(globals).into_bytes())
+            .write(&arg[offset].to_bytes(globals))
             .unwrap();
         globals.stdout.write(b"\n").unwrap();
     }
@@ -42,7 +42,7 @@ extern "C" fn print(
     for offset in 0..len {
         globals
             .stdout
-            .write(&arg[offset].to_s(globals).into_bytes())
+            .write(&arg[offset].to_bytes(globals))
             .unwrap();
     }
     Some(Value::nil())

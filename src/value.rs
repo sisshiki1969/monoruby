@@ -99,6 +99,10 @@ impl Value {
         globals.val_tos(self)
     }
 
+    pub fn to_bytes(self, globals: &Globals) -> Vec<u8> {
+        globals.val_tobytes(self)
+    }
+
     pub fn inspect(self, globals: &Globals) -> String {
         globals.val_inspect(self)
     }

@@ -93,6 +93,7 @@ extern "C" fn get_error_location(
 impl Codegen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
+        jit.add_page();
         let class_version = jit.const_i64(0);
         let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
@@ -222,6 +223,18 @@ impl Codegen {
         );
     }
 
+    fn side_generic_op(&mut self, generic: DestLabel, exit: DestLabel, ret: u16, func: u64) {
+        self.jit.select(1);
+        self.jit.bind_label(generic);
+        self.call_binop(func, self.vm_return);
+        monoasm!(self.jit,
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+            jmp  exit;
+        );
+        self.jit.select(0);
+    }
+
     fn generic_op(&mut self, ret: u16, func: u64) {
         self.call_binop(func, self.vm_return);
         monoasm!(self.jit,
@@ -245,7 +258,7 @@ impl Codegen {
             jo generic;
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
-            jmp exit;
+        exit:
         );
     }
 
@@ -258,7 +271,7 @@ impl Codegen {
             addq rax, 1;
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
-            jmp exit;
+        exit:
         );
     }
 
@@ -656,7 +669,11 @@ impl Codegen {
                         cmpq rax, [rip + cached_const_version];
                         jne  slow_path;
                         movq rax, [rip + cached_value];
-                        jmp  exit;
+                    exit:
+                        movq [rbp - (conv(ret))], rax;
+                    );
+                    self.jit.select(1);
+                    monoasm!(self.jit,
                     slow_path:
                         movq rdx, (id.get());  // name: ConstSiteId
                         movq rdi, rbx;  // &mut Interp
@@ -668,9 +685,9 @@ impl Codegen {
                         movq [rip + cached_value], rax;
                         movq rdi, [rip + global_const_version];
                         movq [rip + cached_const_version], rdi;
-                    exit:
-                        movq [rbp - (conv(ret))], rax;
+                        jmp  exit;
                     );
+                    self.jit.select(0);
                 }
                 BcOp::StoreConst(ret, id) => {
                     let const_version = self.const_version;
@@ -716,7 +733,7 @@ impl Codegen {
                     );
                     self.guard_rdi_fixnum(generic);
                     self.fast_add(exit, generic, ret);
-                    self.generic_op2(generic, exit, ret, add_values as _);
+                    self.side_generic_op(generic, exit, ret, add_values as _);
                 }
                 BcOp::Sub(ret, lhs, rhs) => {
                     let generic = self.jit.label();
@@ -724,7 +741,7 @@ impl Codegen {
                     self.load_binary_args(lhs, rhs);
                     self.guard_rdi_rsi_fixnum(generic);
                     self.fast_sub(exit, generic, ret);
-                    self.generic_op2(generic, exit, ret, sub_values as _);
+                    self.side_generic_op(generic, exit, ret, sub_values as _);
                 }
                 BcOp::Subri(ret, lhs, rhs) => {
                     let generic = self.jit.label();
@@ -911,9 +928,28 @@ impl Codegen {
         monoasm!(self.jit,
             movq rax, [rip + global_class_version];
             cmpq [rip + cached_class_version], rax;
-            jeq l1;
-            // call site stub code.
-            // push down sp to avoid destroying arguments area.
+            jne slow_path;
+        l1:
+            movq rdi, (len);
+            // set meta/func_id slot to FuncId of the callee.
+            movl [rsp - 0x14], 0;
+        l2:
+            // patch point
+            call entry_panic;
+        exit:
+            testq rax, rax;
+            jeq entry_return;
+        );
+        if ret != 0 {
+            monoasm!(self.jit,
+                movq [rbp - (conv(ret))], rax;
+            );
+        }
+
+        self.jit.select(1);
+        // call site stub code.
+        // push down sp to avoid destroying arguments area.
+        monoasm!(self.jit,
         slow_path:
             subq rsp, (sp_max);
             movq rdx, (u32::from(name)); // IdentId
@@ -936,22 +972,9 @@ impl Codegen {
             movq rax, [rip + global_class_version];
             movq [rip + cached_class_version], rax;
             movq [rip + cacheed_recv_class], r15;
-        l1:
-            movq rdi, (len);
-            // set meta/func_id slot to FuncId of the callee.
-            movl [rsp - 0x14], 0;
-        l2:
-            // patch point
-            call entry_panic;
-        exit:
-            testq rax, rax;
-            jeq entry_return;
+            jmp l1;
         );
-        if ret != 0 {
-            monoasm!(self.jit,
-                movq [rbp - (conv(ret))], rax;
-            );
-        }
+        self.jit.select(0);
     }
 }
 
