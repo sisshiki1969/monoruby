@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(TIME_CLASS, "now", now, 0);
+    globals.define_builtin_singleton_func(TIME_CLASS, "-", sub, 1);
 }
 
 extern "C" fn now(
@@ -19,6 +20,22 @@ extern "C" fn now(
     let t = Utc::now().with_timezone(&FixedOffset::east(9 * 3600));
     let time_info = TimeInfo::Local(t);
     Some(Value::new_time(time_info))
+}
+
+extern "C" fn sub(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
+    let lhs = match &arg.self_value().as_rvalue().unwrap().kind {
+        ObjKind::Time(time) => time.clone(),
+        _ => unreachable!(),
+    };
+    let rhs = match &arg[0].as_rvalue().unwrap().kind {
+        ObjKind::Time(time) => time.clone(),
+        _ => {
+            globals.err_method_not_found(IdentId::_SUB);
+            return None;
+        }
+    };
+    let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;
+    Some(Value::new_float(res))
 }
 
 #[derive(Clone, Debug, PartialEq)]

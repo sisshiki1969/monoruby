@@ -106,3 +106,20 @@ impl Interp {
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 }
+
+/*impl Interp {
+    pub fn invoke_method(
+        &mut self,
+        globals: &mut Globals,
+        receiver: Value,
+        method: IdentId,
+        args: &[Value],
+    ) -> Option<Value> {
+        let func_id = globals.get_method(receiver.class_id(), method, args.len())?;
+        let info = &globals.func[func_id];
+        let address = info.jit_label().unwrap();
+        let offset = info.stack_offset();
+        let pc = info.inst_pc();
+        None
+    }
+}*/

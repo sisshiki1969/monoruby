@@ -26,7 +26,7 @@ This project still remains in early-alpha stage. Currently, only the functionali
 ## Benchmark
 
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
-- shown in iteration/sec (the higher, the better).
+- measurements are shown in iteration/sec (the higher, the better).
 
 |   impl \ bench   | app_fib (fib 40)  | so_mandelbrot  |
 |:----------------:|------------------:|---------------:|
