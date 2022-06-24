@@ -329,6 +329,7 @@ impl FuncInfo {
         }
     }
 
+    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
     pub(super) fn id(&self) -> FuncId {
         self.id
     }

@@ -1,3 +1,4 @@
+#[cfg(any(feature = "emit-asm", feature = "log-jit"))]
 use std::time::Instant;
 
 use monoasm::*;
@@ -292,6 +293,7 @@ impl Codegen {
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),

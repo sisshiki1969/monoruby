@@ -109,9 +109,9 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
     } else {
         Interp::jit_exec_toplevel(&mut globals)
     } {
-        Ok(val) => {
+        Ok(_val) => {
             #[cfg(debug_assertions)]
-            eprintln!("jit({:?}) {:?}", jit, val)
+            eprintln!("jit({:?}) {:?}", jit, _val)
         }
         Err(err) => {
             eprintln!("{:?}", err.kind);
