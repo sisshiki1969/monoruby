@@ -34,11 +34,9 @@ macro_rules! cmp_ops {
               self.vm_get_rdi(); // rdi <- lhs addr
               self.vm_get_rsi(); // rsi <- rhs addr
               self.vm_get_addr_r15(); // r15 <- ret addr
+              self.[<cmp_ $op>]();
               monoasm! { self.jit,
-                  movq rax, ([<cmp_ $op _values>]);
-                  call rax;
-                  // store the result to return reg.
-                  movq [r15], rax;
+                movq [r15], rax;
               };
               self.fetch_and_dispatch();
               label
@@ -59,10 +57,13 @@ macro_rules! cmp_ri_ops {
               self.vm_get_rdi(); // rdi <- lhs addr
               self.vm_get_addr_r15(); // r15 <- ret addr
               monoasm! { self.jit,
-                  movq rax, ([<cmp_ $op _ri_values>]);
-                  call rax;
-                  // store the result to return reg.
-                  movq [r15], rax;
+                shlq rsi, 1;
+                orq  rsi, 1;
+              };
+              self.[<cmp_ri_ $op>]();
+              monoasm! { self.jit,
+                // store the result to return reg.
+                movq [r15], rax;
               };
               self.fetch_and_dispatch();
               label
@@ -333,8 +334,7 @@ impl Codegen {
     fn vm_get_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            lea rdi, [rbp + rdi * 8 - 16];
-            movq rdi, [rdi];
+            movq rdi, [rbp + rdi * 8 - 16];
         };
     }
 
@@ -345,10 +345,8 @@ impl Codegen {
     /// - *rsi*: value of the register
     fn vm_get_rsi(&mut self) {
         monoasm! { self.jit,
-            //addq rdi, 2;
             negq rsi;
-            lea rsi, [rbp + rsi * 8 - 16];
-            movq rsi, [rsi];
+            movq rsi, [rbp + rsi * 8 - 16];
         };
     }
 
@@ -447,7 +445,6 @@ impl Codegen {
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
             movzxw r8, rax;    // r8 <- len
-            //lea rdx, [rsp - 0x28];
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;

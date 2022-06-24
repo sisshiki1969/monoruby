@@ -6,63 +6,31 @@ use super::*;
 impl Codegen {
     pub(super) fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> CodePtr {
         macro_rules! cmp {
-          ($lhs:ident, $rhs:ident, $ret:ident, $set:ident, $generic:ident) => {{
-              let generic = self.jit.label();
-              let exit = self.jit.label();
-              self.load_binary_args($lhs, $rhs);
-              self.guard_rdi_fixnum(generic);
-              self.guard_rsi_fixnum(generic);
-              monoasm!(self.jit,
-                  // fastpath
-                  xorq rax,rax;
-                  cmpq rdi, rsi;
-                  $set rax;
-                  shlq rax, 3;
-                  orq rax, (FALSE_VALUE);
-              exit:
-                  // store the result to return reg.
-                  movq [rbp - (conv($ret))], rax;
-              );
-              self.jit.select(1);
-              monoasm!(self.jit,
-              generic:
-                  // generic path
-                  movq rax, ($generic);
-                  call rax;
-                  jmp  exit;
-              );
-              self.jit.select(0);
-          }};
-      }
+            ($lhs:ident, $rhs:ident, $ret:ident, $op:ident) => {{
+                paste! {
+                  self.load_binary_args($lhs, $rhs);
+                  self.[<cmp_ $op>]();
+                  monoasm! { self.jit,
+                    movq [rbp - (conv($ret))], rax;
+                  };
+                }
+            }};
+        }
 
         macro_rules! cmp_ri {
-          ($lhs:ident, $rhs:ident, $ret:ident, $set:ident, $generic_func:ident) => {{
-              let generic = self.jit.label();
-              let exit = self.jit.label();
-              monoasm!(self.jit,
-                  movq rdi, [rbp - (conv($lhs))];
-                  movq rsi, (Value::new_integer($rhs as i64).get());
-              );
-              self.guard_rdi_fixnum(generic);
-              monoasm!(self.jit,
-                  xorq rax, rax;
-                  cmpq rdi, rsi;
-                  $set rax;
-                  shlq rax, 3;
-                  orq rax, (FALSE_VALUE);
-              exit:
-                  movq [rbp - (conv($ret))], rax;
-              );
-              self.jit.select(1);
-              monoasm!(self.jit,
-              generic:
-                  movq rax, ($generic_func);
-                  call rax;
-                  jmp  exit;
-              );
-              self.jit.select(0);
-          }};
-      }
+            ($lhs:ident, $rhs:ident, $ret:ident, $op:ident) => {{
+                paste! {
+                  monoasm!(self.jit,
+                    movq rdi, [rbp - (conv($lhs))];
+                    movq rsi, (Value::new_integer($rhs as i64).get());
+                  );
+                  self.[<cmp_ri_ $op>]();
+                  monoasm! { self.jit,
+                    movq [rbp - (conv($ret))], rax;
+                  }
+                }
+            }};
+        }
 
         macro_rules! bin_ops {
             ($op:ident, $ret:ident, $lhs:ident, $rhs:ident) => {{
@@ -227,20 +195,20 @@ impl Codegen {
                 BcOp::Shr(ret, lhs, rhs) => bin_ops!(shr, ret, lhs, rhs),
                 BcOp::Shl(ret, lhs, rhs) => bin_ops!(shl, ret, lhs, rhs),
                 BcOp::Cmp(kind, ret, lhs, rhs) => match kind {
-                    CmpKind::Eq => cmp!(lhs, rhs, ret, seteq, cmp_eq_values),
-                    CmpKind::Ne => cmp!(lhs, rhs, ret, setne, cmp_ne_values),
-                    CmpKind::Ge => cmp!(lhs, rhs, ret, setge, cmp_ge_values),
-                    CmpKind::Gt => cmp!(lhs, rhs, ret, setgt, cmp_gt_values),
-                    CmpKind::Le => cmp!(lhs, rhs, ret, setle, cmp_le_values),
-                    CmpKind::Lt => cmp!(lhs, rhs, ret, setlt, cmp_lt_values),
+                    CmpKind::Eq => cmp!(lhs, rhs, ret, eq),
+                    CmpKind::Ne => cmp!(lhs, rhs, ret, ne),
+                    CmpKind::Ge => cmp!(lhs, rhs, ret, ge),
+                    CmpKind::Gt => cmp!(lhs, rhs, ret, gt),
+                    CmpKind::Le => cmp!(lhs, rhs, ret, le),
+                    CmpKind::Lt => cmp!(lhs, rhs, ret, lt),
                 },
                 BcOp::Cmpri(kind, ret, lhs, rhs) => match kind {
-                    CmpKind::Eq => cmp_ri!(lhs, rhs, ret, seteq, cmp_eq_values),
-                    CmpKind::Ne => cmp_ri!(lhs, rhs, ret, setne, cmp_ne_values),
-                    CmpKind::Ge => cmp_ri!(lhs, rhs, ret, setge, cmp_ge_values),
-                    CmpKind::Gt => cmp_ri!(lhs, rhs, ret, setgt, cmp_gt_values),
-                    CmpKind::Le => cmp_ri!(lhs, rhs, ret, setle, cmp_le_values),
-                    CmpKind::Lt => cmp_ri!(lhs, rhs, ret, setlt, cmp_lt_values),
+                    CmpKind::Eq => cmp_ri!(lhs, rhs, ret, eq),
+                    CmpKind::Ne => cmp_ri!(lhs, rhs, ret, ne),
+                    CmpKind::Ge => cmp_ri!(lhs, rhs, ret, ge),
+                    CmpKind::Gt => cmp_ri!(lhs, rhs, ret, gt),
+                    CmpKind::Le => cmp_ri!(lhs, rhs, ret, le),
+                    CmpKind::Lt => cmp_ri!(lhs, rhs, ret, lt),
                 },
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,

@@ -336,28 +336,6 @@ macro_rules! eq_values {
 
 eq_values!(eq, ne);
 
-macro_rules! cmp_ri_values {
-    ($op:ident) => {
-        paste! {
-            pub(super) extern "C" fn [<cmp_ $op _ri_values>](lhs: Value, rhs: i64) -> Value {
-                let b = match lhs.unpack() {
-                    RV::Integer(lhs) => lhs.$op(&rhs),
-                    RV::BigInt(lhs) => lhs.$op(&BigInt::from(rhs)),
-                    RV::Float(lhs) => lhs.$op(&(rhs as f64)),
-                    _ => unreachable!(),
-                };
-                Value::bool(b)
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_ri_values!($op1);
-        cmp_ri_values!($($op2),+);
-    };
-}
-
-cmp_ri_values!(eq, ne, ge, gt, le, lt);
-
 pub(super) extern "C" fn neg_value(
     _interp: &mut Interp,
     globals: &mut Globals,

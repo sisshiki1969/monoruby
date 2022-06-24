@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use monoasm::*;
 use monoasm_macro::monoasm;
+use paste::paste;
 
 use super::*;
 
@@ -91,6 +92,74 @@ extern "C" fn get_error_location(
     globals.push_error_location(loc, sourceinfo);
 }
 
+macro_rules! cmp_main {
+    ($op:ident) => {
+        paste! {
+            fn [<cmp_ $op>](&mut self) {
+                let exit = self.jit.label();
+                let generic = self.jit.label();
+                self.guard_rdi_fixnum(generic);
+                self.guard_rsi_fixnum(generic);
+                monoasm! { self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                exit:
+                };
+                self.jit.select(1);
+                monoasm!(self.jit,
+                generic:
+                    // generic path
+                    movq rax, ([<cmp_ $op _values>]);
+                    call rax;
+                    jmp  exit;
+                );
+                self.jit.select(0);
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmp_main!($op1);
+        cmp_main!($($op2),+);
+    };
+}
+
+macro_rules! cmp_ri_main {
+    ($op:ident) => {
+        paste! {
+            fn [<cmp_ri_ $op>](&mut self) {
+                let exit = self.jit.label();
+                let generic = self.jit.label();
+                self.guard_rdi_fixnum(generic);
+                monoasm! { self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                exit:
+                };
+
+                self.jit.select(1);
+                monoasm!(self.jit,
+                generic:
+                    // generic path
+                    movq rax, ([<cmp_ $op _values>]);
+                    call rax;
+                    jmp  exit;
+                );
+                self.jit.select(0);
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmp_ri_main!($op1);
+        cmp_ri_main!($($op2),+);
+    };
+}
+
 impl Codegen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
@@ -176,6 +245,9 @@ impl Codegen {
             jeq generic;
         );
     }
+
+    cmp_main!(eq, ne, lt, le, gt, ge);
+    cmp_ri_main!(eq, ne, lt, le, gt, ge);
 
     fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
