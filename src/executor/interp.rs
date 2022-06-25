@@ -116,15 +116,6 @@ impl Interp {
         args: &[Value],
     ) -> Option<Value> {
         let func_id = globals.get_method(receiver.class_id(), method, args.len())?;
-        let f: extern "C" fn(
-            &mut Interp,
-            &mut Globals,
-            FuncId,
-            Value,
-            *const Value,
-            usize,
-        ) -> Option<Value> = unsafe { std::mem::transmute(self.codegen.invoker.as_ptr()) };
-        f(self, globals, func_id, receiver, args.as_ptr(), args.len())
-        //None
+        (self.codegen.invoker)(self, globals, func_id, receiver, args.as_ptr(), args.len())
     }
 }

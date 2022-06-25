@@ -64,3 +64,17 @@ impl std::fmt::Display for TimeInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_time() {
+        run_test(
+            "
+            before = Time.now
+            (Time.now - before).class",
+        );
+    }
+}

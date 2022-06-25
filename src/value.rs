@@ -302,6 +302,10 @@ impl Value {
         unsafe { &*(self.get() as *const RValue) }
     }
 
+    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
+        unsafe { &mut *(self.get() as *mut RValue) }
+    }
+
     pub(crate) fn as_class(&self) -> ClassId {
         match self.unpack() {
             RV::Object(rv) => match rv.kind {
@@ -312,8 +316,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
-        unsafe { &mut *(self.get() as *mut RValue) }
+    pub(crate) fn as_string(&self) -> &Vec<u8> {
+        match self.unpack() {
+            RV::String(b) => b,
+            _ => unreachable!(),
+        }
     }
 
     /*#[inline(always)]

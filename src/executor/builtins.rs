@@ -4,6 +4,7 @@ mod class;
 mod file;
 mod integer;
 mod object;
+mod string;
 mod time;
 
 pub use time::TimeInfo;
@@ -59,6 +60,7 @@ pub fn init_builtins(globals: &mut Globals) {
     object::init(globals);
     integer::init(globals);
     class::init(globals);
+    string::init(globals);
     time::init(globals);
     file::init(globals, file_class);
 }

@@ -14,6 +14,9 @@ mod vmgen;
 
 pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Option<Value>;
 
+pub type Invoker =
+    extern "C" fn(&mut Interp, &mut Globals, FuncId, Value, *const Value, usize) -> Option<Value>;
+
 ///
 /// Bytecode compiler
 ///
@@ -28,7 +31,7 @@ pub struct Codegen {
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
-    pub invoker: CodePtr,
+    pub invoker: Invoker,
     pub func_data: FuncDataLabels,
 }
 
@@ -210,7 +213,14 @@ impl Codegen {
             ret;
         );
         // method invoker.
-        let invoker = jit.get_current_address();
+        let invoker: extern "C" fn(
+            &mut Interp,
+            &mut Globals,
+            FuncId,
+            Value,
+            *const Value,
+            usize,
+        ) -> Option<Value> = unsafe { std::mem::transmute(jit.get_current_address().as_ptr()) };
         let loop_exit = jit.label();
         let loop_ = jit.label();
         // rdi: &mut Interp
@@ -224,6 +234,8 @@ impl Codegen {
             movq rbp, rsp;
             pushq rbx;
             pushq r12;
+            pushq r13;
+            pushq r15;
             movq rbx, rdi;
             movq r12, rsi;
             pushq r9;
@@ -274,9 +286,10 @@ impl Codegen {
 
             movq rax, [rip + func_address];
             call rax;
+            popq r15;
+            popq r13;
             popq r12;
             popq rbx;
-            popq rbp;
             leave;
             ret;
         };

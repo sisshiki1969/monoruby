@@ -12,7 +12,7 @@ macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                _interp: &mut Interp,
+                interp: &mut Interp,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -29,8 +29,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
-                        globals.err_method_not_found($op_str);
-                        return None;
+                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -66,13 +65,15 @@ pub(super) extern "C" fn sub_values(
         (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).sub(&rhs)),
         (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.sub(&(rhs as f64))),
         (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.sub(&rhs)),
-        _ => return dbg!(interp.invoke_method(globals, IdentId::_SUB, lhs, &[rhs])),
+        _ => {
+            return interp.invoke_method(globals, IdentId::_SUB, lhs, &[rhs]);
+        }
     };
     Some(v)
 }
 
 pub(super) extern "C" fn div_values(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -142,8 +143,7 @@ pub(super) extern "C" fn div_values(
             Value::new_float(lhs.div(&rhs))
         }
         _ => {
-            globals.err_method_not_found(IdentId::_DIV);
-            return None;
+            return interp.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -153,7 +153,7 @@ macro_rules! int_binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                _interp: &mut Interp,
+                interp: &mut Interp,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -164,8 +164,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
                     _ => {
-                        globals.err_method_not_found($op_str);
-                    return None;
+                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -185,7 +184,7 @@ int_binop_values!(
 );
 
 pub(super) extern "C" fn shr_values(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -205,16 +204,15 @@ pub(super) extern "C" fn shr_values(
                 bigint_shl(lhs, -rhs as u64 as u32)
             }
         }
-        (_lhs, _rhs) => {
-            globals.err_method_not_found(IdentId::_SHR);
-            return None;
+        _ => {
+            return interp.invoke_method(globals, IdentId::_SHR, lhs, &[rhs]);
         }
     };
     Some(v)
 }
 
 pub(super) extern "C" fn shl_values(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -234,9 +232,8 @@ pub(super) extern "C" fn shl_values(
                 bigint_shr(lhs, -rhs as u64 as u32)
             }
         }
-        (_lhs, _rhs) => {
-            globals.err_method_not_found(IdentId::_SHL);
-            return None;
+        _ => {
+            return interp.invoke_method(globals, IdentId::_SHL, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -322,7 +319,7 @@ macro_rules! eq_values {
 eq_values!(eq, ne);
 
 pub(super) extern "C" fn neg_value(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
 ) -> Option<Value> {
@@ -334,8 +331,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::new_float(-lhs),
         RV::BigInt(lhs) => Value::new_bigint(-lhs),
         _ => {
-            globals.err_method_not_found(IdentId::_UMINUS);
-            return None;
+            return interp.invoke_method(globals, IdentId::_UMINUS, lhs, &[]);
         }
     };
     Some(v)

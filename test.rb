@@ -1,9 +1,8 @@
-p <<END + <<END
-1
-#{<<END}
-2
-END
-3
-END
-4
-END
+x = 0
+a = "s"
+b = "d"
+while x < 10000 do
+  a = a + b
+  x += 1
+end
+a

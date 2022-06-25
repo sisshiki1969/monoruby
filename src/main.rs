@@ -192,6 +192,8 @@ pub fn run_test(code: &str) {
 
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();
+    #[cfg(debug_assertions)]
+    eprintln!("jit: {:?}", jit_val);
 
     assert!(Value::eq(interp_val, jit_val));
 
