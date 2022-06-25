@@ -99,9 +99,8 @@ impl Interp {
         let mut eval = Self::new();
         let main_id = globals.get_main_func();
 
-        let f = eval.codegen.construct_vm();
-        let vm_entry = eval.codegen.jit.get_label_address(eval.codegen.vm_entry);
-        eval.codegen.precompile(&mut globals.func, vm_entry);
+        let f = eval.codegen.vm_entry_point;
+        eval.codegen.precompile(&mut globals.func);
 
         let res = f(&mut eval, globals, main_id);
         globals.stdout.flush().unwrap();
@@ -117,7 +116,8 @@ impl Interp {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        let func_id = globals.get_method(receiver.class_id(), method, args.len())?;
-        (self.codegen.invoker)(self, globals, func_id, receiver, args.as_ptr(), args.len())
+        let len = args.len();
+        let func_id = globals.get_method(receiver.class_id(), method, len)?;
+        (self.codegen.invoker)(self, globals, func_id, receiver, args.as_ptr(), len)
     }
 }

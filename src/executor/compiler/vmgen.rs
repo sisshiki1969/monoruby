@@ -131,8 +131,7 @@ impl Codegen {
     ///
     /// Generator of virtual machine.
     ///
-    pub fn construct_vm(&mut self) -> EntryPoint {
-        let vm_entry = self.vm_entry;
+    pub(super) fn construct_vm(&mut self) -> EntryPoint {
         let entry = self.jit.get_current_address();
         let FuncDataLabels {
             func_offset,
@@ -197,7 +196,9 @@ impl Codegen {
             //
             //   stack_offset: [rip + func_offset]
             //
-        vm_entry:
+        };
+        self.vm_entry = self.jit.get_current_address();
+        monoasm! { self.jit,
             pushq rbp;
             movq rbp, rsp;
             subq rsp, [rip + func_offset];

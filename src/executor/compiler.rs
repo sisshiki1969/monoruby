@@ -12,8 +12,7 @@ use super::*;
 mod jitgen;
 mod vmgen;
 
-pub type EntryPoint<'r, 's> =
-    extern "C" fn(&'r mut Interp, &'s mut Globals, FuncId) -> Option<Value>;
+pub type EntryPoint = extern "C" fn(&mut Interp, &mut Globals, FuncId) -> Option<Value>;
 
 pub type Invoker =
     extern "C" fn(&mut Interp, &mut Globals, FuncId, Value, *const Value, usize) -> Option<Value>;
@@ -28,7 +27,8 @@ pub struct Codegen {
     pub class_version: DestLabel,
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
-    pub vm_entry: DestLabel,
+    pub vm_entry: CodePtr,
+    pub vm_entry_point: EntryPoint,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
@@ -177,7 +177,6 @@ impl Codegen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
-        let vm_entry = jit.label();
         let func_offset = jit.const_i64(0);
         let func_address = jit.const_i64(0);
         let func_pc = jit.const_i64(0);
@@ -312,18 +311,21 @@ impl Codegen {
             func_pc,
             func_ret,
         };
-        Self {
+        let mut codegen = Self {
             jit,
             class_version,
             const_version,
             entry_panic,
             entry_find_method,
-            vm_entry,
+            vm_entry: entry_unimpl,
+            vm_entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             vm_return,
             dispatch,
             invoker,
             func_data,
-        }
+        };
+        codegen.vm_entry_point = codegen.construct_vm();
+        codegen
     }
 
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
@@ -559,11 +561,11 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub fn precompile(&mut self, store: &mut FnStore, vm_entry: CodePtr) {
+    pub fn precompile(&mut self, store: &mut FnStore) {
         for func in store.funcs_mut().iter_mut() {
             match &func.kind {
                 FuncKind::Normal(_) => {
-                    func.set_jit_label(vm_entry);
+                    func.set_jit_label(self.vm_entry);
                 }
                 FuncKind::Builtin { abs_address } => {
                     let label = self.wrap_builtin(*abs_address);
