@@ -107,19 +107,24 @@ impl Interp {
     }
 }
 
-/*impl Interp {
+impl Interp {
     pub fn invoke_method(
         &mut self,
         globals: &mut Globals,
-        receiver: Value,
         method: IdentId,
+        receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
         let func_id = globals.get_method(receiver.class_id(), method, args.len())?;
-        let info = &globals.func[func_id];
-        let address = info.jit_label().unwrap();
-        let offset = info.stack_offset();
-        let pc = info.inst_pc();
-        None
+        let f: extern "C" fn(
+            &mut Interp,
+            &mut Globals,
+            FuncId,
+            Value,
+            *const Value,
+            usize,
+        ) -> Option<Value> = unsafe { std::mem::transmute(self.codegen.invoker.as_ptr()) };
+        f(self, globals, func_id, receiver, args.as_ptr(), args.len())
+        //None
     }
-}*/
+}

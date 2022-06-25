@@ -23,7 +23,7 @@
 
 ### argument registers
 
-- rdi: number pf args (only for native func wrapper)
+- rdi: number of args (only for native func wrapper)
 
 ### global registers
 

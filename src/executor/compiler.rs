@@ -5,6 +5,8 @@ use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
+use crate::executor::compiler::vmgen::get_func_data;
+
 use super::*;
 
 mod jitgen;
@@ -26,6 +28,15 @@ pub struct Codegen {
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
+    pub invoker: CodePtr,
+    pub func_data: FuncDataLabels,
+}
+
+pub struct FuncDataLabels {
+    pub func_offset: DestLabel,
+    pub func_address: DestLabel,
+    pub func_pc: DestLabel,
+    pub func_ret: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -41,7 +52,7 @@ fn conv(reg: u16) -> i64 {
 ///
 /// If no method was found, return None (==0u64).
 ///
-extern "C" fn get_func_address(
+pub extern "C" fn get_func_address(
     interp: &mut Interp,
     globals: &mut Globals,
     func_name: IdentId,
@@ -51,15 +62,7 @@ extern "C" fn get_func_address(
 ) -> Option<CodePtr> {
     let func_id = globals.get_method(receiver.class_id(), func_name, args_len)?;
     *funcid_patch = func_id;
-    match globals.func[func_id].jit_label() {
-        Some(dest) => Some(dest),
-        None => {
-            let mut info = std::mem::take(&mut globals.func[func_id]);
-            let label = interp.codegen.jit_compile(&mut info, &globals.func);
-            globals.func[func_id] = info;
-            Some(label)
-        }
-    }
+    Some(interp.codegen.compile_on_demand(globals, func_id))
 }
 
 extern "C" fn define_method(
@@ -171,6 +174,10 @@ impl Codegen {
         let jit_return = jit.label();
         let vm_return = jit.label();
         let vm_entry = jit.label();
+        let func_offset = jit.const_i64(0);
+        let func_address = jit.const_i64(0);
+        let func_pc = jit.const_i64(0);
+        let func_ret = jit.const_i64(0);
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -202,6 +209,78 @@ impl Codegen {
             leave;
             ret;
         );
+        // method invoker.
+        let invoker = jit.get_current_address();
+        let loop_exit = jit.label();
+        let loop_ = jit.label();
+        // rdi: &mut Interp
+        // rsi: &mut Globals
+        // rdx: FuncId
+        // rcx: receiver: Value
+        // r8:  *args: *const Value
+        // r9:  len: usize
+        monoasm! { &mut jit,
+            pushq rbp;
+            movq rbp, rsp;
+            pushq rbx;
+            pushq r12;
+            movq rbx, rdi;
+            movq r12, rsi;
+            pushq r9;
+            pushq r8;
+            // set meta/call_kind = 0(VM)
+            // set meta/func_id
+            pushq rdx;
+            // set self (= receiver)
+            pushq rcx;
+            lea rcx, [rip + func_offset]; // rcx: &mut FuncData
+            movq rax, (get_func_data);
+            call rax;
+
+            movq r13, [rip + func_pc];    // r13: BcPc
+            addq rsp, 16;
+            // rcx <- *args
+            popq rcx;
+            // r8 <- len
+            popq r8;
+            //
+            //       +-------------+
+            // +0x08 |             |
+            //       +-------------+
+            //  0x00 |             | <- rsp
+            //       +-------------+
+            // -0x08 | return addr | len
+            //       +-------------+
+            // -0x10 |   old rbp   | args
+            //       +-------------+
+            // -0x18 |    meta     | func_id
+            //       +-------------+
+            // -0x20 |     %0      | receiver
+            //       +-------------+
+            // -0x28 | %1(1st arg) |
+            //       +-------------+
+            //       |             |
+            //
+            movq rdi, r8;
+            testq r8, r8;
+            jeq  loop_exit;
+            negq r8;
+        loop_:
+            movq rax, [rcx + r8 * 8 + 8];
+            movq [rsp + r8 * 8- 0x20], rax;
+            addq r8, 1;
+            jne  loop_;
+        loop_exit:
+
+            movq rax, [rip + func_address];
+            call rax;
+            popq r12;
+            popq rbx;
+            popq rbp;
+            leave;
+            ret;
+        };
+
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
         monoasm! { jit,
@@ -213,6 +292,12 @@ impl Codegen {
                 ret;
         };
         let dispatch = vec![entry_unimpl; 256];
+        let func_data = FuncDataLabels {
+            func_offset,
+            func_address,
+            func_pc,
+            func_ret,
+        };
         Self {
             jit,
             class_version,
@@ -222,6 +307,8 @@ impl Codegen {
             vm_entry,
             vm_return,
             dispatch,
+            invoker,
+            func_data,
         }
     }
 
@@ -362,6 +449,18 @@ impl Codegen {
         );
         self.jit.finalize();
         self.jit.get_label_addr2(entry)
+    }
+
+    pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) -> CodePtr {
+        match globals.func[func_id].jit_label() {
+            Some(dest) => dest,
+            None => {
+                let mut info = std::mem::take(&mut globals.func[func_id]);
+                let label = self.jit_compile(&mut info, &globals.func);
+                globals.func[func_id] = info;
+                label
+            }
+        }
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {

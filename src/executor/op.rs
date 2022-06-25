@@ -50,7 +50,7 @@ binop_values!(
 );
 
 pub(super) extern "C" fn sub_values(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -66,22 +66,7 @@ pub(super) extern "C" fn sub_values(
         (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).sub(&rhs)),
         (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.sub(&(rhs as f64))),
         (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.sub(&rhs)),
-        (RV::Object(lhs), RV::Object(rhs)) => match (&lhs.kind, &rhs.kind) {
-            (ObjKind::Time(lhs), ObjKind::Time(rhs)) => Value::new_float(
-                ((lhs.clone() - rhs.clone()).num_nanoseconds().unwrap() as f64)
-                    / 1000.0
-                    / 1000.0
-                    / 1000.0,
-            ),
-            _ => {
-                globals.err_method_not_found(IdentId::_SUB);
-                return None;
-            }
-        },
-        _ => {
-            globals.err_method_not_found(IdentId::_SUB);
-            return None;
-        }
+        _ => return dbg!(interp.invoke_method(globals, IdentId::_SUB, lhs, &[rhs])),
     };
     Some(v)
 }

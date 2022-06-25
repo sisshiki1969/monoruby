@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-struct FuncData {
+pub struct FuncData {
     /// stack offset. (only used in calling vm_entry)
     offset: i64,
     address: *mut u8,
@@ -96,13 +96,13 @@ extern "C" fn find_method(
     }
 }
 
-extern "C" fn get_func_data(
-    _interp: &mut Interp,
+pub extern "C" fn get_func_data(
+    interp: &mut Interp,
     globals: &mut Globals,
     func_id: FuncId,
     data: &mut FuncData,
 ) {
-    let label = globals.func[func_id].jit_label().unwrap();
+    let label = interp.codegen.compile_on_demand(globals, func_id);
     data.address = label.as_ptr();
     data.offset = globals.func[func_id].stack_offset();
     data.pc = globals.func[func_id].inst_pc();
@@ -134,10 +134,12 @@ impl Codegen {
     pub fn construct_vm(&mut self) -> fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> {
         let vm_entry = self.vm_entry;
         let entry = self.jit.get_current_address();
-        let func_offset = self.jit.const_i64(0);
-        let func_address = self.jit.const_i64(0);
-        let func_pc = self.jit.const_i64(0);
-        let func_ret = self.jit.const_i64(0);
+        let FuncDataLabels {
+            func_offset,
+            func_address,
+            func_pc,
+            ..
+        } = self.func_data;
 
         monoasm! { self.jit,
             pushq rbx;
@@ -230,7 +232,7 @@ impl Codegen {
 
         let (shl, shr) = self.vm_shift();
 
-        self.dispatch[1] = self.vm_method_call(func_offset, func_address, func_pc, func_ret);
+        self.dispatch[1] = self.vm_method_call();
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
         self.dispatch[4] = self.vm_condbr(branch);
@@ -410,13 +412,13 @@ impl Codegen {
         label
     }
 
-    fn vm_method_call(
-        &mut self,
-        func_offset: DestLabel,
-        func_address: DestLabel,
-        func_pc: DestLabel,
-        ret: DestLabel,
-    ) -> CodePtr {
+    fn vm_method_call(&mut self) -> CodePtr {
+        let FuncDataLabels {
+            func_offset,
+            func_address,
+            func_pc,
+            func_ret,
+        } = self.func_data;
         let label = self.jit.get_current_address();
         let class_version = self.class_version;
         let exit = self.jit.label();
@@ -437,7 +439,7 @@ impl Codegen {
             jeq vm_return;
 
             pushq r13;
-            pushq [rip + ret];
+            pushq [rip + func_ret];
             movq r13, [rip + func_pc];    // r13: BcPc
             // set meta/func_id
             movl [rsp - 0x14], rax;
