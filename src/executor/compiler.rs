@@ -12,7 +12,8 @@ use super::*;
 mod jitgen;
 mod vmgen;
 
-pub type JitFunc<'r, 's> = extern "C" fn(&'r mut Interp, &'s mut Globals) -> Option<Value>;
+pub type EntryPoint<'r, 's> =
+    extern "C" fn(&'r mut Interp, &'s mut Globals, FuncId) -> Option<Value>;
 
 pub type Invoker =
     extern "C" fn(&mut Interp, &mut Globals, FuncId, Value, *const Value, usize) -> Option<Value>;
@@ -425,11 +426,9 @@ impl Codegen {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> JitFunc {
+    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> EntryPoint {
         let main_id = globals.get_main_func();
-        let mut info = std::mem::take(&mut globals.func[main_id]);
-        let main = self.jit_compile(&mut info, &globals.func);
-        globals.func[main_id] = info;
+        let main = self.compile_on_demand(globals, main_id);
         let entry = self.jit.label();
         //       +-------------+
         // -0x00 |             | <- rsp
@@ -449,7 +448,7 @@ impl Codegen {
             pushq r12;
             movq rbx, rdi;
             movq r12, rsi;
-            movl [rsp - 0x14], (main_id.0);
+            movl [rsp - 0x14], rdx;
             movl [rsp - 0x18], 1;
             movq [rsp - 0x20], (NIL_VALUE);
             xorq rdi, rdi;
@@ -461,7 +460,7 @@ impl Codegen {
             ret;
         );
         self.jit.finalize();
-        self.jit.get_label_addr2(entry)
+        unsafe { std::mem::transmute(self.jit.get_label_address(entry).as_ptr()) }
     }
 
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) -> CodePtr {

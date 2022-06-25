@@ -87,15 +87,17 @@ impl Interp {
 
     pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
         let mut eval = Self::new();
+        let main_id = globals.get_main_func();
+
         let f = eval.codegen.exec_toplevel(globals);
-        let res = f(&mut eval, globals);
+        let res = f(&mut eval, globals, main_id);
         globals.stdout.flush().unwrap();
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
-        let main_id = globals.get_main_func();
         let mut eval = Self::new();
+        let main_id = globals.get_main_func();
 
         let f = eval.codegen.construct_vm();
         let vm_entry = eval.codegen.jit.get_label_address(eval.codegen.vm_entry);

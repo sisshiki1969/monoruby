@@ -131,7 +131,7 @@ impl Codegen {
     ///
     /// Generator of virtual machine.
     ///
-    pub fn construct_vm(&mut self) -> fn(&mut Interp, &mut Globals, FuncId) -> Option<Value> {
+    pub fn construct_vm(&mut self) -> EntryPoint {
         let vm_entry = self.vm_entry;
         let entry = self.jit.get_current_address();
         let FuncDataLabels {
