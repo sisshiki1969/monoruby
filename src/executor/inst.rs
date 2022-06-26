@@ -6,28 +6,28 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BcIr {
     Br(usize),
-    CondBr(BcReg, usize),
-    CondNotBr(BcReg, usize),
+    CondBr(BcReg, usize, bool),
+    CondNotBr(BcReg, usize, bool),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, u32),
     LoadConst(BcReg, IdentId),
     StoreConst(BcReg, IdentId),
     Nil(BcReg),
-    Neg(BcReg, BcReg),                 // ret, src
-    Add(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Addri(BcReg, BcReg, i16),          // ret, lhs, int
-    Sub(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Subri(BcReg, BcReg, i16),          // ret, lhs, int
-    Mul(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Div(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    BitOr(BcReg, BcReg, BcReg),        // ret, lhs, rhs
-    BitAnd(BcReg, BcReg, BcReg),       // ret, lhs, rhs
-    BitXor(BcReg, BcReg, BcReg),       // ret, lhs, rhs
-    Shr(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Shl(BcReg, BcReg, BcReg),          // ret, lhs, rhs
-    Cmp(CmpKind, BcReg, BcReg, BcReg), // kind, dst, lhs, rhs
-    Cmpri(CmpKind, BcReg, BcReg, i16), // kind, dst, lhs, rhs
+    Neg(BcReg, BcReg),                       // ret, src
+    Add(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    Addri(BcReg, BcReg, i16),                // ret, lhs, int
+    Sub(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    Subri(BcReg, BcReg, i16),                // ret, lhs, int
+    Mul(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    Div(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    BitOr(BcReg, BcReg, BcReg),              // ret, lhs, rhs
+    BitAnd(BcReg, BcReg, BcReg),             // ret, lhs, rhs
+    BitXor(BcReg, BcReg, BcReg),             // ret, lhs, rhs
+    Shr(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    Shl(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
+    Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
     Mov(BcReg, BcReg),                                        // dst, offset
     MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
@@ -44,8 +44,10 @@ pub(super) enum BcOp {
     Br(i32),
     /// conditional branch(%reg, dest)  : branch when reg was true.
     CondBr(u16, i32),
+    CondBrO(u16, i32),
     /// conditional branch(%reg, dest)  : branch when reg was false.
     CondNotBr(u16, i32),
+    CondNotBrO(u16, i32),
     /// integer(%reg, i32)
     Integer(u16, i32),
     /// Symbol(%reg, IdentId)
@@ -82,8 +84,10 @@ pub(super) enum BcOp {
     Shl(u16, u16, u16),
     /// cmp(%ret, %lhs, %rhs)
     Cmp(CmpKind, u16, u16, u16),
+    CmpO(CmpKind, u16, u16, u16),
     /// cmpri(%ret, %lhs, rhs: i16)
     Cmpri(CmpKind, u16, u16, i16),
+    CmpriO(CmpKind, u16, u16, i16),
     /// return(%ret)
     Ret(u16),
     /// move(%dst, %src)
@@ -143,6 +147,8 @@ impl BcOp {
             Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
             LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
+            CondBrO(op1, op2) => enc_wl(12, *op1, *op2 as u32),
+            CondNotBrO(op1, op2) => enc_wl(13, *op1, *op2 as u32),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
@@ -161,6 +167,8 @@ impl BcOp {
             Shr(op1, op2, op3) => enc_www(153, *op1, *op2, *op3),
             Shl(op1, op2, op3) => enc_www(154, *op1, *op2, *op3),
             ConcatStr(op1, op2, op3) => enc_www(155, *op1, *op2, *op3),
+            CmpO(kind, op1, op2, op3) => enc_www(156 + *kind as u16, *op1, *op2, *op3),
+            CmpriO(kind, op1, op2, op3) => enc_wwsw(162 + *kind as u16, *op1, *op2, *op3),
         }
     }
 
@@ -180,6 +188,8 @@ impl BcOp {
                 9 => Self::Symbol(op1, IdentId::from(op2)),
                 10 => Self::LoadConst(op1, ConstSiteId(op2)),
                 11 => Self::StoreConst(op1, IdentId::from(op2)),
+                12 => Self::CondBrO(op1, op2 as i32),
+                13 => Self::CondNotBrO(op1, op2 as i32),
                 _ => unreachable!(),
             }
         } else {
@@ -212,6 +222,18 @@ impl BcOp {
                 153 => Self::Shr(op1, op2, op3),
                 154 => Self::Shl(op1, op2, op3),
                 155 => Self::ConcatStr(op1, op2, op3),
+                156 => Self::CmpO(CmpKind::Eq, op1, op2, op3),
+                157 => Self::CmpO(CmpKind::Ne, op1, op2, op3),
+                158 => Self::CmpO(CmpKind::Lt, op1, op2, op3),
+                159 => Self::CmpO(CmpKind::Le, op1, op2, op3),
+                160 => Self::CmpO(CmpKind::Gt, op1, op2, op3),
+                161 => Self::CmpO(CmpKind::Ge, op1, op2, op3),
+                162 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16),
+                163 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16),
+                164 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16),
+                165 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16),
+                166 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16),
+                167 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16),
                 _ => unreachable!(),
             }
         }

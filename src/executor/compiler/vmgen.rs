@@ -244,6 +244,8 @@ impl Codegen {
         self.dispatch[9] = self.vm_symbol();
         self.dispatch[10] = self.vm_load_const();
         self.dispatch[11] = self.vm_store_const();
+        self.dispatch[12] = self.vm_condbr(branch);
+        self.dispatch[13] = self.vm_condnotbr(branch);
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[130] = self.vm_addrr();
@@ -275,6 +277,19 @@ impl Codegen {
         self.dispatch[153] = shr;
         self.dispatch[154] = shl;
         self.dispatch[155] = self.vm_concat();
+
+        self.dispatch[156] = self.vm_eqrr();
+        self.dispatch[157] = self.vm_nerr();
+        self.dispatch[158] = self.vm_ltrr();
+        self.dispatch[159] = self.vm_lerr();
+        self.dispatch[160] = self.vm_gtrr();
+        self.dispatch[161] = self.vm_gerr();
+        self.dispatch[162] = self.vm_eqri();
+        self.dispatch[163] = self.vm_neri();
+        self.dispatch[164] = self.vm_ltri();
+        self.dispatch[165] = self.vm_leri();
+        self.dispatch[166] = self.vm_gtri();
+        self.dispatch[167] = self.vm_geri();
 
         self.jit.finalize();
         unsafe { std::mem::transmute(entry.as_ptr()) }

@@ -1,8 +1,2 @@
-x = 0
-a = "s"
-b = "d"
-while x < 10000 do
-  a = a + b
-  x += 1
+for x in 0..500000 do
 end
-a

@@ -194,7 +194,7 @@ impl Codegen {
                 BcOp::BitXor(ret, lhs, rhs) => bin_ops!(bit_xor, ret, lhs, rhs),
                 BcOp::Shr(ret, lhs, rhs) => bin_ops!(shr, ret, lhs, rhs),
                 BcOp::Shl(ret, lhs, rhs) => bin_ops!(shl, ret, lhs, rhs),
-                BcOp::Cmp(kind, ret, lhs, rhs) => match kind {
+                BcOp::Cmp(kind, ret, lhs, rhs) | BcOp::CmpO(kind, ret, lhs, rhs) => match kind {
                     CmpKind::Eq => cmp!(lhs, rhs, ret, eq),
                     CmpKind::Ne => cmp!(lhs, rhs, ret, ne),
                     CmpKind::Ge => cmp!(lhs, rhs, ret, ge),
@@ -202,14 +202,16 @@ impl Codegen {
                     CmpKind::Le => cmp!(lhs, rhs, ret, le),
                     CmpKind::Lt => cmp!(lhs, rhs, ret, lt),
                 },
-                BcOp::Cmpri(kind, ret, lhs, rhs) => match kind {
-                    CmpKind::Eq => cmp_ri!(lhs, rhs, ret, eq),
-                    CmpKind::Ne => cmp_ri!(lhs, rhs, ret, ne),
-                    CmpKind::Ge => cmp_ri!(lhs, rhs, ret, ge),
-                    CmpKind::Gt => cmp_ri!(lhs, rhs, ret, gt),
-                    CmpKind::Le => cmp_ri!(lhs, rhs, ret, le),
-                    CmpKind::Lt => cmp_ri!(lhs, rhs, ret, lt),
-                },
+                BcOp::Cmpri(kind, ret, lhs, rhs) | BcOp::CmpriO(kind, ret, lhs, rhs) => {
+                    match kind {
+                        CmpKind::Eq => cmp_ri!(lhs, rhs, ret, eq),
+                        CmpKind::Ne => cmp_ri!(lhs, rhs, ret, ne),
+                        CmpKind::Ge => cmp_ri!(lhs, rhs, ret, ge),
+                        CmpKind::Gt => cmp_ri!(lhs, rhs, ret, gt),
+                        CmpKind::Le => cmp_ri!(lhs, rhs, ret, le),
+                        CmpKind::Lt => cmp_ri!(lhs, rhs, ret, lt),
+                    }
+                }
                 BcOp::Mov(dst, src) => {
                     monoasm!(self.jit,
                       movq rax, [rbp - (conv(src))];
@@ -256,7 +258,7 @@ impl Codegen {
                         jmp dest;
                     );
                 }
-                BcOp::CondBr(cond_, disp) => {
+                BcOp::CondBr(cond_, disp) | BcOp::CondBrO(cond_, disp) => {
                     let cond_ = conv(cond_);
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
@@ -266,7 +268,7 @@ impl Codegen {
                         jne dest;
                     );
                 }
-                BcOp::CondNotBr(cond_, disp) => {
+                BcOp::CondNotBr(cond_, disp) | BcOp::CondNotBrO(cond_, disp) => {
                     let cond_ = conv(cond_);
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,

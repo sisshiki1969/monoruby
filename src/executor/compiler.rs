@@ -181,6 +181,7 @@ impl Codegen {
         let func_address = jit.const_i64(0);
         let func_pc = jit.const_i64(0);
         let func_ret = jit.const_i64(0);
+        jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -304,6 +305,7 @@ impl Codegen {
                 leave;
                 ret;
         };
+        jit.select(0);
         let dispatch = vec![entry_unimpl; 256];
         let func_data = FuncDataLabels {
             func_offset,
@@ -479,6 +481,17 @@ impl Codegen {
 
     fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        {
+            eprintln!(
+                "--> start compile: {} {:?}",
+                match func.name() {
+                    Some(name) => name,
+                    None => "<unnamed>",
+                },
+                func.id()
+            );
+        }
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
@@ -487,21 +500,23 @@ impl Codegen {
         func.set_jit_label(label);
         self.jit.finalize();
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        let elapsed = now.elapsed();
+        #[cfg(any(feature = "emit-asm"))]
         {
-            eprintln!("jit compile: {:?}", func.id());
-            #[cfg(any(feature = "emit-asm"))]
-            {
-                let (start, code_end, end) = self.jit.code_block.last().unwrap();
-                eprintln!(
-                    "offset:{:?} code: {} bytes  data: {} bytes",
-                    start,
-                    *code_end - *start,
-                    *end - *code_end
-                );
+            let (start, code_end, end) = self.jit.code_block.last().unwrap();
+            eprintln!(
+                "offset:{:?} code: {} bytes  data: {} bytes",
+                start,
+                *code_end - *start,
+                *end - *code_end
+            );
+            if let FuncKind::Normal(_) = func.kind {
+                self.jit.select(0);
                 eprintln!("{}", self.jit.dump_code().unwrap());
             }
-            eprintln!("jit compile elapsed:{:?}", now.elapsed());
         }
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
         label
     }
 
@@ -545,10 +560,9 @@ impl Codegen {
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
             pushq rbp;
+            movq rbp, rsp;
             movq rdi, rbx;
             movq rsi, r12;
-            //movq rcx, (arity);
-            movq rbp, rsp;
             subq rsp, rax;
             movq rax, (abs_address);
             // fn(&mut Interp, &mut Globals, *const Value, len:usize)

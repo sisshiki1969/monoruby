@@ -334,6 +334,11 @@ impl FuncInfo {
         self.id
     }
 
+    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+    pub(super) fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+
     pub(super) fn arity(&self) -> i32 {
         self.arity
     }
@@ -415,12 +420,12 @@ impl IrContext {
         self.push(BcIr::Br(cond_pos), Loc::default());
     }
 
-    fn gen_condbr(&mut self, cond: BcReg, then_pos: usize) {
-        self.push(BcIr::CondBr(cond, then_pos), Loc::default());
+    fn gen_condbr(&mut self, cond: BcReg, then_pos: usize, optimizable: bool) {
+        self.push(BcIr::CondBr(cond, then_pos, optimizable), Loc::default());
     }
 
-    fn gen_condnotbr(&mut self, cond: BcReg, else_pos: usize) {
-        self.push(BcIr::CondNotBr(cond, else_pos), Loc::default());
+    fn gen_condnotbr(&mut self, cond: BcReg, else_pos: usize, optimizable: bool) {
+        self.push(BcIr::CondNotBr(cond, else_pos, optimizable), Loc::default());
     }
 }
 
@@ -672,6 +677,12 @@ impl NormalFuncInfo {
                 BcOp::CondNotBr(reg, disp) => {
                     eprintln!("condnbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
                 }
+                BcOp::CondBrO(reg, disp) => {
+                    eprintln!("condbr _%{} =>:{:05}", reg, i as i32 + 1 + disp);
+                }
+                BcOp::CondNotBrO(reg, disp) => {
+                    eprintln!("condnbr _%{} =>:{:05}", reg, i as i32 + 1 + disp);
+                }
                 BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
                 BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
                 BcOp::Literal(reg, id) => {
@@ -707,6 +718,12 @@ impl NormalFuncInfo {
                 }
                 BcOp::Cmpri(kind, dst, lhs, rhs) => {
                     eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, kind, rhs)
+                }
+                BcOp::CmpO(kind, dst, lhs, rhs) => {
+                    eprintln!("_%{} = %{} {:?} %{}", dst, lhs, kind, rhs)
+                }
+                BcOp::CmpriO(kind, dst, lhs, rhs) => {
+                    eprintln!("_%{} = %{} {:?} {}: i16", dst, lhs, kind, rhs)
                 }
 
                 BcOp::Ret(reg) => eprintln!("ret %{}", reg),
@@ -1030,7 +1047,7 @@ impl NormalFuncInfo {
                 let then_pos = ir.new_label();
                 let succ_pos = ir.new_label();
                 let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
-                ir.gen_condbr(cond, then_pos);
+                ir.gen_condbr(cond, then_pos, false);
                 self.gen_expr(ctx, ir, id_store, else_, use_value, is_ret)?;
                 if !is_ret {
                     ir.gen_br(succ_pos);
@@ -1515,10 +1532,10 @@ impl NormalFuncInfo {
     ) -> Result<()> {
         if let Some(i) = is_smi(&rhs) {
             let (dst, lhs) = self.gen_singular(ctx, ir, id_store, dst, lhs)?;
-            ir.push(BcIr::Cmpri(kind, dst, lhs, i), loc);
+            ir.push(BcIr::Cmpri(kind, dst, lhs, i, false), loc);
         } else {
             let (dst, lhs, rhs) = self.gen_binary(ctx, ir, id_store, dst, lhs, rhs)?;
-            ir.push(BcIr::Cmp(kind, dst, lhs, rhs), loc);
+            ir.push(BcIr::Cmp(kind, dst, lhs, rhs, false), loc);
         }
         Ok(())
     }
@@ -1608,8 +1625,8 @@ impl NormalFuncInfo {
 
             ir.apply_label(loop_entry);
             let dst = self.push().into();
-            ir.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end), loc);
-            ir.gen_condbr(dst, loop_exit);
+            ir.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end, true), loc);
+            ir.gen_condbr(dst, loop_exit, true);
             self.pop();
 
             self.gen_expr(ctx, ir, id_store, *body.body, false, false)?;
@@ -1653,7 +1670,7 @@ impl NormalFuncInfo {
         ));
         ir.apply_label(cond_pos);
         let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
-        ir.gen_condnotbr(cond, succ_pos);
+        ir.gen_condnotbr(cond, succ_pos, false);
         self.gen_expr(ctx, ir, id_store, body, false, false)?;
         ir.gen_br(cond_pos);
         ir.apply_label(succ_pos);
@@ -1727,13 +1744,25 @@ impl NormalFuncInfo {
                     let dst = ir.labels[*dst].unwrap().0 as i32;
                     BcOp::Br(dst - idx as i32 - 1)
                 }
-                BcIr::CondBr(reg, dst) => {
+                BcIr::CondBr(reg, dst, optimizable) => {
                     let dst = ir.labels[*dst].unwrap().0 as i32;
-                    BcOp::CondBr(self.get_index(reg), dst - idx as i32 - 1)
+                    let cond_reg = self.get_index(reg);
+                    let disp = dst - idx as i32 - 1;
+                    if *optimizable {
+                        BcOp::CondBrO(cond_reg, disp)
+                    } else {
+                        BcOp::CondBr(cond_reg, disp)
+                    }
                 }
-                BcIr::CondNotBr(reg, dst) => {
+                BcIr::CondNotBr(reg, dst, optimizable) => {
                     let dst = ir.labels[*dst].unwrap().0 as i32;
-                    BcOp::CondNotBr(self.get_index(reg), dst - idx as i32 - 1)
+                    let cond_reg = self.get_index(reg);
+                    let disp = dst - idx as i32 - 1;
+                    if *optimizable {
+                        BcOp::CondNotBrO(cond_reg, disp)
+                    } else {
+                        BcOp::CondNotBr(cond_reg, disp)
+                    }
                 }
                 BcIr::Integer(reg, num) => BcOp::Integer(self.get_index(reg), *num),
                 BcIr::Symbol(reg, name) => BcOp::Symbol(self.get_index(reg), *name),
@@ -1796,17 +1825,25 @@ impl NormalFuncInfo {
                     self.get_index(lhs),
                     self.get_index(rhs),
                 ),
-                BcIr::Cmp(kind, dst, lhs, rhs) => {
+                BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let dst = self.get_index(dst);
                     let lhs = self.get_index(lhs);
                     let rhs = self.get_index(rhs);
-                    BcOp::Cmp(*kind, dst, lhs, rhs)
+                    if *optimizable {
+                        BcOp::CmpO(*kind, dst, lhs, rhs)
+                    } else {
+                        BcOp::Cmp(*kind, dst, lhs, rhs)
+                    }
                 }
-                BcIr::Cmpri(kind, dst, lhs, rhs) => {
+                BcIr::Cmpri(kind, dst, lhs, rhs, optimizable) => {
                     let dst = self.get_index(dst);
                     let lhs = self.get_index(lhs);
                     let rhs = *rhs;
-                    BcOp::Cmpri(*kind, dst, lhs, rhs)
+                    if *optimizable {
+                        BcOp::CmpriO(*kind, dst, lhs, rhs)
+                    } else {
+                        BcOp::Cmpri(*kind, dst, lhs, rhs)
+                    }
                 }
                 BcIr::Ret(reg) => BcOp::Ret(self.get_index(reg)),
                 BcIr::Mov(dst, src) => BcOp::Mov(self.get_index(dst), self.get_index(src)),
