@@ -19,8 +19,8 @@ extern "C" fn add(
     _len: usize,
 ) -> Option<Value> {
     let mut b = arg.self_value().as_string().clone();
-    b.extend(arg[0].as_string());
-    Some(Value::new_string(b))
+    b.extend_from_slice(arg[0].as_string());
+    Some(Value::new_string_from_smallvec(b))
 }
 
 #[cfg(test)]

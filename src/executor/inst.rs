@@ -228,37 +228,14 @@ impl BcOp {
                 159 => Self::CmpO(CmpKind::Le, op1, op2, op3),
                 160 => Self::CmpO(CmpKind::Gt, op1, op2, op3),
                 161 => Self::CmpO(CmpKind::Ge, op1, op2, op3),
-                162 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16),
-                163 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16),
-                164 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16),
-                165 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16),
-                166 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16),
-                167 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16),
+                162 => Self::CmpriO(CmpKind::Eq, op1, op2, op3 as i16),
+                163 => Self::CmpriO(CmpKind::Ne, op1, op2, op3 as i16),
+                164 => Self::CmpriO(CmpKind::Lt, op1, op2, op3 as i16),
+                165 => Self::CmpriO(CmpKind::Le, op1, op2, op3 as i16),
+                166 => Self::CmpriO(CmpKind::Gt, op1, op2, op3 as i16),
+                167 => Self::CmpriO(CmpKind::Ge, op1, op2, op3 as i16),
                 _ => unreachable!(),
             }
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum CmpKind {
-    Eq = 0,
-    Ne = 1,
-    Lt = 2,
-    Le = 3,
-    Gt = 4,
-    Ge = 5,
-}
-
-impl std::fmt::Debug for CmpKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Eq => write!(f, "=="),
-            Self::Ne => write!(f, "!="),
-            Self::Ge => write!(f, ">="),
-            Self::Gt => write!(f, ">"),
-            Self::Le => write!(f, "<="),
-            Self::Lt => write!(f, "<"),
         }
     }
 }

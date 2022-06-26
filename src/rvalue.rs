@@ -1,5 +1,6 @@
 use crate::*;
 use num::BigInt;
+use smallvec::SmallVec;
 
 pub type ValueTable = HashMap<IdentId, Value>;
 
@@ -98,10 +99,28 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
+    pub(crate) fn new_bytes_from_smallvec(bytes: SmallVec<[u8; 31]>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS),
             kind: ObjKind::Bytes(bytes),
+            var_table: None,
+        }
+    }
+
+    pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
+        let v = SmallVec::from_vec(bytes);
+        RValue {
+            flags: RVFlag::new(STRING_CLASS),
+            kind: ObjKind::Bytes(v),
+            var_table: None,
+        }
+    }
+
+    pub(crate) fn new_bytes_from_slice(bytes: &[u8]) -> Self {
+        let v = SmallVec::from_slice(bytes);
+        RValue {
+            flags: RVFlag::new(STRING_CLASS),
+            kind: ObjKind::Bytes(v),
             var_table: None,
         }
     }
@@ -158,8 +177,8 @@ pub enum ObjKind {
     Class(ClassId),
     Bignum(BigInt),
     Float(f64),
-    Bytes(Vec<u8>),
+    Bytes(SmallVec<[u8; 31]>),
     Time(TimeInfo),
     Invalid,
-    Dummy(u64, u64, u64, u64, u64),
+    //Dummy(u64, u64, u64, u64, u64),
 }

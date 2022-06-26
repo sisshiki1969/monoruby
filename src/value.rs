@@ -1,5 +1,6 @@
 use crate::*;
 use num::BigInt;
+use smallvec::SmallVec;
 
 use crate::alloc::{Allocator, GC};
 
@@ -201,6 +202,14 @@ impl Value {
         RValue::new_bytes(b).pack()
     }
 
+    pub fn new_string_from_smallvec(b: SmallVec<[u8; 31]>) -> Self {
+        RValue::new_bytes_from_smallvec(b).pack()
+    }
+
+    pub fn new_string_from_slice(b: &[u8]) -> Self {
+        RValue::new_bytes_from_slice(b).pack()
+    }
+
     pub fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
@@ -316,7 +325,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_string(&self) -> &Vec<u8> {
+    pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
         match self.unpack() {
             RV::String(b) => b,
             _ => unreachable!(),
@@ -337,7 +346,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    String(&'a Vec<u8>),
+    String(&'a SmallVec<[u8; 31]>),
     Object(&'a RValue),
 }
 

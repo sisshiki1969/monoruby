@@ -1,2 +1,6 @@
-for x in 0..500000 do
+x = 0
+y = "s"
+while x < 100000 do
+  x += 1
+  y = y + "s"  
 end

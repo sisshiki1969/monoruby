@@ -856,12 +856,7 @@ impl NormalFuncInfo {
             BinOp::BitXor => self.gen_bitxor(ctx, ir, id_store, dst, lhs, rhs, loc)?,
             BinOp::Shr => self.gen_shr(ctx, ir, id_store, dst, lhs, rhs, loc)?,
             BinOp::Shl => self.gen_shl(ctx, ir, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Eq => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Eq, lhs, rhs, loc)?,
-            BinOp::Ne => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Ne, lhs, rhs, loc)?,
-            BinOp::Ge => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Ge, lhs, rhs, loc)?,
-            BinOp::Gt => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Gt, lhs, rhs, loc)?,
-            BinOp::Le => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Le, lhs, rhs, loc)?,
-            BinOp::Lt => self.gen_cmp(ctx, ir, id_store, dst, CmpKind::Lt, lhs, rhs, loc)?,
+            BinOp::Cmp(kind) => self.gen_cmp(ctx, ir, id_store, dst, kind, lhs, rhs, false, loc)?,
             _ => {
                 return Err(MonorubyErr::unsupported_operator(
                     op,
@@ -1046,8 +1041,16 @@ impl NormalFuncInfo {
             } => {
                 let then_pos = ir.new_label();
                 let succ_pos = ir.new_label();
-                let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
-                ir.gen_condbr(cond, then_pos, false);
+                if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+                    let loc = cond.loc;
+                    let cond = self.next_reg().into();
+                    self.gen_cmp(ctx, ir, id_store, None, kind, lhs, rhs, true, loc)?;
+                    self.pop();
+                    ir.gen_condbr(cond, then_pos, true);
+                } else {
+                    let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
+                    ir.gen_condbr(cond, then_pos, false);
+                }
                 self.gen_expr(ctx, ir, id_store, else_, use_value, is_ret)?;
                 if !is_ret {
                     ir.gen_br(succ_pos);
@@ -1528,14 +1531,15 @@ impl NormalFuncInfo {
         kind: CmpKind,
         lhs: Node,
         rhs: Node,
+        optimizable: bool,
         loc: Loc,
     ) -> Result<()> {
         if let Some(i) = is_smi(&rhs) {
             let (dst, lhs) = self.gen_singular(ctx, ir, id_store, dst, lhs)?;
-            ir.push(BcIr::Cmpri(kind, dst, lhs, i, false), loc);
+            ir.push(BcIr::Cmpri(kind, dst, lhs, i, optimizable), loc);
         } else {
             let (dst, lhs, rhs) = self.gen_binary(ctx, ir, id_store, dst, lhs, rhs)?;
-            ir.push(BcIr::Cmp(kind, dst, lhs, rhs, false), loc);
+            ir.push(BcIr::Cmp(kind, dst, lhs, rhs, optimizable), loc);
         }
         Ok(())
     }
@@ -1669,8 +1673,16 @@ impl NormalFuncInfo {
             },
         ));
         ir.apply_label(cond_pos);
-        let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
-        ir.gen_condnotbr(cond, succ_pos, false);
+        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+            let loc = cond.loc;
+            let cond = self.next_reg().into();
+            self.gen_cmp(ctx, ir, id_store, None, kind, lhs, rhs, true, loc)?;
+            self.pop();
+            ir.gen_condnotbr(cond, succ_pos, true);
+        } else {
+            let cond = self.gen_temp_expr(ctx, ir, id_store, cond)?.into();
+            ir.gen_condnotbr(cond, succ_pos, false);
+        }
         self.gen_expr(ctx, ir, id_store, body, false, false)?;
         ir.gen_br(cond_pos);
         ir.apply_label(succ_pos);

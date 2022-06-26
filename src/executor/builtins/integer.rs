@@ -17,7 +17,7 @@ extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
     match arg.self_value().as_fixnum() {
         Some(i) => {
             if let Ok(b) = u8::try_from(i) {
-                return Some(Value::new_string(vec![b]));
+                return Some(Value::new_string_from_slice(&[b]));
             }
         }
         _ => {}

@@ -20,7 +20,7 @@ extern "C" fn write(
     _len: usize,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
-        RV::String(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+        RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
             globals.err_no_implict_conv(arg[0].class_id(), STRING_CLASS);
             return None;

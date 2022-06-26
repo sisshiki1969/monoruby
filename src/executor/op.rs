@@ -43,10 +43,39 @@ macro_rules! binop_values {
 }
 
 binop_values!(
-    (add, IdentId::_ADD),
+    //(add, IdentId::_ADD),
     //(sub, IdentId::_SUB),
     (mul, IdentId::_MUL)
 );
+
+pub(super) extern "C" fn add_values(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let v = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.checked_add(rhs) {
+            Some(res) => Value::new_integer(res),
+            None => Value::new_bigint(BigInt::from(lhs).add(BigInt::from(rhs))),
+        },
+        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.add(BigInt::from(rhs))),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).add(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.add(rhs)),
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).add(&rhs)),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.add(&(rhs as f64))),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.add(&rhs)),
+        (RV::String(lhs), RV::String(rhs)) => Value::new_string_from_smallvec({
+            let mut b = lhs.clone();
+            b.extend_from_slice(rhs);
+            b
+        }),
+        _ => {
+            return interp.invoke_method(globals, IdentId::_ADD, lhs, &[rhs]);
+        }
+    };
+    Some(v)
+}
 
 pub(super) extern "C" fn sub_values(
     interp: &mut Interp,

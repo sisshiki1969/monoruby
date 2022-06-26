@@ -129,7 +129,7 @@ impl Globals {
             RV::BigInt(n) => format!("{}", n).into_bytes(),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string().into_bytes(),
             RV::Symbol(id) => self.get_ident_name(id).to_string().into_bytes(),
-            RV::String(s) => s.clone(),
+            RV::String(s) => s.to_vec(),
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self).into_bytes(),
                 ObjKind::Time(time) => time.to_string().into_bytes(),
