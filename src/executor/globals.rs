@@ -5,8 +5,10 @@ use super::*;
 
 mod classes;
 mod error;
+mod functions;
 pub use classes::*;
 pub use error::*;
+pub use functions::*;
 
 //
 /// Store of functions.
