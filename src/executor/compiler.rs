@@ -609,6 +609,17 @@ impl Codegen {
         // -0x20 | %1(1st arg) |
         //       +-------------+
         //
+        //  meta
+        // +-------------------+ -0x08
+        // |                   |
+        // +      FuncId       + -0x0a
+        // |                   |
+        // +-------------------+ -0x0c
+        // |    register_len   |
+        // +-------------------+ -0x0e
+        // |0:VM 1:JIT 2:Native|
+        // +-------------------+ -0x10
+        //
         // argument registers:
         //   rdi: number of args
         //
@@ -631,6 +642,8 @@ impl Codegen {
         );
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
+            movw [rsp - 0x10], 2;
+            movw [rsp - 0x0e], rcx;
             pushq rbp;
             movq rbp, rsp;
             movq rdi, rbx;
