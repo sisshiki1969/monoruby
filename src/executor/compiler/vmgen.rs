@@ -7,7 +7,7 @@ use std::num::NonZeroU64;
 #[repr(C)]
 pub struct FuncData {
     /// stack offset. (only used in calling vm_entry)
-    offset: i64,
+    regnum: i64,
     address: *mut u8,
     pc: BcPc,
     ret: usize,
@@ -104,7 +104,7 @@ pub extern "C" fn get_func_data(
 ) {
     let label = interp.codegen.compile_on_demand(globals, func_id);
     data.address = label.as_ptr();
-    data.offset = globals.func[func_id].stack_offset();
+    data.regnum = globals.func[func_id].reg_num();
     data.pc = globals.func[func_id].inst_pc();
 }
 
@@ -128,13 +128,10 @@ extern "C" fn vm_define_method(
 }*/
 
 impl Codegen {
-    ///
-    /// Generator of virtual machine.
-    ///
-    pub(super) fn construct_vm(&mut self) -> EntryPoint {
+    pub(super) fn get_entry_point(&mut self) -> EntryPoint {
         let entry = self.jit.get_current_address();
         let FuncDataLabels {
-            func_offset,
+            func_regnum,
             func_address,
             func_pc,
             ..
@@ -150,12 +147,11 @@ impl Codegen {
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
             movl r13, rdx;  // rdx: FuncId
-            lea rcx, [rip + func_offset];
+            lea rcx, [rip + func_regnum];
             movq rax, (get_func_data);
             call rax;
-            // set meta func_id/call_kind
+            // set meta func_id
             movl [rsp - 0x14], r13;
-            movl [rsp - 0x18], 0;
             movq r13, [rip + func_pc];    // r13: BcPc
             //
             //       +-------------+
@@ -176,6 +172,7 @@ impl Codegen {
             // set self
             movq [rsp - 0x20], (NIL_VALUE);
             movq rax, [rip + func_address];
+            xorq rdi, rdi;
             call rax;
             popq r15;
             popq r14;
@@ -194,14 +191,28 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            //   stack_offset: [rip + func_offset]
+            //   register_len: [rip + func_regnum]
             //
         };
+        unsafe { std::mem::transmute(entry.as_ptr()) }
+    }
+
+    ///
+    /// Generator of virtual machine.
+    ///
+    pub(super) fn construct_vm(&mut self) {
         self.vm_entry = self.jit.get_current_address();
+        let FuncDataLabels { func_regnum, .. } = self.func_data;
         monoasm! { self.jit,
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, [rip + func_offset];
+            movq rax, [rip + func_regnum];
+            movw [rbp - 0x06], rax;
+            movw [rbp - 0x08], 0;
+        };
+        self.calc_offset();
+        monoasm! { self.jit,
+            subq rsp, rax;
         };
         self.fetch_and_dispatch();
 
@@ -290,9 +301,6 @@ impl Codegen {
         self.dispatch[165] = self.vm_leri();
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
-
-        self.jit.finalize();
-        unsafe { std::mem::transmute(entry.as_ptr()) }
     }
 
     ///
@@ -430,7 +438,7 @@ impl Codegen {
 
     fn vm_method_call(&mut self) -> CodePtr {
         let FuncDataLabels {
-            func_offset,
+            func_regnum,
             func_address,
             func_pc,
             func_ret,
@@ -446,7 +454,7 @@ impl Codegen {
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rip + func_offset]; // rcx: &mut FuncData
+            lea rcx, [rip + func_regnum]; // rcx: &mut FuncData
             movq r8, [r15]; // r8: receiver:Value
             movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
@@ -466,8 +474,6 @@ impl Codegen {
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;
-            // set meta/call_kind = 0(VM)
-            movl [rsp - 0x18], 0;
         };
         self.vm_get_addr_rdi(); // rdi <- *args
 

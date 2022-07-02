@@ -65,11 +65,11 @@ pub(super) extern "C" fn add_values(
         (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).add(&rhs)),
         (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.add(&(rhs as f64))),
         (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.add(&rhs)),
-        (RV::String(lhs), RV::String(rhs)) => Value::new_string_from_smallvec({
+        /*(RV::String(lhs), RV::String(rhs)) => Value::new_string_from_smallvec({
             let mut b = lhs.clone();
             b.extend_from_slice(rhs);
             b
-        }),
+        }),*/
         _ => {
             return interp.invoke_method(globals, IdentId::_ADD, lhs, &[rhs]);
         }
@@ -432,5 +432,37 @@ pub extern "C" fn set_constant(
             "warning: already initialized constant {}",
             globals.get_ident_name(name)
         )
+    }
+}
+
+pub extern "C" fn _dump_stacktrace(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    mut bp: *const u64,
+) {
+    for i in 0..2 {
+        eprint!("[{}]:", i);
+        let prev_bp = unsafe { *bp as *const u64 };
+        eprint!("prev rbp: {:?} ", prev_bp);
+        eprintln!("prev adr: {:?} ", unsafe { *bp.add(1) as *const u64 });
+        let meta = unsafe { *bp.sub(1) };
+        let func_id = FuncId((meta >> 32) as u32);
+        eprintln!(
+            "meta: {} {:?} len:{}",
+            match meta as u16 {
+                0 => "VM",
+                1 => "JIT",
+                2 => "NATIVE",
+                _ => "INVALID",
+            },
+            func_id,
+            (meta as u32) >> 16
+        );
+        let self_val = unsafe { Value::from(*bp.sub(2)) };
+        eprintln!("self: {}", globals.val_tos(self_val));
+        if prev_bp.is_null() {
+            break;
+        }
+        bp = prev_bp;
     }
 }

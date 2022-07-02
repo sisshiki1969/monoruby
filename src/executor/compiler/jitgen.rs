@@ -335,10 +335,13 @@ impl Codegen {
     }
 
     fn prologue(&mut self, regs: usize) {
+        let offset = (regs + regs % 2) * 8 + 16;
         monoasm!(self.jit,
+            movw [rsp - 0x0e], (regs);
+            movw [rsp - 0x10], 1;
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, ((regs + regs % 2) * 8 + 16);
+            subq rsp, (offset);
         );
     }
 
@@ -560,8 +563,6 @@ impl Codegen {
 
         let sp_max = 0x40 + (len as u64 + (len % 2) as u64) * 8;
         monoasm!(self.jit,
-            // set meta
-            movl [rsp - 0x18], 1;
             // set self
             movq rax, [rbp - (conv(recv))];
             movq [rsp - 0x20], rax;

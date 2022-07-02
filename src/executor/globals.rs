@@ -118,7 +118,7 @@ impl Globals {
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
-                _ => unreachable!(),
+                _ => format!("{:016x}", val.get()),
             },
         }
     }

@@ -37,7 +37,7 @@ pub struct Codegen {
 }
 
 pub struct FuncDataLabels {
-    pub func_offset: DestLabel,
+    pub func_regnum: DestLabel,
     pub func_address: DestLabel,
     pub func_pc: DestLabel,
     pub func_ret: DestLabel,
@@ -247,7 +247,7 @@ impl Codegen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
-        let func_offset = jit.const_i64(0);
+        let func_regnum = jit.const_i64(0);
         let func_address = jit.const_i64(0);
         let func_pc = jit.const_i64(0);
         let func_ret = jit.const_i64(0);
@@ -301,11 +301,10 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
         monoasm! { &mut jit,
-            pushq rbp;
-            movq rbp, rsp;
             pushq rbx;
             pushq r12;
             pushq r13;
+            pushq r14;
             pushq r15;
             movq rbx, rdi;
             movq r12, rsi;
@@ -316,7 +315,7 @@ impl Codegen {
             pushq rdx;
             // set self (= receiver)
             pushq rcx;
-            lea rcx, [rip + func_offset]; // rcx: &mut FuncData
+            lea rcx, [rip + func_regnum]; // rcx: &mut FuncData
             movq rax, (get_func_data);
             call rax;
 
@@ -358,10 +357,10 @@ impl Codegen {
             movq rax, [rip + func_address];
             call rax;
             popq r15;
+            popq r14;
             popq r13;
             popq r12;
             popq rbx;
-            leave;
             ret;
         };
 
@@ -378,7 +377,7 @@ impl Codegen {
         jit.select(0);
         let dispatch = vec![entry_unimpl; 256];
         let func_data = FuncDataLabels {
-            func_offset,
+            func_regnum,
             func_address,
             func_pc,
             func_ret,
@@ -396,8 +395,19 @@ impl Codegen {
             invoker,
             func_data,
         };
-        codegen.vm_entry_point = codegen.construct_vm();
+        codegen.construct_vm();
+        codegen.vm_entry_point = codegen.get_entry_point();
+        codegen.jit.finalize();
         codegen
+    }
+
+    fn calc_offset(&mut self) {
+        monoasm!(self.jit,
+            addq rax, 1;
+            andq rax, (-2);
+            shlq rax, 3;
+            addq rax, 16;
+        );
     }
 
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
@@ -628,30 +638,39 @@ impl Codegen {
         //   r12: &mut Globals
         //   r13: pc (dummy for builtin funcions)
         //
-        //   stack_offset: [rip + func_offset] (not used, because we can hard-code it.)
+        //   register_len: [rip + func_regnum] (not used, because we can hard-code it.)
         //
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
             movq rcx, rdi;
             movq rax, rdi;
-            andq rax, (0b01);
-            addq rax, rdi;
-            shlq rax, 3;
-            addq rax, 16;
         );
+        self.calc_offset();
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
-            movw [rsp - 0x10], 2;
             movw [rsp - 0x0e], rcx;
+            movw [rsp - 0x10], 2;
             pushq rbp;
             movq rbp, rsp;
+
             movq rdi, rbx;
             movq rsi, r12;
             subq rsp, rax;
             movq rax, (abs_address);
             // fn(&mut Interp, &mut Globals, *const Value, len:usize)
             call rax;
+
+            // pushq rax;
+            // pushq rax;
+            // movq rdi, rbx;  // rdi: &mut Interp
+            // movq rsi, r12;  // rsi: &mut Globals
+            // movq rdx, rbp;  // rdx: rbp
+            // movq rax, (dump_stacktrace);
+            // call rax;
+            // popq rax;
+            // popq rax;
+
             leave;
             ret;
         );
