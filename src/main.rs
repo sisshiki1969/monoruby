@@ -104,11 +104,7 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
         }
     };
 
-    match if !jit {
-        Interp::eval_toplevel(&mut globals)
-    } else {
-        Interp::jit_exec_toplevel(&mut globals)
-    } {
+    match Interp::eval_toplevel(&mut globals, jit) {
         Ok(_val) => {
             #[cfg(debug_assertions)]
             eprintln!("jit({:?}) {:?}", jit, _val)
@@ -131,7 +127,7 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
                 return Err(err);
             }
         };
-        match Interp::eval_toplevel(&mut globals) {
+        match Interp::eval_toplevel(&mut globals, false) {
             Ok(val) => eprintln!("vm: {}", val.to_s(&globals)),
             Err(err) => {
                 eprintln!("vm:{}", err.get_error_message(&globals));
@@ -149,7 +145,7 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
             return Err(err);
         }
     };
-    match Interp::jit_exec_toplevel(&mut globals) {
+    match Interp::eval_toplevel(&mut globals, true) {
         Ok(val) => {
             eprintln!("jit: {}", val.to_s(&globals));
             Ok(())
@@ -182,13 +178,13 @@ pub fn run_test(code: &str) {
         });
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut globals.clone());
+    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
     #[cfg(not(debug_assertions))]
     eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let jit_val = Interp::jit_exec_toplevel(&mut globals);
+    let jit_val = Interp::eval_toplevel(&mut globals, true);
 
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();
@@ -200,6 +196,32 @@ pub fn run_test(code: &str) {
     let ruby_res = run_ruby(&all_codes, &mut globals);
 
     assert!(Value::eq(jit_val, ruby_res));
+}
+
+pub fn run_test_error(code: &str) {
+    #[cfg(debug_assertions)]
+    dbg!(code);
+    let mut globals = Globals::new(1);
+    match globals.compile_script(code.to_string(), std::path::Path::new("")) {
+        Ok(_) => {}
+        Err(err) => {
+            err.show_all_loc();
+            eprintln!("Error in compiling AST. {:?}", err);
+            return;
+        }
+    };
+    #[cfg(not(debug_assertions))]
+    let now = Instant::now();
+    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
+    #[cfg(not(debug_assertions))]
+    eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
+    #[cfg(debug_assertions)]
+    eprintln!("interp: {:?}", interp_val);
+
+    let jit_val = Interp::eval_toplevel(&mut globals, true);
+
+    eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
+    eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
 }
 
 fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
@@ -314,6 +336,19 @@ mod test {
         run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
+    }
+
+    #[test]
+    fn test0_err() {
+        for lhs in [
+            "4.77",
+            "690426",
+            "24829482958347598570210950349530597028472983429873",
+        ] {
+            for rhs in ["0", "0.0"] {
+                run_test_error(&format!("{} / {}", lhs, rhs));
+            }
+        }
     }
 
     #[test]

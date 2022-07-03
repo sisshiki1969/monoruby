@@ -8,7 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
 }
 
-/// String#+
+/// ### String#+
 /// - self + other -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]

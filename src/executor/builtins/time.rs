@@ -7,10 +7,16 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_singleton_func(TIME_CLASS, "new", now, 0);
     globals.define_builtin_singleton_func(TIME_CLASS, "now", now, 0);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
 }
 
+/// ### Time.new
+/// - new -> Time
+/// - now -> Time
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 extern "C" fn now(
     _vm: &mut Interp,
     _globals: &mut Globals,
@@ -22,6 +28,10 @@ extern "C" fn now(
     Some(Value::new_time(time_info))
 }
 
+/// ### Time#-
+/// - self - time -> Float
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 extern "C" fn sub(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
     let lhs = match &arg.self_value().as_rvalue().unwrap().kind {
         ObjKind::Time(time) => time.clone(),

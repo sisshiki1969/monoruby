@@ -14,25 +14,23 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
 }
 
-/// Kernel#puts
+/// ### Kernel#puts
 /// - puts(*arg) -> nil
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Kernel.html#M_PUTS]
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
     for offset in 0..len {
-        globals
-            .stdout
-            .write(&arg[offset].to_bytes(globals))
-            .unwrap();
-        globals.stdout.write(b"\n").unwrap();
+        let mut bytes = arg[offset].to_bytes(globals);
+        bytes.extend(b"\n");
+        globals.write_stdout(&bytes);
     }
     Some(Value::nil())
 }
 
-/// Kernel#print
+/// ### Kernel#print
 /// - print(*arg) -> nil
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Kernel.html#M_PRINT]
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 extern "C" fn print(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -40,10 +38,7 @@ extern "C" fn print(
     len: usize,
 ) -> Option<Value> {
     for offset in 0..len {
-        globals
-            .stdout
-            .write(&arg[offset].to_bytes(globals))
-            .unwrap();
+        globals.write_stdout(&arg[offset].to_bytes(globals));
     }
     Some(Value::nil())
 }
@@ -60,10 +55,10 @@ extern "C" fn assert(
     Some(Value::nil())
 }
 
-/// Object#respond_to?
+/// ### Object#respond_to?
 /// - respond_to?(name, include_all = false) -> bool
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Object.html#I_RESPOND_TO--3F]
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 extern "C" fn respond_to(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -81,10 +76,10 @@ extern "C" fn respond_to(
     ))
 }
 
-/// Object#inspect
+/// ### Object#inspect
 /// - inspect -> String
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Object.html#I_INSPECT]
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 extern "C" fn inspect(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -95,6 +90,10 @@ extern "C" fn inspect(
     Some(Value::new_string(s.into_bytes()))
 }
 
+/// ### Object#class
+/// - class -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
 extern "C" fn class(
     _vm: &mut Interp,
     globals: &mut Globals,
@@ -104,6 +103,10 @@ extern "C" fn class(
     Some(arg.self_value().get_real_class_obj(globals))
 }
 
+/// ### Object#singleton_class
+/// - singleton_class -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
 extern "C" fn singleton_class(
     _vm: &mut Interp,
     globals: &mut Globals,

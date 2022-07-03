@@ -28,7 +28,7 @@ pub struct Codegen {
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
     pub vm_entry: CodePtr,
-    pub vm_entry_point: EntryPoint,
+    pub entry_point: EntryPoint,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
@@ -389,14 +389,14 @@ impl Codegen {
             entry_panic,
             entry_find_method,
             vm_entry: entry_unimpl,
-            vm_entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             vm_return,
             dispatch,
             invoker,
             func_data,
         };
         codegen.construct_vm();
-        codegen.vm_entry_point = codegen.get_entry_point();
+        codegen.entry_point = codegen.get_entry_point();
         codegen.jit.finalize();
         codegen
     }
@@ -512,42 +512,6 @@ impl Codegen {
     ///  - meta and arguments is set by caller.
     ///  - (old rbp) is to be set by callee.
     ///
-    pub fn exec_toplevel(&mut self, globals: &mut Globals) -> EntryPoint {
-        let main_id = globals.get_main_func();
-        let main = self.compile_on_demand(globals, main_id);
-        let entry = self.jit.label();
-        //       +-------------+
-        // -0x00 |             | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |  (old rbp)  |
-        //       +-------------+
-        // -0x18 |    meta     |
-        //       +-------------+
-        // -0x20 |     %0      |
-        //       +-------------+
-        monoasm!(self.jit,
-        entry:
-            pushq rbp;
-            pushq rbx;
-            pushq r12;
-            movq rbx, rdi;
-            movq r12, rsi;
-            movl [rsp - 0x14], rdx;
-            movl [rsp - 0x18], 1;
-            movq [rsp - 0x20], (NIL_VALUE);
-            xorq rdi, rdi;
-            movq rax, (main.as_ptr());
-            call rax;
-            popq r12;
-            popq rbx;
-            popq rbp;
-            ret;
-        );
-        self.jit.finalize();
-        unsafe { std::mem::transmute(self.jit.get_label_address(entry).as_ptr()) }
-    }
 
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) -> CodePtr {
         match globals.func[func_id].jit_label() {
@@ -685,10 +649,7 @@ impl Codegen {
                 FuncKind::Normal(_) => {
                     func.set_jit_label(self.vm_entry);
                 }
-                FuncKind::Builtin { abs_address } => {
-                    let label = self.wrap_builtin(*abs_address);
-                    func.set_jit_label(label);
-                }
+                _ => {}
             };
         }
     }

@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// ### Class#superclass
 /// - superclass -> Class | nil
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Class.html#I_SUPERCLASS]
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 extern "C" fn superclass(
     _vm: &mut Interp,
     globals: &mut Globals,

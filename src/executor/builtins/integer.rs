@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - chr -> String
 /// - chr(encoding) -> String
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/Integer.html#I_CHR]
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
     match arg.self_value().as_fixnum() {
         Some(i) => {

@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 /// - write(path, string, opt={}) -> Integer
 /// - write(path, string, offset=nil, opt={}) -> Integer
 ///
-/// [https://docs.ruby-lang.org/ja/latest/class/IO.html#S_WRITE]
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 extern "C" fn write(
     _vm: &mut Interp,
     globals: &mut Globals,

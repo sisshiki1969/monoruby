@@ -1,10 +1,6 @@
 use super::compiler::Codegen;
 use super::*;
 
-/*fn conv(reg: u16) -> i64 {
-    reg as i64 * 8 + 16
-}*/
-
 ///
 /// Bytecode interpreter.
 ///
@@ -19,30 +15,23 @@ impl Interp {
         }
     }
 
-    pub fn jit_exec_toplevel(globals: &mut Globals) -> Result<Value> {
+    /// Execute top level method.
+    pub fn eval_toplevel(globals: &mut Globals, jit_flag: bool) -> Result<Value> {
         let mut eval = Self::new();
         let main_id = globals.get_main_func();
 
-        let f = eval.codegen.exec_toplevel(globals);
-        let res = f(&mut eval, globals, main_id);
-        globals.stdout.flush().unwrap();
-        res.ok_or_else(|| globals.take_error().unwrap())
-    }
+        if !jit_flag {
+            eval.codegen.precompile(&mut globals.func)
+        };
 
-    pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
-        let mut eval = Self::new();
-        let main_id = globals.get_main_func();
-
-        let f = eval.codegen.vm_entry_point;
-        eval.codegen.precompile(&mut globals.func);
-
-        let res = f(&mut eval, globals, main_id);
-        globals.stdout.flush().unwrap();
+        let res = (eval.codegen.entry_point)(&mut eval, globals, main_id);
+        globals.flush_stdout();
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 }
 
 impl Interp {
+    /// Invoke method from native function.
     pub fn invoke_method(
         &mut self,
         globals: &mut Globals,

@@ -10,11 +10,11 @@ pub use classes::*;
 pub use error::*;
 pub use functions::*;
 
-//
-/// Store of functions.
+///
+/// Global state.
 ///
 pub struct Globals {
-    /// Functions.
+    /// function info.
     pub func: FnStore,
     /// identifier table.
     pub id_store: IdentifierTable,
@@ -24,7 +24,7 @@ pub struct Globals {
     /// warning level.
     pub warning: u8,
     /// stdout.
-    pub stdout: BufWriter<Stdout>,
+    stdout: BufWriter<Stdout>,
 }
 
 impl Globals {
@@ -50,6 +50,14 @@ impl Globals {
             warning: self.warning,
             stdout: BufWriter::new(stdout()),
         }
+    }
+
+    pub fn flush_stdout(&mut self) {
+        self.stdout.flush().unwrap();
+    }
+
+    pub fn write_stdout(&mut self, bytes: &[u8]) {
+        self.stdout.write(bytes).unwrap();
     }
 }
 

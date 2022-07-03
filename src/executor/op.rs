@@ -447,6 +447,7 @@ pub extern "C" fn _dump_stacktrace(
         eprintln!("prev adr: {:?} ", unsafe { *bp.add(1) as *const u64 });
         let meta = unsafe { *bp.sub(1) };
         let func_id = FuncId((meta >> 32) as u32);
+        let register_len = (meta as u32) >> 16;
         eprintln!(
             "meta: {} {:?} len:{}",
             match meta as u16 {
@@ -456,7 +457,7 @@ pub extern "C" fn _dump_stacktrace(
                 _ => "INVALID",
             },
             func_id,
-            (meta as u32) >> 16
+            register_len
         );
         let self_val = unsafe { Value::from(*bp.sub(2)) };
         eprintln!("self: {}", globals.val_tos(self_val));
