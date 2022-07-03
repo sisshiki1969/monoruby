@@ -300,36 +300,12 @@ mod test {
         run_test("-100/5");
 
         run_test("a = 55; a = a /5; a");
-        run_test("1 < 2");
-        run_test("1 <= 2");
-        run_test("1 >= 2");
-        run_test("1 > 2");
-        run_test("1 == 2");
-        run_test("1 != 2");
-        run_test("10 < 2");
-        run_test("10 <= 2");
-        run_test("10 >= 2");
-        run_test("10 > 2");
-        run_test("10 == 2");
-        run_test("10 != 2");
 
         run_test("true != true");
         run_test("true != false");
         run_test("false != false");
         run_test("false != true");
 
-        run_test("1.9 < 2.1");
-        run_test("1.9 <= 2.1");
-        run_test("1.9 >= 2.1");
-        run_test("1.9 > 2.1");
-        run_test("1.9 == 2.1");
-        run_test("1.9 != 2.1");
-        run_test("10.3 < 2.1");
-        run_test("10.3 <= 2.1");
-        run_test("10.3 >= 2.1");
-        run_test("10.3 > 2.1");
-        run_test("10.3 == 2.1");
-        run_test("10.3 != 2.1");
         run_test("a = 42; if a == 42 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a == 42.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a != 42.0 then 1.1 else 2.2 end");
@@ -357,21 +333,33 @@ mod test {
     }
 
     #[test]
-    fn test_bigint() {
-        for lhs in [
+    fn test_numbers() {
+        let lhs_integer = [
             "0",
             "53785",
             "690426",
             "24829482958347598570210950349530597028472983429873",
-        ] {
-            for rhs in [
-                "17",
-                "3454",
-                "25084",
-                "234234645",
-                "2352354645657876868978696835652452546462456245646",
-            ] {
-                for op in ["+", "-", "*", "/", "&", "|", "^"] {
+        ];
+        let rhs_integer = [
+            "17",
+            "3454",
+            "25084",
+            "234234645",
+            "2352354645657876868978696835652452546462456245646",
+        ];
+        for lhs in lhs_integer {
+            for rhs in rhs_integer {
+                for op in ["&", "|", "^"] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
+                    run_test(&format!("-{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                }
+            }
+        }
+        for lhs in lhs_integer.iter().chain(&["234.2345"]) {
+            for rhs in rhs_integer.iter().chain(&["169.5333"]) {
+                for op in ["+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="] {
                     run_test(&format!("{} {} {}", lhs, op, rhs));
                     run_test(&format!("{} {} (-{})", lhs, op, rhs));
                     run_test(&format!("-{} {} {}", lhs, op, rhs));

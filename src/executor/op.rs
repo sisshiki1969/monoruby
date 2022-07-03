@@ -23,10 +23,14 @@ macro_rules! binop_values {
                         None => Value::new_bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
                     }
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
+
                     (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).$op(rhs)),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
+                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.$op(rhs.to_f64().unwrap())),
+
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).$op(&rhs)),
-                    (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
+                    (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().$op(&rhs)),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
                         return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
@@ -43,12 +47,12 @@ macro_rules! binop_values {
 }
 
 binop_values!(
-    //(add, IdentId::_ADD),
-    //(sub, IdentId::_SUB),
+    (add, IdentId::_ADD),
+    (sub, IdentId::_SUB),
     (mul, IdentId::_MUL)
 );
 
-pub(super) extern "C" fn add_values(
+/*pub(super) extern "C" fn add_values(
     interp: &mut Interp,
     globals: &mut Globals,
     lhs: Value,
@@ -60,10 +64,14 @@ pub(super) extern "C" fn add_values(
             None => Value::new_bigint(BigInt::from(lhs).add(BigInt::from(rhs))),
         },
         (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.add(BigInt::from(rhs))),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.add(&(rhs as f64))),
+
         (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).add(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.add(rhs)),
+        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.add(rhs.to_f64().unwrap())),
+
         (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).add(&rhs)),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.add(&(rhs as f64))),
+        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().add(&rhs)),
         (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.add(&rhs)),
         /*(RV::String(lhs), RV::String(rhs)) => Value::new_string_from_smallvec({
             let mut b = lhs.clone();
@@ -75,31 +83,7 @@ pub(super) extern "C" fn add_values(
         }
     };
     Some(v)
-}
-
-pub(super) extern "C" fn sub_values(
-    interp: &mut Interp,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.checked_sub(rhs) {
-            Some(res) => Value::new_integer(res),
-            None => Value::new_bigint(BigInt::from(lhs).sub(BigInt::from(rhs))),
-        },
-        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.sub(BigInt::from(rhs))),
-        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).sub(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.sub(rhs)),
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).sub(&rhs)),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.sub(&(rhs as f64))),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.sub(&rhs)),
-        _ => {
-            return interp.invoke_method(globals, IdentId::_SUB, lhs, &[rhs]);
-        }
-    };
-    Some(v)
-}
+}*/
 
 pub(super) extern "C" fn div_values(
     interp: &mut Interp,
