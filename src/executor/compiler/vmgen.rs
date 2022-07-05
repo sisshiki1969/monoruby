@@ -128,8 +128,9 @@ extern "C" fn vm_define_method(
 }*/
 
 impl Codegen {
-    pub(super) fn get_entry_point(&mut self) -> EntryPoint {
+    pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
+        let return_label = self.jit.label();
         let FuncDataLabels {
             func_regnum,
             func_address,
@@ -174,6 +175,7 @@ impl Codegen {
             movq rax, [rip + func_address];
             xorq rdi, rdi;
             call rax;
+        return_label:
             popq r15;
             popq r14;
             popq r13;
@@ -194,7 +196,9 @@ impl Codegen {
             //   register_len: [rip + func_regnum]
             //
         };
-        unsafe { std::mem::transmute(entry.as_ptr()) }
+
+        self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
+        self.entry_point_return = self.jit.get_label_address(return_label);
     }
 
     ///

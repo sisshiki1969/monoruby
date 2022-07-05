@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
     globals.define_builtin_func(OBJECT_CLASS, "assert", assert, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "dump", dump, 0);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
@@ -52,6 +53,25 @@ extern "C" fn assert(
     let expected = arg[0];
     let actual = arg[1];
     assert_eq!(expected, actual);
+    Some(Value::nil())
+}
+
+use std::arch::asm;
+
+extern "C" fn dump(
+    vm: &mut Interp,
+    globals: &mut Globals,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let mut bp: u64;
+    unsafe {
+        asm!(
+            "mov {bp}, rbp",
+            bp = out(reg) bp,
+        );
+    }
+    super::op::_dump_stacktrace(vm, globals, bp as *const u64);
     Some(Value::nil())
 }
 

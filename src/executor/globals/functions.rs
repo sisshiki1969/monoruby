@@ -231,9 +231,12 @@ impl FnStore {
         id_store: &mut IdentifierTable,
         sourceinfo: SourceInfoRef,
     ) -> Result<()> {
-        let mut fid = self
-            .functions
-            .add_normal_func(None, vec![], ast, sourceinfo.clone());
+        let mut fid = self.functions.add_normal_func(
+            Some("/main".to_string()),
+            vec![],
+            ast,
+            sourceinfo.clone(),
+        );
         self.main = Some(fid);
 
         while self.len() > fid.0 as usize {
@@ -337,7 +340,7 @@ impl FuncInfo {
         self.id
     }
 
-    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+    //#[cfg(any(feature = "emit-asm", feature = "log-jit"))]
     pub(crate) fn name(&self) -> Option<&String> {
         self.name.as_ref()
     }

@@ -419,21 +419,18 @@ pub extern "C" fn set_constant(
     }
 }
 
-pub extern "C" fn _dump_stacktrace(
-    _interp: &mut Interp,
-    globals: &mut Globals,
-    mut bp: *const u64,
-) {
-    for i in 0..2 {
+pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {
+    for i in 0..16 {
         eprint!("[{}]:", i);
         let prev_bp = unsafe { *bp as *const u64 };
         eprint!("prev rbp: {:?} ", prev_bp);
-        eprintln!("prev adr: {:?} ", unsafe { *bp.add(1) as *const u64 });
+        let ret_addr = unsafe { *bp.add(1) as *const u64 };
+        eprintln!("ret adr: {:?} ", ret_addr);
         let meta = unsafe { *bp.sub(1) };
         let func_id = FuncId((meta >> 32) as u32);
-        let register_len = (meta as u32) >> 16;
+        let register_len = (meta as u32 as usize) >> 16;
         eprintln!(
-            "meta: {} {:?} len:{}",
+            " meta: {} {:?} {} len:{}",
             match meta as u16 {
                 0 => "VM",
                 1 => "JIT",
@@ -441,11 +438,19 @@ pub extern "C" fn _dump_stacktrace(
                 _ => "INVALID",
             },
             func_id,
+            globals.func[func_id]
+                .name()
+                .unwrap_or(&"<unnamed>".to_string()),
             register_len
         );
         let self_val = unsafe { Value::from(*bp.sub(2)) };
-        eprintln!("self: {}", globals.val_tos(self_val));
-        if prev_bp.is_null() {
+        eprint!(" self: {} ", globals.val_inspect(self_val));
+        for r in 0..register_len {
+            let v = unsafe { Value::from(*bp.sub(3 + r)) };
+            eprint!("[{}]: {} ", r, globals.val_inspect(v));
+        }
+        eprintln!();
+        if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
             break;
         }
         bp = prev_bp;

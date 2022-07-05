@@ -29,6 +29,7 @@ pub struct Codegen {
     pub entry_panic: DestLabel,
     pub vm_entry: CodePtr,
     pub entry_point: EntryPoint,
+    pub entry_point_return: CodePtr,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
@@ -390,13 +391,14 @@ impl Codegen {
             entry_find_method,
             vm_entry: entry_unimpl,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            entry_point_return: entry_unimpl,
             vm_return,
             dispatch,
             invoker,
             func_data,
         };
         codegen.construct_vm();
-        codegen.entry_point = codegen.get_entry_point();
+        codegen.get_entry_point();
         codegen.jit.finalize();
         codegen
     }
