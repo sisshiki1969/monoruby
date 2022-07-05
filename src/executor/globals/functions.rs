@@ -256,8 +256,8 @@ impl FnStore {
         info.dump(id_store, self);
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
-        self[func_id].inst_pc = BcPcBase::new(self[func_id].as_normal()) + 0;
-        self[func_id].register_len = regs as i64;
+        self[func_id].data.pc = BcPcBase::new(self[func_id].as_normal()) + 0;
+        self[func_id].data.reg_num = regs as i64;
         Ok(())
     }
 
@@ -283,21 +283,32 @@ impl std::default::Default for FuncKind {
     }
 }
 
+/*pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
+pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
+pub const FUNCDATA_OFFSET_PC: u64 = 16;
+pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;*/
+
+#[derive(Debug, Clone, PartialEq, Default)]
+#[repr(C)]
+pub struct FuncData {
+    /// stack offset. (only used in calling vm_entry)
+    pub reg_num: i64,
+    /// address of function.
+    pub codeptr: Option<CodePtr>,
+    /// the address of program counter
+    pub pc: BcPc,
+    /// ID of this function.
+    pub func_id: FuncId,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FuncInfo {
-    /// ID of this function.
-    id: FuncId,
     /// name of this function.
     name: Option<String>,
     /// arity of this function.
     /// -1 for variable numbers.
     arity: i32,
-    /// address of JIT function.
-    jit_label: Option<CodePtr>,
-    /// number of registers.
-    register_len: i64,
-    /// the address of program counter
-    inst_pc: BcPc,
+    pub(crate) data: FuncData,
     pub(crate) kind: FuncKind,
 }
 
@@ -311,58 +322,40 @@ impl FuncInfo {
     ) -> Self {
         let info = NormalFuncInfo::new(func_id, name.clone(), args, ast, sourceinfo);
         Self {
-            id: info.id,
             name,
             arity: info.args.len() as i32,
-            jit_label: None,
-            register_len: 0,
-            inst_pc: BcPc::default(),
+            data: FuncData {
+                reg_num: 0,
+                codeptr: None,
+                pc: BcPc::default(),
+                func_id: info.id,
+            },
             kind: FuncKind::Normal(info),
         }
     }
 
-    fn new_builtin(id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
+    fn new_builtin(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
         Self {
-            id,
             name: Some(name),
             arity,
-            jit_label: None,
-            register_len: if arity == -1 { -1 } else { arity as i64 },
-            inst_pc: BcPc::default(),
+            data: FuncData {
+                reg_num: if arity == -1 { -1 } else { arity as i64 },
+                codeptr: None,
+                pc: BcPc::default(),
+                func_id,
+            },
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
         }
     }
 
-    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-    pub(crate) fn id(&self) -> FuncId {
-        self.id
-    }
-
-    //#[cfg(any(feature = "emit-asm", feature = "log-jit"))]
     pub(crate) fn name(&self) -> Option<&String> {
         self.name.as_ref()
     }
 
     pub(crate) fn arity(&self) -> i32 {
         self.arity
-    }
-
-    pub(crate) fn reg_num(&self) -> i64 {
-        self.register_len
-    }
-
-    pub(crate) fn inst_pc(&self) -> BcPc {
-        self.inst_pc
-    }
-
-    pub(crate) fn jit_label(&self) -> Option<CodePtr> {
-        self.jit_label
-    }
-
-    pub(crate) fn set_jit_label(&mut self, label: CodePtr) {
-        self.jit_label = Some(label);
     }
 
     pub(crate) fn as_normal(&self) -> &NormalFuncInfo {

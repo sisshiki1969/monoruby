@@ -41,7 +41,7 @@ pub struct FuncDataLabels {
     pub func_regnum: DestLabel,
     pub func_address: DestLabel,
     pub func_pc: DestLabel,
-    pub func_ret: DestLabel,
+    pub func_id: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -95,7 +95,7 @@ extern "C" fn get_error_location(
 ) {
     let normal_info = globals.func[func_id].as_normal();
     let sourceinfo = normal_info.sourceinfo.clone();
-    let bc_base = globals.func[func_id].inst_pc();
+    let bc_base = globals.func[func_id].data.pc;
     let loc = normal_info.sourcemap[pc - bc_base];
     globals.push_error_location(loc, sourceinfo);
 }
@@ -251,7 +251,7 @@ impl Codegen {
         let func_regnum = jit.const_i64(0);
         let func_address = jit.const_i64(0);
         let func_pc = jit.const_i64(0);
-        let func_ret = jit.const_i64(0);
+        let func_id = jit.const_i64(0);
         jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
@@ -381,7 +381,7 @@ impl Codegen {
             func_regnum,
             func_address,
             func_pc,
-            func_ret,
+            func_id,
         };
         let mut codegen = Self {
             jit,
@@ -516,7 +516,7 @@ impl Codegen {
     ///
 
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) -> CodePtr {
-        match globals.func[func_id].jit_label() {
+        match globals.func[func_id].data.codeptr {
             Some(dest) => dest,
             None => {
                 let mut info = std::mem::take(&mut globals.func[func_id]);
@@ -536,7 +536,7 @@ impl Codegen {
                     Some(name) => name,
                     None => "<unnamed>",
                 },
-                func.id()
+                func.data.func_id
             );
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -545,7 +545,7 @@ impl Codegen {
             FuncKind::Normal(info) => self.jit_compile_normal(info, store),
             FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
         };
-        func.set_jit_label(label);
+        func.data.codeptr = Some(label);
         self.jit.finalize();
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let elapsed = now.elapsed();
@@ -627,16 +627,6 @@ impl Codegen {
             // fn(&mut Interp, &mut Globals, *const Value, len:usize)
             call rax;
 
-            // pushq rax;
-            // pushq rax;
-            // movq rdi, rbx;  // rdi: &mut Interp
-            // movq rsi, r12;  // rsi: &mut Globals
-            // movq rdx, rbp;  // rdx: rbp
-            // movq rax, (dump_stacktrace);
-            // call rax;
-            // popq rax;
-            // popq rax;
-
             leave;
             ret;
         );
@@ -649,7 +639,7 @@ impl Codegen {
         for func in store.funcs_mut().iter_mut() {
             match &func.kind {
                 FuncKind::Normal(_) => {
-                    func.set_jit_label(self.vm_entry);
+                    func.data.codeptr = Some(self.vm_entry);
                 }
                 _ => {}
             };

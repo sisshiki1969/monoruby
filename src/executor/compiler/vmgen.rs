@@ -3,25 +3,17 @@ use monoasm_macro::monoasm;
 use paste::paste;
 use std::num::NonZeroU64;
 
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct FuncData {
-    /// stack offset. (only used in calling vm_entry)
-    regnum: i64,
-    address: *mut u8,
-    pc: BcPc,
-    ret: usize,
-}
-
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 struct EncodedCallInfo(NonZeroU64);
 
 impl EncodedCallInfo {
-    fn new(func_id: FuncId, args: u16, len: u16) -> Self {
+    fn new(ret: u16, args: u16, len: u16) -> Self {
         Self(
-            NonZeroU64::new((func_id.0 as u64) + ((args as u64) << 48) + ((len as u64) << 32))
-                .unwrap(),
+            NonZeroU64::new(
+                1 + ((args as u64) << 48) + ((len as u64) << 32) + ((ret as u64) << 16),
+            )
+            .unwrap(),
         )
     }
 }
@@ -87,8 +79,7 @@ extern "C" fn find_method(
     match globals.vm_find_method(callsite_id, receiver, class_version) {
         Some((func_id, args, len, ret)) => {
             get_func_data(interp, globals, func_id, data);
-            data.ret = ret as usize;
-            let info = EncodedCallInfo::new(func_id, args, len);
+            let info = EncodedCallInfo::new(ret, args, len);
             Some(info)
         }
         // If error occurs, return 0.
@@ -103,9 +94,8 @@ pub extern "C" fn get_func_data(
     data: &mut FuncData,
 ) {
     let label = interp.codegen.compile_on_demand(globals, func_id);
-    data.address = label.as_ptr();
-    data.regnum = globals.func[func_id].reg_num();
-    data.pc = globals.func[func_id].inst_pc();
+    globals.func[func_id].data.codeptr = Some(label);
+    *data = globals.func[func_id].data.clone()
 }
 
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
@@ -153,6 +143,9 @@ impl Codegen {
             call rax;
             // set meta func_id
             movl [rsp - 0x14], r13;
+            // set meta register_len
+            movq rax, [rip + func_regnum];
+            movw [rsp - 0x16], rax;
             movq r13, [rip + func_pc];    // r13: BcPc
             //
             //       +-------------+
@@ -192,8 +185,6 @@ impl Codegen {
             //   rbx: &mut Interp
             //   r12: &mut Globals
             //   r13: pc
-            //
-            //   register_len: [rip + func_regnum]
             //
         };
 
@@ -445,7 +436,7 @@ impl Codegen {
             func_regnum,
             func_address,
             func_pc,
-            func_ret,
+            func_id,
         } = self.func_data;
         let label = self.jit.get_current_address();
         let class_version = self.class_version;
@@ -467,10 +458,16 @@ impl Codegen {
             jeq vm_return;
 
             pushq r13;
-            pushq [rip + func_ret];
+            movl rdi, rax;
+            shrq rdi, 16;
+            pushq rdi;
             movq r13, [rip + func_pc];    // r13: BcPc
             // set meta/func_id
-            movl [rsp - 0x14], rax;
+            movl rdi, [rip + func_id];
+            movl [rsp - 0x14], rdi;
+            // set meta/register_len
+            movq rdi, [rip + func_regnum];
+            movw [rsp - 0x16], rdi;
             shrq rax, 32;
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
@@ -512,7 +509,14 @@ impl Codegen {
             addq r8, 1;
             jne  loop_;
         loop_exit:
-
+            // argument registers:
+            //   rdi: args len
+            //
+            // global registers:
+            //   rbx: &mut Interp
+            //   r12: &mut Globals
+            //   r13: pc
+            //
             movq rax, [rip + func_address];
             call rax;
             popq r15;
