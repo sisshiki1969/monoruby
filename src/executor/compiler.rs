@@ -311,16 +311,15 @@ impl Codegen {
             movq r12, rsi;
             pushq r9;
             pushq r8;
-            // set meta/call_kind = 0(VM)
             // set meta/func_id
             pushq rdx;
             // set self (= receiver)
             pushq rcx;
-            lea rcx, [rip + func_regnum]; // rcx: &mut FuncData
             movq rax, (get_func_data);
             call rax;
+            movq rdx, rax;
 
-            movq r13, [rip + func_pc];    // r13: BcPc
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             addq rsp, 16;
             // rcx <- *args
             popq rcx;
@@ -344,6 +343,8 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
+            movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
+            movw [rsp - 0x16], rax;
             movq rdi, r8;
             testq r8, r8;
             jeq  loop_exit;
@@ -355,7 +356,7 @@ impl Codegen {
             jne  loop_;
         loop_exit:
 
-            movq rax, [rip + func_address];
+            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             call rax;
             popq r15;
             popq r14;

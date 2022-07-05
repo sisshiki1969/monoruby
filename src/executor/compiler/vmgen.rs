@@ -78,7 +78,7 @@ extern "C" fn find_method(
 ) -> Option<EncodedCallInfo> {
     match globals.vm_find_method(callsite_id, receiver, class_version) {
         Some((func_id, args, len, ret)) => {
-            get_func_data(interp, globals, func_id, data);
+            *data = get_func_data(interp, globals, func_id).clone();
             let info = EncodedCallInfo::new(ret, args, len);
             Some(info)
         }
@@ -87,15 +87,14 @@ extern "C" fn find_method(
     }
 }
 
-pub extern "C" fn get_func_data(
+pub extern "C" fn get_func_data<'a>(
     interp: &mut Interp,
-    globals: &mut Globals,
+    globals: &'a mut Globals,
     func_id: FuncId,
-    data: &mut FuncData,
-) {
+) -> &'a FuncData {
     let label = interp.codegen.compile_on_demand(globals, func_id);
     globals.func[func_id].data.codeptr = Some(label);
-    *data = globals.func[func_id].data.clone()
+    &globals.func[func_id].data
 }
 
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
@@ -121,12 +120,6 @@ impl Codegen {
     pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
-        let FuncDataLabels {
-            func_regnum,
-            func_address,
-            func_pc,
-            ..
-        } = self.func_data;
 
         monoasm! { self.jit,
             pushq rbx;
@@ -138,15 +131,14 @@ impl Codegen {
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
             movl r13, rdx;  // rdx: FuncId
-            lea rcx, [rip + func_regnum];
             movq rax, (get_func_data);
             call rax;
             // set meta func_id
             movl [rsp - 0x14], r13;
             // set meta register_len
-            movq rax, [rip + func_regnum];
-            movw [rsp - 0x16], rax;
-            movq r13, [rip + func_pc];    // r13: BcPc
+            movq rdi, [rax + (FUNCDATA_OFFSET_REGNUM)];
+            movw [rsp - 0x16], rdi;
+            movq r13, [rax + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
             //  0x00 |             | <- rsp
@@ -165,7 +157,7 @@ impl Codegen {
             //
             // set self
             movq [rsp - 0x20], (NIL_VALUE);
-            movq rax, [rip + func_address];
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
         return_label:
@@ -197,13 +189,11 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self) {
         self.vm_entry = self.jit.get_current_address();
-        let FuncDataLabels { func_regnum, .. } = self.func_data;
         monoasm! { self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movq rax, [rip + func_regnum];
-            movw [rbp - 0x06], rax;
             movw [rbp - 0x08], 0;
+            movzxw rax, [rbp - 0x06];
         };
         self.calc_offset();
         monoasm! { self.jit,
