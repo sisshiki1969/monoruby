@@ -283,10 +283,10 @@ impl std::default::Default for FuncKind {
     }
 }
 
-/*pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
+pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
 pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
-pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;*/
+//pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
