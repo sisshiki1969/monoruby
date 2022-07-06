@@ -42,7 +42,8 @@ impl Interp {
     ) -> Option<Value> {
         let len = args.len();
         let func_id = globals.get_method(receiver.class_id(), method, len)?;
-        (self.codegen.invoker)(self, globals, func_id, receiver, args.as_ptr(), len)
+        let data = self.get_func_data(globals, func_id) as *const _;
+        (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), len)
     }
 
     pub fn get_func_data<'a>(&mut self, globals: &'a mut Globals, func_id: FuncId) -> &'a FuncData {

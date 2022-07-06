@@ -12,8 +12,14 @@ mod vmgen;
 
 pub type EntryPoint = extern "C" fn(&mut Interp, &mut Globals, *const FuncData) -> Option<Value>;
 
-pub type Invoker =
-    extern "C" fn(&mut Interp, &mut Globals, FuncId, Value, *const Value, usize) -> Option<Value>;
+pub type Invoker = extern "C" fn(
+    &mut Interp,
+    &mut Globals,
+    *const FuncData,
+    Value,
+    *const Value,
+    usize,
+) -> Option<Value>;
 
 ///
 /// Bytecode compiler
@@ -67,14 +73,6 @@ pub extern "C" fn jit_find_method(
     let codeptr = interp.codegen.compile_on_demand(globals, func_id);
     *funcid_patch = func_id;
     Some(codeptr)
-}
-
-pub extern "C" fn get_func_data<'a>(
-    interp: &mut Interp,
-    globals: &'a mut Globals,
-    func_id: FuncId,
-) -> &'a FuncData {
-    interp.get_func_data(globals, func_id)
 }
 
 extern "C" fn define_method(
@@ -295,7 +293,7 @@ impl Codegen {
         let invoker: extern "C" fn(
             &mut Interp,
             &mut Globals,
-            FuncId,
+            *const FuncData,
             Value,
             *const Value,
             usize,
@@ -304,7 +302,7 @@ impl Codegen {
         let loop_ = jit.label();
         // rdi: &mut Interp
         // rsi: &mut Globals
-        // rdx: FuncId
+        // rdx: *const FuncData
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -316,31 +314,21 @@ impl Codegen {
             pushq r15;
             movq rbx, rdi;
             movq r12, rsi;
-            pushq r9;
-            pushq r8;
             // set meta/func_id
-            pushq rdx;
+            movq [rsp - 0x18], rdx;
             // set self (= receiver)
-            pushq rcx;
-            movq rax, (get_func_data);
-            call rax;
-            movq rdx, rax;
+            movq [rsp - 0x20], rcx;
 
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            addq rsp, 16;
-            // rcx <- *args
-            popq rcx;
-            // r8 <- len
-            popq r8;
             //
             //       +-------------+
             // +0x08 |             |
             //       +-------------+
             //  0x00 |             | <- rsp
             //       +-------------+
-            // -0x08 | return addr | len
+            // -0x08 | return addr |
             //       +-------------+
-            // -0x10 |   old rbp   | args
+            // -0x10 |   old rbp   |
             //       +-------------+
             // -0x18 |    meta     | func_id
             //       +-------------+
@@ -350,16 +338,18 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
+            // r8 <- *args
+            // r9 <- len
             movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
             movw [rsp - 0x16], rax;
-            movq rdi, r8;
-            testq r8, r8;
+            movq rdi, r9;
+            testq r9, r9;
             jeq  loop_exit;
-            negq r8;
+            negq r9;
         loop_:
-            movq rax, [rcx + r8 * 8 + 8];
-            movq [rsp + r8 * 8- 0x20], rax;
-            addq r8, 1;
+            movq rax, [r8 + r9 * 8 + 8];
+            movq [rsp + r9 * 8- 0x20], rax;
+            addq r9, 1;
             jne  loop_;
         loop_exit:
 
