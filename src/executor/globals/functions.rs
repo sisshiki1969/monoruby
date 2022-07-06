@@ -286,7 +286,7 @@ impl std::default::Default for FuncKind {
 pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
 pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
-//pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;
+pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;
 
 ///
 /// Metadata.
@@ -316,6 +316,11 @@ impl Meta {
     pub fn reg_num(&self) -> i64 {
         (self.0 >> 32) as u16 as i16 as i64
     }
+
+    pub fn set_reg_num(&mut self, reg_num: i64) {
+        let meta = (self.0 & 0xffff_0000_ffff_ffff) | (reg_num as i16 as u16 as u64) << 32;
+        self.0 = meta;
+    }
 }
 
 #[test]
@@ -323,9 +328,12 @@ fn meta_test() {
     let meta = Meta::from(FuncId(12), 42);
     assert_eq!(FuncId(12), meta.func_id());
     assert_eq!(42, meta.reg_num());
-    let meta = Meta::from(FuncId(42), -1);
+    let mut meta = Meta::from(FuncId(42), -1);
     assert_eq!(FuncId(42), meta.func_id());
     assert_eq!(-1, meta.reg_num());
+    meta.set_reg_num(12);
+    assert_eq!(FuncId(42), meta.func_id());
+    assert_eq!(12, meta.reg_num());
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -375,11 +383,12 @@ impl FuncInfo {
     }
 
     fn new_builtin(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
+        let reg_num = if arity == -1 { -1 } else { arity as i64 };
         Self {
             name: Some(name),
             arity,
             data: FuncData {
-                reg_num: if arity == -1 { -1 } else { arity as i64 },
+                reg_num,
                 codeptr: None,
                 pc: BcPc::default(),
                 func_id,

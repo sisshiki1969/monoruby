@@ -5,14 +5,12 @@ use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
-use crate::executor::compiler::vmgen::get_func_data;
-
 use super::*;
 
 mod jitgen;
 mod vmgen;
 
-pub type EntryPoint = extern "C" fn(&mut Interp, &mut Globals, FuncId) -> Option<Value>;
+pub type EntryPoint = extern "C" fn(&mut Interp, &mut Globals, *const FuncData) -> Option<Value>;
 
 pub type Invoker =
     extern "C" fn(&mut Interp, &mut Globals, FuncId, Value, *const Value, usize) -> Option<Value>;
@@ -57,7 +55,7 @@ fn conv(reg: u16) -> i64 {
 ///
 /// If no method was found, return None (==0u64).
 ///
-pub extern "C" fn get_func_address(
+pub extern "C" fn jit_find_method(
     interp: &mut Interp,
     globals: &mut Globals,
     func_name: IdentId,
@@ -66,8 +64,17 @@ pub extern "C" fn get_func_address(
     funcid_patch: &mut FuncId,
 ) -> Option<CodePtr> {
     let func_id = globals.get_method(receiver.class_id(), func_name, args_len)?;
+    let codeptr = interp.codegen.compile_on_demand(globals, func_id);
     *funcid_patch = func_id;
-    Some(interp.codegen.compile_on_demand(globals, func_id))
+    Some(codeptr)
+}
+
+pub extern "C" fn get_func_data<'a>(
+    interp: &mut Interp,
+    globals: &'a mut Globals,
+    func_id: FuncId,
+) -> &'a FuncData {
+    interp.get_func_data(globals, func_id)
 }
 
 extern "C" fn define_method(
@@ -262,7 +269,7 @@ impl Codegen {
         entry_find_method:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (get_func_address);
+            movq rax, (jit_find_method);
             jmp  rax;
         vm_return:
             // check call_kind.
@@ -522,6 +529,7 @@ impl Codegen {
             None => {
                 let mut info = std::mem::take(&mut globals.func[func_id]);
                 let label = self.jit_compile(&mut info, &globals.func);
+                //info.data.codeptr = Some(label);
                 globals.func[func_id] = info;
                 label
             }

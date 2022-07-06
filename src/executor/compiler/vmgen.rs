@@ -78,23 +78,13 @@ extern "C" fn find_method(
 ) -> Option<EncodedCallInfo> {
     match globals.vm_find_method(callsite_id, receiver, class_version) {
         Some((func_id, args, len, ret)) => {
-            *data = get_func_data(interp, globals, func_id).clone();
+            *data = interp.get_func_data(globals, func_id).clone();
             let info = EncodedCallInfo::new(ret, args, len);
             Some(info)
         }
         // If error occurs, return 0.
         None => None,
     }
-}
-
-pub extern "C" fn get_func_data<'a>(
-    interp: &mut Interp,
-    globals: &'a mut Globals,
-    func_id: FuncId,
-) -> &'a FuncData {
-    let label = interp.codegen.compile_on_demand(globals, func_id);
-    globals.func[func_id].data.codeptr = Some(label);
-    &globals.func[func_id].data
 }
 
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
@@ -120,7 +110,17 @@ impl Codegen {
     pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
-
+        //
+        // VM entry
+        //
+        // argument registers:
+        //   rdi: args len
+        //
+        // global registers:
+        //   rbx: &mut Interp
+        //   r12: &mut Globals
+        //   r13: pc
+        //
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -130,15 +130,13 @@ impl Codegen {
 
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
-            movl r13, rdx;  // rdx: FuncId
-            movq rax, (get_func_data);
-            call rax;
             // set meta func_id
-            movl [rsp - 0x14], r13;
+            movl rax, [rdx + (FUNCDATA_OFFSET_FUNCID)];  // rdx: *const FuncData
+            movl [rsp - 0x14], rax;
             // set meta register_len
-            movq rdi, [rax + (FUNCDATA_OFFSET_REGNUM)];
-            movw [rsp - 0x16], rdi;
-            movq r13, [rax + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+            movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
+            movw [rsp - 0x16], rax;
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
             //  0x00 |             | <- rsp
@@ -157,7 +155,7 @@ impl Codegen {
             //
             // set self
             movq [rsp - 0x20], (NIL_VALUE);
-            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
         return_label:
@@ -167,17 +165,6 @@ impl Codegen {
             popq r12;
             popq rbx;
             ret;
-            //
-            // VM entry
-            //
-            // argument registers:
-            //   rdi: args len
-            //
-            // global registers:
-            //   rbx: &mut Interp
-            //   r12: &mut Globals
-            //   r13: pc
-            //
         };
 
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
