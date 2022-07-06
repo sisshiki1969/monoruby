@@ -288,6 +288,46 @@ pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
 //pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;
 
+///
+/// Metadata.
+///
+/// ```
+/// let meta = Meta::from(FuncId(12), 42);
+/// assert_eq!(FuncId(12), meta.func_id());
+/// assert_eq!(42, meta.reg_num());
+///
+/// let meta = Meta::from(FuncId(42), -1);
+/// assert_eq!(FuncId(42), meta.func_id());
+/// assert_eq!(-1, meta.reg_num());
+/// ```
+#[derive(Debug, Clone, PartialEq, Default)]
+#[repr(transparent)]
+pub struct Meta(u64);
+
+impl Meta {
+    pub fn from(func_id: FuncId, reg_num: i64) -> Self {
+        Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        FuncId(self.0 as u32)
+    }
+
+    pub fn reg_num(&self) -> i64 {
+        (self.0 >> 32) as u16 as i16 as i64
+    }
+}
+
+#[test]
+fn meta_test() {
+    let meta = Meta::from(FuncId(12), 42);
+    assert_eq!(FuncId(12), meta.func_id());
+    assert_eq!(42, meta.reg_num());
+    let meta = Meta::from(FuncId(42), -1);
+    assert_eq!(FuncId(42), meta.func_id());
+    assert_eq!(-1, meta.reg_num());
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct FuncData {
