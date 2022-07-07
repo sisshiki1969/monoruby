@@ -122,9 +122,6 @@ impl Codegen {
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - 0x18], rax;
-            // set meta register_len
-            //movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
-            //movw [rsp - 0x16], rax;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -410,7 +407,7 @@ impl Codegen {
 
     fn vm_method_call(&mut self) -> CodePtr {
         let FuncDataLabels {
-            func_regnum,
+            func_datatop,
             func_address,
             func_pc,
             func_meta,
@@ -426,7 +423,7 @@ impl Codegen {
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rip + func_regnum]; // rcx: &mut FuncData
+            lea rcx, [rip + func_datatop]; // rcx: &mut FuncData
             movq r8, [r15]; // r8: receiver:Value
             movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
@@ -439,12 +436,9 @@ impl Codegen {
             shrq rdi, 16;
             pushq rdi;
             movq r13, [rip + func_pc];    // r13: BcPc
-            // set meta/func_id
+            // set meta
             movq rdi, [rip + func_meta];
             movq [rsp - 0x18], rdi;
-            // set meta/register_len
-            //movq rdi, [rip + func_regnum];
-            //movw [rsp - 0x16], rdi;
             shrq rax, 32;
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args

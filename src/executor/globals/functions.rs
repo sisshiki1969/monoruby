@@ -283,10 +283,9 @@ impl std::default::Default for FuncKind {
     }
 }
 
-pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
-pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
-pub const FUNCDATA_OFFSET_PC: u64 = 16;
-pub const FUNCDATA_OFFSET_META: u64 = 24;
+pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
+pub const FUNCDATA_OFFSET_PC: u64 = 8;
+pub const FUNCDATA_OFFSET_META: u64 = 16;
 
 ///
 /// Metadata.
@@ -354,8 +353,6 @@ fn meta_test() {
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
 pub struct FuncData {
-    /// stack offset. (only used in calling vm_entry)
-    pub reg_num: i64,
     /// address of function.
     pub codeptr: Option<CodePtr>,
     /// the address of program counter
@@ -366,7 +363,6 @@ pub struct FuncData {
 
 impl FuncData {
     fn set_reg_num(&mut self, reg_num: i64) {
-        self.reg_num = reg_num;
         self.meta.set_reg_num(reg_num);
     }
 }
@@ -395,7 +391,6 @@ impl FuncInfo {
             name,
             arity: info.args.len() as i32,
             data: FuncData {
-                reg_num: 0,
                 codeptr: None,
                 pc: BcPc::default(),
                 meta: Meta::from(info.id, 0),
@@ -410,7 +405,6 @@ impl FuncInfo {
             name: Some(name),
             arity,
             data: FuncData {
-                reg_num,
                 codeptr: None,
                 pc: BcPc::default(),
                 meta: Meta::from(func_id, reg_num),
