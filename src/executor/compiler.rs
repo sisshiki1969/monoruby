@@ -38,14 +38,6 @@ pub struct Codegen {
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    pub func_data: FuncDataLabels,
-}
-
-pub struct FuncDataLabels {
-    pub func_datatop: DestLabel,
-    pub func_address: DestLabel,
-    pub func_pc: DestLabel,
-    pub func_meta: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -253,10 +245,6 @@ impl Codegen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
-        let func_datatop = jit.const_i64(0);
-        let func_address = func_datatop;
-        let func_pc = jit.const_i64(0);
-        let func_meta = jit.const_i64(0);
         jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
@@ -374,12 +362,6 @@ impl Codegen {
         };
         jit.select(0);
         let dispatch = vec![entry_unimpl; 256];
-        let func_data = FuncDataLabels {
-            func_datatop,
-            func_address,
-            func_pc,
-            func_meta,
-        };
         let mut codegen = Self {
             jit,
             class_version,
@@ -392,7 +374,6 @@ impl Codegen {
             vm_return,
             dispatch,
             invoker,
-            func_data,
         };
         codegen.construct_vm();
         codegen.get_entry_point();

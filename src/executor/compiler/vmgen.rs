@@ -56,13 +56,13 @@ extern "C" fn find_method<'a>(
     interp: &mut Interp,
     globals: &'a mut Globals,
     callsite_id: CallsiteId,
-    data: &mut FuncData,
+    data: &mut *const FuncData,
     receiver: Value,
     class_version: usize,
 ) -> Option<&'a CallsiteInfo> {
     match globals.vm_find_method(callsite_id, receiver, class_version) {
         Some(func_id) => {
-            *data = interp.get_func_data(globals, func_id).clone();
+            *data = interp.get_func_data(globals, func_id);
             Some(&globals.func[callsite_id])
         }
         // If error occurs, return 0.
@@ -401,12 +401,6 @@ impl Codegen {
     }
 
     fn vm_method_call(&mut self) -> CodePtr {
-        let FuncDataLabels {
-            func_datatop,
-            func_address,
-            func_pc,
-            func_meta,
-        } = self.func_data;
         let label = self.jit.get_current_address();
         let class_version = self.class_version;
         let exit = self.jit.label();
@@ -421,7 +415,7 @@ impl Codegen {
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rip + func_datatop]; // rcx: &mut FuncData
+            lea rcx, [rsp + 8]; // rcx: &mut *const FuncData
             movq r8, [r15]; // r8: receiver:Value
             movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
@@ -429,11 +423,12 @@ impl Codegen {
             testq rax, rax;
             jeq vm_return;
 
+            movq rsi, [rsp + 8]; // rsi <- *const FuncData
             movzxw rdi, [rax];
             movq [rsp + 8], rdi; // ret
-            movq r13, [rip + func_pc];    // r13: BcPc
+            movq r13, [rsi + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             // set meta
-            movq rdi, [rip + func_meta];
+            movq rdi, [rsi + (FUNCDATA_OFFSET_META)];
             movq [rsp - 0x18], rdi;
             movzxw rcx, [rax + 2]; // rcx <- args
             movzxw rdi, [rax + 4];  // rdi <- len
@@ -480,7 +475,7 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, [rip + func_address];
+            movq rax, [rsi + (FUNCDATA_OFFSET_CODEPTR)];
             call rax;
             movq r15, [rsp + 8];
             movq r13, [rsp];
