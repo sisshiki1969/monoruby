@@ -257,7 +257,7 @@ impl FnStore {
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         self[func_id].data.pc = BcPcBase::new(self[func_id].as_normal()) + 0;
-        self[func_id].data.reg_num = regs as i64;
+        self[func_id].data.set_reg_num(regs as i64);
         Ok(())
     }
 
@@ -286,25 +286,36 @@ impl std::default::Default for FuncKind {
 pub const FUNCDATA_OFFSET_REGNUM: u64 = 0;
 pub const FUNCDATA_OFFSET_CODEPTR: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
-pub const FUNCDATA_OFFSET_FUNCID: u64 = 24;
+pub const FUNCDATA_OFFSET_META: u64 = 24;
 
 ///
 /// Metadata.
 ///
-/// ```
-/// let meta = Meta::from(FuncId(12), 42);
-/// assert_eq!(FuncId(12), meta.func_id());
-/// assert_eq!(42, meta.reg_num());
-///
-/// let meta = Meta::from(FuncId(42), -1);
-/// assert_eq!(FuncId(42), meta.func_id());
-/// assert_eq!(-1, meta.reg_num());
-/// ```
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default)]
 #[repr(transparent)]
 pub struct Meta(u64);
 
+impl std::fmt::Debug for Meta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:016x} {:?} len:{}",
+            self.0,
+            self.func_id(),
+            self.reg_num()
+        )
+    }
+}
+
 impl Meta {
+    pub fn new(meta: u64) -> Self {
+        Self(meta)
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0
+    }
+
     pub fn from(func_id: FuncId, reg_num: i64) -> Self {
         Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
     }
@@ -318,7 +329,7 @@ impl Meta {
     }
 
     pub fn set_reg_num(&mut self, reg_num: i64) {
-        let meta = (self.0 & 0xffff_0000_ffff_ffff) | (reg_num as i16 as u16 as u64) << 32;
+        let meta = (self.0 & 0xffff_0000_ffff_ffff) | ((reg_num as i16 as u16 as u64) << 32);
         self.0 = meta;
     }
 }
@@ -334,6 +345,10 @@ fn meta_test() {
     meta.set_reg_num(12);
     assert_eq!(FuncId(42), meta.func_id());
     assert_eq!(12, meta.reg_num());
+    assert_eq!(8, std::mem::size_of::<i64>());
+    assert_eq!(8, std::mem::size_of::<Option<CodePtr>>());
+    assert_eq!(8, std::mem::size_of::<BcPc>());
+    assert_eq!(8, std::mem::size_of::<Meta>());
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -345,8 +360,15 @@ pub struct FuncData {
     pub codeptr: Option<CodePtr>,
     /// the address of program counter
     pub pc: BcPc,
-    /// ID of this function.
-    pub func_id: FuncId,
+    /// metadata of this function.
+    pub meta: Meta,
+}
+
+impl FuncData {
+    fn set_reg_num(&mut self, reg_num: i64) {
+        self.reg_num = reg_num;
+        self.meta.set_reg_num(reg_num);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -376,7 +398,7 @@ impl FuncInfo {
                 reg_num: 0,
                 codeptr: None,
                 pc: BcPc::default(),
-                func_id: info.id,
+                meta: Meta::from(info.id, 0),
             },
             kind: FuncKind::Normal(info),
         }
@@ -391,7 +413,7 @@ impl FuncInfo {
                 reg_num,
                 codeptr: None,
                 pc: BcPc::default(),
-                func_id,
+                meta: Meta::from(func_id, reg_num),
             },
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
@@ -438,7 +460,7 @@ pub(crate) struct NormalFuncInfo {
     /// The current register id.
     pub temp: u16,
     /// The number of temporary registers.
-    reg_num: u16,
+    temp_num: u16,
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
@@ -460,7 +482,7 @@ impl NormalFuncInfo {
             args: args.clone(),
             locals: HashMap::default(),
             temp: 0,
-            reg_num: 0,
+            temp_num: 0,
             ast: Some(ast),
             sourceinfo,
         };
@@ -472,7 +494,7 @@ impl NormalFuncInfo {
 
     /// get a number of registers.
     pub(crate) fn total_reg_num(&self) -> usize {
-        1 + self.locals.len() + self.reg_num as usize
+        1 + self.locals.len() + self.temp_num as usize
     }
 
     /// get bytecode.
@@ -488,8 +510,8 @@ impl NormalFuncInfo {
     pub(crate) fn push(&mut self) -> BcTemp {
         let reg = BcTemp(self.temp);
         self.temp += 1;
-        if self.temp > self.reg_num {
-            self.reg_num = self.temp;
+        if self.temp > self.temp_num {
+            self.temp_num = self.temp;
         }
         reg
     }

@@ -271,13 +271,9 @@ impl Globals {
         let func_id = if version == class_version && cached_class_id == recv_class {
             cached_func
         } else {
-            match self.get_method(recv_class, name, len as usize) {
-                Some(id) => {
-                    self.func[callsite_id].cache = (class_version, recv_class, id);
-                    id
-                }
-                None => return None,
-            }
+            let id = self.get_method(recv_class, name, len as usize)?;
+            self.func[callsite_id].cache = (class_version, recv_class, id);
+            id
         };
         Some((func_id, args, len, ret))
     }

@@ -337,8 +337,8 @@ impl Codegen {
     fn prologue(&mut self, regs: usize) {
         let offset = (regs + regs % 2) * 8 + 16;
         monoasm!(self.jit,
-            movw [rsp - 0x0e], (regs);
-            movw [rsp - 0x10], 1;
+            movw [rsp - 0x0c], (regs);
+            movw [rsp - 0x0a], 1;
             pushq rbp;
             movq rbp, rsp;
             subq rsp, (offset);
@@ -576,7 +576,7 @@ impl Codegen {
             );
         }
         let exit = self.jit.label();
-        let patch_fid = self.jit.label();
+        let patch_meta = self.jit.label();
         let patch_adr = self.jit.label();
         let slow_path = self.jit.label();
         let cached_class_version = self.jit.const_i64(-1);
@@ -597,9 +597,10 @@ impl Codegen {
             jne slow_path;
         exit:
             movq rdi, (len);
-            // set meta/func_id slot to FuncId of the callee.
-            movl [rsp - 0x14], 0;
-        patch_fid:
+            // set meta.
+            movq rax, 0x8000_0000_0000_0000;
+        patch_meta:
+            movq [rsp - 0x18], rax;
             // patch point
             call entry_panic;
         patch_adr:
@@ -621,8 +622,8 @@ impl Codegen {
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (len as usize); // args_len: usize
             movq r8, [rbp - (conv(recv))]; // receiver: Value
-            lea r9, [rip + patch_fid];
-            subq r9, 4; // &mut FuncId
+            lea r9, [rip + patch_meta];
+            subq r9, 8; // &mut Meta
             call entry_find_method;
             // absolute address was returned to rax.
             addq rsp, (sp_max);

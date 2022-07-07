@@ -45,7 +45,7 @@ pub struct FuncDataLabels {
     pub func_regnum: DestLabel,
     pub func_address: DestLabel,
     pub func_pc: DestLabel,
-    pub func_id: DestLabel,
+    pub func_meta: DestLabel,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -67,12 +67,12 @@ pub extern "C" fn jit_find_method(
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
-    funcid_patch: &mut FuncId,
+    funcid_patch: *mut Meta,
 ) -> Option<CodePtr> {
     let func_id = globals.get_method(receiver.class_id(), func_name, args_len)?;
-    let codeptr = interp.codegen.compile_on_demand(globals, func_id);
-    *funcid_patch = func_id;
-    Some(codeptr)
+    let data = interp.get_func_data(globals, func_id);
+    unsafe { funcid_patch.write_unaligned(data.meta) };
+    Some(data.codeptr.unwrap())
 }
 
 extern "C" fn define_method(
@@ -256,7 +256,7 @@ impl Codegen {
         let func_regnum = jit.const_i64(0);
         let func_address = jit.const_i64(0);
         let func_pc = jit.const_i64(0);
-        let func_id = jit.const_i64(0);
+        let func_meta = jit.const_i64(0);
         jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
@@ -315,7 +315,10 @@ impl Codegen {
             movq rbx, rdi;
             movq r12, rsi;
             // set meta/func_id
-            movq [rsp - 0x18], rdx;
+            movq rax, [rdx + (FUNCDATA_OFFSET_META)];
+            movq [rsp - 0x18], rax;
+            //movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
+            //movw [rsp - 0x16], rax;
             // set self (= receiver)
             movq [rsp - 0x20], rcx;
 
@@ -340,8 +343,6 @@ impl Codegen {
             //
             // r8 <- *args
             // r9 <- len
-            movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
-            movw [rsp - 0x16], rax;
             movq rdi, r9;
             testq r9, r9;
             jeq  loop_exit;
@@ -379,7 +380,7 @@ impl Codegen {
             func_regnum,
             func_address,
             func_pc,
-            func_id,
+            func_meta,
         };
         let mut codegen = Self {
             jit,
@@ -469,10 +470,10 @@ impl Codegen {
     /// +0x08 | return addr |
     ///       +-------------+
     ///  0x00 |  prev rbp   | <- rbp
-    ///       +-------------+       +-------+-------+-------+-------+
-    /// -0x08 |    meta     |  meta | 0:VM 1:JIT 2: |    FuncId     |
-    ///       +-------------+       +-------+-------+-------+-------+
-    /// -0x10 |     %0      |             48      32      16       0
+    ///       +-------------+  
+    /// -0x08 |    meta     |  
+    ///       +-------------+  
+    /// -0x10 |     %0      |
     ///       +-------------+
     /// -0x18 |     %1      |
     ///       +-------------+
@@ -535,7 +536,7 @@ impl Codegen {
                     Some(name) => name,
                     None => "<unnamed>",
                 },
-                func.data.func_id
+                func.data.meta.func_id()
             );
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -586,13 +587,13 @@ impl Codegen {
         //
         //  meta
         // +-------------------+ -0x08
-        // |                   |
-        // +      FuncId       + -0x0a
-        // |                   |
-        // +-------------------+ -0x0c
-        // |    register_len   |
-        // +-------------------+ -0x0e
         // |0:VM 1:JIT 2:Native|
+        // +-------------------+ -0x0a
+        // |    register_len   |
+        // +-------------------+ -0x0c
+        // |                   |
+        // +      FuncId       + -0x0e
+        // |                   |
         // +-------------------+ -0x10
         //
         // argument registers:
@@ -603,8 +604,6 @@ impl Codegen {
         //   r12: &mut Globals
         //   r13: pc (dummy for builtin funcions)
         //
-        //   register_len: [rip + func_regnum] (not used, because we can hard-code it.)
-        //
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
@@ -614,8 +613,8 @@ impl Codegen {
         self.calc_offset();
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
-            movw [rsp - 0x0e], rcx;
-            movw [rsp - 0x10], 2;
+            movw [rsp - 0x0c], rdi;
+            movw [rsp - 0x0a], 2;
             pushq rbp;
             movq rbp, rsp;
 

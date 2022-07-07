@@ -426,29 +426,21 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
         eprint!("prev rbp: {:?} ", prev_bp);
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
-        let meta = unsafe { *bp.sub(1) };
-        let func_id = FuncId((meta >> 32) as u32);
-        let register_len = (meta as u32 as usize) >> 16;
+        let meta = Meta::new(unsafe { *bp.sub(1) });
+        let func_id = meta.func_id();
         eprintln!(
-            " meta: {} {:?} {} len:{}",
-            match meta as u16 {
-                0 => "VM",
-                1 => "JIT",
-                2 => "NATIVE",
-                _ => "INVALID",
-            },
-            func_id,
+            " fn[{}] meta:{:?}",
             globals.func[func_id]
                 .name()
                 .unwrap_or(&"<unnamed>".to_string()),
-            register_len
+            meta,
         );
         let self_val = unsafe { Value::from(*bp.sub(2)) };
         eprint!(" self: {} ", globals.val_inspect(self_val));
-        for r in 0..register_len {
+        /*for r in 0..register_len {
             let v = unsafe { Value::from(*bp.sub(3 + r)) };
             eprint!("[{}]: {} ", r, globals.val_inspect(v));
-        }
+        }*/
         eprintln!();
         if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
             break;

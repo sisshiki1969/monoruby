@@ -110,17 +110,6 @@ impl Codegen {
     pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
-        //
-        // VM entry
-        //
-        // argument registers:
-        //   rdi: args len
-        //
-        // global registers:
-        //   rbx: &mut Interp
-        //   r12: &mut Globals
-        //   r13: pc
-        //
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -131,11 +120,11 @@ impl Codegen {
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
             // set meta func_id
-            movl rax, [rdx + (FUNCDATA_OFFSET_FUNCID)];  // rdx: *const FuncData
-            movl [rsp - 0x14], rax;
+            movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
+            movq [rsp - 0x18], rax;
             // set meta register_len
-            movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
-            movw [rsp - 0x16], rax;
+            //movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
+            //movw [rsp - 0x16], rax;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -176,11 +165,22 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self) {
         self.vm_entry = self.jit.get_current_address();
+        //
+        // VM entry
+        //
+        // argument registers:
+        //   rdi: args len
+        //
+        // global registers:
+        //   rbx: &mut Interp
+        //   r12: &mut Globals
+        //   r13: pc
+        //
         monoasm! { self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movw [rbp - 0x08], 0;
-            movzxw rax, [rbp - 0x06];
+            movw [rbp - 0x02], 0;
+            movzxw rax, [rbp - 0x04];
         };
         self.calc_offset();
         monoasm! { self.jit,
@@ -413,7 +413,7 @@ impl Codegen {
             func_regnum,
             func_address,
             func_pc,
-            func_id,
+            func_meta,
         } = self.func_data;
         let label = self.jit.get_current_address();
         let class_version = self.class_version;
@@ -440,11 +440,11 @@ impl Codegen {
             pushq rdi;
             movq r13, [rip + func_pc];    // r13: BcPc
             // set meta/func_id
-            movl rdi, [rip + func_id];
-            movl [rsp - 0x14], rdi;
+            movq rdi, [rip + func_meta];
+            movq [rsp - 0x18], rdi;
             // set meta/register_len
-            movq rdi, [rip + func_regnum];
-            movw [rsp - 0x16], rdi;
+            //movq rdi, [rip + func_regnum];
+            //movw [rsp - 0x16], rdi;
             shrq rax, 32;
             movl rdi, rax;
             shrq rdi, 16;   // rdi <- args
