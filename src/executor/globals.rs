@@ -259,13 +259,12 @@ impl Globals {
         callsite_id: CallsiteId,
         receiver: Value,
         class_version: usize,
-    ) -> Option<(FuncId, u16, u16, u16)> {
+    ) -> Option<FuncId> {
         let CallsiteInfo {
-            ret,
-            name,
-            args,
             len,
+            name,
             cache: (version, cached_class_id, cached_func),
+            ..
         } = self.func[callsite_id];
         let recv_class = receiver.class_id();
         let func_id = if version == class_version && cached_class_id == recv_class {
@@ -275,7 +274,7 @@ impl Globals {
             self.func[callsite_id].cache = (class_version, recv_class, id);
             id
         };
-        Some((func_id, args, len, ret))
+        Some(func_id)
     }
 
     pub fn get_method(

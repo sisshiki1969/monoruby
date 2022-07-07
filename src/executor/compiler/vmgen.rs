@@ -1,22 +1,6 @@
 use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
-use std::num::NonZeroU64;
-
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-struct EncodedCallInfo(NonZeroU64);
-
-impl EncodedCallInfo {
-    fn new(ret: u16, args: u16, len: u16) -> Self {
-        Self(
-            NonZeroU64::new(
-                1 + ((args as u64) << 48) + ((len as u64) << 32) + ((ret as u64) << 16),
-            )
-            .unwrap(),
-        )
-    }
-}
 
 macro_rules! cmp_ops {
   ($op:ident) => {
@@ -68,19 +52,18 @@ macro_rules! cmp_ri_ops {
   };
 }
 
-extern "C" fn find_method(
+extern "C" fn find_method<'a>(
     interp: &mut Interp,
-    globals: &mut Globals,
+    globals: &'a mut Globals,
     callsite_id: CallsiteId,
     data: &mut FuncData,
     receiver: Value,
     class_version: usize,
-) -> Option<EncodedCallInfo> {
+) -> Option<&'a CallsiteInfo> {
     match globals.vm_find_method(callsite_id, receiver, class_version) {
-        Some((func_id, args, len, ret)) => {
+        Some(func_id) => {
             *data = interp.get_func_data(globals, func_id).clone();
-            let info = EncodedCallInfo::new(ret, args, len);
-            Some(info)
+            Some(&globals.func[callsite_id])
         }
         // If error occurs, return 0.
         None => None,
@@ -321,6 +304,18 @@ impl Codegen {
         };
     }
 
+    /// Get absolute address of the register.
+    /// #### @args
+    /// - *rcx*: register number
+    /// #### @return
+    /// - *rcx*: absolute address of the register
+    fn vm_get_addr_rcx(&mut self) {
+        monoasm! { self.jit,
+            negq rcx;
+            lea rcx, [rbp + rcx * 8 - 16];
+        };
+    }
+
     /// Get value of the register.
     /// #### @args
     /// - *rdi*: register number
@@ -420,6 +415,9 @@ impl Codegen {
         let vm_return = self.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
+            subq rsp, 16; // rsp+0:pc rsp+8:ret
+            movq [rsp], r13;
+
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
@@ -427,27 +425,23 @@ impl Codegen {
             movq r8, [r15]; // r8: receiver:Value
             movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
-            call rax;       // rax <- EncodedCallInfo
+            call rax;       // rax <- Option<&CallsiteInfo>
             testq rax, rax;
             jeq vm_return;
 
-            pushq r13;
-            movl rdi, rax;
-            shrq rdi, 16;
-            pushq rdi;
+            movzxw rdi, [rax];
+            movq [rsp + 8], rdi; // ret
             movq r13, [rip + func_pc];    // r13: BcPc
             // set meta
             movq rdi, [rip + func_meta];
             movq [rsp - 0x18], rdi;
-            shrq rax, 32;
-            movl rdi, rax;
-            shrq rdi, 16;   // rdi <- args
-            movzxw r8, rax;    // r8 <- len
+            movzxw rcx, [rax + 2]; // rcx <- args
+            movzxw rdi, [rax + 4];  // rdi <- len
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;
         };
-        self.vm_get_addr_rdi(); // rdi <- *args
+        self.vm_get_addr_rcx(); // rcx <- *args
 
         monoasm! { self.jit,
             //
@@ -468,11 +462,9 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
-            movq rcx, rdi;
-            movq rdi, r8;
+            movq r8, rdi;
             testq r8, r8;
             jeq  loop_exit;
-            //shlq r8, 3;
             negq r8;
         loop_:
             movq rax, [rcx + r8 * 8 + 8];
@@ -490,8 +482,9 @@ impl Codegen {
             //
             movq rax, [rip + func_address];
             call rax;
-            popq r15;
-            popq r13;
+            movq r15, [rsp + 8];
+            movq r13, [rsp];
+            addq rsp, 16;
             testq rax, rax;
             jeq vm_return;
         };

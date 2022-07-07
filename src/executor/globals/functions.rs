@@ -65,15 +65,16 @@ impl Funcs {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+#[repr(C)]
 pub struct CallsiteInfo {
     /// Return register. 0 for none.
     pub ret: u16,
-    /// Name of function.
-    pub name: IdentId,
     /// Argument register.
     pub args: u16,
     /// Length of arguments.
     pub len: u16,
+    /// Name of function.
+    pub name: IdentId,
     /// Inline method cache.
     pub cache: (usize, ClassId, FuncId), //(version, class_id, func_id)
 }
