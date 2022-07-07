@@ -423,13 +423,12 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
     for i in 0..16 {
         eprint!("[{}]:", i);
         let prev_bp = unsafe { *bp as *const u64 };
-        eprint!("prev rbp: {:?} ", prev_bp);
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
         let meta = Meta::new(unsafe { *bp.sub(1) });
         let func_id = meta.func_id();
         eprintln!(
-            " fn[{}] meta:{:?}",
+            " name:[{}] {:?}",
             globals.func[func_id]
                 .name()
                 .unwrap_or(&"<unnamed>".to_string()),

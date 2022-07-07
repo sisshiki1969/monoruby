@@ -317,8 +317,6 @@ impl Codegen {
             // set meta/func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - 0x18], rax;
-            //movq rax, [rdx + (FUNCDATA_OFFSET_REGNUM)];
-            //movw [rsp - 0x16], rax;
             // set self (= receiver)
             movq [rsp - 0x20], rcx;
 
@@ -542,7 +540,10 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = Instant::now();
         let label = match &func.kind {
-            FuncKind::Normal(info) => self.jit_compile_normal(info, store),
+            FuncKind::Normal(info) => {
+                func.data.meta.set_jit();
+                self.jit_compile_normal(info, store)
+            }
             FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
         };
         func.data.codeptr = Some(label);
@@ -587,7 +588,7 @@ impl Codegen {
         //
         //  meta
         // +-------------------+ -0x08
-        // |0:VM 1:JIT 2:Native|
+        // |     2:Native      |
         // +-------------------+ -0x0a
         // |    register_len   |
         // +-------------------+ -0x0c
@@ -613,8 +614,8 @@ impl Codegen {
         self.calc_offset();
         monoasm!(self.jit,
             lea  rdx, [rsp - 0x20];
+            // we should overwrite reg_num because the func itself does not know actual number of arguments.
             movw [rsp - 0x0c], rdi;
-            movw [rsp - 0x0a], 2;
             pushq rbp;
             movq rbp, rsp;
 

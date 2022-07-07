@@ -337,8 +337,6 @@ impl Codegen {
     fn prologue(&mut self, regs: usize) {
         let offset = (regs + regs % 2) * 8 + 16;
         monoasm!(self.jit,
-            movw [rsp - 0x0c], (regs);
-            movw [rsp - 0x0a], 1;
             pushq rbp;
             movq rbp, rsp;
             subq rsp, (offset);

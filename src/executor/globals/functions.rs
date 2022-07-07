@@ -298,8 +298,13 @@ impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:016x} {:?} len:{}",
-            self.0,
+            "{} {:?} regs:{}",
+            match self.kind() {
+                0 => "VM",
+                1 => "JIT",
+                2 => "NATIVE",
+                _ => "INVALID",
+            },
             self.func_id(),
             self.reg_num()
         )
@@ -316,7 +321,12 @@ impl Meta {
     }
 
     pub fn from(func_id: FuncId, reg_num: i64) -> Self {
+        // kind = VM
         Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
+    }
+
+    pub fn native(func_id: FuncId, reg_num: i64) -> Self {
+        Self((2 << 48) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -325,6 +335,15 @@ impl Meta {
 
     pub fn reg_num(&self) -> i64 {
         (self.0 >> 32) as u16 as i16 as i64
+    }
+
+    pub fn kind(&self) -> u16 {
+        (self.0 >> 48) as u16
+    }
+
+    pub fn set_jit(&mut self) {
+        let meta = (self.0 & 0x0000_ffff_ffff_ffff) | (1 << 48);
+        self.0 = meta;
     }
 
     pub fn set_reg_num(&mut self, reg_num: i64) {
@@ -407,7 +426,7 @@ impl FuncInfo {
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
-                meta: Meta::from(func_id, reg_num),
+                meta: Meta::native(func_id, reg_num),
             },
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
