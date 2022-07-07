@@ -38,7 +38,7 @@ pub struct Codegen {
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    opt_buf: Option<BcOp>,
+    opt_buf: Option<BcOp1>,
 }
 
 fn conv(reg: u16) -> i64 {

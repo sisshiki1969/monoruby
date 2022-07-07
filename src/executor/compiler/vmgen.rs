@@ -185,7 +185,8 @@ impl Codegen {
         let branch = self.jit.label();
         monoasm! { self.jit,
         branch:
-            lea r13, [r13 + rdi * 8];
+            shlq rdi, 4;
+            lea r13, [r13 + rdi];
         };
         self.fetch_and_dispatch();
 
@@ -206,10 +207,6 @@ impl Codegen {
         self.dispatch[13] = self.vm_condnotbr(branch);
 
         self.dispatch[129] = self.vm_neg();
-        self.dispatch[130] = self.vm_addrr();
-        self.dispatch[131] = self.vm_subrr();
-        self.dispatch[132] = self.vm_mulrr();
-        self.dispatch[133] = self.vm_divrr();
         self.dispatch[134] = self.vm_eqrr();
         self.dispatch[135] = self.vm_nerr();
         self.dispatch[136] = self.vm_ltrr();
@@ -229,11 +226,6 @@ impl Codegen {
         self.dispatch[148] = ret;
         self.dispatch[149] = mov;
 
-        self.dispatch[150] = self.vm_bitorrr();
-        self.dispatch[151] = self.vm_bitandrr();
-        self.dispatch[152] = self.vm_bitxorrr();
-        self.dispatch[153] = shr;
-        self.dispatch[154] = shl;
         self.dispatch[155] = self.vm_concat();
 
         self.dispatch[156] = self.vm_eqrr();
@@ -248,6 +240,16 @@ impl Codegen {
         self.dispatch[165] = self.vm_leri();
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
+
+        self.dispatch[170] = self.vm_addrr();
+        self.dispatch[171] = self.vm_subrr();
+        self.dispatch[172] = self.vm_mulrr();
+        self.dispatch[173] = self.vm_divrr();
+        self.dispatch[174] = self.vm_bitorrr();
+        self.dispatch[175] = self.vm_bitandrr();
+        self.dispatch[176] = self.vm_bitxorrr();
+        self.dispatch[177] = shr;
+        self.dispatch[178] = shl;
     }
 
     ///
@@ -267,7 +269,7 @@ impl Codegen {
         let l1 = self.jit.label();
         monoasm! { self.jit,
             movq rax, [r13]; // rax <- :0:1:2:3
-            addq r13, 8;
+            addq r13, 16;
             movsxl rdi, rax;  // rdi <- :2:3
             shrq rax, 32;
             movzxw r15, rax;  // r15 <- :1

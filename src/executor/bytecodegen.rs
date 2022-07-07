@@ -7,7 +7,7 @@ use paste::paste;
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct BcPcBase(*const u64);
+pub struct BcPcBase(*const Bc);
 
 impl std::ops::Add<usize> for BcPcBase {
     type Output = BcPc;
@@ -34,7 +34,7 @@ impl BcPcBase {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct BcPc(*const u64);
+pub struct BcPc(*const Bc);
 
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
@@ -1214,7 +1214,7 @@ macro_rules! gen_ops {
                 loc: Loc,
             ) -> Result<()> {
                 let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
-                self.push(BcIr::$inst(dst, lhs, rhs), loc);
+                self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
                 Ok(())
             }
         }
@@ -1243,7 +1243,7 @@ macro_rules! gen_ri_ops {
                     self.push(BcIr::[<$inst ri>](dst, lhs, i), loc);
                 } else {
                     let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
-                    self.push(BcIr::$inst(dst, lhs, rhs), loc);
+                    self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
                 }
                 Ok(())
             }
@@ -1276,128 +1276,73 @@ impl IrContext {
             let op = match inst {
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
-                    BcOp::Br(dst - idx as i32 - 1)
+                    BcOp1::Br(dst - idx as i32 - 1)
                 }
                 BcIr::CondBr(reg, dst, optimizable) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let cond_reg = info.get_index(reg);
                     let disp = dst - idx as i32 - 1;
-                    if *optimizable {
-                        BcOp::CondBrO(cond_reg, disp)
-                    } else {
-                        BcOp::CondBr(cond_reg, disp)
-                    }
+                    BcOp1::CondBr(cond_reg, disp, *optimizable)
                 }
                 BcIr::CondNotBr(reg, dst, optimizable) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let cond_reg = info.get_index(reg);
                     let disp = dst - idx as i32 - 1;
-                    if *optimizable {
-                        BcOp::CondNotBrO(cond_reg, disp)
-                    } else {
-                        BcOp::CondNotBr(cond_reg, disp)
-                    }
+                    BcOp1::CondNotBr(cond_reg, disp, *optimizable)
                 }
-                BcIr::Integer(reg, num) => BcOp::Integer(info.get_index(reg), *num),
-                BcIr::Symbol(reg, name) => BcOp::Symbol(info.get_index(reg), *name),
-                BcIr::Literal(reg, num) => BcOp::Literal(info.get_index(reg), *num),
-                BcIr::LoadConst(reg, name) => BcOp::LoadConst(
+                BcIr::Integer(reg, num) => BcOp1::Integer(info.get_index(reg), *num),
+                BcIr::Symbol(reg, name) => BcOp1::Symbol(info.get_index(reg), *name),
+                BcIr::Literal(reg, num) => BcOp1::Literal(info.get_index(reg), *num),
+                BcIr::LoadConst(reg, name) => BcOp1::LoadConst(
                     info.get_index(reg),
                     info.add_constsite(store, *name, vec![], false),
                 ),
-                BcIr::StoreConst(reg, name) => BcOp::StoreConst(info.get_index(reg), *name),
-                BcIr::Nil(reg) => BcOp::Nil(info.get_index(reg)),
-                BcIr::Neg(dst, src) => BcOp::Neg(info.get_index(dst), info.get_index(src)),
-                BcIr::Add(dst, lhs, rhs) => BcOp::Add(
+                BcIr::StoreConst(reg, name) => BcOp1::StoreConst(info.get_index(reg), *name),
+                BcIr::Nil(reg) => BcOp1::Nil(info.get_index(reg)),
+                BcIr::Neg(dst, src) => BcOp1::Neg(info.get_index(dst), info.get_index(src)),
+                BcIr::BinOp(kind, dst, lhs, rhs) => BcOp1::BinOp(
+                    *kind,
                     info.get_index(dst),
                     info.get_index(lhs),
                     info.get_index(rhs),
                 ),
                 BcIr::Addri(dst, lhs, rhs) => {
-                    BcOp::Addri(info.get_index(dst), info.get_index(lhs), *rhs)
+                    BcOp1::Addri(info.get_index(dst), info.get_index(lhs), *rhs)
                 }
-                BcIr::Sub(dst, lhs, rhs) => BcOp::Sub(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
                 BcIr::Subri(dst, lhs, rhs) => {
-                    BcOp::Subri(info.get_index(dst), info.get_index(lhs), *rhs)
+                    BcOp1::Subri(info.get_index(dst), info.get_index(lhs), *rhs)
                 }
-                BcIr::Mul(dst, lhs, rhs) => BcOp::Mul(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::Div(dst, lhs, rhs) => BcOp::Div(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::BitOr(dst, lhs, rhs) => BcOp::BitOr(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::BitAnd(dst, lhs, rhs) => BcOp::BitAnd(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::BitXor(dst, lhs, rhs) => BcOp::BitXor(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::Shr(dst, lhs, rhs) => BcOp::Shr(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
-                BcIr::Shl(dst, lhs, rhs) => BcOp::Shl(
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                ),
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let dst = info.get_index(dst);
                     let lhs = info.get_index(lhs);
                     let rhs = info.get_index(rhs);
-                    if *optimizable {
-                        BcOp::CmpO(*kind, dst, lhs, rhs)
-                    } else {
-                        BcOp::Cmp(*kind, dst, lhs, rhs)
-                    }
+                    BcOp1::Cmp(*kind, dst, lhs, rhs, *optimizable)
                 }
                 BcIr::Cmpri(kind, dst, lhs, rhs, optimizable) => {
                     let dst = info.get_index(dst);
                     let lhs = info.get_index(lhs);
                     let rhs = *rhs;
-                    if *optimizable {
-                        BcOp::CmpriO(*kind, dst, lhs, rhs)
-                    } else {
-                        BcOp::Cmpri(*kind, dst, lhs, rhs)
-                    }
+                    BcOp1::Cmpri(*kind, dst, lhs, rhs, *optimizable)
                 }
-                BcIr::Ret(reg) => BcOp::Ret(info.get_index(reg)),
-                BcIr::Mov(dst, src) => BcOp::Mov(info.get_index(dst), info.get_index(src)),
+                BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)),
+                BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)),
                 BcIr::MethodCall(recv, name, ret, args, len) => {
                     let id = info.add_callsite(store, *ret, *name, *args, *len);
                     let recv = info.get_index(recv);
-                    BcOp::MethodCall(recv, id)
+                    BcOp1::MethodCall(recv, id)
                 }
                 BcIr::MethodDef(name, func_id) => {
-                    BcOp::MethodDef(store.add_method_def(*name, *func_id))
+                    BcOp1::MethodDef(store.add_method_def(*name, *func_id))
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let ret = ret.map_or(0, |ret| info.get_index(&ret));
-                    BcOp::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16)
+                    BcOp1::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16)
                 }
             };
-            ops.push(op.to_u64());
+            ops.push(op.to_bc());
             locs.push(*loc);
         }
-        info.bytecode = ops;
+        info.set_bytecode(ops);
         info.sourcemap = locs;
     }
 }

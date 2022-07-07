@@ -1,6 +1,40 @@
 use super::*;
 
 ///
+/// kinds of binary operation.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum BinOpK {
+    Add = 0,
+    Sub = 1,
+    Mul = 2,
+    Div = 3,
+    BitOr = 4,
+    BitAnd = 5,
+    BitXor = 6,
+    Shr = 7,
+    Shl = 8,
+}
+
+use std::fmt;
+impl fmt::Display for BinOpK {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match *self {
+            BinOpK::Add => "+",
+            BinOpK::Sub => "-",
+            BinOpK::Mul => "*",
+            BinOpK::Div => "/",
+            BinOpK::BitOr => "|",
+            BinOpK::BitAnd => "&",
+            BinOpK::BitXor => "^",
+            BinOpK::Shr => ">>",
+            BinOpK::Shl => "<<",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+///
 /// bytecode Ir.
 ///
 #[derive(Debug, Clone, PartialEq)]
@@ -15,17 +49,9 @@ pub(super) enum BcIr {
     StoreConst(BcReg, IdentId),
     Nil(BcReg),
     Neg(BcReg, BcReg),                       // ret, src
-    Add(BcReg, BcReg, BcReg),                // ret, lhs, rhs
+    BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
     Addri(BcReg, BcReg, i16),                // ret, lhs, int
-    Sub(BcReg, BcReg, BcReg),                // ret, lhs, rhs
     Subri(BcReg, BcReg, i16),                // ret, lhs, int
-    Mul(BcReg, BcReg, BcReg),                // ret, lhs, rhs
-    Div(BcReg, BcReg, BcReg),                // ret, lhs, rhs
-    BitOr(BcReg, BcReg, BcReg),              // ret, lhs, rhs
-    BitAnd(BcReg, BcReg, BcReg),             // ret, lhs, rhs
-    BitXor(BcReg, BcReg, BcReg),             // ret, lhs, rhs
-    Shr(BcReg, BcReg, BcReg),                // ret, lhs, rhs
-    Shl(BcReg, BcReg, BcReg),                // ret, lhs, rhs
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
@@ -35,19 +61,50 @@ pub(super) enum BcIr {
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub(crate) struct Bc {
+    op1: Bc1,
+    op2: Bc2,
+}
+
+impl Bc {
+    fn from(op1: Bc1, op2: Bc2) -> Self {
+        Self { op1, op2 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct Bc1(u64);
+
+impl Bc1 {
+    fn from(op: u64) -> Self {
+        Self(op)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(transparent)]
+pub(crate) struct Bc2(u64);
+
+impl Bc2 {
+    fn from(op: u64) -> Self {
+        Self(op)
+    }
+}
+
 ///
 /// Bytecode instructions.
 ///
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum BcOp {
+pub(super) enum BcOp1 {
     /// branch(dest)
     Br(i32),
-    /// conditional branch(%reg, dest)  : branch when reg was true.
-    CondBr(u16, i32),
-    CondBrO(u16, i32),
-    /// conditional branch(%reg, dest)  : branch when reg was false.
-    CondNotBr(u16, i32),
-    CondNotBrO(u16, i32),
+    /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
+    CondBr(u16, i32, bool),
+    /// conditional branch(%reg, dest, optimizable)  : branch when reg was false.
+    CondNotBr(u16, i32, bool),
     /// integer(%reg, i32)
     Integer(u16, i32),
     /// Symbol(%reg, IdentId)
@@ -60,34 +117,16 @@ pub(super) enum BcOp {
     Nil(u16),
     /// negate(%ret, %src)
     Neg(u16, u16),
-    /// add(%ret, %lhs, %rhs)
-    Add(u16, u16, u16),
+    /// binop(kind, %ret, %lhs, %rhs)
+    BinOp(BinOpK, u16, u16, u16),
     /// add with small integer(%ret, %lhs, rhs:i16)
     Addri(u16, u16, i16),
-    /// sub(%ret, %lhs, %rhs)
-    Sub(u16, u16, u16),
     /// sub with small integer(%ret, %lhs, rhs:i16)
     Subri(u16, u16, i16),
-    /// mul(%ret, %lhs, %rhs)
-    Mul(u16, u16, u16),
-    /// div(%ret, %lhs, %rhs)
-    Div(u16, u16, u16),
-    /// bor(%ret, %lhs, %rhs)
-    BitOr(u16, u16, u16),
-    /// band(%ret, %lhs, %rhs)
-    BitAnd(u16, u16, u16),
-    /// bxor(%ret, %lhs, %rhs)
-    BitXor(u16, u16, u16),
-    /// shr(%ret, %lhs, %rhs)
-    Shr(u16, u16, u16),
-    /// shl(%ret, %lhs, %rhs)
-    Shl(u16, u16, u16),
-    /// cmp(%ret, %lhs, %rhs)
-    Cmp(CmpKind, u16, u16, u16),
-    CmpO(CmpKind, u16, u16, u16),
-    /// cmpri(%ret, %lhs, rhs: i16)
-    Cmpri(CmpKind, u16, u16, i16),
-    CmpriO(CmpKind, u16, u16, i16),
+    /// cmp(%ret, %lhs, %rhs, optimizable)
+    Cmp(CmpKind, u16, u16, u16, bool),
+    /// cmpri(%ret, %lhs, rhs: i16, optimizable)
+    Cmpri(CmpKind, u16, u16, i16, bool),
     /// return(%ret)
     Ret(u16),
     /// move(%dst, %src)
@@ -132,47 +171,49 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
     ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
-impl BcOp {
-    pub fn to_u64(&self) -> u64 {
-        use BcOp::*;
-        match self {
+impl BcOp1 {
+    pub fn to_bc(&self) -> Bc {
+        use BcOp1::*;
+        let op = match self {
             MethodCall(op1, op2) => enc_wl(1, *op1, op2.0),
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
-            CondBr(op1, op2) => enc_wl(4, *op1, *op2 as u32),
-            CondNotBr(op1, op2) => enc_wl(5, *op1, *op2 as u32),
+            CondBr(op1, op2, opt) => enc_wl(if *opt { 12 } else { 4 }, *op1, *op2 as u32),
+            CondNotBr(op1, op2, opt) => enc_wl(if *opt { 13 } else { 5 }, *op1, *op2 as u32),
             Integer(op1, op2) => enc_wl(6, *op1, *op2 as u32),
             Literal(op1, op2) => enc_wl(7, *op1, *op2),
             Nil(op1) => enc_w(8, *op1),
             Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
             LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
-            CondBrO(op1, op2) => enc_wl(12, *op1, *op2 as u32),
-            CondNotBrO(op1, op2) => enc_wl(13, *op1, *op2 as u32),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
-            Add(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
-            Sub(op1, op2, op3) => enc_www(131, *op1, *op2, *op3),
-            Mul(op1, op2, op3) => enc_www(132, *op1, *op2, *op3),
-            Div(op1, op2, op3) => enc_www(133, *op1, *op2, *op3),
-            Cmp(kind, op1, op2, op3) => enc_www(134 + *kind as u16, *op1, *op2, *op3),
+            BinOp(kind, op1, op2, op3) => enc_www(170 + *kind as u16, *op1, *op2, *op3),
+            Cmp(kind, op1, op2, op3, opt) => {
+                if *opt {
+                    enc_www(156 + *kind as u16, *op1, *op2, *op3)
+                } else {
+                    enc_www(134 + *kind as u16, *op1, *op2, *op3)
+                }
+            }
             Addri(op1, op2, op3) => enc_wwsw(140, *op1, *op2, *op3),
             Subri(op1, op2, op3) => enc_wwsw(141, *op1, *op2, *op3),
-            Cmpri(kind, op1, op2, op3) => enc_wwsw(142 + *kind as u16, *op1, *op2, *op3),
+            Cmpri(kind, op1, op2, op3, opt) => {
+                if *opt {
+                    enc_wwsw(162 + *kind as u16, *op1, *op2, *op3)
+                } else {
+                    enc_wwsw(142 + *kind as u16, *op1, *op2, *op3)
+                }
+            }
             Ret(op1) => enc_w(148, *op1),
             Mov(op1, op2) => enc_ww(149, *op1, *op2),
-            BitOr(op1, op2, op3) => enc_www(150, *op1, *op2, *op3),
-            BitAnd(op1, op2, op3) => enc_www(151, *op1, *op2, *op3),
-            BitXor(op1, op2, op3) => enc_www(152, *op1, *op2, *op3),
-            Shr(op1, op2, op3) => enc_www(153, *op1, *op2, *op3),
-            Shl(op1, op2, op3) => enc_www(154, *op1, *op2, *op3),
             ConcatStr(op1, op2, op3) => enc_www(155, *op1, *op2, *op3),
-            CmpO(kind, op1, op2, op3) => enc_www(156 + *kind as u16, *op1, *op2, *op3),
-            CmpriO(kind, op1, op2, op3) => enc_wwsw(162 + *kind as u16, *op1, *op2, *op3),
-        }
+        };
+        Bc::from(Bc1::from(op), Bc2::from(0))
     }
 
-    pub fn from_u64(op: u64) -> Self {
+    pub fn from_bc(op: Bc) -> Self {
+        let op = op.op1.0;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
@@ -180,60 +221,60 @@ impl BcOp {
                 1 => Self::MethodCall(op1, CallsiteId(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
                 3 => Self::Br(op2 as i32),
-                4 => Self::CondBr(op1, op2 as i32),
-                5 => Self::CondNotBr(op1, op2 as i32),
+                4 => Self::CondBr(op1, op2 as i32, false),
+                5 => Self::CondNotBr(op1, op2 as i32, false),
                 6 => Self::Integer(op1, op2 as i32),
                 7 => Self::Literal(op1, op2),
                 8 => Self::Nil(op1),
                 9 => Self::Symbol(op1, IdentId::from(op2)),
                 10 => Self::LoadConst(op1, ConstSiteId(op2)),
                 11 => Self::StoreConst(op1, IdentId::from(op2)),
-                12 => Self::CondBrO(op1, op2 as i32),
-                13 => Self::CondNotBrO(op1, op2 as i32),
+                12 => Self::CondBr(op1, op2 as i32, true),
+                13 => Self::CondNotBr(op1, op2 as i32, true),
                 _ => unreachable!(),
             }
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 129 => Self::Neg(op1, op2),
-                130 => Self::Add(op1, op2, op3),
-                131 => Self::Sub(op1, op2, op3),
-                132 => Self::Mul(op1, op2, op3),
-                133 => Self::Div(op1, op2, op3),
-                134 => Self::Cmp(CmpKind::Eq, op1, op2, op3),
-                135 => Self::Cmp(CmpKind::Ne, op1, op2, op3),
-                136 => Self::Cmp(CmpKind::Lt, op1, op2, op3),
-                137 => Self::Cmp(CmpKind::Le, op1, op2, op3),
-                138 => Self::Cmp(CmpKind::Gt, op1, op2, op3),
-                139 => Self::Cmp(CmpKind::Ge, op1, op2, op3),
+                134 => Self::Cmp(CmpKind::Eq, op1, op2, op3, false),
+                135 => Self::Cmp(CmpKind::Ne, op1, op2, op3, false),
+                136 => Self::Cmp(CmpKind::Lt, op1, op2, op3, false),
+                137 => Self::Cmp(CmpKind::Le, op1, op2, op3, false),
+                138 => Self::Cmp(CmpKind::Gt, op1, op2, op3, false),
+                139 => Self::Cmp(CmpKind::Ge, op1, op2, op3, false),
                 140 => Self::Addri(op1, op2, op3 as i16),
                 141 => Self::Subri(op1, op2, op3 as i16),
-                142 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16),
-                143 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16),
-                144 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16),
-                145 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16),
-                146 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16),
-                147 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16),
+                142 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16, false),
+                143 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16, false),
+                144 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16, false),
+                145 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16, false),
+                146 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16, false),
+                147 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16, false),
                 148 => Self::Ret(op1),
                 149 => Self::Mov(op1, op2),
-                150 => Self::BitOr(op1, op2, op3),
-                151 => Self::BitAnd(op1, op2, op3),
-                152 => Self::BitXor(op1, op2, op3),
-                153 => Self::Shr(op1, op2, op3),
-                154 => Self::Shl(op1, op2, op3),
                 155 => Self::ConcatStr(op1, op2, op3),
-                156 => Self::CmpO(CmpKind::Eq, op1, op2, op3),
-                157 => Self::CmpO(CmpKind::Ne, op1, op2, op3),
-                158 => Self::CmpO(CmpKind::Lt, op1, op2, op3),
-                159 => Self::CmpO(CmpKind::Le, op1, op2, op3),
-                160 => Self::CmpO(CmpKind::Gt, op1, op2, op3),
-                161 => Self::CmpO(CmpKind::Ge, op1, op2, op3),
-                162 => Self::CmpriO(CmpKind::Eq, op1, op2, op3 as i16),
-                163 => Self::CmpriO(CmpKind::Ne, op1, op2, op3 as i16),
-                164 => Self::CmpriO(CmpKind::Lt, op1, op2, op3 as i16),
-                165 => Self::CmpriO(CmpKind::Le, op1, op2, op3 as i16),
-                166 => Self::CmpriO(CmpKind::Gt, op1, op2, op3 as i16),
-                167 => Self::CmpriO(CmpKind::Ge, op1, op2, op3 as i16),
+                156 => Self::Cmp(CmpKind::Eq, op1, op2, op3, true),
+                157 => Self::Cmp(CmpKind::Ne, op1, op2, op3, true),
+                158 => Self::Cmp(CmpKind::Lt, op1, op2, op3, true),
+                159 => Self::Cmp(CmpKind::Le, op1, op2, op3, true),
+                160 => Self::Cmp(CmpKind::Gt, op1, op2, op3, true),
+                161 => Self::Cmp(CmpKind::Ge, op1, op2, op3, true),
+                162 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16, true),
+                163 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16, true),
+                164 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16, true),
+                165 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16, true),
+                166 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16, true),
+                167 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16, true),
+                170 => Self::BinOp(BinOpK::Add, op1, op2, op3),
+                171 => Self::BinOp(BinOpK::Sub, op1, op2, op3),
+                172 => Self::BinOp(BinOpK::Mul, op1, op2, op3),
+                173 => Self::BinOp(BinOpK::Div, op1, op2, op3),
+                174 => Self::BinOp(BinOpK::BitOr, op1, op2, op3),
+                175 => Self::BinOp(BinOpK::BitAnd, op1, op2, op3),
+                176 => Self::BinOp(BinOpK::BitXor, op1, op2, op3),
+                177 => Self::BinOp(BinOpK::Shr, op1, op2, op3),
+                178 => Self::BinOp(BinOpK::Shl, op1, op2, op3),
                 _ => unreachable!(),
             }
         }

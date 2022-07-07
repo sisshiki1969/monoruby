@@ -464,7 +464,7 @@ pub(crate) struct NormalFuncInfo {
     pub(super) id: FuncId,
     name: Option<String>,
     /// Bytecode.
-    pub bytecode: Vec<u64>,
+    pub(super) bytecode: Vec<Bc>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
@@ -506,13 +506,18 @@ impl NormalFuncInfo {
         info
     }
 
+    /// set bytecode..
+    pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
+        self.bytecode = bc;
+    }
+
     /// get a number of registers.
     pub(crate) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.temp_num as usize
     }
 
     /// get bytecode.
-    pub(crate) fn bytecode(&self) -> &Vec<u64> {
+    pub(crate) fn bytecode(&self) -> &Vec<Bc> {
         &self.bytecode
     }
 
@@ -566,6 +571,13 @@ impl NormalFuncInfo {
 
     #[cfg(feature = "emit-bc")]
     pub(crate) fn dump(&self, id_store: &IdentifierTable, store: &FnStore) {
+        fn optstr(opt: bool) -> &'static str {
+            if opt {
+                "_"
+            } else {
+                ""
+            }
+        }
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?} bc:{:?}",
@@ -579,68 +591,60 @@ impl NormalFuncInfo {
         );
         for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
-            match BcOp::from_u64(*inst) {
-                BcOp::Br(disp) => {
+            match BcOp1::from_bc(*inst) {
+                BcOp1::Br(disp) => {
                     eprintln!("br =>:{:05}", i as i32 + 1 + disp);
                 }
-                BcOp::CondBr(reg, disp) => {
-                    eprintln!("condbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
+                BcOp1::CondBr(reg, disp, opt) => {
+                    eprintln!(
+                        "condbr {}%{} =>:{:05}",
+                        optstr(opt),
+                        reg,
+                        i as i32 + 1 + disp
+                    );
                 }
-                BcOp::CondNotBr(reg, disp) => {
-                    eprintln!("condnbr %{} =>:{:05}", reg, i as i32 + 1 + disp);
+                BcOp1::CondNotBr(reg, disp, opt) => {
+                    eprintln!(
+                        "condnbr {}%{} =>:{:05}",
+                        optstr(opt),
+                        reg,
+                        i as i32 + 1 + disp
+                    );
                 }
-                BcOp::CondBrO(reg, disp) => {
-                    eprintln!("condbr _%{} =>:{:05}", reg, i as i32 + 1 + disp);
-                }
-                BcOp::CondNotBrO(reg, disp) => {
-                    eprintln!("condnbr _%{} =>:{:05}", reg, i as i32 + 1 + disp);
-                }
-                BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
-                BcOp::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
-                BcOp::Literal(reg, id) => {
+                BcOp1::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
+                BcOp1::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
+                BcOp1::Literal(reg, id) => {
                     let v = store.get_literal(id);
                     eprintln!("%{} = literal[{:?}]", reg, v)
                 }
-                BcOp::LoadConst(reg, id) => {
+                BcOp1::LoadConst(reg, id) => {
                     let name = store[id].name;
                     eprintln!("%{} = const[{}]", reg, id_store.get_name(name))
                 }
-                BcOp::StoreConst(reg, id) => {
+                BcOp1::StoreConst(reg, id) => {
                     eprintln!("const[{}] = %{}", id_store.get_name(id), reg)
                 }
-                BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
-                BcOp::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
-                BcOp::Add(dst, lhs, rhs) => eprintln!("%{} = %{} + %{}", dst, lhs, rhs),
-                BcOp::Addri(dst, lhs, rhs) => {
+                BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
+                BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
+                BcOp1::BinOp(kind, dst, lhs, rhs) => {
+                    eprintln!("%{} = %{} {} %{}", dst, lhs, kind, rhs)
+                }
+                BcOp1::Addri(dst, lhs, rhs) => {
                     eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
                 }
-                BcOp::Sub(dst, lhs, rhs) => eprintln!("%{} = %{} - %{}", dst, lhs, rhs),
-                BcOp::Subri(dst, lhs, rhs) => {
+                BcOp1::Subri(dst, lhs, rhs) => {
                     eprintln!("%{} = %{} - {}: i16", dst, lhs, rhs)
                 }
-                BcOp::Mul(dst, lhs, rhs) => eprintln!("%{} = %{} * %{}", dst, lhs, rhs),
-                BcOp::Div(dst, lhs, rhs) => eprintln!("%{} = %{} / %{}", dst, lhs, rhs),
-                BcOp::BitOr(dst, lhs, rhs) => eprintln!("%{} = %{} | %{}", dst, lhs, rhs),
-                BcOp::BitAnd(dst, lhs, rhs) => eprintln!("%{} = %{} & %{}", dst, lhs, rhs),
-                BcOp::BitXor(dst, lhs, rhs) => eprintln!("%{} = %{} ^ %{}", dst, lhs, rhs),
-                BcOp::Shr(dst, lhs, rhs) => eprintln!("%{} = %{} >> %{}", dst, lhs, rhs),
-                BcOp::Shl(dst, lhs, rhs) => eprintln!("%{} = %{} << %{}", dst, lhs, rhs),
-                BcOp::Cmp(kind, dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} %{}", dst, lhs, kind, rhs)
+                BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
+                    eprintln!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs)
                 }
-                BcOp::Cmpri(kind, dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {:?} {}: i16", dst, lhs, kind, rhs)
-                }
-                BcOp::CmpO(kind, dst, lhs, rhs) => {
-                    eprintln!("_%{} = %{} {:?} %{}", dst, lhs, kind, rhs)
-                }
-                BcOp::CmpriO(kind, dst, lhs, rhs) => {
-                    eprintln!("_%{} = %{} {:?} {}: i16", dst, lhs, kind, rhs)
+                BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
+                    eprintln!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs)
                 }
 
-                BcOp::Ret(reg) => eprintln!("ret %{}", reg),
-                BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp::MethodCall(recv, id) => {
+                BcOp1::Ret(reg) => eprintln!("ret %{}", reg),
+                BcOp1::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
+                BcOp1::MethodCall(recv, id) => {
                     let CallsiteInfo {
                         ret,
                         name,
@@ -658,12 +662,12 @@ impl NormalFuncInfo {
                         }
                     }
                 }
-                BcOp::MethodDef(id) => {
+                BcOp1::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
                     let name = id_store.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
-                BcOp::ConcatStr(ret, args, len) => match ret {
+                BcOp1::ConcatStr(ret, args, len) => match ret {
                     0 => eprintln!("_ = concat(%{}; {})", args, len),
                     ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
                 },
