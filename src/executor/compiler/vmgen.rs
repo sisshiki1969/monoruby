@@ -7,48 +7,43 @@ macro_rules! cmp_ops {
       paste! {
           fn [<vm_ $op rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
+              let generic = self.jit.label();
               self.vm_get_rdi(); // rdi <- lhs addr
               self.vm_get_rsi(); // rsi <- rhs addr
               self.vm_get_addr_r15(); // r15 <- ret addr
-              self.[<cmp_ $op>]();
+              self.guard_rdi_fixnum(generic);
+              self.guard_rsi_fixnum(generic);
+              self.[<cmp_ $op>](generic);
               monoasm! { self.jit,
                 movq [r15], rax;
               };
               self.fetch_and_dispatch();
               label
+          }
+
+          fn [<vm_ $op ri>](&mut self) -> CodePtr {
+            let label = self.jit.get_current_address();
+            let generic = self.jit.label();
+            self.vm_get_rdi();      // rdi <- lhs addr
+            self.vm_get_addr_r15(); // r15 <- ret addr
+            monoasm! { self.jit,
+              shlq rsi, 1;
+              orq  rsi, 1;
+            };
+            self.guard_rdi_fixnum(generic);
+            self.[<cmp_ $op>](generic);
+            monoasm! { self.jit,
+              // store the result to return reg.
+              movq [r15], rax;
+            };
+            self.fetch_and_dispatch();
+            label
           }
       }
   };
   ($op1:ident, $($op2:ident),+) => {
       cmp_ops!($op1);
       cmp_ops!($($op2),+);
-  };
-}
-
-macro_rules! cmp_ri_ops {
-  ($op:ident) => {
-      paste! {
-          fn [<vm_ $op ri>](&mut self) -> CodePtr {
-              let label = self.jit.get_current_address();
-              self.vm_get_rdi(); // rdi <- lhs addr
-              self.vm_get_addr_r15(); // r15 <- ret addr
-              monoasm! { self.jit,
-                shlq rsi, 1;
-                orq  rsi, 1;
-              };
-              self.[<cmp_ri_ $op>]();
-              monoasm! { self.jit,
-                // store the result to return reg.
-                movq [r15], rax;
-              };
-              self.fetch_and_dispatch();
-              label
-          }
-      }
-  };
-  ($op1:ident, $($op2:ident),+) => {
-      cmp_ri_ops!($op1);
-      cmp_ri_ops!($($op2),+);
   };
 }
 
@@ -788,7 +783,6 @@ impl Codegen {
     }
 
     cmp_ops!(eq, ne, gt, ge, lt, le);
-    cmp_ri_ops!(eq, ne, gt, ge, lt, le);
 
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();

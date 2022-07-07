@@ -8,20 +8,14 @@ impl Codegen {
         macro_rules! cmp {
             ($lhs:ident, $rhs:ident, $ret:ident, $op:ident) => {{
                 paste! {
-                  self.load_binary_args($lhs, $rhs);
-                  self.[<cmp_ $op>]();
-                  monoasm! { self.jit,
-                    movq [rbp - (conv($ret))], rax;
-                  };
-                }
-            }};
-        }
-
-        macro_rules! cmp_o {
-            ($lhs:ident, $rhs:ident, $op:ident) => {{
-                paste! {
-                  self.load_binary_args($lhs, $rhs);
-                  self.[<cmp_opt_ $op>]();
+                    let generic = self.jit.label();
+                    self.load_binary_args($lhs, $rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.[<cmp_ $op>](generic);
+                    monoasm! { self.jit,
+                        movq [rbp - (conv($ret))], rax;
+                    };
                 }
             }};
         }
@@ -29,26 +23,68 @@ impl Codegen {
         macro_rules! cmp_ri {
             ($lhs:ident, $rhs:ident, $ret:ident, $op:ident) => {{
                 paste! {
-                  monoasm!(self.jit,
-                    movq rdi, [rbp - (conv($lhs))];
-                    movq rsi, (Value::new_integer($rhs as i64).get());
-                  );
-                  self.[<cmp_ri_ $op>]();
-                  monoasm! { self.jit,
-                    movq [rbp - (conv($ret))], rax;
-                  }
+                    let generic = self.jit.label();
+                    monoasm!(self.jit,
+                        movq rdi, [rbp - (conv($lhs))];
+                        movq rsi, (Value::new_integer($rhs as i64).get());
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    self.[<cmp_ $op>](generic);
+                    monoasm! { self.jit,
+                        movq [rbp - (conv($ret))], rax;
+                    }
+                }
+            }};
+        }
+
+        macro_rules! cmp_o {
+            ($lhs:ident, $rhs:ident, $dest:ident, $op:ident) => {{
+                paste! {
+                    let generic = self.jit.label();
+                    self.load_binary_args($lhs, $rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.[<cmp_opt_ $op>]($dest, generic, true);
+                }
+            }};
+        }
+
+        macro_rules! cmp_o_not {
+            ($lhs:ident, $rhs:ident, $dest:ident, $op:ident) => {{
+                paste! {
+                    let generic = self.jit.label();
+                    self.load_binary_args($lhs, $rhs);
+                    self.guard_rdi_fixnum(generic);
+                    self.guard_rsi_fixnum(generic);
+                    self.[<cmp_opt_ $op>]($dest, generic, false);
                 }
             }};
         }
 
         macro_rules! cmp_o_ri {
-            ($lhs:ident, $rhs:ident, $op:ident) => {{
+            ($lhs:ident, $rhs:ident, $dest:ident, $op:ident) => {{
                 paste! {
-                  monoasm!(self.jit,
-                    movq rdi, [rbp - (conv($lhs))];
-                    movq rsi, (Value::new_integer($rhs as i64).get());
-                  );
-                  self.[<cmp_opt_ri_ $op>]();
+                    let generic = self.jit.label();
+                    monoasm!(self.jit,
+                        movq rdi, [rbp - (conv($lhs))];
+                        movq rsi, (Value::new_integer($rhs as i64).get());
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    self.[<cmp_opt_ $op>]($dest, generic, true);
+                }
+            }};
+        }
+
+        macro_rules! cmp_o_not_ri {
+            ($lhs:ident, $rhs:ident, $dest:ident, $op:ident) => {{
+                paste! {
+                    let generic = self.jit.label();
+                    monoasm!(self.jit,
+                        movq rdi, [rbp - (conv($lhs))];
+                        movq rsi, (Value::new_integer($rhs as i64).get());
+                    );
+                    self.guard_rdi_fixnum(generic);
+                    self.[<cmp_opt_ $op>]($dest, generic, false);
                 }
             }};
         }
@@ -73,7 +109,8 @@ impl Codegen {
         self.prologue(func.total_reg_num());
         for (idx, op) in func.bytecode().iter().enumerate() {
             self.jit.bind_label(labels[idx]);
-            match BcOp::from_u64(*op) {
+            let ops = BcOp::from_u64(*op);
+            match ops {
                 BcOp::Integer(ret, i) => {
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
@@ -224,15 +261,10 @@ impl Codegen {
                     CmpKind::Lt => cmp!(lhs, rhs, ret, lt),
                     _ => unimplemented!(),
                 },
-                BcOp::CmpO(kind, _ret, lhs, rhs) => match kind {
-                    CmpKind::Eq => cmp_o!(lhs, rhs, eq),
-                    CmpKind::Ne => cmp_o!(lhs, rhs, ne),
-                    CmpKind::Ge => cmp_o!(lhs, rhs, ge),
-                    CmpKind::Gt => cmp_o!(lhs, rhs, gt),
-                    CmpKind::Le => cmp_o!(lhs, rhs, le),
-                    CmpKind::Lt => cmp_o!(lhs, rhs, lt),
-                    _ => unimplemented!(),
-                },
+                BcOp::CmpO(..) | BcOp::CmpriO(..) => {
+                    assert!(self.opt_buf.is_none());
+                    self.opt_buf = Some(ops);
+                }
                 BcOp::Cmpri(kind, ret, lhs, rhs) => match kind {
                     CmpKind::Eq => cmp_ri!(lhs, rhs, ret, eq),
                     CmpKind::Ne => cmp_ri!(lhs, rhs, ret, ne),
@@ -240,15 +272,6 @@ impl Codegen {
                     CmpKind::Gt => cmp_ri!(lhs, rhs, ret, gt),
                     CmpKind::Le => cmp_ri!(lhs, rhs, ret, le),
                     CmpKind::Lt => cmp_ri!(lhs, rhs, ret, lt),
-                    _ => unimplemented!(),
-                },
-                BcOp::CmpriO(kind, _ret, lhs, rhs) => match kind {
-                    CmpKind::Eq => cmp_o_ri!(lhs, rhs, eq),
-                    CmpKind::Ne => cmp_o_ri!(lhs, rhs, ne),
-                    CmpKind::Ge => cmp_o_ri!(lhs, rhs, ge),
-                    CmpKind::Gt => cmp_o_ri!(lhs, rhs, gt),
-                    CmpKind::Le => cmp_o_ri!(lhs, rhs, le),
-                    CmpKind::Lt => cmp_o_ri!(lhs, rhs, lt),
                     _ => unimplemented!(),
                 },
                 BcOp::Mov(dst, src) => {
@@ -319,15 +342,51 @@ impl Codegen {
                 }
                 BcOp::CondBrO(_, disp) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    monoasm!(self.jit,
-                        jne dest;
-                    );
+                    match std::mem::take(&mut self.opt_buf).unwrap() {
+                        BcOp::CmpO(kind, _ret, lhs, rhs) => match kind {
+                            CmpKind::Eq => cmp_o!(lhs, rhs, dest, eq),
+                            CmpKind::Ne => cmp_o!(lhs, rhs, dest, ne),
+                            CmpKind::Ge => cmp_o!(lhs, rhs, dest, ge),
+                            CmpKind::Gt => cmp_o!(lhs, rhs, dest, gt),
+                            CmpKind::Le => cmp_o!(lhs, rhs, dest, le),
+                            CmpKind::Lt => cmp_o!(lhs, rhs, dest, lt),
+                            _ => unimplemented!(),
+                        },
+                        BcOp::CmpriO(kind, _ret, lhs, rhs) => match kind {
+                            CmpKind::Eq => cmp_o_ri!(lhs, rhs, dest, eq),
+                            CmpKind::Ne => cmp_o_ri!(lhs, rhs, dest, ne),
+                            CmpKind::Ge => cmp_o_ri!(lhs, rhs, dest, ge),
+                            CmpKind::Gt => cmp_o_ri!(lhs, rhs, dest, gt),
+                            CmpKind::Le => cmp_o_ri!(lhs, rhs, dest, le),
+                            CmpKind::Lt => cmp_o_ri!(lhs, rhs, dest, lt),
+                            _ => unimplemented!(),
+                        },
+                        _ => unreachable!(),
+                    }
                 }
                 BcOp::CondNotBrO(_, disp) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    monoasm!(self.jit,
-                        jeq dest;
-                    );
+                    match std::mem::take(&mut self.opt_buf).unwrap() {
+                        BcOp::CmpO(kind, _ret, lhs, rhs) => match kind {
+                            CmpKind::Eq => cmp_o_not!(lhs, rhs, dest, eq),
+                            CmpKind::Ne => cmp_o_not!(lhs, rhs, dest, ne),
+                            CmpKind::Ge => cmp_o_not!(lhs, rhs, dest, ge),
+                            CmpKind::Gt => cmp_o_not!(lhs, rhs, dest, gt),
+                            CmpKind::Le => cmp_o_not!(lhs, rhs, dest, le),
+                            CmpKind::Lt => cmp_o_not!(lhs, rhs, dest, lt),
+                            _ => unimplemented!(),
+                        },
+                        BcOp::CmpriO(kind, _ret, lhs, rhs) => match kind {
+                            CmpKind::Eq => cmp_o_not_ri!(lhs, rhs, dest, eq),
+                            CmpKind::Ne => cmp_o_not_ri!(lhs, rhs, dest, ne),
+                            CmpKind::Ge => cmp_o_not_ri!(lhs, rhs, dest, ge),
+                            CmpKind::Gt => cmp_o_not_ri!(lhs, rhs, dest, gt),
+                            CmpKind::Le => cmp_o_not_ri!(lhs, rhs, dest, le),
+                            CmpKind::Lt => cmp_o_not_ri!(lhs, rhs, dest, lt),
+                            _ => unimplemented!(),
+                        },
+                        _ => unreachable!(),
+                    }
                 }
             }
         }

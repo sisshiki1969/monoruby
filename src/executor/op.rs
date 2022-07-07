@@ -317,7 +317,7 @@ macro_rules! eq_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
-                    _ => unreachable!(),
+                    _ => unreachable!("{:?} {:?}", lhs, rhs),
                 };
                 Value::bool(b)
             }

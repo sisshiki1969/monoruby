@@ -38,6 +38,7 @@ pub struct Codegen {
     pub vm_return: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
+    opt_buf: Option<BcOp>,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -100,11 +101,8 @@ extern "C" fn get_error_location(
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            fn [<cmp_ $op>](&mut self) {
+            fn [<cmp_ $op>](&mut self, generic:DestLabel) {
                 let exit = self.jit.label();
-                let generic = self.jit.label();
-                self.guard_rdi_fixnum(generic);
-                self.guard_rsi_fixnum(generic);
                 monoasm! { self.jit,
                     xorq rax, rax;
                     cmpq rdi, rsi;
@@ -134,28 +132,43 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     ($op:ident) => {
         paste! {
-            fn [<cmp_opt_ $op>](&mut self) {
-                let generic = self.jit.label();
+            fn [<cmp_opt_ $op>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool) {
                 let exit = self.jit.label();
-                self.guard_rdi_fixnum(generic);
-                self.guard_rsi_fixnum(generic);
                 monoasm! { self.jit,
                     cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    testq rax, 0x1;
-                exit:
-                // if cond was met, Z=0(not set).
                 };
+                if switch {
+                    monoasm! { self.jit,
+                        [<j $op>] dest;
+                    };
+                } else {
+                    monoasm! { self.jit,
+                        [<j $op>] exit;
+                        jmp dest;
+                    };
+                }
+                self.jit.bind_label(exit);
                 self.jit.select(1);
                 monoasm!(self.jit,
                 generic:
                     // generic path
                     movq rax, ([<cmp_ $op _values>]);
                     call rax;
-                    orq rax, 0x10;
+                    orq  rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
-                    jmp  exit;
+                    // if true, Z=0(not set).
                 );
+                if switch {
+                    monoasm!(self.jit,
+                        jne  dest;
+                        jmp  exit;
+                    );
+                } else {
+                    monoasm!(self.jit,
+                        jeq  dest;
+                        jmp  exit;
+                    );
+                }
                 self.jit.select(0);
             }
         }
@@ -166,76 +179,10 @@ macro_rules! cmp_opt_main {
     };
 }
 
-macro_rules! cmp_ri_main {
-    ($op:ident) => {
-        paste! {
-            fn [<cmp_ri_ $op>](&mut self) {
-                let exit = self.jit.label();
-                let generic = self.jit.label();
-                self.guard_rdi_fixnum(generic);
-                monoasm! { self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                exit:
-                };
-
-                self.jit.select(1);
-                monoasm!(self.jit,
-                generic:
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                    jmp  exit;
-                );
-                self.jit.select(0);
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_ri_main!($op1);
-        cmp_ri_main!($($op2),+);
-    };
-}
-
-macro_rules! cmp_opt_ri_main {
-    ($op:ident) => {
-        paste! {
-            fn [<cmp_opt_ri_ $op>](&mut self) {
-                let exit = self.jit.label();
-                let generic = self.jit.label();
-                self.guard_rdi_fixnum(generic);
-                monoasm! { self.jit,
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    testq rax, 0x1;
-                exit:
-                // if cond was met, Z=0(not set).
-                };
-
-                self.jit.select(1);
-                monoasm!(self.jit,
-                generic:
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                    orq rax, 0x10;
-                    cmpq rax, (FALSE_VALUE);
-                    jmp  exit;
-                );
-                self.jit.select(0);
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_opt_ri_main!($op1);
-        cmp_opt_ri_main!($($op2),+);
-    };
-}
-
 impl Codegen {
+    cmp_main!(eq, ne, lt, le, gt, ge);
+    cmp_opt_main!(eq, ne, lt, le, gt, ge);
+
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
@@ -374,6 +321,7 @@ impl Codegen {
             vm_return,
             dispatch,
             invoker,
+            opt_buf: None,
         };
         codegen.construct_vm();
         codegen.get_entry_point();
@@ -410,11 +358,6 @@ impl Codegen {
             jeq generic;
         );
     }
-
-    cmp_main!(eq, ne, lt, le, gt, ge);
-    cmp_opt_main!(eq, ne, lt, le, gt, ge);
-    cmp_ri_main!(eq, ne, lt, le, gt, ge);
-    cmp_opt_ri_main!(eq, ne, lt, le, gt, ge);
 
     fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
         monoasm!(self.jit,
