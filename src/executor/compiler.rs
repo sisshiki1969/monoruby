@@ -29,6 +29,7 @@ pub type Invoker = extern "C" fn(
 pub struct Codegen {
     pub jit: JitMemory,
     pub class_version: DestLabel,
+    pub class_version_addr: *mut usize,
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
     pub vm_entry: CodePtr,
@@ -186,6 +187,7 @@ impl Codegen {
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
+
         let class_version = jit.const_i64(0);
         let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
@@ -312,6 +314,7 @@ impl Codegen {
         let mut codegen = Self {
             jit,
             class_version,
+            class_version_addr: std::ptr::null_mut(),
             const_version,
             entry_panic,
             entry_find_method,
@@ -326,6 +329,8 @@ impl Codegen {
         codegen.construct_vm();
         codegen.get_entry_point();
         codegen.jit.finalize();
+        codegen.class_version_addr =
+            codegen.jit.get_label_address(class_version).as_ptr() as *mut usize;
         codegen
     }
 
@@ -336,6 +341,10 @@ impl Codegen {
             shlq rax, 3;
             addq rax, 16;
         );
+    }
+
+    fn class_version(&self) -> usize {
+        unsafe { *self.class_version_addr }
     }
 
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {

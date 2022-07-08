@@ -53,16 +53,23 @@ extern "C" fn find_method<'a>(
     callsite_id: CallsiteId,
     len: usize,
     receiver: Value,
-    class_version: usize,
 ) -> Option<&'a FuncData> {
-    match globals.vm_find_method(callsite_id, receiver, class_version, len) {
-        Some(func_id) => {
-            let data = interp.get_func_data(globals, func_id);
-            Some(data)
-        }
-        // If error occurs, return 0.
-        None => None,
-    }
+    let class_version = interp.codegen.class_version();
+    let CallsiteInfo {
+        name,
+        cache: (version, cached_class_id, cached_func),
+        ..
+    } = globals.func[callsite_id];
+    let recv_class = receiver.class_id();
+    let func_id = if version == class_version && cached_class_id == recv_class {
+        cached_func
+    } else {
+        let id = globals.get_method(recv_class, name, len)?;
+        globals.func[callsite_id].cache = (class_version, recv_class, id);
+        id
+    };
+    let data = interp.get_func_data(globals, func_id);
+    Some(data)
 }
 
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
@@ -399,11 +406,12 @@ impl Codegen {
 
     fn vm_method_call(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let class_version = self.class_version;
         let exit = self.jit.label();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         let vm_return = self.vm_return;
+        // rdi: CallsiteId
+        // r15: receiver reg
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             pushq r13; // push pc
@@ -415,7 +423,6 @@ impl Codegen {
             movq rsi, r12;  // rsi: &mut Globals
             movzxw rcx, [r13 + 0];  // rcx: len
             movq r8, [r15]; // r8: receiver:Value
-            movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
             call rax;       // rax <- Option<&FuncData>
             testq rax, rax;

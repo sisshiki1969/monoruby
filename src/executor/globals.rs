@@ -254,29 +254,6 @@ impl Globals {
         None
     }
 
-    pub fn vm_find_method(
-        &mut self,
-        callsite_id: CallsiteId,
-        receiver: Value,
-        class_version: usize,
-        len: usize,
-    ) -> Option<FuncId> {
-        let CallsiteInfo {
-            name,
-            cache: (version, cached_class_id, cached_func),
-            ..
-        } = self.func[callsite_id];
-        let recv_class = receiver.class_id();
-        let func_id = if version == class_version && cached_class_id == recv_class {
-            cached_func
-        } else {
-            let id = self.get_method(recv_class, name, len)?;
-            self.func[callsite_id].cache = (class_version, recv_class, id);
-            id
-        };
-        Some(func_id)
-    }
-
     pub fn get_method(
         &mut self,
         class_id: ClassId,
