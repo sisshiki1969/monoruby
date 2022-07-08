@@ -302,7 +302,18 @@ impl Codegen {
                         );
                     }
                 }
-                BcOp1::MethodCall(recv, id) => self.jit_method_call(store, recv, id),
+                BcOp1::MethodCall(..) => {
+                    assert!(self.opt_buf.is_none());
+                    self.opt_buf = Some(ops);
+                }
+                BcOp1::MethodArgs(ret, args, len) => {
+                    match std::mem::take(&mut self.opt_buf).unwrap() {
+                        BcOp1::MethodCall(recv, id) => {
+                            self.jit_method_call(store, recv, id, ret, args, len)
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 BcOp1::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
@@ -583,7 +594,15 @@ impl Codegen {
         );
     }
 
-    fn jit_method_call(&mut self, store: &FnStore, recv: u16, id: CallsiteId) {
+    fn jit_method_call(
+        &mut self,
+        store: &FnStore,
+        recv: u16,
+        id: CallsiteId,
+        ret: u16,
+        args: u16,
+        len: u16,
+    ) {
         // set arguments to a callee stack.
         //
         //       +-------------+
@@ -604,13 +623,7 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
-        let CallsiteInfo {
-            ret,
-            name,
-            args,
-            len,
-            ..
-        } = store[id];
+        let CallsiteInfo { name, .. } = store[id];
         if recv != 0 {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];

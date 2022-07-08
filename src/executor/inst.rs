@@ -55,8 +55,9 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
-    Mov(BcReg, BcReg),                                        // dst, offset
-    MethodCall(BcReg, IdentId, Option<BcReg>, BcTemp, usize), // (recv, id, ret, args, args_len)
+    Mov(BcReg, BcReg),                        // dst, offset
+    MethodCall(BcReg, IdentId),               // (recv, id)
+    MethodArgs(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
@@ -64,7 +65,7 @@ pub(super) enum BcIr {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub(crate) struct Bc {
-    op1: Bc1,
+    pub(crate) op1: Bc1,
     op2: Bc2,
 }
 
@@ -133,6 +134,8 @@ pub(super) enum BcOp1 {
     Mov(u16, u16),
     /// func call(%recv, callsite_id)
     MethodCall(u16, CallsiteId),
+    /// func call 2nd opecode(%ret, %args, %len)
+    MethodArgs(u16, u16, u16),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
@@ -188,6 +191,7 @@ impl BcOp1 {
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
+            MethodArgs(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
             BinOp(kind, op1, op2, op3) => enc_www(170 + *kind as u16, *op1, *op2, *op3),
             Cmp(kind, op1, op2, op3, opt) => {
                 if *opt {
@@ -237,6 +241,7 @@ impl BcOp1 {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 129 => Self::Neg(op1, op2),
+                130 => Self::MethodArgs(op1, op2, op3),
                 134 => Self::Cmp(CmpKind::Eq, op1, op2, op3, false),
                 135 => Self::Cmp(CmpKind::Ne, op1, op2, op3, false),
                 136 => Self::Cmp(CmpKind::Lt, op1, op2, op3, false),

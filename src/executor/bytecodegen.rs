@@ -931,15 +931,17 @@ impl IrContext {
         loc: Loc,
     ) -> Result<()> {
         let method = id_store.get_ident_id_from_string(method);
-        if receiver.kind == NodeKind::SelfValue {
+        let (recv, arg, len) = if receiver.kind == NodeKind::SelfValue {
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
-            self.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
+            (BcReg::Self_, arg, len)
         } else {
             self.gen_expr(ctx, info, id_store, receiver, true, false)?;
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
             let recv = info.pop().into();
-            self.push(BcIr::MethodCall(recv, method, ret, arg, len), loc);
-        }
+            (recv, arg, len)
+        };
+        self.push(BcIr::MethodCall(recv, method), loc);
+        self.push(BcIr::MethodArgs(ret, arg, len), loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -959,7 +961,8 @@ impl IrContext {
     ) -> Result<()> {
         let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
         let method = id_store.get_ident_id_from_string(method);
-        self.push(BcIr::MethodCall(BcReg::Self_, method, ret, arg, len), loc);
+        self.push(BcIr::MethodCall(BcReg::Self_, method), loc);
+        self.push(BcIr::MethodArgs(ret, arg, len), loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1276,70 +1279,83 @@ impl IrContext {
             let op = match inst {
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
-                    BcOp1::Br(dst - idx as i32 - 1)
+                    BcOp1::Br(dst - idx as i32 - 1).to_bc()
                 }
                 BcIr::CondBr(reg, dst, optimizable) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let cond_reg = info.get_index(reg);
                     let disp = dst - idx as i32 - 1;
-                    BcOp1::CondBr(cond_reg, disp, *optimizable)
+                    BcOp1::CondBr(cond_reg, disp, *optimizable).to_bc()
                 }
                 BcIr::CondNotBr(reg, dst, optimizable) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let cond_reg = info.get_index(reg);
                     let disp = dst - idx as i32 - 1;
-                    BcOp1::CondNotBr(cond_reg, disp, *optimizable)
+                    BcOp1::CondNotBr(cond_reg, disp, *optimizable).to_bc()
                 }
-                BcIr::Integer(reg, num) => BcOp1::Integer(info.get_index(reg), *num),
-                BcIr::Symbol(reg, name) => BcOp1::Symbol(info.get_index(reg), *name),
-                BcIr::Literal(reg, num) => BcOp1::Literal(info.get_index(reg), *num),
+                BcIr::Integer(reg, num) => BcOp1::Integer(info.get_index(reg), *num).to_bc(),
+                BcIr::Symbol(reg, name) => BcOp1::Symbol(info.get_index(reg), *name).to_bc(),
+                BcIr::Literal(reg, num) => BcOp1::Literal(info.get_index(reg), *num).to_bc(),
                 BcIr::LoadConst(reg, name) => BcOp1::LoadConst(
                     info.get_index(reg),
                     info.add_constsite(store, *name, vec![], false),
-                ),
-                BcIr::StoreConst(reg, name) => BcOp1::StoreConst(info.get_index(reg), *name),
-                BcIr::Nil(reg) => BcOp1::Nil(info.get_index(reg)),
-                BcIr::Neg(dst, src) => BcOp1::Neg(info.get_index(dst), info.get_index(src)),
+                )
+                .to_bc(),
+                BcIr::StoreConst(reg, name) => {
+                    BcOp1::StoreConst(info.get_index(reg), *name).to_bc()
+                }
+                BcIr::Nil(reg) => BcOp1::Nil(info.get_index(reg)).to_bc(),
+                BcIr::Neg(dst, src) => BcOp1::Neg(info.get_index(dst), info.get_index(src)).to_bc(),
                 BcIr::BinOp(kind, dst, lhs, rhs) => BcOp1::BinOp(
                     *kind,
                     info.get_index(dst),
                     info.get_index(lhs),
                     info.get_index(rhs),
-                ),
+                )
+                .to_bc(),
                 BcIr::Addri(dst, lhs, rhs) => {
-                    BcOp1::Addri(info.get_index(dst), info.get_index(lhs), *rhs)
+                    BcOp1::Addri(info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
                 }
                 BcIr::Subri(dst, lhs, rhs) => {
-                    BcOp1::Subri(info.get_index(dst), info.get_index(lhs), *rhs)
+                    BcOp1::Subri(info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
                 }
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let dst = info.get_index(dst);
                     let lhs = info.get_index(lhs);
                     let rhs = info.get_index(rhs);
-                    BcOp1::Cmp(*kind, dst, lhs, rhs, *optimizable)
+                    BcOp1::Cmp(*kind, dst, lhs, rhs, *optimizable).to_bc()
                 }
                 BcIr::Cmpri(kind, dst, lhs, rhs, optimizable) => {
                     let dst = info.get_index(dst);
                     let lhs = info.get_index(lhs);
                     let rhs = *rhs;
-                    BcOp1::Cmpri(*kind, dst, lhs, rhs, *optimizable)
+                    BcOp1::Cmpri(*kind, dst, lhs, rhs, *optimizable).to_bc()
                 }
-                BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)),
-                BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)),
-                BcIr::MethodCall(recv, name, ret, args, len) => {
-                    let id = info.add_callsite(store, *ret, *name, *args, *len);
+                BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)).to_bc(),
+                BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)).to_bc(),
+                BcIr::MethodCall(recv, name) => {
+                    let id = info.add_callsite(store, *name);
                     let recv = info.get_index(recv);
-                    BcOp1::MethodCall(recv, id)
+                    BcOp1::MethodCall(recv, id).to_bc()
                 }
+                BcIr::MethodArgs(ret, args, len) => BcOp1::MethodArgs(
+                    match ret {
+                        None => 0,
+                        Some(ret) => info.get_index(ret),
+                    },
+                    info.get_index(&BcReg::from(*args)),
+                    *len as u16,
+                )
+                .to_bc(),
                 BcIr::MethodDef(name, func_id) => {
-                    BcOp1::MethodDef(store.add_method_def(*name, *func_id))
+                    BcOp1::MethodDef(store.add_method_def(*name, *func_id)).to_bc()
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let ret = ret.map_or(0, |ret| info.get_index(&ret));
-                    BcOp1::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16)
+                    BcOp1::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16).to_bc()
                 }
             };
-            ops.push(op.to_bc());
+            ops.push(op);
             locs.push(*loc);
         }
         info.set_bytecode(ops);

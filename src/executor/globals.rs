@@ -259,9 +259,9 @@ impl Globals {
         callsite_id: CallsiteId,
         receiver: Value,
         class_version: usize,
+        len: usize,
     ) -> Option<FuncId> {
         let CallsiteInfo {
-            len,
             name,
             cache: (version, cached_class_id, cached_func),
             ..
@@ -270,7 +270,7 @@ impl Globals {
         let func_id = if version == class_version && cached_class_id == recv_class {
             cached_func
         } else {
-            let id = self.get_method(recv_class, name, len as usize)?;
+            let id = self.get_method(recv_class, name, len)?;
             self.func[callsite_id].cache = (class_version, recv_class, id);
             id
         };

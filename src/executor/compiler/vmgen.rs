@@ -51,14 +51,14 @@ extern "C" fn find_method<'a>(
     interp: &mut Interp,
     globals: &'a mut Globals,
     callsite_id: CallsiteId,
-    data: &mut *const FuncData,
+    len: usize,
     receiver: Value,
     class_version: usize,
-) -> Option<&'a CallsiteInfo> {
-    match globals.vm_find_method(callsite_id, receiver, class_version) {
+) -> Option<&'a FuncData> {
+    match globals.vm_find_method(callsite_id, receiver, class_version, len) {
         Some(func_id) => {
-            *data = interp.get_func_data(globals, func_id);
-            Some(&globals.func[callsite_id])
+            let data = interp.get_func_data(globals, func_id);
+            Some(data)
         }
         // If error occurs, return 0.
         None => None,
@@ -406,32 +406,32 @@ impl Codegen {
         let vm_return = self.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            subq rsp, 16; // rsp+0:pc rsp+8:ret
-            movq [rsp], r13;
+            pushq r13; // push pc
+            movzxw rax, [r13 + 4];
+            pushq rax; // push ret
 
             movq rdx, rdi;  // rdx: CallsiteId
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            lea rcx, [rsp + 8]; // rcx: &mut *const FuncData
+            movzxw rcx, [r13 + 0];  // rcx: len
             movq r8, [r15]; // r8: receiver:Value
             movq r9, [rip + class_version]; // r9: &usize
             movq rax, (find_method);
-            call rax;       // rax <- Option<&CallsiteInfo>
+            call rax;       // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
 
-            movq rsi, [rsp + 8]; // rsi <- *const FuncData
-            movzxw rdi, [rax];
-            movq [rsp + 8], rdi; // ret
-            movq r13, [rsi + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+            movq rsi, rax; // rsi <- *const FuncData
             // set meta
             movq rdi, [rsi + (FUNCDATA_OFFSET_META)];
             movq [rsp - 0x18], rdi;
-            movzxw rcx, [rax + 2]; // rcx <- args
-            movzxw rdi, [rax + 4];  // rdi <- len
+            movzxw rcx, [r13 + 2]; // rcx <- args
+            movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;
+            // set pc
+            movq r13, [rsi + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
@@ -474,9 +474,9 @@ impl Codegen {
             //
             movq rax, [rsi + (FUNCDATA_OFFSET_CODEPTR)];
             call rax;
-            movq r15, [rsp + 8];
-            movq r13, [rsp];
-            addq rsp, 16;
+            popq r15;   // pop ret
+            popq r13;   // pop pc
+            addq r13, 16;
             testq rax, rax;
             jeq vm_return;
         };

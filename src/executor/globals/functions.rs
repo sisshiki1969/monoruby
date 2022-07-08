@@ -67,12 +67,6 @@ impl Funcs {
 #[derive(Debug, Clone, Default, PartialEq)]
 #[repr(C)]
 pub struct CallsiteInfo {
-    /// Return register. 0 for none.
-    pub ret: u16,
-    /// Argument register.
-    pub args: u16,
-    /// Length of arguments.
-    pub len: u16,
     /// Name of function.
     pub name: IdentId,
     /// Inline method cache.
@@ -589,9 +583,11 @@ impl NormalFuncInfo {
             self.args.iter().collect::<Vec<_>>(),
             BcPcBase::new(self)
         );
+        let mut buf = None;
         for (i, inst) in self.bytecode.iter().enumerate() {
             eprint!(":{:05} ", i);
-            match BcOp1::from_bc(*inst) {
+            let bcop1 = BcOp1::from_bc(*inst);
+            match bcop1 {
                 BcOp1::Br(disp) => {
                     eprintln!("br =>:{:05}", i as i32 + 1 + disp);
                 }
@@ -644,14 +640,16 @@ impl NormalFuncInfo {
 
                 BcOp1::Ret(reg) => eprintln!("ret %{}", reg),
                 BcOp1::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
-                BcOp1::MethodCall(recv, id) => {
-                    let CallsiteInfo {
-                        ret,
-                        name,
-                        args,
-                        len,
-                        cache: _,
-                    } = store[id];
+                BcOp1::MethodCall(..) => {
+                    assert!(buf.is_none());
+                    buf = Some(bcop1.clone());
+                }
+                BcOp1::MethodArgs(ret, args, len) => {
+                    let (recv, id) = match std::mem::take(&mut buf).unwrap() {
+                        BcOp1::MethodCall(recv, id) => (recv, id),
+                        _ => unreachable!(),
+                    };
+                    let CallsiteInfo { name, cache: _ } = store[id];
                     let name = id_store.get_name(name);
                     match ret {
                         0 => {
@@ -704,22 +702,9 @@ impl NormalFuncInfo {
         ConstSiteId(id as u32)
     }
 
-    pub(crate) fn add_callsite(
-        &self,
-        store: &mut FnStore,
-        ret: Option<BcReg>,
-        name: IdentId,
-        args: BcTemp,
-        len: usize,
-    ) -> CallsiteId {
+    pub(crate) fn add_callsite(&self, store: &mut FnStore, name: IdentId) -> CallsiteId {
         let info = CallsiteInfo {
-            ret: match ret {
-                None => 0,
-                Some(ret) => self.get_index(&ret),
-            },
             name,
-            args: self.get_index(&BcReg::from(args)),
-            len: len as u16,
             cache: (usize::MAX, ClassId::default(), FuncId::default()),
         };
         let id = store.callsite_info.len();
