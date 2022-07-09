@@ -55,18 +55,16 @@ fn conv(reg: u16) -> i64 {
 ///
 /// If no method was found, return None (==0u64).
 ///
-pub extern "C" fn jit_find_method(
+pub extern "C" fn jit_find_method<'a>(
     interp: &mut Interp,
-    globals: &mut Globals,
+    globals: &'a mut Globals,
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
-    funcid_patch: *mut Meta,
-) -> Option<CodePtr> {
+) -> Option<&'a FuncData> {
     let func_id = globals.get_method(receiver.class_id(), func_name, args_len)?;
     let data = interp.get_func_data(globals, func_id);
-    unsafe { funcid_patch.write_unaligned(data.meta) };
-    Some(data.codeptr.unwrap())
+    Some(data)
 }
 
 extern "C" fn define_method(

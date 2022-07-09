@@ -650,6 +650,7 @@ impl Codegen {
         let exit = self.jit.label();
         let patch_meta = self.jit.label();
         let patch_adr = self.jit.label();
+        let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let cached_class_version = self.jit.const_i64(-1);
         let cached_recv_class = self.jit.const_i64(0);
@@ -673,6 +674,8 @@ impl Codegen {
             movq rax, 0x8000_0000_0000_0000;
         patch_meta:
             movq [rsp - 0x18], rax;
+            movq r13, 0x8000_0000_0000_0000;
+        patch_pc:
             // patch point
             call entry_panic;
         patch_adr:
@@ -694,13 +697,23 @@ impl Codegen {
             movq rdx, (u32::from(name)); // IdentId
             movq rcx, (len as usize); // args_len: usize
             movq r8, [rbp - (conv(recv))]; // receiver: Value
-            lea r9, [rip + patch_meta];
-            subq r9, 8; // &mut Meta
             call entry_find_method;
             // absolute address was returned to rax.
             addq rsp, (sp_max);
             testq rax, rax;
             jeq entry_return;
+
+            lea rdi, [rip + patch_meta];
+            subq rdi, 8;
+            movq rcx, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rdi], rcx;
+
+            lea rdi, [rip + patch_pc];
+            subq rdi, 8;
+            movq rcx, [rax + (FUNCDATA_OFFSET_PC)];
+            movq [rdi], rcx;
+
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             lea rdi, [rip + patch_adr];
             // calculate a displacement to the function address.
             subq rax, rdi;
@@ -708,6 +721,7 @@ impl Codegen {
             subq rdi, 4;
             // apply patch.
             movl [rdi], rax;
+
             movq rax, [rip + global_class_version];
             movq [rip + cached_class_version], rax;
             movq [rip + cached_recv_class], r15;
