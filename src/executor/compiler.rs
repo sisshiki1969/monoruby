@@ -76,8 +76,8 @@ extern "C" fn define_method(
     globals.class.add_method(OBJECT_CLASS, name, func);
 }
 
-pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals) {
-    panic!("unimplemented inst.");
+pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
+    panic!("unimplemented inst. {:016x}", opcode);
 }
 
 pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
@@ -302,6 +302,7 @@ impl Codegen {
         monoasm! { jit,
                 movq rdi, rbx;
                 movq rsi, r12;
+                movq rdx, [r13 - 16];
                 movq rax, (super::compiler::unimplemented_inst);
                 call rax;
                 leave;
@@ -339,10 +340,6 @@ impl Codegen {
             shlq rax, 3;
             addq rax, 16;
         );
-    }
-
-    fn class_version(&self) -> u32 {
-        unsafe { *self.class_version_addr }
     }
 
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {

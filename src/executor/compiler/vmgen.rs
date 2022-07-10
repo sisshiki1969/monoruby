@@ -47,28 +47,6 @@ macro_rules! cmp_ops {
   };
 }
 
-extern "C" fn find_method<'a>(
-    interp: &mut Interp,
-    globals: &'a mut Globals,
-    callsite_id: CallsiteId,
-    len: usize,
-    receiver: Value,
-) -> Option<&'a FuncData> {
-    let class_version = interp.codegen.class_version();
-    let CallsiteInfo {
-        name,
-        cache: (version, cached_class_id, _),
-        ..
-    } = globals.func[callsite_id];
-    let recv_class = receiver.class_id();
-    if version != class_version || cached_class_id != recv_class {
-        let id = globals.get_method(recv_class, name, len)?;
-        let data = interp.get_func_data(globals, id).clone();
-        globals.func[callsite_id].cache = (class_version, recv_class, data);
-    }
-    Some(&globals.func[callsite_id].cache.2)
-}
-
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
     Value::dup(globals.func.get_literal(literal_id))
 }
@@ -400,36 +378,43 @@ impl Codegen {
         let exit = self.jit.label();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        let slowpath = self.jit.label();
+        let exec = self.jit.label();
         let vm_return = self.vm_return;
-        // rdi: CallsiteId
+        let class_version = self.class_version;
+        //
+        // +------+------+------+------+
+        // | MethodCall  |class | ver  |
+        // +------+------+------+------+
+        // | MethodArgs  |   CodePtr   |
+        // +------+------+------+------+
+        // |     Meta    |     PC      |
+        // +------+------+------+------+
+        //
+        // rdi: IdentId
         // r15: receiver reg
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             pushq r13; // push pc
-            movzxw rax, [r13 + 4];
-            pushq rax; // push ret
+            pushq rdi;  // push IdentId
 
-            movq rdx, rdi;  // rdx: CallsiteId
-            movq rdi, rbx;  // rdi: &mut Interp
-            movq rsi, r12;  // rsi: &mut Globals
-            movzxw rcx, [r13 + 0];  // rcx: len
-            movq r8, [r15]; // r8: receiver:Value
-            movq rax, (find_method);
-            call rax;       // rax <- Option<&FuncData>
-            testq rax, rax;
-            jeq vm_return;
-
-            movq rsi, rax; // rsi <- *const FuncData
+            movl rax, [r13 - 4];
+            cmpl rax, [rip + class_version];
+            jne  slowpath;
+            movq rdi, [r15];
+            movq rax, (Value::get_class);
+            call rax;
+            cmpl rax, [r13 - 8];
+            jne  slowpath;
+        exec:
             // set meta
-            movq rdi, [rsi + (FUNCDATA_OFFSET_META)];
+            movq rdi, [r13 + 16];
             movq [rsp - 0x18], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
             movq rax, [r15];
             movq [rsp - 0x20], rax;
-            // set pc
-            movq r13, [rsi + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
@@ -470,16 +455,45 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, [rsi + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + 8];
+            // set pc
+            movq r13, [r13 + 24];    // r13: BcPc
             call rax;
-            popq r15;   // pop ret
+            popq r13;
             popq r13;   // pop pc
-            addq r13, 16;
+            movzxw r15, [r13 + 4];
+            addq r13, 32;
             testq rax, rax;
             jeq vm_return;
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
+
+        self.jit.select(1);
+        monoasm!(self.jit,
+        slowpath:
+            movl [r13 - 8], rax;
+            movl rdi, [rip + class_version];
+            movl [r13 - 4], rdi;
+            movq rdi, rbx;  // rdi: &mut Interp
+            movq rsi, r12;  // rsi: &mut Globals
+            movq rdx, [rsp];  // rdx: IdentId
+            movzxw rcx, [r13 + 0];  // rcx: len
+            movq r8, [r15]; // r8: receiver:Value
+            movq rax, (jit_find_method);
+            call rax;       // rax <- Option<&FuncData>
+            testq rax, rax;
+            jeq vm_return;
+            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq [r13 + 8], rdi;
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [r13 + 16], rdi;
+            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
+            movq [r13 + 24], rdi;
+            jmp exec;
+        );
+        self.jit.select(0);
+
         label
     }
 

@@ -107,7 +107,12 @@ impl Codegen {
             labels.push(self.jit.label());
         }
         self.prologue(func.total_reg_num());
+        let mut skip = false;
         for (idx, op) in func.bytecode().iter().enumerate() {
+            if skip {
+                skip = false;
+                continue;
+            }
             self.jit.bind_label(labels[idx]);
             let ops = BcOp1::from_bc(*op);
             match ops {
@@ -308,11 +313,12 @@ impl Codegen {
                 }
                 BcOp1::MethodArgs(ret, args, len) => {
                     match std::mem::take(&mut self.opt_buf).unwrap() {
-                        BcOp1::MethodCall(recv, id) => {
-                            self.jit_method_call(store, recv, id, ret, args, len)
+                        BcOp1::MethodCall(recv, name) => {
+                            self.jit_method_call(recv, name, ret, args, len)
                         }
                         _ => unreachable!(),
                     }
+                    skip = true;
                 }
                 BcOp1::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
@@ -594,15 +600,7 @@ impl Codegen {
         );
     }
 
-    fn jit_method_call(
-        &mut self,
-        store: &FnStore,
-        recv: u16,
-        id: CallsiteId,
-        ret: u16,
-        args: u16,
-        len: u16,
-    ) {
+    fn jit_method_call(&mut self, recv: u16, name: IdentId, ret: u16, args: u16, len: u16) {
         // set arguments to a callee stack.
         //
         //       +-------------+
@@ -623,7 +621,6 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
-        let CallsiteInfo { name, .. } = store[id];
         if recv != 0 {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];

@@ -64,19 +64,6 @@ impl Funcs {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-#[repr(C)]
-pub struct CallsiteInfo {
-    /// Name of function.
-    pub name: IdentId,
-    /// Inline method cache.
-    pub cache: (u32, ClassId, FuncData), //(version, class_id, func_id)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct CallsiteId(pub u32);
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstSiteInfo {
     /// Name of constants.
@@ -115,8 +102,6 @@ pub struct FnStore {
     pub main: Option<FuncId>,
     /// method define info.
     method_def_info: Vec<MethodDefInfo>,
-    /// callsite info.
-    callsite_info: Vec<CallsiteInfo>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
     /// literal values.
@@ -143,19 +128,6 @@ impl std::ops::Index<MethodDefId> for FnStore {
     }
 }
 
-impl std::ops::Index<CallsiteId> for FnStore {
-    type Output = CallsiteInfo;
-    fn index(&self, index: CallsiteId) -> &CallsiteInfo {
-        &self.callsite_info[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<CallsiteId> for FnStore {
-    fn index_mut(&mut self, index: CallsiteId) -> &mut CallsiteInfo {
-        &mut self.callsite_info[index.0 as usize]
-    }
-}
-
 impl std::ops::Index<ConstSiteId> for FnStore {
     type Output = ConstSiteInfo;
     fn index(&self, index: ConstSiteId) -> &ConstSiteInfo {
@@ -175,7 +147,6 @@ impl FnStore {
             functions: Funcs::new(SourceInfoRef::default()),
             main: None,
             method_def_info: vec![],
-            callsite_info: vec![],
             constsite_info: vec![],
             literals: vec![],
         }
@@ -584,9 +555,17 @@ impl NormalFuncInfo {
             BcPcBase::new(self)
         );
         let mut buf = None;
+        let mut skip = false;
         for (i, inst) in self.bytecode.iter().enumerate() {
-            eprint!(":{:05} ", i);
+            if skip {
+                skip = false;
+                continue;
+            }
             let bcop1 = BcOp1::from_bc(*inst);
+            if let BcOp1::MethodArgs(..) = bcop1 {
+            } else {
+                eprint!(":{:05} ", i)
+            };
             match bcop1 {
                 BcOp1::Br(disp) => {
                     eprintln!("br =>:{:05}", i as i32 + 1 + disp);
@@ -645,11 +624,10 @@ impl NormalFuncInfo {
                     buf = Some(bcop1.clone());
                 }
                 BcOp1::MethodArgs(ret, args, len) => {
-                    let (recv, id) = match std::mem::take(&mut buf).unwrap() {
-                        BcOp1::MethodCall(recv, id) => (recv, id),
+                    let (recv, name) = match std::mem::take(&mut buf).unwrap() {
+                        BcOp1::MethodCall(recv, name) => (recv, name),
                         _ => unreachable!(),
                     };
-                    let CallsiteInfo { name, cache: _ } = store[id];
                     let name = id_store.get_name(name);
                     match ret {
                         0 => {
@@ -659,6 +637,7 @@ impl NormalFuncInfo {
                             eprintln!("%{:?} = %{}.call {}(%{}; {})", ret, recv, name, args, len)
                         }
                     }
+                    skip = true;
                 }
                 BcOp1::MethodDef(id) => {
                     let MethodDefInfo { name, func } = store[id];
@@ -700,15 +679,5 @@ impl NormalFuncInfo {
         let id = store.constsite_info.len();
         store.constsite_info.push(info);
         ConstSiteId(id as u32)
-    }
-
-    pub(crate) fn add_callsite(&self, store: &mut FnStore, name: IdentId) -> CallsiteId {
-        let info = CallsiteInfo {
-            name,
-            cache: (u32::MAX, ClassId::default(), FuncData::default()),
-        };
-        let id = store.callsite_info.len();
-        store.callsite_info.push(info);
-        CallsiteId(id as u32)
     }
 }

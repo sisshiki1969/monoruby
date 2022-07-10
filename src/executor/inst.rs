@@ -58,6 +58,7 @@ pub(super) enum BcIr {
     Mov(BcReg, BcReg),                        // dst, offset
     MethodCall(BcReg, IdentId),               // (recv, id)
     MethodArgs(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
+    InlineCache,
     MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
 }
@@ -66,11 +67,11 @@ pub(super) enum BcIr {
 #[repr(C)]
 pub(crate) struct Bc {
     pub(crate) op1: Bc1,
-    op2: Bc2,
+    pub(crate) op2: Bc2,
 }
 
 impl Bc {
-    fn from(op1: Bc1, op2: Bc2) -> Self {
+    pub(crate) fn from(op1: Bc1, op2: Bc2) -> Self {
         Self { op1, op2 }
     }
 }
@@ -80,7 +81,7 @@ impl Bc {
 pub(crate) struct Bc1(u64);
 
 impl Bc1 {
-    fn from(op: u64) -> Self {
+    pub(crate) fn from(op: u64) -> Self {
         Self(op)
     }
 }
@@ -90,7 +91,7 @@ impl Bc1 {
 pub(crate) struct Bc2(u64);
 
 impl Bc2 {
-    fn from(op: u64) -> Self {
+    pub(crate) fn from(op: u64) -> Self {
         Self(op)
     }
 
@@ -137,8 +138,8 @@ pub(super) enum BcOp1 {
     Ret(u16),
     /// move(%dst, %src)
     Mov(u16, u16),
-    /// func call(%recv, callsite_id)
-    MethodCall(u16, CallsiteId),
+    /// func call(%recv, name)
+    MethodCall(u16, IdentId),
     /// func call 2nd opecode(%ret, %args, %len)
     MethodArgs(u16, u16, u16),
     /// method definition(method_def_id)
@@ -185,11 +186,13 @@ impl BcOp1 {
         let op = match self {
             MethodCall(op1, op2) => {
                 return Bc::from(
-                    Bc1::from(enc_wl(1, *op1, op2.0)),
+                    Bc1::from(enc_wl(1, *op1, op2.get())),
                     Bc2::class_and_version(ClassId::new(0), -1i32 as u32),
                 )
             }
-            MethodArgs(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
+            MethodArgs(op1, op2, op3) => {
+                return Bc::from(Bc1::from(enc_www(130, *op1, *op2, *op3)), Bc2::from(0))
+            }
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
             CondBr(op1, op2, opt) => enc_wl(if *opt { 12 } else { 4 }, *op1, *op2 as u32),
@@ -226,13 +229,13 @@ impl BcOp1 {
         Bc::from(Bc1::from(op), Bc2::from(0))
     }
 
-    pub fn from_bc(op: Bc) -> Self {
-        let op = op.op1.0;
+    pub fn from_bc(bcop: Bc) -> Self {
+        let op = bcop.op1.0;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::MethodCall(op1, CallsiteId(op2)),
+                1 => Self::MethodCall(op1, IdentId::from(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(op1, op2 as i32, false),

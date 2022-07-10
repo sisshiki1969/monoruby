@@ -918,6 +918,20 @@ impl IrContext {
         Ok((arg, len))
     }
 
+    fn gen_call(
+        &mut self,
+        recv: BcReg,
+        method: IdentId,
+        ret: Option<BcReg>,
+        arg: BcTemp,
+        len: usize,
+        loc: Loc,
+    ) {
+        self.push(BcIr::MethodCall(recv, method), loc);
+        self.push(BcIr::MethodArgs(ret, arg, len), loc);
+        self.push(BcIr::InlineCache, loc);
+    }
+
     fn gen_method_call(
         &mut self,
         ctx: &mut FnStore,
@@ -940,8 +954,7 @@ impl IrContext {
             let recv = info.pop().into();
             (recv, arg, len)
         };
-        self.push(BcIr::MethodCall(recv, method), loc);
-        self.push(BcIr::MethodArgs(ret, arg, len), loc);
+        self.gen_call(recv, method, ret, arg, len, loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -961,8 +974,7 @@ impl IrContext {
     ) -> Result<()> {
         let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
         let method = id_store.get_ident_id_from_string(method);
-        self.push(BcIr::MethodCall(BcReg::Self_, method), loc);
-        self.push(BcIr::MethodArgs(ret, arg, len), loc);
+        self.gen_call(BcReg::Self_, method, ret, arg, len, loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1334,9 +1346,8 @@ impl IrContext {
                 BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)).to_bc(),
                 BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)).to_bc(),
                 BcIr::MethodCall(recv, name) => {
-                    let id = info.add_callsite(store, *name);
                     let recv = info.get_index(recv);
-                    BcOp1::MethodCall(recv, id).to_bc()
+                    BcOp1::MethodCall(recv, *name).to_bc()
                 }
                 BcIr::MethodArgs(ret, args, len) => BcOp1::MethodArgs(
                     match ret {
@@ -1347,6 +1358,7 @@ impl IrContext {
                     *len as u16,
                 )
                 .to_bc(),
+                BcIr::InlineCache => Bc::from(Bc1::from(0), Bc2::from(0)),
                 BcIr::MethodDef(name, func_id) => {
                     BcOp1::MethodDef(store.add_method_def(*name, *func_id)).to_bc()
                 }
