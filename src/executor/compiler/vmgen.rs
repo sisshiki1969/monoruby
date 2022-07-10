@@ -57,34 +57,25 @@ extern "C" fn find_method<'a>(
     let class_version = interp.codegen.class_version();
     let CallsiteInfo {
         name,
-        cache: (version, cached_class_id, cached_func),
+        cache: (version, cached_class_id, _),
         ..
     } = globals.func[callsite_id];
     let recv_class = receiver.class_id();
-    let func_id = if version == class_version && cached_class_id == recv_class {
-        cached_func
-    } else {
+    if version != class_version || cached_class_id != recv_class {
         let id = globals.get_method(recv_class, name, len)?;
-        globals.func[callsite_id].cache = (class_version, recv_class, id);
-        id
-    };
-    let data = interp.get_func_data(globals, func_id);
-    Some(data)
+        let data = interp.get_func_data(globals, id).clone();
+        globals.func[callsite_id].cache = (class_version, recv_class, data);
+    }
+    Some(&globals.func[callsite_id].cache.2)
 }
 
 extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
     Value::dup(globals.func.get_literal(literal_id))
 }
 
-extern "C" fn vm_define_method(
-    _interp: &mut Interp,
-    globals: &mut Globals,
-    def_id: MethodDefId,
-    class_version: &mut usize,
-) {
+extern "C" fn vm_define_method(_interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
     let MethodDefInfo { name, func } = globals.func[def_id];
     globals.class.add_method(OBJECT_CLASS, name, func);
-    *class_version += 1;
 }
 
 /*extern "C" fn eprintln(data: u64) {
@@ -798,11 +789,11 @@ impl Codegen {
         let class_version = self.class_version;
         monoasm! { self.jit,
             movq rdx, rdi;  // method_def_id
-            lea  rcx, [rip + class_version]; // &mut usize
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (vm_define_method);
             call rax;
+            addl [rip + class_version], 1;
         };
         self.fetch_and_dispatch();
         label

@@ -318,13 +318,13 @@ impl Codegen {
                     let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
-                        addq [rip + class_version], 1;
                         movq rdi, rbx; // &mut Interp
                         movq rsi, r12; // &Globals
                         movq rdx, (u32::from(name)); // IdentId
                         movq rcx, (u32::from(func)); // FuncId
                         movq rax, (define_method);
                         call rax;
+                        addl [rip + class_version], 1;
                     );
                 }
                 BcOp1::Br(disp) => {
@@ -652,21 +652,21 @@ impl Codegen {
         let patch_adr = self.jit.label();
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
-        let cached_class_version = self.jit.const_i64(-1);
-        let cached_recv_class = self.jit.const_i64(0);
+        let cached_class_version = self.jit.const_i32(-1);
+        let cached_recv_class = self.jit.const_i32(0);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
         let entry_return = self.vm_return;
         if recv != 0 {
             monoasm!(self.jit,
-                cmpq r15, [rip + cached_recv_class];
+                cmpl r15, [rip + cached_recv_class];
                 jne slow_path;
             );
         }
         monoasm!(self.jit,
-            movq rax, [rip + global_class_version];
-            cmpq [rip + cached_class_version], rax;
+            movl rax, [rip + global_class_version];
+            cmpl [rip + cached_class_version], rax;
             jne slow_path;
         exit:
             movq rdi, (len);
@@ -722,9 +722,9 @@ impl Codegen {
             // apply patch.
             movl [rdi], rax;
 
-            movq rax, [rip + global_class_version];
-            movq [rip + cached_class_version], rax;
-            movq [rip + cached_recv_class], r15;
+            movl rax, [rip + global_class_version];
+            movl [rip + cached_class_version], rax;
+            movl [rip + cached_recv_class], r15;
             jmp exit;
         );
         self.jit.select(0);

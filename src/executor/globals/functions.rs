@@ -70,7 +70,7 @@ pub struct CallsiteInfo {
     /// Name of function.
     pub name: IdentId,
     /// Inline method cache.
-    pub cache: (usize, ClassId, FuncId), //(version, class_id, func_id)
+    pub cache: (u32, ClassId, FuncData), //(version, class_id, func_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -705,7 +705,7 @@ impl NormalFuncInfo {
     pub(crate) fn add_callsite(&self, store: &mut FnStore, name: IdentId) -> CallsiteId {
         let info = CallsiteInfo {
             name,
-            cache: (usize::MAX, ClassId::default(), FuncId::default()),
+            cache: (u32::MAX, ClassId::default(), FuncData::default()),
         };
         let id = store.callsite_info.len();
         store.callsite_info.push(info);
