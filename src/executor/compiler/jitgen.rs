@@ -311,9 +311,9 @@ impl Codegen {
                     assert!(self.opt_buf.is_none());
                     self.opt_buf = Some(ops);
                 }
-                BcOp1::MethodArgs(ret, args, len) => {
+                BcOp1::MethodArgs(recv, args, len) => {
                     match std::mem::take(&mut self.opt_buf).unwrap() {
-                        BcOp1::MethodCall(recv, name) => {
+                        BcOp1::MethodCall(ret, name) => {
                             self.jit_method_call(recv, name, ret, args, len)
                         }
                         _ => unreachable!(),

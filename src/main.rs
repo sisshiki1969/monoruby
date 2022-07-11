@@ -428,6 +428,11 @@ mod test {
     }
 
     #[test]
+    fn test_fn() {
+        run_test("def f; end; f");
+    }
+
+    #[test]
     fn test_fibpoly() {
         run_test(
             r#"

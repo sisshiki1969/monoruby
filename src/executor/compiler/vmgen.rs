@@ -383,29 +383,48 @@ impl Codegen {
         let vm_return = self.vm_return;
         let class_version = self.class_version;
         //
-        // +------+------+------+------+
-        // | MethodCall  |class | ver  |
-        // +------+------+------+------+
-        // | MethodArgs  |   CodePtr   |
-        // +------+------+------+------+
-        // |     Meta    |     PC      |
-        // +------+------+------+------+
+        //      +------+------+------+------+
+        //      | MethodCall  |class | ver  |
+        //      +------+------+------+------+
+        // r13->| MethodArgs  |   CodePtr   |
+        //      +------+------+------+------+
+        //      |     Meta    |     PC      |
+        //      +------+------+------+------+
         //
         // rdi: IdentId
-        // r15: receiver reg
-        self.vm_get_addr_r15();
-        monoasm! { self.jit,
-            pushq r13; // push pc
-            pushq rdi;  // push IdentId
+        // r15: %ret
+        // [r13 -  8]: class_id
+        // [r13 -  4]: class_version
+        // [r13 +  0]; len
+        // [r13 +  2]; %args
+        // [r13 +  4]: %recv
+        // [r13 +  8]: CodePtr
+        // [r13 + 16]: Meta
+        // [r13 + 24]: PC
 
-            movl rax, [r13 - 4];
-            cmpl rax, [rip + class_version];
-            jne  slowpath;
-            movq rdi, [r15];
+        monoasm! { self.jit,
+            pushq r15;
+            pushq r13; // push pc
+            pushq rdi; // push IdentId
+            movzxw rdi, [r13 + 4];
+        };
+        self.vm_get_rdi();
+        monoasm! { self.jit,
+            pushq rdi;
+            // rsp + 24:[%ret]
+            // rsp + 16:[pc]
+            // rsp + 08:[method_name:IdentId]
+            // rsp + 00:[recv:Value]
+
+            // rdi: receiver: Value
             movq rax, (Value::get_class);
             call rax;
             cmpl rax, [r13 - 8];
             jne  slowpath;
+            movl rdi, [r13 - 4];
+            cmpl rdi, [rip + class_version];
+            jne  slowpath;
+
         exec:
             // set meta
             movq rdi, [r13 + 16];
@@ -413,7 +432,7 @@ impl Codegen {
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
-            movq rax, [r15];
+            movq rax, [rsp];
             movq [rsp - 0x20], rax;
         };
         self.vm_get_addr_rcx(); // rcx <- *args
@@ -459,9 +478,9 @@ impl Codegen {
             // set pc
             movq r13, [r13 + 24];    // r13: BcPc
             call rax;
-            popq r13;
+            addq rsp, 16;
             popq r13;   // pop pc
-            movzxw r15, [r13 + 4];
+            popq r15;   // pop %ret
             addq r13, 32;
             testq rax, rax;
             jeq vm_return;
@@ -477,9 +496,9 @@ impl Codegen {
             movl [r13 - 4], rdi;
             movq rdi, rbx;  // rdi: &mut Interp
             movq rsi, r12;  // rsi: &mut Globals
-            movq rdx, [rsp];  // rdx: IdentId
-            movzxw rcx, [r13 + 0];  // rcx: len
-            movq r8, [r15]; // r8: receiver:Value
+            movq rdx, [rsp + 8];  // rdx: IdentId
+            movzxw rcx, [r13];  // rcx: len
+            movq r8, [rsp]; // r8: receiver:Value
             movq rax, (jit_find_method);
             call rax;       // rax <- Option<&FuncData>
             testq rax, rax;

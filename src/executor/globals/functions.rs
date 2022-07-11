@@ -623,9 +623,9 @@ impl NormalFuncInfo {
                     assert!(buf.is_none());
                     buf = Some(bcop1.clone());
                 }
-                BcOp1::MethodArgs(ret, args, len) => {
-                    let (recv, name) = match std::mem::take(&mut buf).unwrap() {
-                        BcOp1::MethodCall(recv, name) => (recv, name),
+                BcOp1::MethodArgs(recv, args, len) => {
+                    let (recv, ret, name) = match std::mem::take(&mut buf).unwrap() {
+                        BcOp1::MethodCall(ret, name) => (recv, ret, name),
                         _ => unreachable!(),
                     };
                     let name = id_store.get_name(name);

@@ -55,9 +55,9 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
-    Mov(BcReg, BcReg),                        // dst, offset
-    MethodCall(BcReg, IdentId),               // (recv, id)
-    MethodArgs(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
+    Mov(BcReg, BcReg),                  // dst, offset
+    MethodCall(Option<BcReg>, IdentId), // (ret, id)
+    MethodArgs(BcReg, BcTemp, usize),   // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
@@ -138,9 +138,9 @@ pub(super) enum BcOp1 {
     Ret(u16),
     /// move(%dst, %src)
     Mov(u16, u16),
-    /// func call(%recv, name)
+    /// func call(%ret, name)
     MethodCall(u16, IdentId),
-    /// func call 2nd opecode(%ret, %args, %len)
+    /// func call 2nd opecode(%recv, %args, %len)
     MethodArgs(u16, u16, u16),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),

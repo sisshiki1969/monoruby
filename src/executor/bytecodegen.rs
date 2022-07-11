@@ -927,8 +927,8 @@ impl IrContext {
         len: usize,
         loc: Loc,
     ) {
-        self.push(BcIr::MethodCall(recv, method), loc);
-        self.push(BcIr::MethodArgs(ret, arg, len), loc);
+        self.push(BcIr::MethodCall(ret, method), loc);
+        self.push(BcIr::MethodArgs(recv, arg, len), loc);
         self.push(BcIr::InlineCache, loc);
     }
 
@@ -1345,15 +1345,15 @@ impl IrContext {
                 }
                 BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)).to_bc(),
                 BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)).to_bc(),
-                BcIr::MethodCall(recv, name) => {
-                    let recv = info.get_index(recv);
-                    BcOp1::MethodCall(recv, *name).to_bc()
-                }
-                BcIr::MethodArgs(ret, args, len) => BcOp1::MethodArgs(
-                    match ret {
+                BcIr::MethodCall(ret, name) => {
+                    let ret = match ret {
                         None => 0,
                         Some(ret) => info.get_index(ret),
-                    },
+                    };
+                    BcOp1::MethodCall(ret, *name).to_bc()
+                }
+                BcIr::MethodArgs(recv, args, len) => BcOp1::MethodArgs(
+                    info.get_index(recv),
                     info.get_index(&BcReg::from(*args)),
                     *len as u16,
                 )
