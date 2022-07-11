@@ -56,14 +56,12 @@ extern "C" fn vm_define_method(_interp: &mut Interp, globals: &mut Globals, def_
     globals.class.add_method(OBJECT_CLASS, name, func);
 }
 
-/*extern "C" fn eprintln(data: u64) {
-    eprintln!("{:016x}", data);
-}*/
-
 impl Codegen {
     pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -76,6 +74,18 @@ impl Codegen {
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - 0x18], rax;
+
+            shrq rax, 32;
+            movzxw rax, rax;
+            testq rax, rax;
+            jeq  loop_exit;
+            negq rax;
+        loop_:
+            movq [rsp + rax * 8 - 0x20], (NIL_VALUE);
+            addq rax, 1;
+            jne  loop_;
+        loop_exit:
+
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -462,10 +472,11 @@ impl Codegen {
             negq r8;
         loop_:
             movq rax, [rcx + r8 * 8 + 8];
-            movq [rsp + r8 * 8- 0x20], rax;
+            movq [rsp + r8 * 8 - 0x20], rax;
             addq r8, 1;
             jne  loop_;
         loop_exit:
+
             // argument registers:
             //   rdi: args len
             //

@@ -674,7 +674,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#70f49d763d7213827fdd788c43787b1d0a91ac51"
+source = "git+https://github.com/sisshiki1969/monoasm.git#23d0ceb7b9aad1dada23ea197f3e12400a57a3b1"
 dependencies = [
  "libc",
  "monoasm_macro",
@@ -686,7 +686,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#70f49d763d7213827fdd788c43787b1d0a91ac51"
+source = "git+https://github.com/sisshiki1969/monoasm.git#23d0ceb7b9aad1dada23ea197f3e12400a57a3b1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1177,9 +1177,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.138"
+version = "1.0.139"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1578c6245786b9d168c5447eeacfb96856573ca56c9d68fdcf394be134882a47"
+checksum = "0171ebb889e45aa68b44aee0859b3eede84c6f5f5c228e6f140c0b2a0a46cad6"
 
 [[package]]
 name = "serde_json"

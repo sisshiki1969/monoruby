@@ -84,6 +84,10 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
+pub extern "C" fn eprintln(rdi: u64, rsi: u64) {
+    eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
+}
+
 extern "C" fn get_error_location(
     _interp: &mut Interp,
     globals: &mut Globals,

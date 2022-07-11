@@ -433,6 +433,24 @@ mod test {
     }
 
     #[test]
+    #[ignore]
+    fn test_stacktrace() {
+        run_test(
+            r##"
+        def f(x)
+            if x < 2
+                dump
+                1
+            else
+                x*f(x-1)
+            end
+        end
+        f(5)
+        "##,
+        );
+    }
+
+    #[test]
     fn test_fibpoly() {
         run_test(
             r#"

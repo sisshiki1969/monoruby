@@ -436,10 +436,10 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
         );
         let self_val = unsafe { Value::from(*bp.sub(2)) };
         eprint!(" self: {} ", globals.val_inspect(self_val));
-        /*for r in 0..register_len {
+        for r in 0..meta.reg_num() as usize {
             let v = unsafe { Value::from(*bp.sub(3 + r)) };
             eprint!("[{}]: {} ", r, globals.val_inspect(v));
-        }*/
+        }
         eprintln!();
         if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
             break;
