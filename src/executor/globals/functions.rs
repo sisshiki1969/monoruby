@@ -255,7 +255,12 @@ pub const FUNCDATA_OFFSET_META: u64 = 16;
 
 ///
 /// Metadata.
-///
+///~~~
+///   7   6   5   4    3   2    1   0
+/// +-------+-------+---------+--------+
+/// |    FuncId     | reg_num |  kind  |
+/// +-------+-------+---------+--------+
+///~~~
 #[derive(Clone, Copy, PartialEq, Default)]
 #[repr(transparent)]
 pub struct Meta(u64);
