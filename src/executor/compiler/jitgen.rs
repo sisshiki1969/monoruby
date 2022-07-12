@@ -171,7 +171,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(src))];
                     );
-                    self.call_unop(neg_value as _, self.vm_return);
+                    self.call_unop(neg_value as _);
                     monoasm!(self.jit,
                         movq [rbp - (conv(dst))], rax;
                     );
@@ -581,7 +581,7 @@ impl Codegen {
     fn side_generic_op(&mut self, generic: DestLabel, exit: DestLabel, ret: u16, func: u64) {
         self.jit.select(1);
         self.jit.bind_label(generic);
-        self.call_binop(func, self.vm_return);
+        self.call_binop(func);
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
@@ -591,7 +591,7 @@ impl Codegen {
     }
 
     fn generic_op(&mut self, ret: u16, func: u64) {
-        self.call_binop(func, self.vm_return);
+        self.call_binop(func);
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;

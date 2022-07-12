@@ -60,8 +60,6 @@ impl Codegen {
     pub(super) fn get_entry_point(&mut self) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -74,21 +72,6 @@ impl Codegen {
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - 0x18], rax;
-
-            shrq rax, 32;
-            movzxw rax, rax;
-            subq rax, 1;
-
-            jeq  loop_exit;
-            movq rdi, rax;
-            negq rdi;
-            lea  rcx, [rsp + rdi * 8 - 28];
-        loop_:
-            movq [rcx + rax * 8], (FALSE_VALUE);
-            subq rax, 1;
-            jne  loop_;
-        loop_exit:
-
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -368,7 +351,7 @@ impl Codegen {
 
     fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
         self.jit.bind_label(generic);
-        self.call_unop(func, self.vm_return);
+        self.call_unop(func);
         monoasm! { self.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -378,7 +361,7 @@ impl Codegen {
 
     fn vm_generic_binop(&mut self, generic: DestLabel, func: u64) {
         self.jit.bind_label(generic);
-        self.call_binop(func, self.vm_return);
+        self.call_binop(func);
         monoasm! { self.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -669,7 +652,7 @@ impl Codegen {
             // generic path
             addq rsi, 1;
         };
-        self.call_binop(add_values as _, self.vm_return);
+        self.call_binop(add_values as _);
         monoasm! { self.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -742,7 +725,7 @@ impl Codegen {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.call_binop(mul_values as _, self.vm_return);
+        self.call_binop(mul_values as _);
         monoasm! { self.jit,
             // store the result to return reg.
             movq [r15], rax;
@@ -756,7 +739,7 @@ impl Codegen {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_rsi(); // rsi <- rhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        self.call_binop(div_values as _, self.vm_return);
+        self.call_binop(div_values as _);
         monoasm! { self.jit,
             // store the result to return reg.
             movq [r15], rax;

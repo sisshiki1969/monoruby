@@ -95,6 +95,10 @@ extern "C" fn get_error_location(
     pc: BcPc,
 ) {
     dbg!(meta);
+    if meta.kind() != 0 {
+        // currently, JIT is not yet supported.
+        return;
+    }
     let func_id = meta.func_id();
     let normal_info = match &globals.func[func_id].kind {
         FuncKind::Normal(info) => info,
@@ -372,7 +376,8 @@ impl Codegen {
         );
     }
 
-    fn call_unop(&mut self, func: u64, entry_return: DestLabel) {
+    fn call_unop(&mut self, func: u64) {
+        let entry_return = self.vm_return;
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
@@ -384,7 +389,8 @@ impl Codegen {
         );
     }
 
-    fn call_binop(&mut self, func: u64, entry_return: DestLabel) {
+    fn call_binop(&mut self, func: u64) {
+        let entry_return = self.vm_return;
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;

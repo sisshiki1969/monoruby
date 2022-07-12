@@ -221,13 +221,13 @@ pub fn run_test_error(code: &str) {
             return;
         }
     };
-    //let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
-    //eprintln!("interp: {:?}", interp_val);
+    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
+    eprintln!("interp: {:?}", interp_val);
 
     let jit_val = Interp::eval_toplevel(&mut globals, true);
     eprintln!("jit: {:?}", jit_val);
 
-    //eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
+    eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
     eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
 }
 
@@ -322,7 +322,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test0_err() {
         for lhs in [
             "4.77",
