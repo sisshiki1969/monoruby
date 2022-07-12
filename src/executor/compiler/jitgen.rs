@@ -384,14 +384,30 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
             movq rax, (regs);
+            subq rax, 1;
             subq rax, rdi;
             jeq  loop_exit;
-            lea  rcx, [rsp - 24];
-            shlq rdi, 3;
-            subq rcx, rdi;
+            lea  rcx, [rsp - ((regs as i32) * 8 + 16)];
+            //
+            // rax: counter, regs - 1 - args_len
+            // rcx: pointer, the next quad word of the last register.
+            //       +-------------+
+            //       | return addr |
+            //       +-------------+
+            //       |   old rbp   |
+            //       +-------------+
+            //       |    meta     |
+            //       +-------------+
+            //       |     %0      |
+            //       +-------------+
+            //       |     %1      |
+            //       +-------------+
+            //       |     %2      |
+            //       +-------------+
+            // rcx-> |             |
+            //       +-------------+
         loop_:
-            movq [rcx], (NIL_VALUE);
-            subq rcx, 8;
+            movq [rcx + rax * 8], (FALSE_VALUE);
             subq rax, 1;
             jne  loop_;
         loop_exit:

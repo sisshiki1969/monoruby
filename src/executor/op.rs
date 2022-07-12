@@ -420,25 +420,30 @@ pub extern "C" fn set_constant(
 }
 
 pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {
+    eprintln!("-----begin stacktrace");
     for i in 0..16 {
-        eprint!("[{}]:", i);
+        eprint!("  [{}]:", i);
         let prev_bp = unsafe { *bp as *const u64 };
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
         let meta = Meta::new(unsafe { *bp.sub(1) });
         let func_id = meta.func_id();
         eprintln!(
-            " name:[{}] {:?}",
+            "    name:[{}] {:?}",
             globals.func[func_id]
                 .name()
                 .unwrap_or(&"<unnamed>".to_string()),
             meta,
         );
-        let self_val = unsafe { Value::from(*bp.sub(2)) };
-        eprint!(" self: {} ", globals.val_inspect(self_val));
+        eprint!("    ");
         for r in 0..meta.reg_num() as usize {
-            let v = unsafe { Value::from(*bp.sub(3 + r)) };
-            eprint!("[{}]: {} ", r, globals.val_inspect(v));
+            let v = unsafe { Value::from(*bp.sub(2 + r)) };
+            eprint!(
+                "%{}{}:[{}] ",
+                r,
+                if r == 0 { "(self)" } else { "" },
+                globals.val_inspect(v)
+            );
         }
         eprintln!();
         if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
@@ -446,4 +451,5 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
         }
         bp = prev_bp;
     }
+    eprintln!("-----end stacktrace");
 }

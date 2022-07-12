@@ -77,12 +77,15 @@ impl Codegen {
 
             shrq rax, 32;
             movzxw rax, rax;
-            testq rax, rax;
+            subq rax, 1;
+
             jeq  loop_exit;
-            negq rax;
+            movq rdi, rax;
+            negq rdi;
+            lea  rcx, [rsp + rdi * 8 - 28];
         loop_:
-            movq [rsp + rax * 8 - 0x20], (NIL_VALUE);
-            addq rax, 1;
+            movq [rcx + rax * 8], (FALSE_VALUE);
+            subq rax, 1;
             jne  loop_;
         loop_exit:
 
@@ -126,6 +129,8 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self) {
         self.vm_entry = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
         //
         // VM entry
         //
@@ -140,8 +145,22 @@ impl Codegen {
         monoasm! { self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movw [rbp - 0x02], 0;
-            movzxw rax, [rbp - 0x04];
+            movw [rbp - 0x02], 0;       // kind
+            movzxw rax, [rbp - 0x04];   // reg_num
+            movq rdx, rax;  // rdx = reg_num
+
+            subq rdx, rdi;
+            subq rdx, 1;    // rax = reg_num - 1 - args_len
+            jeq  loop_exit;
+            movq rdi, rax;
+            negq rdi;
+            lea  rcx, [rsp + rdi * 8 - 16];
+        loop_:
+            movq [rcx + rdx * 8], (FALSE_VALUE);
+            subq rdx, 1;
+            jne  loop_;
+        loop_exit:
+            //movq rax, rdx;
         };
         self.calc_offset();
         monoasm! { self.jit,
