@@ -168,8 +168,22 @@ fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool, warning: u8
 pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let all_codes = vec![code.to_string()];
     let mut globals = Globals::new(1);
+    let interp_val = run_test_main(&mut globals, code);
+    let all_codes = vec![code.to_string()];
+    let ruby_res = run_ruby(&all_codes, &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
+pub fn run_test_no_result_check(code: &str) -> Value {
+    #[cfg(debug_assertions)]
+    dbg!(code);
+    let mut globals = Globals::new(1);
+    run_test_main(&mut globals, code)
+}
+
+pub fn run_test_main(globals: &mut Globals, code: &str) -> Value {
     globals
         .compile_script(code.to_string(), std::path::Path::new(""))
         .unwrap_or_else(|err| {
@@ -184,7 +198,7 @@ pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     eprintln!("interp: {:?}", interp_val);
 
-    let jit_val = Interp::eval_toplevel(&mut globals, true);
+    let jit_val = Interp::eval_toplevel(globals, true);
 
     let interp_val = interp_val.unwrap();
     let jit_val = jit_val.unwrap();
@@ -192,10 +206,7 @@ pub fn run_test(code: &str) {
     eprintln!("jit: {:?}", jit_val);
 
     assert!(Value::eq(interp_val, jit_val));
-
-    let ruby_res = run_ruby(&all_codes, &mut globals);
-
-    assert!(Value::eq(jit_val, ruby_res));
+    interp_val
 }
 
 pub fn run_test_error(code: &str) {
@@ -210,17 +221,13 @@ pub fn run_test_error(code: &str) {
             return;
         }
     };
-    #[cfg(not(debug_assertions))]
-    let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
-    #[cfg(not(debug_assertions))]
-    eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
-    #[cfg(debug_assertions)]
-    eprintln!("interp: {:?}", interp_val);
+    //let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
+    //eprintln!("interp: {:?}", interp_val);
 
     let jit_val = Interp::eval_toplevel(&mut globals, true);
+    eprintln!("jit: {:?}", jit_val);
 
-    eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
+    //eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
     eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
 }
 
@@ -315,6 +322,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test0_err() {
         for lhs in [
             "4.77",
@@ -433,9 +441,8 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_stacktrace() {
-        run_test(
+        run_test_no_result_check(
             r##"
         def f(x)
             if x < 2

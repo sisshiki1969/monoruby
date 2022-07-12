@@ -84,17 +84,22 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
-pub extern "C" fn eprintln(rdi: u64, rsi: u64) {
+/*pub extern "C" fn eprintln(rdi: u64, rsi: u64) {
     eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
-}
+}*/
 
 extern "C" fn get_error_location(
     _interp: &mut Interp,
     globals: &mut Globals,
-    func_id: FuncId,
+    meta: Meta,
     pc: BcPc,
 ) {
-    let normal_info = globals.func[func_id].as_normal();
+    dbg!(meta);
+    let func_id = meta.func_id();
+    let normal_info = match &globals.func[func_id].kind {
+        FuncKind::Normal(info) => info,
+        FuncKind::Builtin { .. } => return,
+    };
     let sourceinfo = normal_info.sourceinfo.clone();
     let bc_base = globals.func[func_id].data.pc;
     let loc = normal_info.sourcemap[pc - bc_base];
@@ -210,14 +215,14 @@ impl Codegen {
             jmp  rax;
         vm_return:
             // check call_kind.
-            movl r15, [rbp - 8];
-            testq r15, r15;
-            jne  jit_return;
+            //movl r15, [rbp - 8];
+            //testq r15, r15;
+            //jne  jit_return;
             // save return value
             movq r15, rax;
             movq rdi, rbx;
             movq rsi, r12;
-            movl rdx, [rbp - 0x4];
+            movq rdx, [rbp - 8];
             movq rcx, r13;
             subq rcx, 8;
             movq rax, (get_error_location);
