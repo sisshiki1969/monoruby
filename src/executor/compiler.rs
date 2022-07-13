@@ -55,7 +55,7 @@ fn conv(reg: u16) -> i64 {
 ///
 /// If no method was found, return None (==0u64).
 ///
-pub extern "C" fn jit_find_method<'a>(
+extern "C" fn find_method<'a>(
     interp: &mut Interp,
     globals: &'a mut Globals,
     func_name: IdentId,
@@ -94,18 +94,17 @@ extern "C" fn get_error_location(
     meta: Meta,
     pc: BcPc,
 ) {
-    dbg!(meta);
     if meta.kind() != 0 {
         // currently, JIT is not yet supported.
         return;
     }
-    let func_id = meta.func_id();
-    let normal_info = match &globals.func[func_id].kind {
+    let func_info = &globals.func[meta.func_id()];
+    let bc_base = func_info.data.pc;
+    let normal_info = match &func_info.kind {
         FuncKind::Normal(info) => info,
         FuncKind::Builtin { .. } => return,
     };
     let sourceinfo = normal_info.sourceinfo.clone();
-    let bc_base = globals.func[func_id].data.pc;
     let loc = normal_info.sourcemap[pc - bc_base];
     globals.push_error_location(loc, sourceinfo);
 }
@@ -215,7 +214,7 @@ impl Codegen {
         entry_find_method:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (jit_find_method);
+            movq rax, (find_method);
             jmp  rax;
         vm_return:
             // check call_kind.

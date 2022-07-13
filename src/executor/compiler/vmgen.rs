@@ -502,18 +502,16 @@ impl Codegen {
         self.fetch_and_dispatch();
 
         self.jit.select(1);
+        let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
             movl [r13 - 8], rax;
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;
-            movq rdi, rbx;  // rdi: &mut Interp
-            movq rsi, r12;  // rsi: &mut Globals
             movq rdx, [rsp + 8];  // rdx: IdentId
             movzxw rcx, [r13];  // rcx: len
             movq r8, [rsp]; // r8: receiver:Value
-            movq rax, (jit_find_method);
-            call rax;       // rax <- Option<&FuncData>
+            call entry_find_method; // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
             movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
