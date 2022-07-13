@@ -155,9 +155,9 @@ impl Codegen {
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
                       movq rcx, [rbp - (conv(ret))];  // val: Value
-                      lea  r8, [rip + const_version];
                       movq rdi, rbx;  // &mut Interp
                       movq rsi, r12;  // &mut Globals
+                      addq [rip + const_version], 1;
                       movq rax, (set_constant);
                       call rax;
                     );

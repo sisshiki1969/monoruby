@@ -52,39 +52,6 @@ binop_values!(
     (mul, IdentId::_MUL)
 );
 
-/*pub(super) extern "C" fn add_values(
-    interp: &mut Interp,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Option<Value> {
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.checked_add(rhs) {
-            Some(res) => Value::new_integer(res),
-            None => Value::new_bigint(BigInt::from(lhs).add(BigInt::from(rhs))),
-        },
-        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.add(BigInt::from(rhs))),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.add(&(rhs as f64))),
-
-        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).add(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.add(rhs)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.add(rhs.to_f64().unwrap())),
-
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).add(&rhs)),
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().add(&rhs)),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.add(&rhs)),
-        /*(RV::String(lhs), RV::String(rhs)) => Value::new_string_from_smallvec({
-            let mut b = lhs.clone();
-            b.extend_from_slice(rhs);
-            b
-        }),*/
-        _ => {
-            return interp.invoke_method(globals, IdentId::_ADD, lhs, &[rhs]);
-        }
-    };
-    Some(v)
-}*/
-
 pub(super) extern "C" fn div_values(
     interp: &mut Interp,
     globals: &mut Globals,
@@ -370,20 +337,17 @@ pub extern "C" fn vm_get_constant(
         prefix,
         toplevel,
         cache: (cached_version, val),
-    } = globals.func[site_id].clone();
+    } = &globals.func[site_id];
     assert_eq!(0, prefix.len());
     assert!(!toplevel);
-    if cached_version == const_version {
-        return val;
+    if *cached_version == const_version {
+        return *val;
     };
-    let res = match globals.get_constant(name) {
-        Some(v) => Some(v),
-        None => {
-            globals.err_uninitialized_constant(name);
-            None
-        }
-    };
-    globals.func[site_id].cache = (const_version, res);
+    let name = *name;
+    let res = globals.get_constant_checked(name);
+    if res.is_some() {
+        globals.func[site_id].cache = (const_version, res)
+    }
     res
 }
 
@@ -393,14 +357,7 @@ pub extern "C" fn get_constant(
     site_id: ConstSiteId,
 ) -> Option<Value> {
     let ConstSiteInfo { name, .. } = globals.func[site_id].clone();
-    let res = match globals.get_constant(name) {
-        Some(v) => Some(v),
-        None => {
-            globals.err_uninitialized_constant(name);
-            None
-        }
-    };
-    res
+    globals.get_constant_checked(name)
 }
 
 pub extern "C" fn set_constant(
@@ -408,9 +365,7 @@ pub extern "C" fn set_constant(
     globals: &mut Globals,
     name: IdentId,
     val: Value,
-    const_version: &mut usize,
 ) {
-    *const_version += 1;
     if globals.set_constant(name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",

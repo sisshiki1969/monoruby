@@ -279,6 +279,16 @@ impl Globals {
         self.class.get_constants(name)
     }
 
+    pub fn get_constant_checked(&mut self, name: IdentId) -> Option<Value> {
+        match self.get_constant(name) {
+            Some(v) => Some(v),
+            None => {
+                self.err_uninitialized_constant(name);
+                None
+            }
+        }
+    }
+
     pub fn set_constant(&mut self, name: IdentId, val: Value) -> Option<Value> {
         self.class.set_constants(name, val)
     }
