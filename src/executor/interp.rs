@@ -27,6 +27,10 @@ impl Interp {
 
         let res = (eval.codegen.entry_point)(&mut eval, globals, main_data);
         globals.flush_stdout();
+
+        #[cfg(feature = "emit-bc")]
+        globals.dump_bc();
+
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 }

@@ -157,7 +157,7 @@ impl Globals {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Symbol(id) => format!(":{}", self.get_ident_name(id)),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("\"{}\"", s),
+                Ok(s) => format!("\"{}\"", escape_string::escape(&s)),
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match &rvalue.kind {
@@ -351,5 +351,19 @@ impl Globals {
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
         }
+    }
+}
+
+impl Globals {
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn dump_bc(&self) {
+        self.func
+            .functions()
+            .iter()
+            .skip(1)
+            .for_each(|info| match &info.kind {
+                FuncKind::Normal(info) => info.dump(self),
+                _ => {}
+            });
     }
 }

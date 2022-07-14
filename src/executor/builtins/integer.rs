@@ -14,7 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
-    match arg.self_value().as_fixnum() {
+    match arg.self_value().try_fixnum() {
         Some(i) => {
             if let Ok(b) = u8::try_from(i) {
                 return Some(Value::new_string_from_slice(&[b]));

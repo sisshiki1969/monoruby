@@ -74,6 +74,13 @@ impl Bc {
     pub(crate) fn from(op1: Bc1, op2: Bc2) -> Self {
         Self { op1, op2 }
     }
+
+    pub(crate) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
+        Self {
+            op1: Bc1::from(op1),
+            op2: Bc2::class_and_version(class_id, version),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,7 +104,12 @@ impl Bc2 {
 
     fn class_and_version(class_id: ClassId, version: u32) -> Self {
         let id: u32 = class_id.into();
-        Self((version as u64) << 32 + (id as u64))
+        Self(((version as u64) << 32) + (id as u64))
+    }
+
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn from_bc_classid(bcop: Bc) -> ClassId {
+        ClassId::new(bcop.op2.0 as u32)
     }
 }
 
@@ -185,14 +197,13 @@ impl BcOp1 {
         use BcOp1::*;
         let op = match self {
             MethodCall(op1, op2) => {
-                return Bc::from(
-                    Bc1::from(enc_wl(1, *op1, op2.get())),
-                    Bc2::class_and_version(ClassId::new(0), -1i32 as u32),
+                return Bc::from_with_class_and_version(
+                    enc_wl(1, *op1, op2.get()),
+                    ClassId::new(0),
+                    -1i32 as u32,
                 )
             }
-            MethodArgs(op1, op2, op3) => {
-                return Bc::from(Bc1::from(enc_www(130, *op1, *op2, *op3)), Bc2::from(0))
-            }
+            MethodArgs(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
             CondBr(op1, op2, opt) => enc_wl(if *opt { 12 } else { 4 }, *op1, *op2 as u32),
@@ -205,7 +216,13 @@ impl BcOp1 {
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
-            BinOp(kind, op1, op2, op3) => enc_www(170 + *kind as u16, *op1, *op2, *op3),
+            BinOp(kind, op1, op2, op3) => {
+                return Bc::from_with_class_and_version(
+                    enc_www(170 + *kind as u16, *op1, *op2, *op3),
+                    INTEGER_CLASS,
+                    -1i32 as u32,
+                )
+            }
             Cmp(kind, op1, op2, op3, opt) => {
                 if *opt {
                     enc_www(156 + *kind as u16, *op1, *op2, *op3)

@@ -26,7 +26,7 @@ impl std::fmt::Debug for Value {
 
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
-        match self.as_rvalue() {
+        match self.try_rvalue() {
             Some(rvalue) => rvalue.mark(alloc),
             None => {}
         }
@@ -38,7 +38,7 @@ impl Value {
         if lhs == rhs {
             return true;
         }
-        match (lhs.as_rvalue(), rhs.as_rvalue()) {
+        match (lhs.try_rvalue(), rhs.try_rvalue()) {
             (Some(lhs), Some(rhs)) => match (&lhs.kind, &rhs.kind) {
                 (ObjKind::Bignum(lhs), ObjKind::Bignum(rhs)) => lhs == rhs,
                 (ObjKind::Float(lhs), ObjKind::Float(rhs)) => lhs == rhs,
@@ -60,9 +60,9 @@ impl Value {
     }
 
     pub fn class_id(&self) -> ClassId {
-        if let Some(_) = self.as_fixnum() {
+        if self.is_fixnum() {
             INTEGER_CLASS
-        } else if let Some(_) = self.as_flonum() {
+        } else if self.is_flonum() {
             FLOAT_CLASS
         } else if !self.is_packed_value() {
             self.rvalue().class()
@@ -219,9 +219,9 @@ impl Value {
     }
 
     pub fn unpack(&self) -> RV {
-        if let Some(i) = self.as_fixnum() {
+        if let Some(i) = self.try_fixnum() {
             RV::Integer(i)
-        } else if let Some(f) = self.as_flonum() {
+        } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
         } else if !self.is_packed_value() {
             let rvalue = self.rvalue();
@@ -258,23 +258,27 @@ impl Value {
         self.0.get() & 0b0111 != 0
     }
 
-    pub fn as_fnum(&self) -> i64 {
+    pub fn as_fixnnum(&self) -> i64 {
         (self.0.get() as i64) >> 1
     }
 
-    pub fn is_fnum(&self) -> bool {
+    pub fn is_fixnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 
-    pub fn as_fixnum(&self) -> Option<i64> {
-        if self.is_fnum() {
-            Some(self.as_fnum())
+    pub fn is_flonum(&self) -> bool {
+        self.0.get() & 0b11 == 2
+    }
+
+    pub fn try_fixnum(&self) -> Option<i64> {
+        if self.is_fixnum() {
+            Some(self.as_fixnnum())
         } else {
             None
         }
     }
 
-    fn as_flonum(&self) -> Option<f64> {
+    fn try_flonum(&self) -> Option<f64> {
         let u = self.0.get();
         if u & 0b11 == 2 {
             if u == FLOAT_ZERO {
@@ -299,7 +303,7 @@ impl Value {
     /// Get reference of RValue from `self`.
     ///
     /// return None if `self` was not a packed value.
-    pub(crate) fn as_rvalue(&self) -> Option<&RValue> {
+    pub(crate) fn try_rvalue(&self) -> Option<&RValue> {
         if self.is_packed_value() {
             None
         } else {

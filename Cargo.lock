@@ -310,6 +310,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "escape_string"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59e867569975c88fdf73833a30bd6e0978aa6ab6bd784b648fcece07450951ba"
+
+[[package]]
 name = "fastrand"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,6 +708,7 @@ dependencies = [
  "chumsky",
  "clap",
  "dtoa",
+ "escape_string",
  "fxhash",
  "monoasm",
  "monoasm_macro",

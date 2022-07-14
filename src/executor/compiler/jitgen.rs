@@ -635,7 +635,7 @@ impl Codegen {
                 movq rdi, [rbp - (conv(recv))];
                 movq rax, (Value::get_class);
                 call rax;
-                movq r15, rax;  // r15: receiver class_id
+                movl r15, rax;  // r15: receiver class_id
                 cmpl r15, [rip + cached_recv_class];
                 jne slow_path;
             );

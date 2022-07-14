@@ -152,6 +152,10 @@ impl FnStore {
         }
     }
 
+    pub fn functions(&self) -> &Vec<FuncInfo> {
+        &self.functions.0
+    }
+
     fn len(&self) -> usize {
         self.functions.0.len()
     }
@@ -218,8 +222,7 @@ impl FnStore {
         let mut info = std::mem::take(self[func_id].as_normal_mut());
         let mut ir = IrContext::compile_ast(&mut info, self, id_store)?;
         ir.ir_to_bytecode(&mut info, self);
-        #[cfg(feature = "emit-bc")]
-        info.dump(id_store, self);
+
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
         self[func_id].data.pc = BcPcBase::new(self[func_id].as_normal()) + 0;
@@ -434,7 +437,7 @@ pub(crate) struct NormalFuncInfo {
     pub(super) id: FuncId,
     name: Option<String>,
     /// Bytecode.
-    pub(super) bytecode: Vec<Bc>,
+    pub(super) bytecode: Box<[Bc]>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
@@ -461,7 +464,7 @@ impl NormalFuncInfo {
         let mut info = NormalFuncInfo {
             id,
             name,
-            bytecode: vec![],
+            bytecode: Box::new([]),
             sourcemap: vec![],
             args: args.clone(),
             locals: HashMap::default(),
@@ -478,7 +481,7 @@ impl NormalFuncInfo {
 
     /// set bytecode..
     pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
-        self.bytecode = bc;
+        self.bytecode = bc.into_boxed_slice();
     }
 
     /// get a number of registers.
@@ -487,7 +490,7 @@ impl NormalFuncInfo {
     }
 
     /// get bytecode.
-    pub(crate) fn bytecode(&self) -> &Vec<Bc> {
+    pub(crate) fn bytecode(&self) -> &[Bc] {
         &self.bytecode
     }
 
@@ -540,7 +543,7 @@ impl NormalFuncInfo {
     }
 
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn dump(&self, id_store: &IdentifierTable, store: &FnStore) {
+    pub(crate) fn dump(&self, globals: &Globals) {
         fn optstr(opt: bool) -> &'static str {
             if opt {
                 "_"
@@ -592,22 +595,32 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp1::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
-                BcOp1::Symbol(reg, id) => eprintln!("%{} = :{}", reg, id_store.get_name(id)),
+                BcOp1::Symbol(reg, id) => {
+                    eprintln!("%{} = :{}", reg, globals.id_store.get_name(id))
+                }
                 BcOp1::Literal(reg, id) => {
-                    let v = store.get_literal(id);
-                    eprintln!("%{} = literal[{:?}]", reg, v)
+                    let v = globals.func.get_literal(id);
+                    eprintln!("%{} = literal[{}]", reg, globals.val_inspect(v))
                 }
                 BcOp1::LoadConst(reg, id) => {
-                    let name = store[id].name;
-                    eprintln!("%{} = const[{}]", reg, id_store.get_name(name))
+                    let name = globals.func[id].name;
+                    eprintln!("%{} = const[{}]", reg, globals.id_store.get_name(name))
                 }
                 BcOp1::StoreConst(reg, id) => {
-                    eprintln!("const[{}] = %{}", id_store.get_name(id), reg)
+                    eprintln!("const[{}] = %{}", globals.id_store.get_name(id), reg)
                 }
                 BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} {} %{}", dst, lhs, kind, rhs)
+                    let class_id = Bc2::from_bc_classid(*inst);
+                    eprintln!(
+                        "%{} = %{} {} %{}\t{}",
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                        class_id.get_name(globals)
+                    )
                 }
                 BcOp1::Addri(dst, lhs, rhs) => {
                     eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
@@ -626,27 +639,31 @@ impl NormalFuncInfo {
                 BcOp1::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
                 BcOp1::MethodCall(..) => {
                     assert!(buf.is_none());
-                    buf = Some(bcop1.clone());
+                    buf = Some((bcop1.clone(), Bc2::from_bc_classid(*inst)));
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
-                    let (recv, ret, name) = match std::mem::take(&mut buf).unwrap() {
-                        BcOp1::MethodCall(ret, name) => (recv, ret, name),
+                    let (recv, ret, name, class_id) = match std::mem::take(&mut buf).unwrap() {
+                        (BcOp1::MethodCall(ret, name), class_id) => (recv, ret, name, class_id),
                         _ => unreachable!(),
                     };
-                    let name = id_store.get_name(name);
-                    match ret {
-                        0 => {
-                            eprintln!("_ = %{}.call {}(%{}; {})", recv, name, args, len)
-                        }
-                        ret => {
-                            eprintln!("%{:?} = %{}.call {}(%{}; {})", ret, recv, name, args, len)
-                        }
-                    }
+                    let name = globals.id_store.get_name(name);
+                    eprintln!(
+                        "{} = %{}.call {}(%{}; {})\t{}",
+                        match ret {
+                            0 => "_".to_string(),
+                            ret => format!("%{:?}", ret),
+                        },
+                        recv,
+                        name,
+                        args,
+                        len,
+                        class_id.get_name(globals)
+                    );
                     skip = true;
                 }
                 BcOp1::MethodDef(id) => {
-                    let MethodDefInfo { name, func } = store[id];
-                    let name = id_store.get_name(name);
+                    let MethodDefInfo { name, func } = globals.func[id];
+                    let name = globals.id_store.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
                 BcOp1::ConcatStr(ret, args, len) => match ret {

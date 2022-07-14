@@ -431,7 +431,8 @@ impl Codegen {
             // rdi: receiver: Value
             movq rax, (Value::get_class);
             call rax;
-            cmpl rax, [r13 - 8];
+            movl r15, rax;
+            cmpl r15, [r13 - 8];
             jne  slowpath;
             movl rdi, [r13 - 4];
             cmpl rdi, [rip + class_version];
@@ -505,15 +506,15 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
-            movl [r13 - 8], rax;
-            movl rdi, [rip + class_version];
-            movl [r13 - 4], rdi;
             movq rdx, [rsp + 8];  // rdx: IdentId
             movzxw rcx, [r13];  // rcx: len
             movq r8, [rsp]; // r8: receiver:Value
             call entry_find_method; // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
+            movl [r13 - 8], r15;
+            movl rdi, [rip + class_version];
+            movl [r13 - 4], rdi;
             movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             movq [r13 + 8], rdi;
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];

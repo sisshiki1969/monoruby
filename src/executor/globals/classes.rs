@@ -46,6 +46,9 @@ impl ClassId {
 
     /// Get class name of *ClassId*.
     pub fn get_name(self, globals: &Globals) -> String {
+        if self.0 == 0 {
+            return "<INVALID>".to_string();
+        }
         let val = self.get_obj(globals);
         match globals.class[self].get_name() {
             Some(s) => s.to_string(),
