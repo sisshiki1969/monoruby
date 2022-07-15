@@ -50,8 +50,7 @@ pub(super) enum BcIr {
     Nil(BcReg),
     Neg(BcReg, BcReg),                       // ret, src
     BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
-    Addri(BcReg, BcReg, i16),                // ret, lhs, int
-    Subri(BcReg, BcReg, i16),                // ret, lhs, int
+    BinOpRi(BinOpK, BcReg, BcReg, i16),      // kind, ret, lhs, rhs
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
@@ -138,10 +137,8 @@ pub(super) enum BcOp1 {
     Neg(u16, u16),
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp(BinOpK, u16, u16, u16),
-    /// add with small integer(%ret, %lhs, rhs:i16)
-    Addri(u16, u16, i16),
-    /// sub with small integer(%ret, %lhs, rhs:i16)
-    Subri(u16, u16, i16),
+    /// binop with small integer(kind, %ret, %lhs, %rhs)
+    BinOpRi(BinOpK, u16, u16, i16),
     /// cmp(%ret, %lhs, %rhs, optimizable)
     Cmp(CmpKind, u16, u16, u16, bool),
     /// cmpri(%ret, %lhs, rhs: i16, optimizable)
@@ -224,20 +221,29 @@ impl BcOp1 {
                 )
             }
             Cmp(kind, op1, op2, op3, opt) => {
-                if *opt {
+                let op1 = if *opt {
                     enc_www(156 + *kind as u16, *op1, *op2, *op3)
                 } else {
                     enc_www(134 + *kind as u16, *op1, *op2, *op3)
-                }
+                };
+                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
             }
-            Addri(op1, op2, op3) => enc_wwsw(140, *op1, *op2, *op3),
-            Subri(op1, op2, op3) => enc_wwsw(141, *op1, *op2, *op3),
+            BinOpRi(BinOpK::Add, op1, op2, op3) => {
+                let op1 = enc_wwsw(140, *op1, *op2, *op3);
+                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
+            }
+            BinOpRi(BinOpK::Sub, op1, op2, op3) => {
+                let op1 = enc_wwsw(141, *op1, *op2, *op3);
+                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
+            }
+            BinOpRi(..) => unimplemented!(),
             Cmpri(kind, op1, op2, op3, opt) => {
-                if *opt {
+                let op1 = if *opt {
                     enc_wwsw(162 + *kind as u16, *op1, *op2, *op3)
                 } else {
                     enc_wwsw(142 + *kind as u16, *op1, *op2, *op3)
-                }
+                };
+                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
             }
             Ret(op1) => enc_w(148, *op1),
             Mov(op1, op2) => enc_ww(149, *op1, *op2),
@@ -278,8 +284,8 @@ impl BcOp1 {
                 137 => Self::Cmp(CmpKind::Le, op1, op2, op3, false),
                 138 => Self::Cmp(CmpKind::Gt, op1, op2, op3, false),
                 139 => Self::Cmp(CmpKind::Ge, op1, op2, op3, false),
-                140 => Self::Addri(op1, op2, op3 as i16),
-                141 => Self::Subri(op1, op2, op3 as i16),
+                140 => Self::BinOpRi(BinOpK::Add, op1, op2, op3 as i16),
+                141 => Self::BinOpRi(BinOpK::Sub, op1, op2, op3 as i16),
                 142 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16, false),
                 143 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16, false),
                 144 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16, false),

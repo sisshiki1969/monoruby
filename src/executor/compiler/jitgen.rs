@@ -203,7 +203,7 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::Addri(ret, lhs, rhs) => {
+                BcOp1::BinOpRi(BinOpK::Add, ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let rhs = Value::int32(rhs as i32).get();
                     monoasm!(self.jit,
@@ -213,7 +213,7 @@ impl Codegen {
                     self.guard_rdi_fixnum(generic);
                     self.fast_add(generic, ret);
                 }
-                BcOp1::Subri(ret, lhs, rhs) => {
+                BcOp1::BinOpRi(BinOpK::Sub, ret, lhs, rhs) => {
                     let generic = self.jit.label();
                     let rhs = Value::int32(rhs as i32).get();
                     monoasm!(self.jit,
@@ -223,6 +223,7 @@ impl Codegen {
                     self.guard_rdi_fixnum(generic);
                     self.fast_sub(generic, ret);
                 }
+                BcOp1::BinOpRi(..) => unimplemented!(),
                 BcOp1::Cmp(kind, ret, lhs, rhs, false) => match kind {
                     CmpKind::Eq => cmp!(lhs, rhs, ret, eq),
                     CmpKind::Ne => cmp!(lhs, rhs, ret, ne),

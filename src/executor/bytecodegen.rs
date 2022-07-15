@@ -1153,7 +1153,10 @@ impl IrContext {
 
             self.gen_expr(ctx, info, id_store, *body.body, false, false)?;
 
-            self.push(BcIr::Addri(counter.into(), counter.into(), 1), loc);
+            self.push(
+                BcIr::BinOpRi(BinOpK::Add, counter.into(), counter.into(), 1),
+                loc,
+            );
             self.gen_br(loop_entry);
 
             self.apply_label(loop_exit);
@@ -1255,7 +1258,7 @@ macro_rules! gen_ri_ops {
             ) -> Result<()> {
                 if let Some(i) = is_smi(&rhs) {
                     let (dst, lhs) = self.gen_singular(ctx, info, id_store, dst, lhs)?;
-                    self.push(BcIr::[<$inst ri>](dst, lhs, i), loc);
+                    self.push(BcIr::BinOpRi(BinOpK::$inst, dst, lhs, i), loc);
                 } else {
                     let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
                     self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
@@ -1325,11 +1328,8 @@ impl IrContext {
                     info.get_index(rhs),
                 )
                 .to_bc(),
-                BcIr::Addri(dst, lhs, rhs) => {
-                    BcOp1::Addri(info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
-                }
-                BcIr::Subri(dst, lhs, rhs) => {
-                    BcOp1::Subri(info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
+                BcIr::BinOpRi(kind, dst, lhs, rhs) => {
+                    BcOp1::BinOpRi(*kind, info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
                 }
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let dst = info.get_index(dst);

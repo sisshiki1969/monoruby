@@ -622,17 +622,40 @@ impl NormalFuncInfo {
                         class_id.get_name(globals)
                     )
                 }
-                BcOp1::Addri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} + {}: i16", dst, lhs, rhs)
-                }
-                BcOp1::Subri(dst, lhs, rhs) => {
-                    eprintln!("%{} = %{} - {}: i16", dst, lhs, rhs)
+                BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
+                    let class_id = Bc2::from_bc_classid(*inst);
+                    eprintln!(
+                        "%{} = %{} {} {}: i16\t{}",
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                        class_id.get_name(globals)
+                    )
                 }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
-                    eprintln!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs)
+                    let class_id = Bc2::from_bc_classid(*inst);
+                    eprintln!(
+                        "{}%{} = %{} {:?} %{}\t{}",
+                        optstr(opt),
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                        class_id.get_name(globals)
+                    )
                 }
                 BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
-                    eprintln!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs)
+                    let class_id = Bc2::from_bc_classid(*inst);
+                    eprintln!(
+                        "{}%{} = %{} {:?} {}: i16\t{}",
+                        optstr(opt),
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                        class_id.get_name(globals)
+                    )
                 }
 
                 BcOp1::Ret(reg) => eprintln!("ret %{}", reg),
