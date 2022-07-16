@@ -4,7 +4,11 @@ use paste::paste;
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_compile_normal(&mut self, func: &NormalFuncInfo, store: &FnStore) -> CodePtr {
+    pub(super) fn jit_compile_normal(
+        &mut self,
+        func: &NormalFuncInfo,
+        store: &FnStore,
+    ) -> DestLabel {
         macro_rules! cmp {
             ($lhs:ident, $rhs:ident, $ret:ident, $op:ident) => {{
                 paste! {
@@ -74,11 +78,12 @@ impl Codegen {
             }};
         }
 
-        let label = self.jit.get_current_address();
+        let label = self.jit.label();
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
         }
+        self.jit.bind_label(label);
         self.prologue(func.total_reg_num());
         let mut skip = false;
         for (idx, op) in func.bytecode().iter().enumerate() {

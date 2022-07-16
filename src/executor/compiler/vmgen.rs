@@ -127,7 +127,7 @@ impl Codegen {
     /// Generator of virtual machine.
     ///
     pub(super) fn construct_vm(&mut self) {
-        self.vm_entry = self.jit.get_current_address();
+        let entry = self.jit.label();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         //
@@ -141,7 +141,9 @@ impl Codegen {
         //   r12: &mut Globals
         //   r13: pc
         //
+
         monoasm! { self.jit,
+        entry:
             pushq rbp;
             movq rbp, rsp;
             movw [rbp - 0x02], 0;       // kind
@@ -196,6 +198,7 @@ impl Codegen {
 
         let (shl, shr) = self.vm_shift();
 
+        self.vm_entry = entry;
         self.dispatch[1] = self.vm_method_call();
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;

@@ -18,12 +18,11 @@ impl Interp {
     /// Execute top level method.
     pub fn eval_toplevel(globals: &mut Globals, jit_flag: bool) -> Result<Value> {
         let mut eval = Self::new();
-        let main_id = globals.get_main_func();
-        let main_data = eval.get_func_data(globals, main_id) as *const _;
-
         if !jit_flag {
             eval.codegen.precompile(&mut globals.func)
         };
+        let main_id = globals.get_main_func();
+        let main_data = eval.get_func_data(globals, main_id) as *const _;
 
         let res = (eval.codegen.entry_point)(&mut eval, globals, main_data);
         globals.flush_stdout();
@@ -51,7 +50,7 @@ impl Interp {
     }
 
     pub fn get_func_data<'a>(&mut self, globals: &'a mut Globals, func_id: FuncId) -> &'a FuncData {
-        let _ = self.codegen.compile_on_demand(globals, func_id);
+        self.codegen.compile_on_demand(globals, func_id);
         &globals.func[func_id].data
     }
 }

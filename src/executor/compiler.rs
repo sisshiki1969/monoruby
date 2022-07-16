@@ -32,7 +32,7 @@ pub struct Codegen {
     pub class_version_addr: *mut u32,
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
-    pub vm_entry: CodePtr,
+    pub vm_entry: DestLabel,
     pub entry_point: EntryPoint,
     pub entry_point_return: CodePtr,
     entry_find_method: DestLabel,
@@ -329,7 +329,7 @@ impl Codegen {
             const_version,
             entry_panic,
             entry_find_method,
-            vm_entry: entry_unimpl,
+            vm_entry: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_point_return: entry_unimpl,
             vm_return,
@@ -454,20 +454,15 @@ impl Codegen {
     ///  - (old rbp) is to be set by callee.
     ///
 
-    pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) -> CodePtr {
-        match globals.func[func_id].data.codeptr {
-            Some(dest) => dest,
-            None => {
-                let mut info = std::mem::take(&mut globals.func[func_id]);
-                let label = self.jit_compile(&mut info, &globals.func);
-                //info.data.codeptr = Some(label);
-                globals.func[func_id] = info;
-                label
-            }
+    pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
+        if globals.func[func_id].data.codeptr.is_none() {
+            let mut info = std::mem::take(&mut globals.func[func_id]);
+            self.jit_compile(&mut info, &globals.func);
+            globals.func[func_id] = info;
         }
     }
 
-    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) -> CodePtr {
+    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         {
             eprintln!(
@@ -484,12 +479,20 @@ impl Codegen {
         let label = match &func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
-                self.jit_compile_normal(info, store)
+                let jit_entry = self.jit_compile_normal(info, store);
+                //let vm_entry = self.vm_entry;
+                let codeptr = self.jit.get_current_address();
+                monoasm!(self.jit,
+                    jmp jit_entry;
+                );
+                codeptr
             }
             FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
         };
-        func.data.codeptr = Some(label);
         self.jit.finalize();
+        //eprintln!("{}", self.jit.dump_code().unwrap());
+        assert_eq!(None, func.data.codeptr);
+        func.data.codeptr = Some(label);
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let elapsed = now.elapsed();
         #[cfg(any(feature = "emit-asm"))]
@@ -508,7 +511,6 @@ impl Codegen {
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
-        label
     }
 
     pub fn wrap_builtin(&mut self, abs_address: u64) -> CodePtr {
@@ -577,13 +579,20 @@ impl Codegen {
 
 impl Codegen {
     pub fn precompile(&mut self, store: &mut FnStore) {
+        let vm_entry = self.vm_entry;
         for func in store.funcs_mut().iter_mut() {
             match &func.kind {
                 FuncKind::Normal(_) => {
-                    func.data.codeptr = Some(self.vm_entry);
+                    let codeptr = self.jit.get_current_address();
+                    monoasm!(self.jit,
+                        jmp vm_entry;
+                    );
+                    assert_eq!(None, func.data.codeptr);
+                    func.data.codeptr = Some(codeptr);
                 }
                 _ => {}
             };
         }
+        self.jit.finalize();
     }
 }
