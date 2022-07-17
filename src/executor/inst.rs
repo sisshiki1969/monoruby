@@ -106,7 +106,6 @@ impl Bc2 {
         Self(((version as u64) << 32) + (id as u64))
     }
 
-    #[cfg(feature = "emit-bc")]
     pub(crate) fn from_bc_classid(bcop: Bc) -> ClassId {
         ClassId::new(bcop.op2.0 as u32)
     }

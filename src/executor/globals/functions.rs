@@ -434,7 +434,7 @@ impl FuncInfo {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct NormalFuncInfo {
     /// ID of this function.
-    pub(super) id: FuncId,
+    pub(crate) id: FuncId,
     name: Option<String>,
     /// Bytecode.
     pub(super) bytecode: Box<[Bc]>,
@@ -487,6 +487,12 @@ impl NormalFuncInfo {
     /// get a number of registers.
     pub(crate) fn total_reg_num(&self) -> usize {
         1 + self.locals.len() + self.temp_num as usize
+    }
+
+    /// get bytecode.
+    #[cfg(feature = "emit-asm")]
+    pub(crate) fn name(&self) -> &Option<String> {
+        &self.name
     }
 
     /// get bytecode.
@@ -613,49 +619,24 @@ impl NormalFuncInfo {
                 BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
                     let class_id = Bc2::from_bc_classid(*inst);
-                    eprintln!(
-                        "%{} = %{} {} %{}\t{}",
-                        dst,
-                        lhs,
-                        kind,
-                        rhs,
-                        class_id.get_name(globals)
-                    )
+                    let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
+                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
                     let class_id = Bc2::from_bc_classid(*inst);
-                    eprintln!(
-                        "%{} = %{} {} {}: i16\t{}",
-                        dst,
-                        lhs,
-                        kind,
-                        rhs,
-                        class_id.get_name(globals)
-                    )
+                    let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
+                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
                     let class_id = Bc2::from_bc_classid(*inst);
-                    eprintln!(
-                        "{}%{} = %{} {:?} %{}\t{}",
-                        optstr(opt),
-                        dst,
-                        lhs,
-                        kind,
-                        rhs,
-                        class_id.get_name(globals)
-                    )
+                    let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
+                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
                     let class_id = Bc2::from_bc_classid(*inst);
-                    eprintln!(
-                        "{}%{} = %{} {:?} {}: i16\t{}",
-                        optstr(opt),
-                        dst,
-                        lhs,
-                        kind,
-                        rhs,
-                        class_id.get_name(globals)
-                    )
+                    let op1 =
+                        format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
+                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
 
                 BcOp1::Ret(reg) => eprintln!("ret %{}", reg),
@@ -670,8 +651,8 @@ impl NormalFuncInfo {
                         _ => unreachable!(),
                     };
                     let name = globals.id_store.get_name(name);
-                    eprintln!(
-                        "{} = %{}.call {}(%{}; {})\t{}",
+                    let op1 = format!(
+                        "{} = %{}.call {}(%{}; {})",
                         match ret {
                             0 => "_".to_string(),
                             ret => format!("%{:?}", ret),
@@ -680,8 +661,8 @@ impl NormalFuncInfo {
                         name,
                         args,
                         len,
-                        class_id.get_name(globals)
                     );
+                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
                     skip = true;
                 }
                 BcOp1::MethodDef(id) => {

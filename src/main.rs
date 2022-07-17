@@ -35,9 +35,9 @@ struct CommandLineArgs {
     /// print the version number, then turn on verbose mode
     #[clap(short)]
     verbose: bool,
-    /// switch JIT compilation.
+    /// switch ahead-of-time compilation.
     #[clap(short, long)]
-    jit: bool,
+    aot: bool,
     #[clap(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
@@ -50,7 +50,7 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            exec(&code, args.jit, args.warning, std::path::Path::new("REPL"));
+            exec(&code, args.aot, args.warning, std::path::Path::new("REPL"));
         }
         return;
     }
@@ -62,7 +62,7 @@ fn main() {
             file.read_to_string(&mut code).unwrap();
             exec(
                 &code,
-                args.jit,
+                args.aot,
                 args.warning,
                 &std::path::Path::new(&file_name),
             );
@@ -75,7 +75,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes, args.jit, args.warning);
+                        run_repl(&code, &mut all_codes, args.aot, args.warning);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;

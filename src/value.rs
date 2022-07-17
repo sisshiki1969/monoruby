@@ -9,8 +9,6 @@ pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 const TRUE_VALUE: u64 = 0x1c; // 0001_1100
 pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
-const FLOAT_MASK1: u64 = !(0b0110u64 << 60);
-const FLOAT_MASK2: u64 = 0b0100u64 << 60;
 
 const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
@@ -173,14 +171,14 @@ impl Value {
         }
     }
 
-    pub fn new_float(num: f64) -> Self {
+    pub extern "C" fn new_float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(FLOAT_ZERO);
         }
         let unum = f64::to_bits(num);
         let exp = ((unum >> 60) & 0b111) + 1;
         if (exp & 0b0110) == 0b0100 {
-            Value::from((unum & FLOAT_MASK1 | FLOAT_MASK2).rotate_left(3))
+            Value::from(((unum.rotate_left(3)) & !1) | 2)
         } else {
             RValue::new_float(num).pack()
         }
@@ -244,6 +242,13 @@ impl Value {
     }
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct F2 {
+    f1: f64,
+    f2: f64,
+}
+
 impl Value {
     /*fn is_nil(&self) -> bool {
         self.0.get() == NIL_VALUE
@@ -253,6 +258,17 @@ impl Value {
         let v = self.0.get();
         (v | 0x10) != 0x14
     }*/
+
+    pub extern "C" fn conv_val_to_flonum(v: Value) -> f64 {
+        v.as_flonum()
+    }
+
+    pub extern "C" fn binary_flonum(lhs: Value, rhs: Value) -> F2 {
+        F2 {
+            f1: lhs.as_flonum(),
+            f2: rhs.as_flonum(),
+        }
+    }
 
     pub fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
@@ -278,15 +294,20 @@ impl Value {
         }
     }
 
+    fn as_flonum(&self) -> f64 {
+        let u = self.0.get();
+        if u == FLOAT_ZERO {
+            return 0.0;
+        }
+        let bit = 0b10 - ((u >> 63) & 0b1);
+        let num = ((u & !(0b0011u64)) | bit).rotate_right(3);
+        f64::from_bits(num)
+    }
+
     fn try_flonum(&self) -> Option<f64> {
         let u = self.0.get();
         if u & 0b11 == 2 {
-            if u == FLOAT_ZERO {
-                return Some(0.0);
-            }
-            let bit = 0b10 - ((u >> 63) & 0b1);
-            let num = ((u & !(0b0011u64)) | bit).rotate_right(3);
-            Some(f64::from_bits(num))
+            Some(Self::as_flonum(self))
         } else {
             None
         }

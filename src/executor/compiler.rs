@@ -375,6 +375,58 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Guard for whether lhs is flonum.
+    ///
+    /// ### in
+    ///
+    /// - rdi: lhs: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: lhs: f64
+    ///
+    fn guard_rdi_flonum(&mut self, generic: DestLabel) {
+        monoasm!(self.jit,
+            // check whether lhs is flonum.
+            movq rax, rdi;
+            andq rax, 3;
+            cmpq rax, 2;
+            jne generic;
+            movq rax, (Value::conv_val_to_flonum);
+            call rax;
+        );
+    }
+
+    ///
+    /// Guard for whether lhs and rhs are flonum.
+    ///
+    /// ### in
+    ///
+    /// - rdi: lhs: Value
+    /// - rsi: rhs: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: lhs: f64
+    /// - xmm1: rhs: f64
+    ///
+    fn guard_rdi_rsi_flonum(&mut self, generic: DestLabel) {
+        monoasm!(self.jit,
+            // check whether lhs is flonum.
+            movq rax, rdi;
+            andq rax, 3;
+            cmpq rax, 2;
+            jne generic;
+            movq rax, rsi;
+            andq rax, 3;
+            cmpq rax, 2;
+            jne generic;
+            movq rax, (Value::binary_flonum);
+            call rax;
+        );
+    }
+
     fn call_unop(&mut self, func: u64) {
         let entry_return = self.vm_return;
         monoasm!(self.jit,
@@ -463,19 +515,6 @@ impl Codegen {
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) {
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        {
-            eprintln!(
-                "--> start compile: {} {:?}",
-                match func.name() {
-                    Some(name) => name,
-                    None => "<unnamed>",
-                },
-                func.data.meta.func_id()
-            );
-        }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        let now = Instant::now();
         let label = match &func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
@@ -493,24 +532,6 @@ impl Codegen {
         //eprintln!("{}", self.jit.dump_code().unwrap());
         assert_eq!(None, func.data.codeptr);
         func.data.codeptr = Some(label);
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        let elapsed = now.elapsed();
-        #[cfg(any(feature = "emit-asm"))]
-        {
-            let (start, code_end, end) = self.jit.code_block.last().unwrap();
-            eprintln!(
-                "offset:{:?} code: {} bytes  data: {} bytes",
-                start,
-                *code_end - *start,
-                *end - *code_end
-            );
-            if let FuncKind::Normal(_) = func.kind {
-                self.jit.select(0);
-                eprintln!("{}", self.jit.dump_code().unwrap());
-            }
-        }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
     }
 
     pub fn wrap_builtin(&mut self, abs_address: u64) -> CodePtr {
@@ -578,17 +599,53 @@ impl Codegen {
 }
 
 impl Codegen {
+    extern "C" fn exec_jit_compile(
+        interp: &mut Interp,
+        globals: &mut Globals,
+        func_id: FuncId,
+    ) -> CodePtr {
+        //eprintln!("{:?}", func_id);
+        globals.func[func_id].data.meta.set_jit();
+        let label = interp
+            .codegen
+            .jit_compile_normal(globals.func[func_id].as_normal(), &globals.func);
+        interp.codegen.jit.finalize();
+        interp.codegen.jit.get_label_address(label)
+    }
+
     pub fn precompile(&mut self, store: &mut FnStore) {
         let vm_entry = self.vm_entry;
         for func in store.funcs_mut().iter_mut() {
             match &func.kind {
                 FuncKind::Normal(_) => {
                     let codeptr = self.jit.get_current_address();
+                    let counter = self.jit.const_i32(100);
+                    let entry = self.jit.label();
                     monoasm!(self.jit,
-                        jmp vm_entry;
+                    entry:
+                        subl [rip + counter], 1;
+                        jne vm_entry;
+                        movl rax, [rsp - 16];
+                        subq rsp, 1024;
+                        pushq rdi;
+                        movq rdi, rbx;
+                        movq rsi, r12;
+                        movl rdx, rax;
+                        movq rax, (Self::exec_jit_compile);
+                        call rax;
+                        movw [rip + entry], 0xe9;
+                        lea rdi, [rip + entry];
+                        addq rdi, 5;
+                        subq rax, rdi;
+                        movl [rdi - 4], rax;
+                        popq rdi;
+                        addq rsp, 1024;
+                        jmp entry;
                     );
-                    assert_eq!(None, func.data.codeptr);
-                    func.data.codeptr = Some(codeptr);
+                    assert_eq!(
+                        None,
+                        std::mem::replace(&mut func.data.codeptr, Some(codeptr))
+                    );
                 }
                 _ => {}
             };

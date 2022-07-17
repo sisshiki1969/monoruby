@@ -78,6 +78,20 @@ impl Codegen {
             }};
         }
 
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        {
+            eprintln!(
+                "--> start compile: {} {:?}",
+                match func.name() {
+                    Some(name) => name,
+                    None => "<unnamed>",
+                },
+                func.id
+            );
+        }
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        let now = Instant::now();
+
         let label = self.jit.label();
         let mut labels = vec![];
         for _ in func.bytecode() {
@@ -185,17 +199,69 @@ impl Codegen {
                     self.load_binary_args(lhs, rhs);
                     match kind {
                         BinOpK::Add => {
-                            let generic = self.jit.label();
-                            self.guard_rdi_rsi_fixnum(generic);
-                            self.fast_add(generic, ret);
+                            let class = Bc2::from_bc_classid(*op);
+                            if class == INTEGER_CLASS {
+                                let generic = self.jit.label();
+                                self.guard_rdi_rsi_fixnum(generic);
+                                self.fast_add(generic, ret);
+                            } else if class == FLOAT_CLASS {
+                                let generic = self.jit.label();
+                                let exit = self.jit.label();
+                                self.guard_rdi_rsi_flonum(generic);
+                                monoasm!(self.jit,
+                                    addsd xmm0, xmm1;
+                                    movq rax, (Value::new_float);
+                                    call rax;
+                                    // store the result to return reg.
+                                    movq [rbp - (conv(ret))], rax;
+                                exit:
+                                );
+                                self.side_generic_op(generic, exit, ret, add_values as _);
+                            } else {
+                                self.generic_op(ret, add_values as _);
+                            }
                         }
                         BinOpK::Sub => {
-                            let generic = self.jit.label();
-                            self.guard_rdi_rsi_fixnum(generic);
-                            self.fast_sub(generic, ret);
+                            let class = Bc2::from_bc_classid(*op);
+                            if class == INTEGER_CLASS {
+                                let generic = self.jit.label();
+                                self.guard_rdi_rsi_fixnum(generic);
+                                self.fast_sub(generic, ret);
+                            } else if class == FLOAT_CLASS {
+                                let generic = self.jit.label();
+                                let exit = self.jit.label();
+                                self.guard_rdi_rsi_flonum(generic);
+                                monoasm!(self.jit,
+                                    subsd xmm0, xmm1;
+                                    movq rax, (Value::new_float);
+                                    call rax;
+                                    // store the result to return reg.
+                                    movq [rbp - (conv(ret))], rax;
+                                exit:
+                                );
+                                self.side_generic_op(generic, exit, ret, sub_values as _);
+                            } else {
+                                self.generic_op(ret, sub_values as _);
+                            }
                         }
                         BinOpK::Mul => {
-                            self.generic_op(ret, mul_values as _);
+                            let class = Bc2::from_bc_classid(*op);
+                            if class == FLOAT_CLASS {
+                                let generic = self.jit.label();
+                                let exit = self.jit.label();
+                                self.guard_rdi_rsi_flonum(generic);
+                                monoasm!(self.jit,
+                                    mulsd xmm0, xmm1;
+                                    movq rax, (Value::new_float);
+                                    call rax;
+                                    // store the result to return reg.
+                                    movq [rbp - (conv(ret))], rax;
+                                exit:
+                                );
+                                self.side_generic_op(generic, exit, ret, mul_values as _);
+                            } else {
+                                self.generic_op(ret, mul_values as _);
+                            }
                         }
                         BinOpK::Div => {
                             self.generic_op(ret, div_values as _);
@@ -208,27 +274,89 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::BinOpRi(BinOpK::Add, ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let rhs = Value::int32(rhs as i32).get();
+                BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(lhs))];
-                        movq rsi, (rhs);
                     );
-                    self.guard_rdi_fixnum(generic);
-                    self.fast_add(generic, ret);
+                    match kind {
+                        BinOpK::Add => {
+                            let class = Bc2::from_bc_classid(*op);
+                            if class == INTEGER_CLASS {
+                                let generic = self.jit.label();
+                                monoasm!(self.jit,
+                                    movq rsi, (Value::int32(rhs as i32).get());
+                                );
+                                self.guard_rdi_fixnum(generic);
+                                self.fast_add(generic, ret);
+                            } else if class == FLOAT_CLASS {
+                                let exit = self.jit.label();
+                                let generic = self.jit.label();
+                                self.guard_rdi_flonum(generic);
+                                monoasm!(self.jit,
+                                    movq rsi, (f64::to_bits(rhs as f64));
+                                    movq xmm1, rsi;
+                                    addsd xmm0, xmm1;
+                                    movq rax, (Value::new_float);
+                                    call rax;
+                                    // store the result to return reg.
+                                    movq [rbp - (conv(ret))], rax;
+                                exit:
+                                );
+                                self.side_generic_op_with_rhs_integer(
+                                    rhs,
+                                    generic,
+                                    exit,
+                                    ret,
+                                    add_values as _,
+                                );
+                            } else {
+                                monoasm!(self.jit,
+                                    movq rsi, (Value::int32(rhs as i32).get());
+                                );
+                                self.generic_op(ret, add_values as _);
+                            }
+                        }
+                        BinOpK::Sub => {
+                            let class = Bc2::from_bc_classid(*op);
+                            if class == INTEGER_CLASS {
+                                let generic = self.jit.label();
+                                monoasm!(self.jit,
+                                    movq rsi, (Value::int32(rhs as i32).get());
+                                );
+                                self.guard_rdi_fixnum(generic);
+                                self.fast_sub(generic, ret);
+                            } else if class == FLOAT_CLASS {
+                                let exit = self.jit.label();
+                                let generic = self.jit.label();
+                                self.guard_rdi_flonum(generic);
+                                monoasm!(self.jit,
+                                    movq rsi, (f64::to_bits(rhs as f64));
+                                    movq xmm1, rsi;
+                                    subsd xmm0, xmm1;
+                                    movq rax, (Value::new_float);
+                                    call rax;
+                                    // store the result to return reg.
+                                    movq [rbp - (conv(ret))], rax;
+                                exit:
+                                );
+                                self.side_generic_op_with_rhs_integer(
+                                    rhs,
+                                    generic,
+                                    exit,
+                                    ret,
+                                    sub_values as _,
+                                );
+                            } else {
+                                monoasm!(self.jit,
+                                    movq rsi, (Value::int32(rhs as i32).get());
+                                );
+                                self.generic_op(ret, sub_values as _);
+                            }
+                        }
+                        _ => unimplemented!(),
+                    }
                 }
-                BcOp1::BinOpRi(BinOpK::Sub, ret, lhs, rhs) => {
-                    let generic = self.jit.label();
-                    let rhs = Value::int32(rhs as i32).get();
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(lhs))];
-                        movq rsi, (rhs);
-                    );
-                    self.guard_rdi_fixnum(generic);
-                    self.fast_sub(generic, ret);
-                }
-                BcOp1::BinOpRi(..) => unimplemented!(),
+
                 BcOp1::Cmp(kind, ret, lhs, rhs, false) => match kind {
                     CmpKind::Eq => cmp!(lhs, rhs, ret, eq),
                     CmpKind::Ne => cmp!(lhs, rhs, ret, ne),
@@ -379,6 +507,25 @@ impl Codegen {
                 }
             }
         }
+        self.jit.finalize();
+
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        let elapsed = now.elapsed();
+        #[cfg(any(feature = "emit-asm"))]
+        {
+            let (start, code_end, end) = self.jit.code_block.last().unwrap();
+            eprintln!(
+                "offset:{:?} code: {} bytes  data: {} bytes",
+                start,
+                *code_end - *start,
+                *end - *code_end
+            );
+            self.jit.select(0);
+            eprintln!("{}", self.jit.dump_code().unwrap());
+        }
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
+
         label
     }
 
@@ -596,6 +743,28 @@ impl Codegen {
         self.jit.select(0);
     }
 
+    fn side_generic_op_with_rhs_integer(
+        &mut self,
+        rhs: i16,
+        generic: DestLabel,
+        exit: DestLabel,
+        ret: u16,
+        func: u64,
+    ) {
+        self.jit.select(1);
+        self.jit.bind_label(generic);
+        monoasm!(self.jit,
+            movq rsi, (Value::int32(rhs as i32).get());
+        );
+        self.call_binop(func);
+        monoasm!(self.jit,
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+            jmp  exit;
+        );
+        self.jit.select(0);
+    }
+
     fn generic_op(&mut self, ret: u16, func: u64) {
         self.call_binop(func);
         monoasm!(self.jit,
@@ -732,4 +901,27 @@ impl Codegen {
         );
         self.jit.select(0);
     }
+}
+
+#[test]
+fn test() {
+    let mut gen = Codegen::new();
+    let generic = gen.entry_panic;
+    let entry = gen.jit.get_current_address();
+    monoasm!(gen.jit,
+        movq rdi, (Value::new_float(5.2).get()); // 0xa666666666666a
+    );
+    gen.guard_rdi_flonum(generic);
+    monoasm!(gen.jit,
+        movq rsi, (f64::to_bits(1 as f64)); // 0x3ff00000_00000000
+        movq xmm1, rsi;
+        subsd xmm0, xmm1;
+        movq rax, (Value::new_float);
+        call rax;
+        ret;
+    );
+    gen.jit.finalize();
+    let f: fn() -> Option<Value> = unsafe { std::mem::transmute(entry.as_ptr()) };
+    let res = f();
+    assert_eq!(Some(Value::new_float(4.2)), res);
 }

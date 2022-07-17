@@ -680,7 +680,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#3343e126d1aac836a872d5739f84b6d505767178"
+source = "git+https://github.com/sisshiki1969/monoasm.git#c294aba2fc89a5bd5c1feefb4de1732eaf9c2c3c"
 dependencies = [
  "libc",
  "monoasm_macro",
@@ -692,7 +692,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#3343e126d1aac836a872d5739f84b6d505767178"
+source = "git+https://github.com/sisshiki1969/monoasm.git#c294aba2fc89a5bd5c1feefb4de1732eaf9c2c3c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -899,9 +899,9 @@ dependencies = [
 
 [[package]]
 name = "os_str_bytes"
-version = "6.1.0"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21326818e99cfe6ce1e524c2a805c189a99b5ae555a35d19f9a284b427d86afa"
+checksum = "648001efe5d5c0102d8cea768e348da85d90af8ba91f0bea908f157951493cd4"
 
 [[package]]
 name = "paste"
