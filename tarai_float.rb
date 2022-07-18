@@ -6,4 +6,4 @@ def tarai(x,y,z)
   end
 end
 
-puts tarai(12.0, 6.0, 4.0)
+puts tarai(16.0, 6.0, 4.0)

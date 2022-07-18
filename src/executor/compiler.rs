@@ -33,6 +33,7 @@ pub struct Codegen {
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
     pub vm_entry: DestLabel,
+    pub vm_fetch: DestLabel,
     pub entry_point: EntryPoint,
     pub entry_point_return: CodePtr,
     entry_find_method: DestLabel,
@@ -330,6 +331,7 @@ impl Codegen {
             entry_panic,
             entry_find_method,
             vm_entry: entry_panic,
+            vm_fetch: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_point_return: entry_unimpl,
             vm_return,
@@ -656,8 +658,7 @@ impl Codegen {
         let label = match &func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
-                let jit_entry = self.jit_compile_normal(info, store);
-                //let vm_entry = self.vm_entry;
+                let jit_entry = self.jit_compile_normal(info, store, None);
                 let codeptr = self.jit.get_current_address();
                 monoasm!(self.jit,
                     jmp jit_entry;
@@ -667,7 +668,6 @@ impl Codegen {
             FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
         };
         self.jit.finalize();
-        //eprintln!("{}", self.jit.dump_code().unwrap());
         assert_eq!(None, func.data.codeptr);
         func.data.codeptr = Some(label);
     }
@@ -742,12 +742,27 @@ impl Codegen {
         globals: &mut Globals,
         func_id: FuncId,
     ) -> CodePtr {
-        //eprintln!("{:?}", func_id);
         globals.func[func_id].data.meta.set_jit();
-        let label = interp
-            .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal(), &globals.func);
-        interp.codegen.jit.finalize();
+        let label = interp.codegen.jit_compile_normal(
+            globals.func[func_id].as_normal(),
+            &globals.func,
+            None,
+        );
+        interp.codegen.jit.get_label_address(label)
+    }
+
+    extern "C" fn exec_jit_partial_compile(
+        interp: &mut Interp,
+        globals: &mut Globals,
+        func_id: FuncId,
+        pc: BcPc,
+    ) -> CodePtr {
+        let pc_index = pc - globals.func[func_id].data.pc;
+        let label = interp.codegen.jit_compile_normal(
+            globals.func[func_id].as_normal(),
+            &globals.func,
+            Some(pc_index),
+        );
         interp.codegen.jit.get_label_address(label)
     }
 

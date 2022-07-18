@@ -225,7 +225,7 @@ impl FnStore {
 
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_normal_mut());
-        self[func_id].data.pc = BcPcBase::new(self[func_id].as_normal()) + 0;
+        self[func_id].data.pc = self[func_id].as_normal().get_bytecode_address(0);
         self[func_id].data.set_reg_num(regs as i64);
         Ok(())
     }
@@ -479,9 +479,14 @@ impl NormalFuncInfo {
         info
     }
 
-    /// set bytecode..
+    /// set bytecode.
     pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
         self.bytecode = bc.into_boxed_slice();
+    }
+
+    /// get bytecode address.
+    pub(crate) fn get_bytecode_address(&self, index: usize) -> BcPc {
+        BcPcBase::new(self) + index
     }
 
     /// get a number of registers.
@@ -489,8 +494,8 @@ impl NormalFuncInfo {
         1 + self.locals.len() + self.temp_num as usize
     }
 
-    /// get bytecode.
-    #[cfg(feature = "emit-asm")]
+    /// get name.
+    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
     pub(crate) fn name(&self) -> &Option<String> {
         &self.name
     }
@@ -498,6 +503,11 @@ impl NormalFuncInfo {
     /// get bytecode.
     pub(crate) fn bytecode(&self) -> &[Bc] {
         &self.bytecode
+    }
+
+    /// get bytecode address.
+    pub(crate) fn bytecode_top(&self) -> *const Bc {
+        self.bytecode.as_ptr()
     }
 
     /// get the next register id.
@@ -674,6 +684,12 @@ impl NormalFuncInfo {
                     0 => eprintln!("_ = concat(%{}; {})", args, len),
                     ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
                 },
+                BcOp1::LoopStart(count) => eprintln!(
+                    "loop_start counter={} jit-addr={:016x}",
+                    count,
+                    Bc2::from_jit_addr(*inst)
+                ),
+                BcOp1::LoopEnd => eprintln!("loop_end"),
             }
         }
         eprintln!("------------------------------------");

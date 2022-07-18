@@ -1,9 +1,15 @@
-def f(x)
-  if x < 2
-      dump
-      1
-  else
-      x*f(x-1)
-  end
+def f
+  1
 end
-f(5)
+a = 0
+i = 0
+while i < 1000000
+  a = a + f()
+  if i == 500
+    def f
+      0
+    end
+  end
+  i = i + 1
+end
+a 

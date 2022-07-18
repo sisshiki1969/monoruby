@@ -60,6 +60,8 @@ pub(super) enum BcIr {
     InlineCache,
     MethodDef(IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
+    LoopStart,
+    LoopEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,6 +111,11 @@ impl Bc2 {
     pub(crate) fn from_bc_classid(bcop: Bc) -> ClassId {
         ClassId::new(bcop.op2.0 as u32)
     }
+
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn from_jit_addr(bcop: Bc) -> u64 {
+        bcop.op2.0
+    }
 }
 
 ///
@@ -154,6 +161,9 @@ pub(super) enum BcOp1 {
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
     ConcatStr(u16, u16, u16),
+    /// loop start marker
+    LoopStart(u32),
+    LoopEnd,
 }
 
 fn enc_wl(opcode: u16, op1: u16, op2: u32) -> u64 {
@@ -210,6 +220,8 @@ impl BcOp1 {
             Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
             LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
+            LoopStart(_) => enc_l(14, 0),
+            LoopEnd => enc_l(15, 0),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             BinOp(kind, op1, op2, op3) => {
@@ -270,6 +282,8 @@ impl BcOp1 {
                 11 => Self::StoreConst(op1, IdentId::from(op2)),
                 12 => Self::CondBr(op1, op2 as i32, true),
                 13 => Self::CondNotBr(op1, op2 as i32, true),
+                14 => Self::LoopStart(op2),
+                15 => Self::LoopEnd,
                 _ => unreachable!(),
             }
         } else {

@@ -162,6 +162,9 @@ impl Codegen {
         monoasm! { self.jit,
             subq rsp, rax;
         };
+        let entry_fetch = self.jit.label();
+        self.jit.bind_label(entry_fetch);
+        self.vm_fetch = entry_fetch;
         self.fetch_and_dispatch();
 
         //BcOp::Ret
@@ -207,6 +210,8 @@ impl Codegen {
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(branch);
         self.dispatch[13] = self.vm_condnotbr(branch);
+        self.dispatch[14] = self.vm_loop_start();
+        self.dispatch[15] = self.vm_loop_end();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[134] = self.vm_eqrr();
@@ -581,6 +586,43 @@ impl Codegen {
         );
         self.jit.select(0);
 
+        label
+    }
+
+    fn vm_loop_start(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let count = self.jit.label();
+        let compile = self.jit.label();
+        monoasm! { self.jit,
+            movq rax, [r13 - 8];
+            cmpq rax, 0;
+            jeq count;
+            jmp rax;
+        count:
+            addl [r13 - 16], 1;
+            cmpl [r13 - 16], 10;
+            jge   compile;
+        };
+        self.fetch_and_dispatch();
+        monoasm!(self.jit,
+        compile:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [rbp - 8];
+            lea rcx, [r13 - 16];
+            movq rax, (Self::exec_jit_partial_compile);
+            call rax;
+            movq [r13 - 8], rax;
+            jmp rax;
+        );
+        label
+    }
+
+    fn vm_loop_end(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+        };
+        self.fetch_and_dispatch();
         label
     }
 
