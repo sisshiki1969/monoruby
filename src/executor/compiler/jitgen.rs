@@ -14,8 +14,7 @@ impl Codegen {
                 paste! {
                     let generic = self.jit.label();
                     self.load_binary_args($lhs, $rhs);
-                    self.guard_rdi_fixnum(generic);
-                    self.guard_rsi_fixnum(generic);
+                    self.guard_rdi_rsi_fixnum(generic);
                     self.[<cmp_ $op>](generic);
                     monoasm! { self.jit,
                         movq [rbp - (conv($ret))], rax;
@@ -46,8 +45,7 @@ impl Codegen {
                 paste! {
                     let generic = self.jit.label();
                     self.load_binary_args($lhs, $rhs);
-                    self.guard_rdi_fixnum(generic);
-                    self.guard_rsi_fixnum(generic);
+                    self.guard_rdi_rsi_fixnum(generic);
                     self.[<cmp_opt_ $op>]($dest, generic, $cond);
                 }
             }};
@@ -118,24 +116,23 @@ impl Codegen {
                     let sym = Value::new_symbol(id).get();
                     monoasm!(self.jit,
                       movq rax, (sym);
-                      movq [rbp - (conv(ret))], rax;
                     );
+                    self.store_rax(ret);
                 }
                 BcOp1::Literal(ret, id) => {
                     let v = store.get_literal(id);
                     if v.is_packed_value() {
                         monoasm!(self.jit,
                           movq rax, (v.get());
-                          movq [rbp - (conv(ret))], rax;
                         );
                     } else {
                         monoasm!(self.jit,
                           movq rdi, (v.get());
                           movq rax, (Value::dup);
                           call rax;
-                          movq [rbp - (conv(ret))], rax;
                         );
                     }
+                    self.store_rax(ret);
                 }
                 BcOp1::LoadConst(ret, id) => {
                     let jit_return = self.vm_return;
@@ -150,8 +147,8 @@ impl Codegen {
                         jne  slow_path;
                         movq rax, [rip + cached_value];
                     exit:
-                        movq [rbp - (conv(ret))], rax;
                     );
+                    self.store_rax(ret);
                     self.jit.select(1);
                     monoasm!(self.jit,
                     slow_path:
@@ -198,71 +195,61 @@ impl Codegen {
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
                     self.load_binary_args(lhs, rhs);
                     match kind {
-                        BinOpK::Add => {
-                            let class = Bc2::from_bc_classid(*op);
-                            if class == INTEGER_CLASS {
+                        BinOpK::Add => match Bc2::from_bc_classid(*op) {
+                            INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_fixnum(generic);
                                 self.fast_add(generic, ret);
-                            } else if class == FLOAT_CLASS {
+                            }
+                            FLOAT_CLASS => {
                                 let generic = self.jit.label();
                                 let exit = self.jit.label();
                                 self.guard_rdi_rsi_flonum(generic);
                                 monoasm!(self.jit,
                                     addsd xmm0, xmm1;
-                                    movq rax, (Value::new_float);
-                                    call rax;
-                                    // store the result to return reg.
-                                    movq [rbp - (conv(ret))], rax;
-                                exit:
                                 );
+                                self.gen_f64_to_val();
+                                self.store_rax(ret);
+                                self.jit.bind_label(exit);
                                 self.side_generic_op(generic, exit, ret, add_values as _);
-                            } else {
-                                self.generic_op(ret, add_values as _);
                             }
-                        }
-                        BinOpK::Sub => {
-                            let class = Bc2::from_bc_classid(*op);
-                            if class == INTEGER_CLASS {
+                            _ => self.generic_op(ret, add_values as _),
+                        },
+                        BinOpK::Sub => match Bc2::from_bc_classid(*op) {
+                            INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_fixnum(generic);
                                 self.fast_sub(generic, ret);
-                            } else if class == FLOAT_CLASS {
+                            }
+                            FLOAT_CLASS => {
                                 let generic = self.jit.label();
                                 let exit = self.jit.label();
                                 self.guard_rdi_rsi_flonum(generic);
                                 monoasm!(self.jit,
                                     subsd xmm0, xmm1;
-                                    movq rax, (Value::new_float);
-                                    call rax;
-                                    // store the result to return reg.
-                                    movq [rbp - (conv(ret))], rax;
-                                exit:
                                 );
+                                self.gen_f64_to_val();
+                                self.store_rax(ret);
+                                self.jit.bind_label(exit);
                                 self.side_generic_op(generic, exit, ret, sub_values as _);
-                            } else {
-                                self.generic_op(ret, sub_values as _);
                             }
-                        }
-                        BinOpK::Mul => {
-                            let class = Bc2::from_bc_classid(*op);
-                            if class == FLOAT_CLASS {
+                            _ => self.generic_op(ret, sub_values as _),
+                        },
+                        BinOpK::Mul => match Bc2::from_bc_classid(*op) {
+                            FLOAT_CLASS => {
                                 let generic = self.jit.label();
                                 let exit = self.jit.label();
                                 self.guard_rdi_rsi_flonum(generic);
                                 monoasm!(self.jit,
                                     mulsd xmm0, xmm1;
-                                    movq rax, (Value::new_float);
-                                    call rax;
-                                    // store the result to return reg.
-                                    movq [rbp - (conv(ret))], rax;
-                                exit:
                                 );
+                                self.gen_f64_to_val();
+                                self.store_rax(ret);
+                                self.jit.bind_label(exit);
                                 self.side_generic_op(generic, exit, ret, mul_values as _);
-                            } else {
-                                self.generic_op(ret, mul_values as _);
                             }
-                        }
+                            _ => self.generic_op(ret, mul_values as _),
+                        },
                         BinOpK::Div => {
                             self.generic_op(ret, div_values as _);
                         }
@@ -278,30 +265,28 @@ impl Codegen {
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(lhs))];
                     );
+                    let imm = self.jit.const_f64(rhs as f64);
                     match kind {
-                        BinOpK::Add => {
-                            let class = Bc2::from_bc_classid(*op);
-                            if class == INTEGER_CLASS {
+                        BinOpK::Add => match Bc2::from_bc_classid(*op) {
+                            INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 monoasm!(self.jit,
                                     movq rsi, (Value::int32(rhs as i32).get());
                                 );
                                 self.guard_rdi_fixnum(generic);
                                 self.fast_add(generic, ret);
-                            } else if class == FLOAT_CLASS {
+                            }
+                            FLOAT_CLASS => {
                                 let exit = self.jit.label();
                                 let generic = self.jit.label();
                                 self.guard_rdi_flonum(generic);
                                 monoasm!(self.jit,
-                                    movq rsi, (f64::to_bits(rhs as f64));
-                                    movq xmm1, rsi;
+                                    movq xmm1, [rip + imm];
                                     addsd xmm0, xmm1;
-                                    movq rax, (Value::new_float);
-                                    call rax;
-                                    // store the result to return reg.
-                                    movq [rbp - (conv(ret))], rax;
-                                exit:
                                 );
+                                self.gen_f64_to_val();
+                                self.store_rax(ret);
+                                self.jit.bind_label(exit);
                                 self.side_generic_op_with_rhs_integer(
                                     rhs,
                                     generic,
@@ -309,36 +294,33 @@ impl Codegen {
                                     ret,
                                     add_values as _,
                                 );
-                            } else {
+                            }
+                            _ => {
                                 monoasm!(self.jit,
                                     movq rsi, (Value::int32(rhs as i32).get());
                                 );
                                 self.generic_op(ret, add_values as _);
                             }
-                        }
-                        BinOpK::Sub => {
-                            let class = Bc2::from_bc_classid(*op);
-                            if class == INTEGER_CLASS {
+                        },
+                        BinOpK::Sub => match Bc2::from_bc_classid(*op) {
+                            INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 monoasm!(self.jit,
                                     movq rsi, (Value::int32(rhs as i32).get());
                                 );
                                 self.guard_rdi_fixnum(generic);
                                 self.fast_sub(generic, ret);
-                            } else if class == FLOAT_CLASS {
+                            }
+                            FLOAT_CLASS => {
                                 let exit = self.jit.label();
                                 let generic = self.jit.label();
                                 self.guard_rdi_flonum(generic);
                                 monoasm!(self.jit,
-                                    movq rsi, (f64::to_bits(rhs as f64));
-                                    movq xmm1, rsi;
-                                    subsd xmm0, xmm1;
-                                    movq rax, (Value::new_float);
-                                    call rax;
-                                    // store the result to return reg.
-                                    movq [rbp - (conv(ret))], rax;
-                                exit:
+                                    subsd xmm0, [rip + imm];
                                 );
+                                self.gen_f64_to_val();
+                                self.store_rax(ret);
+                                self.jit.bind_label(exit);
                                 self.side_generic_op_with_rhs_integer(
                                     rhs,
                                     generic,
@@ -346,13 +328,14 @@ impl Codegen {
                                     ret,
                                     sub_values as _,
                                 );
-                            } else {
+                            }
+                            _ => {
                                 monoasm!(self.jit,
                                     movq rsi, (Value::int32(rhs as i32).get());
                                 );
                                 self.generic_op(ret, sub_values as _);
                             }
-                        }
+                        },
                         _ => unimplemented!(),
                     }
                 }
@@ -400,9 +383,7 @@ impl Codegen {
                         call rax;
                     );
                     if ret != 0 {
-                        monoasm!(self.jit,
-                            movq [rbp - (conv(ret))], rax;
-                        );
+                        self.store_rax(ret);
                     }
                 }
                 BcOp1::MethodCall(..) => {
@@ -590,10 +571,9 @@ impl Codegen {
             subq rax, 1;
             addq rax, rsi;
             jo generic;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
-        exit:
         );
+        self.store_rax(ret);
+        self.jit.bind_label(exit);
         self.side_generic_op(generic, exit, ret, add_values as _);
     }
 
@@ -605,10 +585,9 @@ impl Codegen {
             subq rax, rsi;
             jo generic;
             addq rax, 1;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
-        exit:
         );
+        self.store_rax(ret);
+        self.jit.bind_label(exit);
         self.side_generic_op(generic, exit, ret, sub_values as _);
     }
 
@@ -616,10 +595,9 @@ impl Codegen {
         monoasm!(self.jit,
             // fastpath
             orq rdi, rsi;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
-        exit:
         );
+        self.store_rdi(ret);
+        self.jit.bind_label(exit);
         self.side_generic_op(generic, exit, ret, bitor_values as _);
     }
 
@@ -627,10 +605,9 @@ impl Codegen {
         monoasm!(self.jit,
             // fastpath
             andq rdi, rsi;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
-        exit:
         );
+        self.store_rdi(ret);
+        self.jit.bind_label(exit);
         self.side_generic_op(generic, exit, ret, bitand_values as _);
     }
 
@@ -639,10 +616,9 @@ impl Codegen {
             // fastpath
             xorq rdi, rsi;
             addq rdi, 1;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
-        exit:
         );
+        self.store_rdi(ret);
+        self.jit.bind_label(exit);
         self.side_generic_op(generic, exit, ret, bitxor_values as _);
     }
 
@@ -677,10 +653,9 @@ impl Codegen {
             sarq rdi, rcx;
         after:
             orq rdi, 1;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
-        exit:
         );
+        self.store_rdi(ret);
+        self.jit.bind_label(exit);
         self.jit.select(1);
         monoasm!(self.jit,
         shl:
@@ -713,10 +688,9 @@ impl Codegen {
             salq rdi, rcx;
         after:
             orq rdi, 1;
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rdi;
-        exit:
         );
+        self.store_rdi(ret);
+        self.jit.bind_label(exit);
         self.jit.select(1);
         monoasm!(self.jit,
         shr:
@@ -734,10 +708,8 @@ impl Codegen {
     fn side_generic_op(&mut self, generic: DestLabel, exit: DestLabel, ret: u16, func: u64) {
         self.jit.select(1);
         self.jit.bind_label(generic);
-        self.call_binop(func);
+        self.generic_op(ret, func);
         monoasm!(self.jit,
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
             jmp  exit;
         );
         self.jit.select(0);
@@ -756,10 +728,8 @@ impl Codegen {
         monoasm!(self.jit,
             movq rsi, (Value::int32(rhs as i32).get());
         );
-        self.call_binop(func);
+        self.generic_op(ret, func);
         monoasm!(self.jit,
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
             jmp  exit;
         );
         self.jit.select(0);
@@ -767,10 +737,7 @@ impl Codegen {
 
     fn generic_op(&mut self, ret: u16, func: u64) {
         self.call_binop(func);
-        monoasm!(self.jit,
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rax;
-        );
+        self.store_rax(ret);
     }
 
     fn jit_method_call(&mut self, recv: u16, name: IdentId, ret: u16, args: u16, len: u16) {
@@ -852,9 +819,7 @@ impl Codegen {
             jeq entry_return;
         );
         if ret != 0 {
-            monoasm!(self.jit,
-                movq [rbp - (conv(ret))], rax;
-            );
+            self.store_rax(ret);
         }
 
         self.jit.select(1);
@@ -904,24 +869,44 @@ impl Codegen {
 }
 
 #[test]
-fn test() {
+fn float_test() {
     let mut gen = Codegen::new();
-    let generic = gen.entry_panic;
-    let entry = gen.jit.get_current_address();
+
+    let from_f64_entry = gen.jit.get_current_address();
+    gen.gen_f64_to_val();
     monoasm!(gen.jit,
-        movq rdi, (Value::new_float(5.2).get()); // 0xa666666666666a
-    );
-    gen.guard_rdi_flonum(generic);
-    monoasm!(gen.jit,
-        movq rsi, (f64::to_bits(1 as f64)); // 0x3ff00000_00000000
-        movq xmm1, rsi;
-        subsd xmm0, xmm1;
-        movq rax, (Value::new_float);
-        call rax;
         ret;
     );
+
+    let to_f64_entry1 = gen.jit.get_current_address();
+    gen.gen_rdi_to_f64();
+    monoasm!(gen.jit,
+        ret;
+    );
+
+    let to_f64_entry2 = gen.jit.get_current_address();
+    monoasm!(gen.jit,
+        movq rsi, rdi;
+    );
+    gen.gen_rsi_to_f64();
+    monoasm!(gen.jit,
+        movq xmm0, xmm1;
+        ret;
+    );
+
     gen.jit.finalize();
-    let f: fn() -> Option<Value> = unsafe { std::mem::transmute(entry.as_ptr()) };
-    let res = f();
-    assert_eq!(Some(Value::new_float(4.2)), res);
+    let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
+    let to_f641: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry1.as_ptr()) };
+    let to_f642: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry2.as_ptr()) };
+    for n in [
+        0.0,
+        4.2,
+        35354354354.2135365,
+        -3535354345111.5696876565435432,
+    ] {
+        let v = from_f64(n);
+        assert_eq!(Value::new_float(n), v);
+        assert_eq!(n, to_f641(v));
+        assert_eq!(n, to_f642(v));
+    }
 }

@@ -300,7 +300,7 @@ impl Value {
             return 0.0;
         }
         let bit = 0b10 - ((u >> 63) & 0b1);
-        let num = ((u & !(0b0011u64)) | bit).rotate_right(3);
+        let num = ((u & !3) | bit).rotate_right(3);
         f64::from_bits(num)
     }
 

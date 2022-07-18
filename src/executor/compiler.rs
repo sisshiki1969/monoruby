@@ -363,7 +363,7 @@ impl Codegen {
         monoasm!(self.jit,
             // check whether lhs is fixnum.
             testq rdi, 0x1;
-            jeq generic;
+            jz generic;
         );
     }
 
@@ -371,7 +371,7 @@ impl Codegen {
         monoasm!(self.jit,
             // check whether rhs is fixnum.
             testq rsi, 0x1;
-            jeq generic;
+            jz generic;
         );
     }
 
@@ -386,6 +386,10 @@ impl Codegen {
     ///
     /// - xmm0: lhs: f64
     ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
     fn guard_rdi_flonum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
             // check whether lhs is flonum.
@@ -393,13 +397,12 @@ impl Codegen {
             andq rax, 3;
             cmpq rax, 2;
             jne generic;
-            movq rax, (Value::conv_val_to_flonum);
-            call rax;
         );
+        self.gen_rdi_to_f64();
     }
 
     ///
-    /// Guard for whether lhs and rhs are flonum.
+    /// Guard for whether both of lhs and rhs are flonum.
     ///
     /// ### in
     ///
@@ -410,6 +413,10 @@ impl Codegen {
     ///
     /// - xmm0: lhs: f64
     /// - xmm1: rhs: f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
     ///
     fn guard_rdi_rsi_flonum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
@@ -422,8 +429,139 @@ impl Codegen {
             andq rax, 3;
             cmpq rax, 2;
             jne generic;
-            movq rax, (Value::binary_flonum);
-            call rax;
+        );
+        self.gen_rdi_to_f64();
+        self.gen_rsi_to_f64();
+    }
+
+    fn store_rax(&mut self, ret: u16) {
+        monoasm!(self.jit,
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rax;
+        );
+    }
+
+    fn store_rdi(&mut self, ret: u16) {
+        monoasm!(self.jit,
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rdi;
+        );
+    }
+
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    ///
+    /// - xmm0: f64
+    ///
+    /// ### out
+    ///
+    /// - rax: Value
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rcx, xmm1
+    ///
+    fn gen_f64_to_val(&mut self) {
+        let panic = self.entry_panic;
+        let return_zero = self.jit.label();
+        let normal = self.jit.label();
+        let heap_alloc = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(self.jit,
+            xorq rax, rax;
+            movq xmm1, rax;
+            ucomisd xmm0, xmm1;
+            jne normal;
+            jp normal;
+        return_zero:
+            movq rax, (Value::new_float(0.0).get());
+            jmp exit;
+        heap_alloc:
+            jmp panic;
+        normal:
+            movq rax, xmm0;
+            movq rcx, rax;
+            shrq rcx, 60;
+            addl rcx, 1;
+            andl rcx, 6;
+            cmpl rcx, 4;
+            jne heap_alloc;
+            rolq rax, 3;
+            andq rax, (-4);
+            orq rax, 2;
+        exit:
+        );
+    }
+
+    ///
+    /// Convert Value(rdi) to f64(xmm0).
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
+    fn gen_rdi_to_f64(&mut self) {
+        const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
+        let exit = self.jit.label();
+        monoasm!(self.jit,
+            xorq rax, rax;
+            movq xmm0, rax;
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            je exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm0, rdi;
+        exit:
+        );
+    }
+
+    ///
+    /// Convert Value(rsi) to f64(xmm1).
+    ///
+    /// ### in
+    ///
+    /// - rsi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm1: f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
+    fn gen_rsi_to_f64(&mut self) {
+        const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
+        let exit = self.jit.label();
+        monoasm!(self.jit,
+            xorq rax, rax;
+            movq xmm1, rax;
+            movq rax, (FLOAT_ZERO);
+            cmpq rsi, rax;
+            je exit;
+            movq rax, rsi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rsi, (-4);
+            orq rsi, rax;
+            rolq rsi, 61;
+            movq xmm1, rsi;
+        exit:
         );
     }
 

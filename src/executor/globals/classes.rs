@@ -11,7 +11,7 @@ pub const STRING_CLASS: ClassId = ClassId::new(8);
 pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ClassId(u32);
 

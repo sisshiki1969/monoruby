@@ -3,7 +3,7 @@
 cargo build --release
 ruby mandel.rb > mandel.ppm
 target/release/monoruby mandel.rb > mandel1.ppm
-target/release/monoruby --jit mandel.rb > mandel2.ppm
+target/release/monoruby --aot mandel.rb > mandel2.ppm
 diff -s mandel.ppm mandel1.ppm
 diff -s mandel.ppm mandel2.ppm
 rm mandel.ppm mandel1.ppm mandel2.ppm
