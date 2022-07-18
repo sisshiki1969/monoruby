@@ -112,8 +112,9 @@ impl Bc2 {
         ClassId::new(bcop.op2.0 as u32)
     }
 
-    pub(crate) fn from_bc_counter(bcop: Bc) -> u32 {
-        bcop.op2.0 as u32
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn from_jit_addr(bcop: Bc) -> u64 {
+        bcop.op2.0
     }
 }
 
@@ -160,7 +161,8 @@ pub(super) enum BcOp1 {
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
     ConcatStr(u16, u16, u16),
-    LoopStart,
+    /// loop start marker
+    LoopStart(u32),
     LoopEnd,
 }
 
@@ -218,7 +220,7 @@ impl BcOp1 {
             Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
             LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
             StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
-            LoopStart => enc_l(14, 0),
+            LoopStart(_) => enc_l(14, 0),
             LoopEnd => enc_l(15, 0),
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
@@ -280,7 +282,7 @@ impl BcOp1 {
                 11 => Self::StoreConst(op1, IdentId::from(op2)),
                 12 => Self::CondBr(op1, op2 as i32, true),
                 13 => Self::CondNotBr(op1, op2 as i32, true),
-                14 => Self::LoopStart,
+                14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
                 _ => unreachable!(),
             }

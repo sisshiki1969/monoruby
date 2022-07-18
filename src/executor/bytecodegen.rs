@@ -25,7 +25,7 @@ impl std::ops::Add<InstId> for BcPcBase {
 
 impl BcPcBase {
     pub(super) fn new(func: &NormalFuncInfo) -> Self {
-        BcPcBase(&func.bytecode()[0] as *const _)
+        BcPcBase(func.bytecode_top())
     }
 }
 
@@ -34,7 +34,7 @@ impl BcPcBase {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct BcPc(*const Bc);
+pub struct BcPc(pub(crate) *const Bc);
 
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
@@ -1297,7 +1297,7 @@ impl IrContext {
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
-                BcIr::LoopStart => BcOp1::LoopStart.to_bc(),
+                BcIr::LoopStart => BcOp1::LoopStart(0).to_bc(),
                 BcIr::LoopEnd => BcOp1::LoopEnd.to_bc(),
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
