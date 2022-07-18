@@ -16,9 +16,9 @@ impl Interp {
     }
 
     /// Execute top level method.
-    pub fn eval_toplevel(globals: &mut Globals, jit_flag: bool) -> Result<Value> {
+    pub fn eval_toplevel(globals: &mut Globals, aot_flag: bool) -> Result<Value> {
         let mut eval = Self::new();
-        if !jit_flag {
+        if !aot_flag {
             eval.codegen.precompile(&mut globals.func)
         };
         let main_id = globals.get_main_func();

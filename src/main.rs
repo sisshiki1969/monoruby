@@ -93,7 +93,7 @@ fn main() {
     }
 }
 
-fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
+fn exec(code: &str, aot_flag: bool, warning: u8, path: &std::path::Path) {
     let mut globals = Globals::new(warning);
     match globals.compile_script(code.to_string(), path) {
         Ok(_) => {}
@@ -104,10 +104,10 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
         }
     };
 
-    match Interp::eval_toplevel(&mut globals, jit) {
+    match Interp::eval_toplevel(&mut globals, aot_flag) {
         Ok(_val) => {
             #[cfg(debug_assertions)]
-            eprintln!("jit({:?}) {:?}", jit, _val)
+            eprintln!("jit({:?}) {:?}", aot_flag, _val)
         }
         Err(err) => {
             eprintln!("{:?}", err.kind);
@@ -116,8 +116,8 @@ fn exec(code: &str, jit: bool, warning: u8, path: &std::path::Path) {
     };
 }
 
-fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
-    if !jit_flag {
+fn repl_exec(code: &str, aot_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
+    if !aot_flag {
         let mut globals = Globals::new(warning);
         match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
             Ok(_) => {}
@@ -158,9 +158,9 @@ fn repl_exec(code: &str, jit_flag: bool, warning: u8) -> Result<(), MonorubyErr>
     }
 }
 
-fn run_repl(code: &str, all_codes: &mut Vec<String>, jit_flag: bool, warning: u8) {
+fn run_repl(code: &str, all_codes: &mut Vec<String>, aot_flag: bool, warning: u8) {
     all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";"), jit_flag, warning) {
+    if let Err(_) = repl_exec(&all_codes.join(";"), aot_flag, warning) {
         all_codes.pop();
     };
 }
@@ -206,7 +206,7 @@ pub fn run_test_main(globals: &mut Globals, code: &str) -> Value {
     eprintln!("jit: {:?}", jit_val);
 
     assert!(Value::eq(interp_val, jit_val));
-    interp_val
+    jit_val
 }
 
 pub fn run_test_error(code: &str) {
