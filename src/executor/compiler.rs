@@ -806,3 +806,46 @@ impl Codegen {
         self.jit.finalize();
     }
 }
+
+#[test]
+fn float_test() {
+    let mut gen = Codegen::new();
+
+    let from_f64_entry = gen.jit.get_current_address();
+    gen.gen_f64_to_val();
+    monoasm!(gen.jit,
+        ret;
+    );
+
+    let to_f64_entry1 = gen.jit.get_current_address();
+    gen.gen_rdi_to_f64();
+    monoasm!(gen.jit,
+        ret;
+    );
+
+    let to_f64_entry2 = gen.jit.get_current_address();
+    monoasm!(gen.jit,
+        movq rsi, rdi;
+    );
+    gen.gen_rsi_to_f64();
+    monoasm!(gen.jit,
+        movq xmm0, xmm1;
+        ret;
+    );
+
+    gen.jit.finalize();
+    let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
+    let to_f641: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry1.as_ptr()) };
+    let to_f642: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry2.as_ptr()) };
+    for n in [
+        0.0,
+        4.2,
+        35354354354.2135365,
+        -3535354345111.5696876565435432,
+    ] {
+        let v = from_f64(n);
+        assert_eq!(Value::new_float(n), v);
+        assert_eq!(n, to_f641(v));
+        assert_eq!(n, to_f642(v));
+    }
+}
