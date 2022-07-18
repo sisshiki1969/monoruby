@@ -674,6 +674,8 @@ impl NormalFuncInfo {
                     0 => eprintln!("_ = concat(%{}; {})", args, len),
                     ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
                 },
+                BcOp1::LoopStart => eprintln!("loop_start counter={}", Bc2::from_bc_counter(*inst)),
+                BcOp1::LoopEnd => eprintln!("loop_end"),
             }
         }
         eprintln!("------------------------------------");

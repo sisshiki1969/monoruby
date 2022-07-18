@@ -1146,6 +1146,7 @@ impl IrContext {
             let end = info.push().into();
 
             self.apply_label(loop_entry);
+            self.push(BcIr::LoopStart, loc);
             let dst = info.push().into();
             self.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end, true), loc);
             self.gen_condbr(dst, loop_exit, true);
@@ -1170,6 +1171,7 @@ impl IrContext {
         }
         self.loops.pop().unwrap();
         self.apply_label(break_pos);
+        self.push(BcIr::LoopEnd, loc);
         Ok(())
     }
 
@@ -1193,7 +1195,9 @@ impl IrContext {
                 false => None,
             },
         ));
+        let loc = body.loc;
         self.apply_label(cond_pos);
+        self.push(BcIr::LoopStart, loc);
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
             let cond = info.next_reg().into();
@@ -1213,6 +1217,7 @@ impl IrContext {
         }
         self.loops.pop().unwrap();
         self.apply_label(break_pos);
+        self.push(BcIr::LoopEnd, loc);
 
         Ok(())
     }
@@ -1292,6 +1297,8 @@ impl IrContext {
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
+                BcIr::LoopStart => BcOp1::LoopStart.to_bc(),
+                BcIr::LoopEnd => BcOp1::LoopEnd.to_bc(),
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     BcOp1::Br(dst - idx as i32 - 1).to_bc()

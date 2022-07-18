@@ -207,6 +207,8 @@ impl Codegen {
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(branch);
         self.dispatch[13] = self.vm_condnotbr(branch);
+        self.dispatch[14] = self.vm_loop_start();
+        self.dispatch[15] = self.vm_loop_end();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[134] = self.vm_eqrr();
@@ -581,6 +583,23 @@ impl Codegen {
         );
         self.jit.select(0);
 
+        label
+    }
+
+    fn vm_loop_start(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+            addl [r13 - 8], 1;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_loop_end(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+        };
+        self.fetch_and_dispatch();
         label
     }
 

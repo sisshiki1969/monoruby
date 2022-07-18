@@ -90,12 +90,12 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = Instant::now();
 
-        let label = self.jit.label();
+        let entry = self.jit.label();
         let mut labels = vec![];
         for _ in func.bytecode() {
             labels.push(self.jit.label());
         }
-        self.jit.bind_label(label);
+        self.jit.bind_label(entry);
         self.prologue(func.total_reg_num());
         let mut skip = false;
         for (idx, op) in func.bytecode().iter().enumerate() {
@@ -106,6 +106,7 @@ impl Codegen {
             self.jit.bind_label(labels[idx]);
             let ops = BcOp1::from_bc(*op);
             match ops {
+                BcOp1::LoopStart | BcOp1::LoopEnd => {}
                 BcOp1::Integer(ret, i) => {
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
@@ -507,7 +508,7 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
 
-        label
+        entry
     }
 
     fn prologue(&mut self, regs: usize) {
