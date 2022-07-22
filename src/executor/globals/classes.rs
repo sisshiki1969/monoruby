@@ -11,13 +11,31 @@ pub const STRING_CLASS: ClassId = ClassId::new(8);
 pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ClassId(u32);
 
 impl ClassId {
     pub const fn new(id: u32) -> Self {
         Self(id)
+    }
+}
+
+impl std::fmt::Debug for ClassId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            1 => write!(f, "OBJECT"),
+            2 => write!(f, "CLASS"),
+            3 => write!(f, "NIL"),
+            4 => write!(f, "TRUE"),
+            5 => write!(f, "FALSE"),
+            6 => write!(f, "INTEGER"),
+            7 => write!(f, "FLOAT"),
+            8 => write!(f, "STRING"),
+            9 => write!(f, "SYMBOL"),
+            10 => write!(f, "TIME"),
+            n => write!(f, "ClassId({})", n),
+        }
     }
 }
 

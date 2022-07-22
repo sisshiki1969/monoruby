@@ -64,7 +64,7 @@ pub(super) enum BcIr {
     LoopEnd,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
 pub(crate) struct Bc {
     pub(crate) op1: Bc1,
@@ -80,6 +80,104 @@ impl Bc {
         Self {
             op1: Bc1::from(op1),
             op2: Bc2::class_and_version(class_id, version),
+        }
+    }
+}
+
+impl std::fmt::Debug for Bc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        fn optstr(opt: bool) -> &'static str {
+            if opt {
+                "_"
+            } else {
+                ""
+            }
+        }
+        fn disp_str(disp: i32) -> String {
+            if disp >= 0 {
+                format!("+{:05}", disp + 1)
+            } else {
+                format!("{:05}", disp + 1)
+            }
+        }
+        let bcop1 = BcOp1::from_bc(*self);
+        match bcop1 {
+            BcOp1::Br(disp) => {
+                writeln!(f, "br => {}", disp_str(disp))
+            }
+            BcOp1::CondBr(reg, disp, opt) => {
+                writeln!(f, "condbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            }
+            BcOp1::CondNotBr(reg, disp, opt) => {
+                writeln!(f, "condnbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            }
+            BcOp1::Integer(reg, num) => writeln!(f, "%{} = {}: i32", reg, num),
+            BcOp1::Symbol(reg, id) => {
+                writeln!(f, "%{} = {:?}", reg, id)
+            }
+            BcOp1::Literal(reg, id) => {
+                writeln!(f, "%{} = literal[#{}]", reg, id)
+            }
+            BcOp1::LoadConst(reg, id) => {
+                writeln!(f, "%{} = const[{:?}]", reg, id)
+            }
+            BcOp1::StoreConst(reg, id) => {
+                writeln!(f, "const[{:?}] = %{}", id, reg)
+            }
+            BcOp1::Nil(reg) => writeln!(f, "%{} = nil", reg),
+            BcOp1::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
+            BcOp1::BinOp(kind, dst, lhs, rhs) => {
+                let class_id = Bc2::from_bc_classid(*self);
+                let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
+            BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
+                let class_id = Bc2::from_bc_classid(*self);
+                let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
+            BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
+                let class_id = Bc2::from_bc_classid(*self);
+                let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
+            BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
+                let class_id = Bc2::from_bc_classid(*self);
+                let op1 = format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
+
+            BcOp1::Ret(reg) => writeln!(f, "ret %{}", reg),
+            BcOp1::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
+            BcOp1::MethodCall(ret, name) => {
+                let class_id = Bc2::from_bc_classid(*self);
+                let op1 = format!(
+                    "{} = call {:?}",
+                    match ret {
+                        0 => "_".to_string(),
+                        ret => format!("%{:?}", ret),
+                    },
+                    name,
+                );
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
+            BcOp1::MethodArgs(recv, args, len) => {
+                writeln!(f, "%{}.call_args (%{}; {})", recv, args, len)
+            }
+            BcOp1::MethodDef(id) => {
+                writeln!(f, "define {:?}", id)
+            }
+            BcOp1::ConcatStr(ret, args, len) => match ret {
+                0 => writeln!(f, "_ = concat(%{}; {})", args, len),
+                ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
+            },
+            BcOp1::LoopStart(count) => writeln!(
+                f,
+                "loop_start counter={} jit-addr={:016x}",
+                count,
+                Bc2::from_jit_addr(*self)
+            ),
+            BcOp1::LoopEnd => writeln!(f, "loop_end"),
         }
     }
 }
@@ -112,7 +210,7 @@ impl Bc2 {
         ClassId::new(bcop.op2.0 as u32)
     }
 
-    #[cfg(feature = "emit-bc")]
+    //#[cfg(feature = "emit-bc")]
     pub(crate) fn from_jit_addr(bcop: Bc) -> u64 {
         bcop.op2.0
     }

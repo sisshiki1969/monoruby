@@ -2,6 +2,48 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+struct FloatContext {
+    float_reg: usize,
+    reg_info: Vec<Option<usize>>,
+}
+
+impl FloatContext {
+    fn new(reg_num: usize) -> Self {
+        Self {
+            float_reg: 0,
+            reg_info: vec![None; reg_num],
+        }
+    }
+
+    fn unset(&mut self, reg: u16) {
+        self.reg_info[reg as usize] = None;
+    }
+
+    fn write_back(&mut self, reg: u16) {
+        if let Some(freg) = self.reg_info[reg as usize] {
+            eprintln!("     %{} = F{}", reg, freg);
+            self.unset(reg);
+        }
+    }
+
+    fn set(&mut self, reg: u16) -> usize {
+        let flhs = self.float_reg;
+        self.reg_info[reg as usize] = Some(flhs);
+        self.float_reg += 1;
+        flhs
+    }
+
+    fn get_float(&mut self, reg: u16) -> usize {
+        if let Some(freg) = self.reg_info[reg as usize] {
+            freg
+        } else {
+            let freg = self.set(reg);
+            eprintln!("     F{} = %{}", freg, reg);
+            freg
+        }
+    }
+}
+
 impl Codegen {
     pub(super) fn jit_compile_normal(
         &mut self,
@@ -43,12 +85,38 @@ impl Codegen {
         }
 
         let mut skip = false;
+        let mut info = vec![false; func.bytecode().len()];
+        for (idx, op) in func.bytecode().iter().enumerate() {
+            if skip {
+                skip = false;
+                continue;
+            }
+            let ops = BcOp1::from_bc(*op);
+            match ops {
+                BcOp1::MethodArgs(..) => {
+                    skip = true;
+                }
+                BcOp1::Br(disp) | BcOp1::CondBr(_, disp, _) | BcOp1::CondNotBr(_, disp, _) => {
+                    info[((idx + 1) as i32 + disp) as usize] = true;
+                }
+                _ => {}
+            }
+        }
+
+        let mut skip = false;
         let mut loop_count = 0;
+        let mut ctx = FloatContext::new(func.total_reg_num());
         for (idx, op) in func.bytecode()[start_pos..].iter().enumerate() {
             if skip {
                 skip = false;
                 continue;
             }
+            eprint!(
+                "{} {:05} {:?}",
+                if info[start_pos + idx] { "=>" } else { "  " },
+                start_pos + idx,
+                op
+            );
             self.jit.bind_label(labels[idx]);
             let ops = BcOp1::from_bc(*op);
             match ops {
@@ -73,12 +141,14 @@ impl Codegen {
                     }
                 }
                 BcOp1::Integer(ret, i) => {
+                    ctx.unset(ret);
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
                       movq [rbp - (conv(ret))], (i);
                     );
                 }
                 BcOp1::Symbol(ret, id) => {
+                    ctx.unset(ret);
                     let sym = Value::new_symbol(id).get();
                     monoasm!(self.jit,
                       movq rax, (sym);
@@ -86,6 +156,7 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp1::Literal(ret, id) => {
+                    ctx.unset(ret);
                     let v = store.get_literal(id);
                     if v.is_packed_value() {
                         monoasm!(self.jit,
@@ -101,6 +172,7 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp1::LoadConst(ret, id) => {
+                    ctx.unset(ret);
                     let jit_return = self.vm_return;
                     let cached_const_version = self.jit.const_i64(-1);
                     let cached_value = self.jit.const_i64(0);
@@ -133,6 +205,7 @@ impl Codegen {
                     self.jit.select(0);
                 }
                 BcOp1::StoreConst(ret, id) => {
+                    ctx.unset(ret);
                     let const_version = self.const_version;
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
@@ -145,6 +218,7 @@ impl Codegen {
                     );
                 }
                 BcOp1::Nil(ret) => {
+                    ctx.unset(ret);
                     monoasm!(self.jit,
                         movq [rbp - (conv(ret))], (NIL_VALUE);
                     );
@@ -157,6 +231,16 @@ impl Codegen {
                     self.store_rax(dst);
                 }
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
+                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                        let flhs = ctx.get_float(lhs);
+                        let frhs = ctx.get_float(rhs);
+                        let fret = ctx.set(ret);
+                        eprintln!("     F{} = F{} {} F{}", fret, flhs, kind, frhs);
+                    } else {
+                        ctx.write_back(lhs);
+                        ctx.write_back(rhs);
+                        ctx.unset(ret);
+                    }
                     self.load_binary_args(lhs, rhs);
                     match kind {
                         BinOpK::Add => match Bc2::from_bc_classid(*op) {
@@ -227,6 +311,14 @@ impl Codegen {
                 }
 
                 BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
+                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                        let flhs = ctx.get_float(lhs);
+                        let fret = ctx.set(ret);
+                        eprintln!("     F{} = F{} {} {}: i16", fret, flhs, kind, rhs);
+                    } else {
+                        ctx.write_back(lhs);
+                        ctx.unset(ret);
+                    }
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(lhs))];
                     );
@@ -305,44 +397,69 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::Cmp(kind, ret, lhs, rhs, false) => {
-                    let generic = self.jit.label();
-                    self.load_binary_args(lhs, rhs);
-                    self.guard_rdi_rsi_fixnum(generic);
-                    match kind {
-                        CmpKind::Eq => self.cmp_eq(generic),
-                        CmpKind::Ne => self.cmp_ne(generic),
-                        CmpKind::Ge => self.cmp_ge(generic),
-                        CmpKind::Gt => self.cmp_gt(generic),
-                        CmpKind::Le => self.cmp_le(generic),
-                        CmpKind::Lt => self.cmp_lt(generic),
-                        _ => unimplemented!(),
+                BcOp1::Cmp(kind, ret, lhs, rhs, optimizable) => {
+                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                        let flhs = ctx.get_float(lhs);
+                        let frhs = ctx.get_float(rhs);
+                        ctx.unset(ret);
+                        eprintln!("     %{} = F{} {:?} F{}", ret, flhs, kind, frhs);
+                    } else {
+                        ctx.write_back(lhs);
+                        ctx.write_back(rhs);
+                        ctx.unset(ret);
                     }
-                    self.store_rax(ret);
-                }
-                BcOp1::Cmp(_, _, _, _, true) | BcOp1::Cmpri(_, _, _, _, true) => {
-                    assert!(self.opt_buf.is_none());
-                    self.opt_buf = Some(ops);
-                }
-                BcOp1::Cmpri(kind, ret, lhs, rhs, false) => {
-                    let generic = self.jit.label();
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(lhs))];
-                        movq rsi, (Value::new_integer(rhs as i64).get());
-                    );
-                    self.guard_rdi_fixnum(generic);
-                    match kind {
-                        CmpKind::Eq => self.cmp_eq(generic),
-                        CmpKind::Ne => self.cmp_ne(generic),
-                        CmpKind::Ge => self.cmp_ge(generic),
-                        CmpKind::Gt => self.cmp_gt(generic),
-                        CmpKind::Le => self.cmp_le(generic),
-                        CmpKind::Lt => self.cmp_lt(generic),
-                        _ => unimplemented!(),
+                    if optimizable {
+                        assert!(self.opt_buf.is_none());
+                        self.opt_buf = Some(ops);
+                    } else {
+                        let generic = self.jit.label();
+                        self.load_binary_args(lhs, rhs);
+                        self.guard_rdi_rsi_fixnum(generic);
+                        match kind {
+                            CmpKind::Eq => self.cmp_eq(generic),
+                            CmpKind::Ne => self.cmp_ne(generic),
+                            CmpKind::Ge => self.cmp_ge(generic),
+                            CmpKind::Gt => self.cmp_gt(generic),
+                            CmpKind::Le => self.cmp_le(generic),
+                            CmpKind::Lt => self.cmp_lt(generic),
+                            _ => unimplemented!(),
+                        }
+                        self.store_rax(ret);
                     }
-                    self.store_rax(ret);
+                }
+                BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
+                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                        let flhs = ctx.get_float(lhs);
+                        ctx.unset(ret);
+                        eprintln!("     %{} = F{} {:?} {}: i16", ret, flhs, kind, rhs);
+                    } else {
+                        ctx.write_back(lhs);
+                        ctx.unset(ret);
+                    }
+                    if optimizable {
+                        assert!(self.opt_buf.is_none());
+                        self.opt_buf = Some(ops);
+                    } else {
+                        let generic = self.jit.label();
+                        monoasm!(self.jit,
+                            movq rdi, [rbp - (conv(lhs))];
+                            movq rsi, (Value::new_integer(rhs as i64).get());
+                        );
+                        self.guard_rdi_fixnum(generic);
+                        match kind {
+                            CmpKind::Eq => self.cmp_eq(generic),
+                            CmpKind::Ne => self.cmp_ne(generic),
+                            CmpKind::Ge => self.cmp_ge(generic),
+                            CmpKind::Gt => self.cmp_gt(generic),
+                            CmpKind::Le => self.cmp_le(generic),
+                            CmpKind::Lt => self.cmp_lt(generic),
+                            _ => unimplemented!(),
+                        }
+                        self.store_rax(ret);
+                    }
                 }
                 BcOp1::Mov(dst, src) => {
+                    ctx.reg_info[dst as usize] = ctx.reg_info[src as usize];
                     monoasm!(self.jit,
                       movq rax, [rbp - (conv(src))];
                       movq [rbp - (conv(dst))], rax;
@@ -355,6 +472,7 @@ impl Codegen {
                     self.epilogue();
                 }
                 BcOp1::ConcatStr(ret, arg, len) => {
+                    ctx.unset(ret);
                     monoasm!(self.jit,
                         movq rdi, r12;
                         lea rsi, [rbp - (conv(arg))];
@@ -371,8 +489,12 @@ impl Codegen {
                     self.opt_buf = Some(ops);
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
+                    for r in args..args + len {
+                        ctx.unset(r);
+                    }
                     match std::mem::take(&mut self.opt_buf).unwrap() {
                         BcOp1::MethodCall(ret, name) => {
+                            ctx.unset(ret);
                             self.jit_method_call(recv, name, ret, args, len)
                         }
                         _ => unreachable!(),
