@@ -628,22 +628,22 @@ impl NormalFuncInfo {
                 BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
-                    let class_id = Bc2::from_bc_classid(*inst);
+                    let class_id = inst.classid();
                     let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
                     eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
-                    let class_id = Bc2::from_bc_classid(*inst);
+                    let class_id = inst.classid();
                     let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
                     eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
-                    let class_id = Bc2::from_bc_classid(*inst);
+                    let class_id = inst.classid();
                     let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
                     eprintln!("{:36} {}", op1, class_id.get_name(globals));
                 }
                 BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
-                    let class_id = Bc2::from_bc_classid(*inst);
+                    let class_id = inst.classid();
                     let op1 =
                         format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
                     eprintln!("{:36} {}", op1, class_id.get_name(globals));
@@ -653,7 +653,7 @@ impl NormalFuncInfo {
                 BcOp1::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
                 BcOp1::MethodCall(..) => {
                     assert!(buf.is_none());
-                    buf = Some((bcop1.clone(), Bc2::from_bc_classid(*inst)));
+                    buf = Some((bcop1.clone(), inst.classid()));
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
                     let (recv, ret, name, class_id) = match std::mem::take(&mut buf).unwrap() {

@@ -15,6 +15,11 @@ impl FloatContext {
         }
     }
 
+    fn _clear(&mut self) {
+        self.float_reg = 0;
+        self.reg_info.iter_mut().for_each(|elem| *elem = None);
+    }
+
     fn unset(&mut self, reg: u16) {
         self.reg_info[reg as usize] = None;
     }
@@ -23,6 +28,12 @@ impl FloatContext {
         if let Some(freg) = self.reg_info[reg as usize] {
             eprintln!("     %{} = F{}", reg, freg);
             self.unset(reg);
+        }
+    }
+
+    fn all_write_back(&mut self) {
+        for reg in 0..self.reg_info.len() as u16 {
+            self.write_back(reg)
         }
     }
 
@@ -85,6 +96,7 @@ impl Codegen {
         }
 
         let mut skip = false;
+        // true for the end ob basic block.
         let mut info = vec![false; func.bytecode().len()];
         for (idx, op) in func.bytecode().iter().enumerate() {
             if skip {
@@ -110,6 +122,9 @@ impl Codegen {
             if skip {
                 skip = false;
                 continue;
+            }
+            if info[start_pos + idx] {
+                ctx.all_write_back();
             }
             eprint!(
                 "{} {:05} {:?}",
@@ -224,6 +239,14 @@ impl Codegen {
                     );
                 }
                 BcOp1::Neg(dst, src) => {
+                    if op.is_float() {
+                        let fsrc = ctx.get_float(src);
+                        let fdst = ctx.set(dst);
+                        eprintln!("     F{} = @- F{}", fdst, fsrc);
+                    } else {
+                        ctx.write_back(src);
+                        ctx.unset(dst);
+                    }
                     monoasm!(self.jit,
                         movq rdi, [rbp - (conv(src))];
                     );
@@ -231,7 +254,7 @@ impl Codegen {
                     self.store_rax(dst);
                 }
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
-                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                    if op.is_float() {
                         let flhs = ctx.get_float(lhs);
                         let frhs = ctx.get_float(rhs);
                         let fret = ctx.set(ret);
@@ -243,7 +266,7 @@ impl Codegen {
                     }
                     self.load_binary_args(lhs, rhs);
                     match kind {
-                        BinOpK::Add => match Bc2::from_bc_classid(*op) {
+                        BinOpK::Add => match op.classid() {
                             INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_fixnum(generic);
@@ -261,7 +284,7 @@ impl Codegen {
                             }
                             _ => self.generic_binop(ret, add_values as _),
                         },
-                        BinOpK::Sub => match Bc2::from_bc_classid(*op) {
+                        BinOpK::Sub => match op.classid() {
                             INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_fixnum(generic);
@@ -279,7 +302,7 @@ impl Codegen {
                             }
                             _ => self.generic_binop(ret, sub_values as _),
                         },
-                        BinOpK::Mul => match Bc2::from_bc_classid(*op) {
+                        BinOpK::Mul => match op.classid() {
                             FLOAT_CLASS => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_flonum(generic);
@@ -311,7 +334,7 @@ impl Codegen {
                 }
 
                 BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
-                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                    if op.is_float() {
                         let flhs = ctx.get_float(lhs);
                         let fret = ctx.set(ret);
                         eprintln!("     F{} = F{} {} {}: i16", fret, flhs, kind, rhs);
@@ -324,7 +347,7 @@ impl Codegen {
                     );
                     let imm = self.jit.const_f64(rhs as f64);
                     match kind {
-                        BinOpK::Add => match Bc2::from_bc_classid(*op) {
+                        BinOpK::Add => match op.classid() {
                             INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 monoasm!(self.jit,
@@ -359,7 +382,7 @@ impl Codegen {
                                 self.generic_binop(ret, add_values as _);
                             }
                         },
-                        BinOpK::Sub => match Bc2::from_bc_classid(*op) {
+                        BinOpK::Sub => match op.classid() {
                             INTEGER_CLASS => {
                                 let generic = self.jit.label();
                                 monoasm!(self.jit,
@@ -398,7 +421,7 @@ impl Codegen {
                 }
 
                 BcOp1::Cmp(kind, ret, lhs, rhs, optimizable) => {
-                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                    if op.is_float() {
                         let flhs = ctx.get_float(lhs);
                         let frhs = ctx.get_float(rhs);
                         ctx.unset(ret);
@@ -415,20 +438,11 @@ impl Codegen {
                         let generic = self.jit.label();
                         self.load_binary_args(lhs, rhs);
                         self.guard_rdi_rsi_fixnum(generic);
-                        match kind {
-                            CmpKind::Eq => self.cmp_eq(generic),
-                            CmpKind::Ne => self.cmp_ne(generic),
-                            CmpKind::Ge => self.cmp_ge(generic),
-                            CmpKind::Gt => self.cmp_gt(generic),
-                            CmpKind::Le => self.cmp_le(generic),
-                            CmpKind::Lt => self.cmp_lt(generic),
-                            _ => unimplemented!(),
-                        }
-                        self.store_rax(ret);
+                        self.gen_cmp_kind(kind, generic, ret);
                     }
                 }
                 BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
-                    if Bc2::from_bc_classid(*op) == FLOAT_CLASS {
+                    if op.is_float() {
                         let flhs = ctx.get_float(lhs);
                         ctx.unset(ret);
                         eprintln!("     %{} = F{} {:?} {}: i16", ret, flhs, kind, rhs);
@@ -446,16 +460,7 @@ impl Codegen {
                             movq rsi, (Value::new_integer(rhs as i64).get());
                         );
                         self.guard_rdi_fixnum(generic);
-                        match kind {
-                            CmpKind::Eq => self.cmp_eq(generic),
-                            CmpKind::Ne => self.cmp_ne(generic),
-                            CmpKind::Ge => self.cmp_ge(generic),
-                            CmpKind::Gt => self.cmp_gt(generic),
-                            CmpKind::Le => self.cmp_le(generic),
-                            CmpKind::Lt => self.cmp_lt(generic),
-                            _ => unimplemented!(),
-                        }
-                        self.store_rax(ret);
+                        self.gen_cmp_kind(kind, generic, ret);
                     }
                 }
                 BcOp1::Mov(dst, src) => {
@@ -559,15 +564,7 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
-                    match kind {
-                        CmpKind::Eq => self.cmp_opt_eq(dest, generic, true),
-                        CmpKind::Ne => self.cmp_opt_ne(dest, generic, true),
-                        CmpKind::Ge => self.cmp_opt_ge(dest, generic, true),
-                        CmpKind::Gt => self.cmp_opt_gt(dest, generic, true),
-                        CmpKind::Le => self.cmp_opt_le(dest, generic, true),
-                        CmpKind::Lt => self.cmp_opt_lt(dest, generic, true),
-                        _ => unimplemented!(),
-                    }
+                    self.gen_cmp_opt(kind, dest, generic, true);
                 }
                 BcOp1::CondNotBr(_, disp, true) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
@@ -588,15 +585,7 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
-                    match kind {
-                        CmpKind::Eq => self.cmp_opt_eq(dest, generic, false),
-                        CmpKind::Ne => self.cmp_opt_ne(dest, generic, false),
-                        CmpKind::Ge => self.cmp_opt_ge(dest, generic, false),
-                        CmpKind::Gt => self.cmp_opt_gt(dest, generic, false),
-                        CmpKind::Le => self.cmp_opt_le(dest, generic, false),
-                        CmpKind::Lt => self.cmp_opt_lt(dest, generic, false),
-                        _ => unimplemented!(),
-                    }
+                    self.gen_cmp_opt(kind, dest, generic, false);
                 }
             }
         }
@@ -673,6 +662,31 @@ impl Codegen {
             movq rdi, [rbp - (conv(lhs))];
             movq rsi, [rbp - (conv(rhs))];
         );
+    }
+
+    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: u16) {
+        match kind {
+            CmpKind::Eq => self.cmp_eq(generic),
+            CmpKind::Ne => self.cmp_ne(generic),
+            CmpKind::Ge => self.cmp_ge(generic),
+            CmpKind::Gt => self.cmp_gt(generic),
+            CmpKind::Le => self.cmp_le(generic),
+            CmpKind::Lt => self.cmp_lt(generic),
+            _ => unimplemented!(),
+        }
+        self.store_rax(ret);
+    }
+
+    fn gen_cmp_opt(&mut self, kind: CmpKind, dest: DestLabel, generic: DestLabel, switch: bool) {
+        match kind {
+            CmpKind::Eq => self.cmp_opt_eq(dest, generic, switch),
+            CmpKind::Ne => self.cmp_opt_ne(dest, generic, switch),
+            CmpKind::Ge => self.cmp_opt_ge(dest, generic, switch),
+            CmpKind::Gt => self.cmp_opt_gt(dest, generic, switch),
+            CmpKind::Le => self.cmp_opt_le(dest, generic, switch),
+            CmpKind::Lt => self.cmp_opt_lt(dest, generic, switch),
+            _ => unimplemented!(),
+        }
     }
 
     fn gen_add(&mut self, generic: DestLabel, ret: u16) {

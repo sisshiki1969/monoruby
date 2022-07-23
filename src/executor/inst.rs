@@ -82,6 +82,14 @@ impl Bc {
             op2: Bc2::class_and_version(class_id, version),
         }
     }
+
+    pub(crate) fn classid(&self) -> ClassId {
+        ClassId::new(self.op2.0 as u32)
+    }
+
+    pub(crate) fn is_float(&self) -> bool {
+        self.classid() == FLOAT_CLASS
+    }
 }
 
 impl std::fmt::Debug for Bc {
@@ -127,22 +135,22 @@ impl std::fmt::Debug for Bc {
             BcOp1::Nil(reg) => writeln!(f, "%{} = nil", reg),
             BcOp1::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
             BcOp1::BinOp(kind, dst, lhs, rhs) => {
-                let class_id = Bc2::from_bc_classid(*self);
+                let class_id = self.classid();
                 let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
             BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
-                let class_id = Bc2::from_bc_classid(*self);
+                let class_id = self.classid();
                 let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
             BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
-                let class_id = Bc2::from_bc_classid(*self);
+                let class_id = self.classid();
                 let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
             BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
-                let class_id = Bc2::from_bc_classid(*self);
+                let class_id = self.classid();
                 let op1 = format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
@@ -150,7 +158,7 @@ impl std::fmt::Debug for Bc {
             BcOp1::Ret(reg) => writeln!(f, "ret %{}", reg),
             BcOp1::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
             BcOp1::MethodCall(ret, name) => {
-                let class_id = Bc2::from_bc_classid(*self);
+                let class_id = self.classid();
                 let op1 = format!(
                     "{} = call {:?}",
                     match ret {
@@ -204,10 +212,6 @@ impl Bc2 {
     fn class_and_version(class_id: ClassId, version: u32) -> Self {
         let id: u32 = class_id.into();
         Self(((version as u64) << 32) + (id as u64))
-    }
-
-    pub(crate) fn from_bc_classid(bcop: Bc) -> ClassId {
-        ClassId::new(bcop.op2.0 as u32)
     }
 
     //#[cfg(feature = "emit-bc")]
