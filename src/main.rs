@@ -473,10 +473,10 @@ mod test {
         run_test(
             r#"
             def fib(x)
-                if x<3 then
-                    1
+                if x<3.0 then
+                    1.0
                 else
-                    fib(x-1)+fib(x-2)
+                    fib(x-1.0)+fib(x-2.0)
                 end
             end;
             fib(32.0)

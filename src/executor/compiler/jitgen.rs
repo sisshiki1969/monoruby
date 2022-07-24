@@ -2,60 +2,390 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+#[derive(Clone, PartialEq)]
+enum TIr {
+    /// branch(dest)
+    Br(i32),
+    /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
+    CondBr(u16, i32, bool),
+    /// conditional branch(%reg, dest, optimizable)  : branch when reg was false.
+    CondNotBr(u16, i32, bool),
+    /// integer(%reg, i32)
+    Integer(u16, i32),
+    /// Symbol(%reg, IdentId)
+    Symbol(u16, IdentId),
+    /// literal(%ret, literal_id)
+    Literal(u16, u32),
+    LoadConst(u16, ConstSiteId),
+    StoreConst(u16, IdentId),
+    /// nil(%reg)
+    Nil(u16),
+    /// negate(%ret, %src)
+    Neg(u16, u16),
+    /// binop(kind, %ret, %lhs, %rhs)
+    BinOp(BinOpK, u16, u16, u16, ClassId),
+    /// binop with small integer(kind, %ret, %lhs, %rhs)
+    BinOpRi(BinOpK, u16, u16, i16, ClassId),
+    /// cmp(%ret, %lhs, %rhs, optimizable)
+    Cmp(CmpKind, u16, u16, u16, bool, ClassId),
+    /// cmpri(%ret, %lhs, rhs: i16, optimizable)
+    Cmpri(CmpKind, u16, u16, i16, bool, ClassId),
+    /// return(%ret)
+    Ret(u16),
+    /// move(%dst, %src)
+    Mov(u16, u16),
+    /// func call(%ret, name)
+    MethodCall(u16, IdentId),
+    /// func call 2nd opecode(%recv, %args, %len)
+    MethodArgs(u16, u16, u16),
+    /// method definition(method_def_id)
+    MethodDef(MethodDefId),
+    /// concatenate strings(ret, args, args_len)
+    ConcatStr(u16, u16, u16),
+    /// float_binop(kind, Fret, Flhs, Frhs)
+    FBinOp(BinOpK, u16, u16, u16),
+    /// float_binop(kind, Fret, Flhs, f64)
+    FBinOpRf(BinOpK, u16, u16, f64),
+    /// float_cmp(%ret, Flhs, Frhs, optimizable)
+    FCmp(CmpKind, u16, u16, u16, bool),
+    /// float_cmpri(%ret, Flhs, rhs: f16, optimizable)
+    FCmpRf(CmpKind, u16, u16, f64, bool),
+    /// negate(Fret, Fsrc)
+    FNeg(u16, u16),
+    /// load float from register(%src, Fdst)
+    FLoad(u16, u16),
+    /// store float to register(Fsrc, %dst)
+    FStore(u16, u16),
+    /// write back float to registers(Vec<(Fsrc, %dst)>).
+    WriteBack(Vec<(u16, u16)>),
+}
+
+impl std::fmt::Debug for TIr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn optstr(opt: &bool) -> &'static str {
+            if *opt {
+                "_"
+            } else {
+                ""
+            }
+        }
+        fn disp_str(disp: &i32) -> String {
+            if *disp >= 0 {
+                format!("+{:05}", disp + 1)
+            } else {
+                format!("{:05}", disp + 1)
+            }
+        }
+        fn disp_write_back(v: &[(u16, u16)]) -> String {
+            v.iter()
+                .map(|(fsrc, dst)| format!("%{}:=F{} ", dst, fsrc))
+                .fold(String::new(), |acc, s| acc + &s)
+        }
+        match self {
+            TIr::Br(disp) => {
+                writeln!(f, "br => {}", disp_str(disp),)
+            }
+            TIr::CondBr(reg, disp, opt) => {
+                writeln!(f, "condbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            }
+            TIr::CondNotBr(reg, disp, opt) => {
+                writeln!(f, "condnbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            }
+            TIr::Integer(reg, num) => writeln!(f, "%{} = {}: i32", reg, num),
+            TIr::Symbol(reg, id) => {
+                writeln!(f, "%{} = {:?}", reg, id)
+            }
+            TIr::Literal(reg, id) => {
+                writeln!(f, "%{} = literal[#{}]", reg, id)
+            }
+            TIr::LoadConst(reg, id) => {
+                writeln!(f, "%{} = const[{:?}]", reg, id)
+            }
+            TIr::StoreConst(reg, id) => {
+                writeln!(f, "const[{:?}] = %{}", id, reg)
+            }
+            TIr::FLoad(src, fdst) => {
+                writeln!(f, "F{} = %{}", fdst, src)
+            }
+            TIr::FStore(fsrc, dst) => {
+                writeln!(f, "%{} = F{}", dst, fsrc)
+            }
+            TIr::Nil(reg) => writeln!(f, "%{} = nil", reg),
+            TIr::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
+            TIr::FNeg(dst, src) => writeln!(f, "F{} = neg F{}", dst, src),
+            TIr::BinOp(kind, dst, lhs, rhs, class) => {
+                writeln!(f, "%{} = %{}:{:?} {} %{}", dst, lhs, class, kind, rhs)
+            }
+            TIr::BinOpRi(kind, dst, lhs, rhs, class) => {
+                writeln!(f, "%{} = %{}:{:?} {} {}: i16", dst, lhs, class, kind, rhs)
+            }
+            TIr::FBinOp(kind, dst, lhs, rhs) => {
+                writeln!(f, "F{} = F{} {} F{}", dst, lhs, kind, rhs)
+            }
+            TIr::FBinOpRf(kind, dst, lhs, rhs) => {
+                writeln!(f, "F{} = F{} {} {}: f64", dst, lhs, kind, rhs)
+            }
+            TIr::Cmp(kind, dst, lhs, rhs, opt, class) => {
+                writeln!(
+                    f,
+                    "{}%{} = %{}:{:?} {:?} %{}",
+                    optstr(opt),
+                    dst,
+                    lhs,
+                    class,
+                    kind,
+                    rhs
+                )
+            }
+            TIr::Cmpri(kind, dst, lhs, rhs, opt, class) => {
+                writeln!(
+                    f,
+                    "{}%{} = %{}:{:?} {:?} {}: i16",
+                    optstr(opt),
+                    dst,
+                    lhs,
+                    class,
+                    kind,
+                    rhs
+                )
+            }
+            TIr::FCmp(kind, dst, lhs, rhs, opt) => {
+                writeln!(f, "{}%{} = F{} {:?} F{}", optstr(opt), dst, lhs, kind, rhs)
+            }
+            TIr::FCmpRf(kind, dst, lhs, rhs, opt) => {
+                writeln!(
+                    f,
+                    "{}%{} = F{} {:?} {}: f64",
+                    optstr(opt),
+                    dst,
+                    lhs,
+                    kind,
+                    rhs
+                )
+            }
+
+            TIr::Ret(reg) => writeln!(f, "ret %{}", reg),
+            TIr::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
+            TIr::MethodCall(ret, name) => {
+                writeln!(
+                    f,
+                    "{} = call {:?}",
+                    match ret {
+                        0 => "_".to_string(),
+                        ret => format!("%{:?}", ret),
+                    },
+                    name,
+                )
+            }
+            TIr::MethodArgs(recv, args, len) => {
+                writeln!(f, "%{}.call_args (%{}; {})", recv, args, len)
+            }
+            TIr::MethodDef(id) => {
+                writeln!(f, "define {:?}", id)
+            }
+            TIr::ConcatStr(ret, args, len) => match ret {
+                0 => writeln!(f, "_ = concat(%{}; {})", args, len),
+                ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
+            },
+            TIr::WriteBack(v) => writeln!(f, "write_back {}", disp_write_back(v)),
+        }
+    }
+}
+
 struct FloatContext {
-    float_reg: usize,
-    reg_info: Vec<Option<usize>>,
+    reg_info: Vec<Option<u16>>,
+    xmm: [Vec<u16>; 13],
+    tir: Vec<TIr>,
 }
 
 impl FloatContext {
     fn new(reg_num: usize) -> Self {
+        let xmm = (0..13)
+            .map(|_| vec![])
+            .collect::<Vec<Vec<u16>>>()
+            .try_into()
+            .unwrap();
         Self {
-            float_reg: 0,
             reg_info: vec![None; reg_num],
+            xmm,
+            tir: vec![],
         }
     }
 
-    fn _clear(&mut self) {
-        self.float_reg = 0;
-        self.reg_info.iter_mut().for_each(|elem| *elem = None);
+    fn push(&mut self, tir: TIr) {
+        self.tir.push(tir);
     }
 
-    fn unset(&mut self, reg: u16) {
-        self.reg_info[reg as usize] = None;
+    fn alloc(&mut self, reg: u16) -> u16 {
+        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
+            if xmm.is_empty() {
+                self.reg_info[reg as usize] = Some(flhs as u16);
+                xmm.push(reg);
+                return flhs as u16;
+            }
+        }
+        unreachable!()
     }
 
-    fn write_back(&mut self, reg: u16) {
+    fn dealloc(&mut self, reg: u16) {
         if let Some(freg) = self.reg_info[reg as usize] {
-            eprintln!("     %{} = F{}", reg, freg);
-            self.unset(reg);
+            assert!(self.xmm[freg as usize].contains(&reg));
+            self.xmm[freg as usize].retain(|e| *e != reg);
+            self.reg_info[reg as usize] = None;
+        };
+    }
+
+    fn copy(&mut self, src: u16, dst: u16) -> Option<u16> {
+        self.dealloc(dst);
+        let f = self.reg_info[src as usize];
+        if let Some(freg) = f {
+            self.reg_info[dst as usize] = Some(freg);
+            self.xmm[freg as usize].push(dst);
+        }
+        f
+    }
+
+    fn write_back(&mut self, codegen: &mut Codegen, reg: u16) {
+        if let Some(freg) = self.reg_info[reg as usize] {
+            self.push(TIr::FStore(freg, reg));
+            let f64_to_val = codegen.f64_to_val;
+            monoasm!(codegen.jit,
+                movq xmm0, xmm(freg as u64 + 2);
+                call f64_to_val;
+                movq [rbp - (conv(reg))], rax;
+            );
+            self.dealloc(reg);
         }
     }
 
-    fn all_write_back(&mut self) {
-        for reg in 0..self.reg_info.len() as u16 {
-            self.write_back(reg)
+    fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: u16) {
+        if let Some(freg) = self.reg_info[reg as usize] {
+            //self.push(TIr::FStore(freg, reg));
+            let f64_to_val = codegen.f64_to_val;
+            monoasm!(codegen.jit,
+                movq xmm0, xmm(freg as u64 + 2);
+                call f64_to_val;
+                movq [rbp - (conv(reg))], rax;
+            );
         }
     }
 
-    fn set(&mut self, reg: u16) -> usize {
-        let flhs = self.float_reg;
-        self.reg_info[reg as usize] = Some(flhs);
-        self.float_reg += 1;
-        flhs
+    fn write_back_range(&mut self, codegen: &mut Codegen, arg: u16, len: u16) {
+        for reg in arg..arg + len {
+            self.write_back(codegen, reg)
+        }
     }
 
-    fn get_float(&mut self, reg: u16) -> usize {
+    fn branch_write_back(&mut self, codegen: &mut Codegen) {
+        let v = self.get_write_back();
+        v.iter()
+            .for_each(|(_, reg)| self.write_back_no_dealloc(codegen, *reg));
+    }
+
+    fn all_write_back(&mut self, codegen: &mut Codegen) {
+        let v = self.get_write_back();
+        v.iter().for_each(|(_, reg)| self.write_back(codegen, *reg));
+        /*if !v.is_empty() {
+            self.push(TIr::WriteBack(v));
+        }*/
+        assert!(self.xmm.iter().all(|v| v.is_empty()));
+        assert!(self.reg_info.iter().all(|r| r.is_none()));
+    }
+
+    fn get_write_back(&mut self) -> Vec<(u16, u16)> {
+        self.reg_info
+            .iter()
+            .enumerate()
+            .filter_map(|(reg, freg)| freg.map(|freg| (freg as u16, reg as u16)))
+            .collect()
+    }
+
+    fn get_float(&mut self, codegen: &mut Codegen, reg: u16) -> u16 {
         if let Some(freg) = self.reg_info[reg as usize] {
             freg
         } else {
-            let freg = self.set(reg);
-            eprintln!("     F{} = %{}", freg, reg);
+            let freg = self.alloc(reg);
+            self.push(TIr::FLoad(reg, freg as u16));
+            let val_to_f64 = codegen.val_to_f64;
+            monoasm!(codegen.jit,
+                movq rdi, [rbp - (conv(reg))];
+                call val_to_f64;
+                movq xmm(freg as u64 + 2), xmm0;
+            );
             freg
         }
     }
 }
 
+macro_rules! cmp_opt_main {
+    ($op:ident) => {
+        paste! {
+            fn [<cmp_opt_ $op>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut FloatContext) {
+                let cont = self.jit.label();
+                monoasm! { self.jit,
+                    cmpq rdi, rsi;
+                };
+                if switch {
+                    let write_back = self.jit.label();
+                    monoasm! { self.jit,
+                        [<j $op>] write_back;
+                        jmp cont;
+                    write_back:
+                    };
+                    ctx.branch_write_back(self);
+                    monoasm! { self.jit,
+                        jmp dest;
+                    };
+                } else {
+                    monoasm! { self.jit,
+                        [<j $op>] cont;
+                    };
+                    ctx.branch_write_back(self);
+                    monoasm! { self.jit,
+                        jmp dest;
+                    };
+                }
+                self.jit.bind_label(cont);
+                self.jit.select(1);
+                monoasm!(self.jit,
+                generic:
+                    // generic path
+                    movq rax, ([<cmp_ $op _values>]);
+                    call rax;
+                    orq  rax, 0x10;
+                    cmpq rax, (FALSE_VALUE);
+                    // if true, Z=0(not set).
+                );
+                if switch {
+                    monoasm!(self.jit,
+                        jz   cont;
+                    );
+                    ctx.branch_write_back(self);
+                    monoasm! { self.jit,
+                        jmp dest;
+                    };
+                } else {
+                    monoasm!(self.jit,
+                        jnz  cont;
+                    );
+                    ctx.branch_write_back(self);
+                    monoasm! { self.jit,
+                        jmp dest;
+                    };
+                }
+                self.jit.select(0);
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmp_opt_main!($op1);
+        cmp_opt_main!($($op2),+);
+    };
+}
+
 impl Codegen {
+    cmp_opt_main!(eq, ne, lt, le, gt, ge);
+
     pub(super) fn jit_compile_normal(
         &mut self,
         func: &NormalFuncInfo,
@@ -95,25 +425,7 @@ impl Codegen {
             self.prologue(func.total_reg_num());
         }
 
-        let mut skip = false;
-        // true for the end ob basic block.
-        let mut info = vec![false; func.bytecode().len()];
-        for (idx, op) in func.bytecode().iter().enumerate() {
-            if skip {
-                skip = false;
-                continue;
-            }
-            let ops = BcOp1::from_bc(*op);
-            match ops {
-                BcOp1::MethodArgs(..) => {
-                    skip = true;
-                }
-                BcOp1::Br(disp) | BcOp1::CondBr(_, disp, _) | BcOp1::CondNotBr(_, disp, _) => {
-                    info[((idx + 1) as i32 + disp) as usize] = true;
-                }
-                _ => {}
-            }
-        }
+        let info = func.get_bb_info();
 
         let mut skip = false;
         let mut loop_count = 0;
@@ -123,15 +435,9 @@ impl Codegen {
                 skip = false;
                 continue;
             }
-            if info[start_pos + idx] {
-                ctx.all_write_back();
+            if let Some(_) = info[start_pos + idx] {
+                ctx.all_write_back(self);
             }
-            eprint!(
-                "{} {:05} {:?}",
-                if info[start_pos + idx] { "=>" } else { "  " },
-                start_pos + idx,
-                op
-            );
             self.jit.bind_label(labels[idx]);
             let ops = BcOp1::from_bc(*op);
             match ops {
@@ -152,18 +458,22 @@ impl Codegen {
                             movq r13, (pc.0);
                             jmp fetch;
                         );
+
+                        eprint!("{:?}", ctx.tir);
                         break;
                     }
                 }
                 BcOp1::Integer(ret, i) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::Integer(ret, i));
+                    ctx.dealloc(ret);
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
                       movq [rbp - (conv(ret))], (i);
                     );
                 }
                 BcOp1::Symbol(ret, id) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::Symbol(ret, id));
+                    ctx.dealloc(ret);
                     let sym = Value::new_symbol(id).get();
                     monoasm!(self.jit,
                       movq rax, (sym);
@@ -171,7 +481,8 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp1::Literal(ret, id) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::Literal(ret, id));
+                    ctx.dealloc(ret);
                     let v = store.get_literal(id);
                     if v.is_packed_value() {
                         monoasm!(self.jit,
@@ -187,7 +498,8 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp1::LoadConst(ret, id) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::LoadConst(ret, id));
+                    ctx.dealloc(ret);
                     let jit_return = self.vm_return;
                     let cached_const_version = self.jit.const_i64(-1);
                     let cached_value = self.jit.const_i64(0);
@@ -220,7 +532,8 @@ impl Codegen {
                     self.jit.select(0);
                 }
                 BcOp1::StoreConst(ret, id) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::StoreConst(ret, id));
+                    ctx.dealloc(ret);
                     let const_version = self.const_version;
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
@@ -233,101 +546,105 @@ impl Codegen {
                     );
                 }
                 BcOp1::Nil(ret) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::Nil(ret));
+                    ctx.dealloc(ret);
                     monoasm!(self.jit,
                         movq [rbp - (conv(ret))], (NIL_VALUE);
                     );
                 }
                 BcOp1::Neg(dst, src) => {
                     if op.is_float() {
-                        let fsrc = ctx.get_float(src);
-                        let fdst = ctx.set(dst);
-                        eprintln!("     F{} = @- F{}", fdst, fsrc);
+                        let fsrc = ctx.get_float(self, src);
+                        ctx.dealloc(dst);
+                        let fdst = ctx.alloc(dst);
+                        ctx.push(TIr::FNeg(fdst, fsrc));
+                        monoasm!(self.jit,
+                            movq rax, (-1);
+                            movq xmm(fdst as u64 + 2), rax;
+                            mulsd xmm(fdst as u64 + 2), xmm(fsrc as u64 + 2);
+                        );
                     } else {
-                        ctx.write_back(src);
-                        ctx.unset(dst);
+                        ctx.dealloc(dst);
+                        ctx.write_back(self, src);
+                        ctx.push(TIr::Neg(dst, src));
+                        monoasm!(self.jit,
+                            movq rdi, [rbp - (conv(src))];
+                        );
+                        self.call_unop(neg_value as _);
+                        self.store_rax(dst);
                     }
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(src))];
-                    );
-                    self.call_unop(neg_value as _);
-                    self.store_rax(dst);
                 }
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
                     if op.is_float() {
-                        let flhs = ctx.get_float(lhs);
-                        let frhs = ctx.get_float(rhs);
-                        let fret = ctx.set(ret);
-                        eprintln!("     F{} = F{} {} F{}", fret, flhs, kind, frhs);
-                    } else {
-                        ctx.write_back(lhs);
-                        ctx.write_back(rhs);
-                        ctx.unset(ret);
-                    }
-                    self.load_binary_args(lhs, rhs);
-                    match kind {
-                        BinOpK::Add => match op.classid() {
-                            INTEGER_CLASS => {
-                                let generic = self.jit.label();
-                                self.guard_rdi_rsi_fixnum(generic);
-                                self.gen_add(generic, ret);
-                            }
-                            FLOAT_CLASS => {
-                                let generic = self.jit.label();
-                                self.guard_rdi_rsi_flonum(generic);
-                                monoasm!(self.jit,
-                                    addsd xmm0, xmm1;
-                                );
-                                self.gen_f64_to_val();
-                                self.store_rax(ret);
-                                self.side_generic_op(generic, ret, add_values as _);
-                            }
-                            _ => self.generic_binop(ret, add_values as _),
-                        },
-                        BinOpK::Sub => match op.classid() {
-                            INTEGER_CLASS => {
-                                let generic = self.jit.label();
-                                self.guard_rdi_rsi_fixnum(generic);
-                                self.gen_sub(generic, ret);
-                            }
-                            FLOAT_CLASS => {
-                                let generic = self.jit.label();
-                                self.guard_rdi_rsi_flonum(generic);
-                                monoasm!(self.jit,
-                                    subsd xmm0, xmm1;
-                                );
-                                self.gen_f64_to_val();
-                                self.store_rax(ret);
-                                self.side_generic_op(generic, ret, sub_values as _);
-                            }
-                            _ => self.generic_binop(ret, sub_values as _),
-                        },
-                        BinOpK::Mul => match op.classid() {
-                            FLOAT_CLASS => {
-                                let generic = self.jit.label();
-                                self.guard_rdi_rsi_flonum(generic);
-                                monoasm!(self.jit,
-                                    mulsd xmm0, xmm1;
-                                );
-                                self.gen_f64_to_val();
-                                self.store_rax(ret);
-                                self.side_generic_op(generic, ret, mul_values as _);
-                            }
-                            _ => self.generic_binop(ret, mul_values as _),
-                        },
-                        BinOpK::Div => {
-                            self.generic_binop(ret, div_values as _);
+                        let flhs = ctx.get_float(self, lhs);
+                        let frhs = ctx.get_float(self, rhs);
+                        ctx.dealloc(ret);
+                        let fret = ctx.alloc(ret);
+                        ctx.push(TIr::FBinOp(kind, fret as u16, flhs as u16, frhs as u16));
+                        //self.xmm_mov(flhs, fret);
+                        match kind {
+                            BinOpK::Add => monoasm!(self.jit,
+                                movq  xmm0, xmm(flhs as u64 + 2);
+                                addsd xmm0, xmm(frhs as u64 + 2);
+                                movq  xmm(fret as u64 + 2), xmm0;
+                            ),
+                            BinOpK::Sub => monoasm!(self.jit,
+                                movq  xmm0, xmm(flhs as u64 + 2);
+                                subsd xmm0, xmm(frhs as u64 + 2);
+                                movq  xmm(fret as u64 + 2), xmm0;
+                            ),
+                            BinOpK::Mul => monoasm!(self.jit,
+                                movq  xmm0, xmm(flhs as u64 + 2);
+                                mulsd xmm0, xmm(frhs as u64 + 2);
+                                movq  xmm(fret as u64 + 2), xmm0;
+                            ),
+                            BinOpK::Div => monoasm!(self.jit,
+                                movq  xmm0, xmm(flhs as u64 + 2);
+                                divsd xmm0, xmm(frhs as u64 + 2);
+                                movq  xmm(fret as u64 + 2), xmm0;
+                            ),
+                            _ => unimplemented!(),
                         }
-                        _ => {
-                            let generic = self.jit.label();
-                            self.guard_rdi_rsi_fixnum(generic);
-                            match kind {
-                                BinOpK::BitOr => self.gen_bit_or(generic, ret),
-                                BinOpK::BitAnd => self.gen_bit_and(generic, ret),
-                                BinOpK::BitXor => self.gen_bit_xor(generic, ret),
-                                BinOpK::Shr => self.gen_shr(generic, ret),
-                                BinOpK::Shl => self.gen_shl(generic, ret),
-                                _ => unimplemented!(),
+                    } else {
+                        ctx.dealloc(ret);
+                        ctx.write_back(self, lhs);
+                        ctx.write_back(self, rhs);
+                        ctx.push(TIr::BinOp(kind, ret, lhs, rhs, op.classid()));
+                        self.load_binary_args(lhs, rhs);
+                        match kind {
+                            BinOpK::Add => match op.classid() {
+                                INTEGER_CLASS => {
+                                    let generic = self.jit.label();
+                                    self.guard_rdi_rsi_fixnum(generic);
+                                    self.gen_add(generic, ret);
+                                }
+                                _ => self.generic_binop(ret, add_values as _),
+                            },
+                            BinOpK::Sub => match op.classid() {
+                                INTEGER_CLASS => {
+                                    let generic = self.jit.label();
+                                    self.guard_rdi_rsi_fixnum(generic);
+                                    self.gen_sub(generic, ret);
+                                }
+                                _ => self.generic_binop(ret, sub_values as _),
+                            },
+                            BinOpK::Mul => {
+                                self.generic_binop(ret, mul_values as _);
+                            }
+                            BinOpK::Div => {
+                                self.generic_binop(ret, div_values as _);
+                            }
+                            _ => {
+                                let generic = self.jit.label();
+                                self.guard_rdi_rsi_fixnum(generic);
+                                match kind {
+                                    BinOpK::BitOr => self.gen_bit_or(generic, ret),
+                                    BinOpK::BitAnd => self.gen_bit_and(generic, ret),
+                                    BinOpK::BitXor => self.gen_bit_xor(generic, ret),
+                                    BinOpK::Shr => self.gen_shr(generic, ret),
+                                    BinOpK::Shl => self.gen_shl(generic, ret),
+                                    _ => unimplemented!(),
+                                }
                             }
                         }
                     }
@@ -335,105 +652,88 @@ impl Codegen {
 
                 BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
                     if op.is_float() {
-                        let flhs = ctx.get_float(lhs);
-                        let fret = ctx.set(ret);
-                        eprintln!("     F{} = F{} {} {}: i16", fret, flhs, kind, rhs);
+                        let flhs = ctx.get_float(self, lhs);
+                        ctx.dealloc(ret);
+                        let fret = ctx.alloc(ret);
+                        ctx.push(TIr::FBinOpRf(kind, fret as u16, flhs as u16, rhs as f64));
+                        let imm = self.jit.const_f64(rhs as f64);
+                        self.xmm_mov(flhs, fret);
+                        match kind {
+                            BinOpK::Add => monoasm!(self.jit,
+                                addsd xmm(fret as u64 + 2), [rip + imm];
+                            ),
+                            BinOpK::Sub => monoasm!(self.jit,
+                                subsd xmm(fret as u64 + 2), [rip + imm];
+                            ),
+                            BinOpK::Mul => monoasm!(self.jit,
+                                mulsd xmm(fret as u64 + 2), [rip + imm];
+                            ),
+                            BinOpK::Div => monoasm!(self.jit,
+                                divsd xmm(fret as u64 + 2), [rip + imm];
+                            ),
+                            _ => unimplemented!(),
+                        }
                     } else {
-                        ctx.write_back(lhs);
-                        ctx.unset(ret);
-                    }
-                    monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(lhs))];
-                    );
-                    let imm = self.jit.const_f64(rhs as f64);
-                    match kind {
-                        BinOpK::Add => match op.classid() {
-                            INTEGER_CLASS => {
-                                let generic = self.jit.label();
-                                monoasm!(self.jit,
-                                    movq rsi, (Value::int32(rhs as i32).get());
-                                );
-                                self.guard_rdi_fixnum(generic);
-                                self.gen_add(generic, ret);
-                            }
-                            FLOAT_CLASS => {
-                                let exit = self.jit.label();
-                                let generic = self.jit.label();
-                                self.guard_rdi_flonum(generic);
-                                monoasm!(self.jit,
-                                    movq xmm1, [rip + imm];
-                                    addsd xmm0, xmm1;
-                                );
-                                self.gen_f64_to_val();
-                                self.store_rax(ret);
-                                self.jit.bind_label(exit);
-                                self.side_generic_op_with_rhs_integer(
-                                    rhs,
-                                    generic,
-                                    exit,
-                                    ret,
-                                    add_values as _,
-                                );
-                            }
-                            _ => {
-                                monoasm!(self.jit,
-                                    movq rsi, (Value::int32(rhs as i32).get());
-                                );
-                                self.generic_binop(ret, add_values as _);
-                            }
-                        },
-                        BinOpK::Sub => match op.classid() {
-                            INTEGER_CLASS => {
-                                let generic = self.jit.label();
-                                monoasm!(self.jit,
-                                    movq rsi, (Value::int32(rhs as i32).get());
-                                );
-                                self.guard_rdi_fixnum(generic);
-                                self.gen_sub(generic, ret);
-                            }
-                            FLOAT_CLASS => {
-                                let exit = self.jit.label();
-                                let generic = self.jit.label();
-                                self.guard_rdi_flonum(generic);
-                                monoasm!(self.jit,
-                                    subsd xmm0, [rip + imm];
-                                );
-                                self.gen_f64_to_val();
-                                self.store_rax(ret);
-                                self.jit.bind_label(exit);
-                                self.side_generic_op_with_rhs_integer(
-                                    rhs,
-                                    generic,
-                                    exit,
-                                    ret,
-                                    sub_values as _,
-                                );
-                            }
-                            _ => {
-                                monoasm!(self.jit,
-                                    movq rsi, (Value::int32(rhs as i32).get());
-                                );
-                                self.generic_binop(ret, sub_values as _);
-                            }
-                        },
-                        _ => unimplemented!(),
+                        ctx.dealloc(ret);
+                        ctx.write_back(self, lhs);
+                        ctx.push(TIr::BinOpRi(kind, ret, lhs, rhs, op.classid()));
+
+                        monoasm!(self.jit,
+                            movq rdi, [rbp - (conv(lhs))];
+                        );
+                        match kind {
+                            BinOpK::Add => match op.classid() {
+                                INTEGER_CLASS => {
+                                    let generic = self.jit.label();
+                                    monoasm!(self.jit,
+                                        movq rsi, (Value::int32(rhs as i32).get());
+                                    );
+                                    self.guard_rdi_fixnum(generic);
+                                    self.gen_add(generic, ret);
+                                }
+                                _ => {
+                                    monoasm!(self.jit,
+                                        movq rsi, (Value::int32(rhs as i32).get());
+                                    );
+                                    self.generic_binop(ret, add_values as _);
+                                }
+                            },
+                            BinOpK::Sub => match op.classid() {
+                                INTEGER_CLASS => {
+                                    let generic = self.jit.label();
+                                    monoasm!(self.jit,
+                                        movq rsi, (Value::int32(rhs as i32).get());
+                                    );
+                                    self.guard_rdi_fixnum(generic);
+                                    self.gen_sub(generic, ret);
+                                }
+                                _ => {
+                                    monoasm!(self.jit,
+                                        movq rsi, (Value::int32(rhs as i32).get());
+                                    );
+                                    self.generic_binop(ret, sub_values as _);
+                                }
+                            },
+                            _ => unimplemented!(),
+                        }
                     }
                 }
 
                 BcOp1::Cmp(kind, ret, lhs, rhs, optimizable) => {
                     if op.is_float() {
-                        let flhs = ctx.get_float(lhs);
-                        let frhs = ctx.get_float(rhs);
-                        ctx.unset(ret);
-                        eprintln!("     %{} = F{} {:?} F{}", ret, flhs, kind, frhs);
+                        let flhs = ctx.get_float(self, lhs);
+                        let frhs = ctx.get_float(self, rhs);
+                        ctx.dealloc(ret);
+                        ctx.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, optimizable));
                     } else {
-                        ctx.write_back(lhs);
-                        ctx.write_back(rhs);
-                        ctx.unset(ret);
+                        ctx.dealloc(ret);
+                        ctx.write_back(self, lhs);
+                        ctx.write_back(self, rhs);
+                        ctx.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, op.classid()));
                     }
                     if optimizable {
                         assert!(self.opt_buf.is_none());
-                        self.opt_buf = Some(ops);
+                        self.opt_buf = Some(*op);
                     } else {
                         let generic = self.jit.label();
                         self.load_binary_args(lhs, rhs);
@@ -443,16 +743,17 @@ impl Codegen {
                 }
                 BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
                     if op.is_float() {
-                        let flhs = ctx.get_float(lhs);
-                        ctx.unset(ret);
-                        eprintln!("     %{} = F{} {:?} {}: i16", ret, flhs, kind, rhs);
+                        let flhs = ctx.get_float(self, lhs);
+                        ctx.dealloc(ret);
+                        ctx.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, optimizable));
                     } else {
-                        ctx.write_back(lhs);
-                        ctx.unset(ret);
+                        ctx.dealloc(ret);
+                        ctx.write_back(self, lhs);
+                        ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, op.classid()));
                     }
                     if optimizable {
                         assert!(self.opt_buf.is_none());
-                        self.opt_buf = Some(ops);
+                        self.opt_buf = Some(*op);
                     } else {
                         let generic = self.jit.label();
                         monoasm!(self.jit,
@@ -464,20 +765,26 @@ impl Codegen {
                     }
                 }
                 BcOp1::Mov(dst, src) => {
-                    ctx.reg_info[dst as usize] = ctx.reg_info[src as usize];
-                    monoasm!(self.jit,
-                      movq rax, [rbp - (conv(src))];
-                      movq [rbp - (conv(dst))], rax;
-                    );
+                    if ctx.copy(src, dst).is_none() {
+                        ctx.push(TIr::Mov(dst, src));
+                        monoasm!(self.jit,
+                          movq rax, [rbp - (conv(src))];
+                          movq [rbp - (conv(dst))], rax;
+                        );
+                    }
                 }
                 BcOp1::Ret(lhs) => {
+                    ctx.push(TIr::Ret(lhs));
+                    ctx.write_back(self, lhs);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
                 }
                 BcOp1::ConcatStr(ret, arg, len) => {
-                    ctx.unset(ret);
+                    ctx.push(TIr::ConcatStr(ret, arg, len));
+                    ctx.write_back_range(self, arg, len);
+                    ctx.dealloc(ret);
                     monoasm!(self.jit,
                         movq rdi, r12;
                         lea rsi, [rbp - (conv(arg))];
@@ -489,17 +796,20 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                BcOp1::MethodCall(..) => {
+                BcOp1::MethodCall(ret, name) => {
+                    ctx.push(TIr::MethodCall(ret, name));
                     assert!(self.opt_buf.is_none());
-                    self.opt_buf = Some(ops);
+                    self.opt_buf = Some(*op);
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
-                    for r in args..args + len {
-                        ctx.unset(r);
-                    }
-                    match std::mem::take(&mut self.opt_buf).unwrap() {
+                    ctx.write_back(self, recv);
+                    ctx.write_back_range(self, args, len);
+                    ctx.push(TIr::MethodArgs(recv, args, len));
+
+                    let op = std::mem::take(&mut self.opt_buf).unwrap();
+                    match BcOp1::from_bc(op) {
                         BcOp1::MethodCall(ret, name) => {
-                            ctx.unset(ret);
+                            ctx.dealloc(ret);
                             self.jit_method_call(recv, name, ret, args, len)
                         }
                         _ => unreachable!(),
@@ -507,6 +817,7 @@ impl Codegen {
                     skip = true;
                 }
                 BcOp1::MethodDef(id) => {
+                    ctx.push(TIr::MethodDef(id));
                     let MethodDefInfo { name, func } = store[id];
                     let class_version = self.class_version;
                     monoasm!(self.jit,
@@ -520,35 +831,51 @@ impl Codegen {
                     );
                 }
                 BcOp1::Br(disp) => {
+                    ctx.all_write_back(self);
+                    ctx.push(TIr::Br(disp));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                         jmp dest;
                     );
                 }
                 BcOp1::CondBr(cond_, disp, false) => {
-                    let cond_ = conv(cond_);
+                    ctx.push(TIr::CondBr(cond_, disp, false));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
+                    let cont = self.jit.label();
                     monoasm!(self.jit,
-                        movq rax, [rbp - (cond_)];
+                        movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
                         cmpq rax, (FALSE_VALUE);
-                        jne dest;
+                        jeq cont;
+                    );
+                    ctx.branch_write_back(self);
+                    monoasm!(self.jit,
+                        jmp dest;
+                    cont:
                     );
                 }
                 BcOp1::CondNotBr(cond_, disp, false) => {
-                    let cond_ = conv(cond_);
+                    ctx.push(TIr::CondNotBr(cond_, disp, false));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
+                    let cont = self.jit.label();
                     monoasm!(self.jit,
-                        movq rax, [rbp - (cond_)];
+                        movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
                         cmpq rax, (FALSE_VALUE);
-                        jeq dest;
+                        jne cont;
+                    );
+                    ctx.branch_write_back(self);
+                    monoasm!(self.jit,
+                        jmp dest;
+                    cont:
                     );
                 }
-                BcOp1::CondBr(_, disp, true) => {
+                BcOp1::CondBr(cond_, disp, true) => {
+                    ctx.push(TIr::CondBr(cond_, disp, true));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
-                    let kind = match std::mem::take(&mut self.opt_buf).unwrap() {
+                    let op = std::mem::take(&mut self.opt_buf).unwrap();
+                    let kind = match BcOp1::from_bc(op) {
                         BcOp1::Cmp(kind, _ret, lhs, rhs, true) => {
                             self.load_binary_args(lhs, rhs);
                             self.guard_rdi_rsi_fixnum(generic);
@@ -564,12 +891,14 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
-                    self.gen_cmp_opt(kind, dest, generic, true);
+                    self.gen_cmp_opt(kind, dest, generic, true, &mut ctx);
                 }
-                BcOp1::CondNotBr(_, disp, true) => {
+                BcOp1::CondNotBr(cond_, disp, true) => {
+                    ctx.push(TIr::CondBr(cond_, disp, true));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
-                    let kind = match std::mem::take(&mut self.opt_buf).unwrap() {
+                    let op = std::mem::take(&mut self.opt_buf).unwrap();
+                    let kind = match BcOp1::from_bc(op) {
                         BcOp1::Cmp(kind, _ret, lhs, rhs, true) => {
                             self.load_binary_args(lhs, rhs);
                             self.guard_rdi_rsi_fixnum(generic);
@@ -585,7 +914,7 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
-                    self.gen_cmp_opt(kind, dest, generic, false);
+                    self.gen_cmp_opt(kind, dest, generic, false, &mut ctx);
                 }
             }
         }
@@ -677,14 +1006,21 @@ impl Codegen {
         self.store_rax(ret);
     }
 
-    fn gen_cmp_opt(&mut self, kind: CmpKind, dest: DestLabel, generic: DestLabel, switch: bool) {
+    fn gen_cmp_opt(
+        &mut self,
+        kind: CmpKind,
+        dest: DestLabel,
+        generic: DestLabel,
+        switch: bool,
+        ctx: &mut FloatContext,
+    ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_eq(dest, generic, switch),
-            CmpKind::Ne => self.cmp_opt_ne(dest, generic, switch),
-            CmpKind::Ge => self.cmp_opt_ge(dest, generic, switch),
-            CmpKind::Gt => self.cmp_opt_gt(dest, generic, switch),
-            CmpKind::Le => self.cmp_opt_le(dest, generic, switch),
-            CmpKind::Lt => self.cmp_opt_lt(dest, generic, switch),
+            CmpKind::Eq => self.cmp_opt_eq(dest, generic, switch, ctx),
+            CmpKind::Ne => self.cmp_opt_ne(dest, generic, switch, ctx),
+            CmpKind::Ge => self.cmp_opt_ge(dest, generic, switch, ctx),
+            CmpKind::Gt => self.cmp_opt_gt(dest, generic, switch, ctx),
+            CmpKind::Le => self.cmp_opt_le(dest, generic, switch, ctx),
+            CmpKind::Lt => self.cmp_opt_lt(dest, generic, switch, ctx),
             _ => unimplemented!(),
         }
     }

@@ -38,9 +38,11 @@ pub struct Codegen {
     pub entry_point_return: CodePtr,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
+    pub val_to_f64: DestLabel,
+    pub f64_to_val: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    opt_buf: Option<BcOp1>,
+    opt_buf: Option<Bc>,
 }
 
 fn conv(reg: u16) -> i64 {
@@ -141,59 +143,8 @@ macro_rules! cmp_main {
     };
 }
 
-macro_rules! cmp_opt_main {
-    ($op:ident) => {
-        paste! {
-            fn [<cmp_opt_ $op>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool) {
-                let exit = self.jit.label();
-                monoasm! { self.jit,
-                    cmpq rdi, rsi;
-                };
-                if switch {
-                    monoasm! { self.jit,
-                        [<j $op>] dest;
-                    };
-                } else {
-                    monoasm! { self.jit,
-                        [<j $op>] exit;
-                        jmp dest;
-                    };
-                }
-                self.jit.bind_label(exit);
-                self.jit.select(1);
-                monoasm!(self.jit,
-                generic:
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                    orq  rax, 0x10;
-                    cmpq rax, (FALSE_VALUE);
-                    // if true, Z=0(not set).
-                );
-                if switch {
-                    monoasm!(self.jit,
-                        jne  dest;
-                        jmp  exit;
-                    );
-                } else {
-                    monoasm!(self.jit,
-                        jeq  dest;
-                        jmp  exit;
-                    );
-                }
-                self.jit.select(0);
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_opt_main!($op1);
-        cmp_opt_main!($($op2),+);
-    };
-}
-
 impl Codegen {
     cmp_main!(eq, ne, lt, le, gt, ge);
-    cmp_opt_main!(eq, ne, lt, le, gt, ge);
 
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
@@ -205,9 +156,17 @@ impl Codegen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
+        let val_to_f64 = jit.label();
+        let not_integer = jit.label();
+        let f64_to_val = jit.label();
         jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rbp;
+            movq rax, (op::_dump_stacktrace);
+            call rax;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (panic);
@@ -236,7 +195,97 @@ impl Codegen {
         jit_return:
             leave;
             ret;
+        val_to_f64:
+            // convert Value to f64.
+            // panic if Value is not Integer or Float.
+            // - in rdi: Value
+            // - out xmm0: f64
+            testq rdi, 0b01;
+            jz not_integer;
+            sarq rdi, 1;
+            cvtsi2sdq xmm0, rdi;
+            ret;
+        not_integer:
+            // we must save xmm registers.
+            subq rsp, 112;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::val_tof);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            addq rsp, 112;
+            ret;
         );
+        //
+        // Convert f64 to Value.
+        //
+        // ### in
+        //
+        // - xmm0: f64
+        //
+        // ### out
+        //
+        // - rax: Value
+        //
+        // ### registers destroyed
+        //
+        // - rcx, xmm1
+        //
+        {
+            let return_zero = jit.label();
+            let normal = jit.label();
+            let heap_alloc = jit.label();
+            monoasm!(jit,
+            f64_to_val:
+                xorq rax, rax;
+                movq xmm1, rax;
+                ucomisd xmm0, xmm1;
+                jne normal;
+                jp normal;
+            return_zero:
+                movq rax, (Value::new_float(0.0).get());
+                ret;
+            heap_alloc:
+                jmp entry_panic;
+            normal:
+                movq rax, xmm0;
+                movq rcx, rax;
+                shrq rcx, 60;
+                addl rcx, 1;
+                andl rcx, 6;
+                cmpl rcx, 4;
+                jne heap_alloc;
+                rolq rax, 3;
+                andq rax, (-4);
+                orq rax, 2;
+                ret;
+            );
+        }
         // method invoker.
         let invoker: extern "C" fn(
             &mut Interp,
@@ -335,6 +384,8 @@ impl Codegen {
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_point_return: entry_unimpl,
             vm_return,
+            val_to_f64,
+            f64_to_val,
             dispatch,
             invoker,
             opt_buf: None,
@@ -450,51 +501,12 @@ impl Codegen {
         );
     }
 
-    ///
-    /// Convert f64 to Value.
-    ///
-    /// ### in
-    ///
-    /// - xmm0: f64
-    ///
-    /// ### out
-    ///
-    /// - rax: Value
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rcx, xmm1
-    ///
-    fn gen_f64_to_val(&mut self) {
-        let panic = self.entry_panic;
-        let return_zero = self.jit.label();
-        let normal = self.jit.label();
-        let heap_alloc = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(self.jit,
-            xorq rax, rax;
-            movq xmm1, rax;
-            ucomisd xmm0, xmm1;
-            jne normal;
-            jp normal;
-        return_zero:
-            movq rax, (Value::new_float(0.0).get());
-            jmp exit;
-        heap_alloc:
-            jmp panic;
-        normal:
-            movq rax, xmm0;
-            movq rcx, rax;
-            shrq rcx, 60;
-            addl rcx, 1;
-            andl rcx, 6;
-            cmpl rcx, 4;
-            jne heap_alloc;
-            rolq rax, 3;
-            andq rax, (-4);
-            orq rax, 2;
-        exit:
-        );
+    fn xmm_mov(&mut self, src: u16, dst: u16) {
+        if src != dst {
+            monoasm!(self.jit,
+                movq  xmm(dst as u64 + 2), xmm(src as u64 + 2);
+            );
+        }
     }
 
     ///
@@ -811,11 +823,7 @@ impl Codegen {
 fn float_test() {
     let mut gen = Codegen::new();
 
-    let from_f64_entry = gen.jit.get_current_address();
-    gen.gen_f64_to_val();
-    monoasm!(gen.jit,
-        ret;
-    );
+    let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
 
     let to_f64_entry1 = gen.jit.get_current_address();
     gen.gen_rdi_to_f64();
@@ -848,4 +856,16 @@ fn float_test() {
         assert_eq!(n, to_f641(v));
         assert_eq!(n, to_f642(v));
     }
+}
+
+#[test]
+fn float_test2() {
+    let mut gen = Codegen::new();
+
+    let to_f64_entry = gen.jit.get_label_address(gen.val_to_f64);
+
+    gen.jit.finalize();
+    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+    assert_eq!(3.574, to_f64(Value::new_float(3.574)));
+    assert_eq!(143.0, to_f64(Value::new_integer(143)));
 }

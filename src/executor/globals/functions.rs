@@ -558,6 +558,37 @@ impl NormalFuncInfo {
         BcLocal(local)
     }
 
+    pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
+        let mut info = vec![None; self.bytecode().len()];
+        let mut skip = false;
+        for (idx, op) in self.bytecode().iter().enumerate() {
+            if skip {
+                skip = false;
+                continue;
+            }
+            let ops = BcOp1::from_bc(*op);
+            match ops {
+                BcOp1::MethodArgs(..) => {
+                    skip = true;
+                }
+                BcOp1::Br(disp) | BcOp1::CondBr(_, disp, _) | BcOp1::CondNotBr(_, disp, _) => {
+                    info[((idx + 1) as i32 + disp) as usize] = Some(0);
+                }
+                _ => {}
+            }
+        }
+        let mut bb_id = 0;
+        info.into_iter()
+            .map(|e| {
+                e.map(|_| {
+                    let id = bb_id;
+                    bb_id += 1;
+                    id
+                })
+            })
+            .collect()
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(crate) fn dump(&self, globals: &Globals) {
         fn optstr(opt: bool) -> &'static str {

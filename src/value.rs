@@ -1,5 +1,5 @@
 use crate::*;
-use num::BigInt;
+use num::{BigInt, ToPrimitive};
 use smallvec::SmallVec;
 
 use crate::alloc::{Allocator, GC};
@@ -259,8 +259,13 @@ impl Value {
         (v | 0x10) != 0x14
     }*/
 
-    pub extern "C" fn conv_val_to_flonum(v: Value) -> f64 {
-        v.as_flonum()
+    pub extern "C" fn val_tof(v: Value) -> f64 {
+        match v.unpack() {
+            RV::Integer(n) => n.to_f64().unwrap(),
+            RV::BigInt(n) => n.to_f64().unwrap(),
+            RV::Float(n) => n,
+            _ => unimplemented!("to_f is not implemented for {:?}", v),
+        }
     }
 
     pub extern "C" fn binary_flonum(lhs: Value, rhs: Value) -> F2 {
