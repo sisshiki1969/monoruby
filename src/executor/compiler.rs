@@ -40,6 +40,7 @@ pub struct Codegen {
     pub vm_return: DestLabel,
     pub val_to_f64: DestLabel,
     pub f64_to_val: DestLabel,
+    pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
     opt_buf: Option<Bc>,
@@ -91,6 +92,10 @@ pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
 }*/
 
+extern "C" fn error_divide_by_zero(globals: &mut Globals) {
+    globals.err_divide_by_zero();
+}
+
 extern "C" fn get_error_location(
     _interp: &mut Interp,
     globals: &mut Globals,
@@ -112,40 +117,7 @@ extern "C" fn get_error_location(
     globals.push_error_location(loc, sourceinfo);
 }
 
-macro_rules! cmp_main {
-    ($op:ident) => {
-        paste! {
-            fn [<cmp_ $op>](&mut self, generic:DestLabel) {
-                let exit = self.jit.label();
-                monoasm! { self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                exit:
-                };
-                self.jit.select(1);
-                monoasm!(self.jit,
-                generic:
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                    jmp  exit;
-                );
-                self.jit.select(0);
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_main!($op1);
-        cmp_main!($($op2),+);
-    };
-}
-
 impl Codegen {
-    cmp_main!(eq, ne, lt, le, gt, ge);
-
     pub fn new() -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
@@ -159,6 +131,7 @@ impl Codegen {
         let val_to_f64 = jit.label();
         let not_integer = jit.label();
         let f64_to_val = jit.label();
+        let div_by_zero = jit.label();
         jit.select(1);
         monoasm!(&mut jit,
         entry_panic:
@@ -195,6 +168,13 @@ impl Codegen {
         jit_return:
             leave;
             ret;
+        div_by_zero:
+            movq rdi, r12;
+            movq rax, (error_divide_by_zero);
+            call rax;
+            xorq rax, rax;
+            leave;
+            ret;
         val_to_f64:
             // convert Value to f64.
             // panic if Value is not Integer or Float.
@@ -207,6 +187,8 @@ impl Codegen {
             ret;
         not_integer:
             // we must save xmm registers.
+        );
+        monoasm!(&mut jit,
             subq rsp, 112;
             movq [rsp + 104], xmm15;
             movq [rsp + 96], xmm14;
@@ -386,6 +368,7 @@ impl Codegen {
             vm_return,
             val_to_f64,
             f64_to_val,
+            div_by_zero,
             dispatch,
             invoker,
             opt_buf: None,
@@ -428,65 +411,6 @@ impl Codegen {
         );
     }
 
-    ///
-    /// Guard for whether lhs is flonum.
-    ///
-    /// ### in
-    ///
-    /// - rdi: lhs: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm0: lhs: f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
-    ///
-    fn guard_rdi_flonum(&mut self, generic: DestLabel) {
-        monoasm!(self.jit,
-            // check whether lhs is flonum.
-            movq rax, rdi;
-            andq rax, 3;
-            cmpq rax, 2;
-            jne generic;
-        );
-        self.gen_rdi_to_f64();
-    }
-
-    ///
-    /// Guard for whether both of lhs and rhs are flonum.
-    ///
-    /// ### in
-    ///
-    /// - rdi: lhs: Value
-    /// - rsi: rhs: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm0: lhs: f64
-    /// - xmm1: rhs: f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
-    ///
-    fn guard_rdi_rsi_flonum(&mut self, generic: DestLabel) {
-        monoasm!(self.jit,
-            // check whether lhs is flonum.
-            movq rax, rdi;
-            andq rax, 3;
-            cmpq rax, 2;
-            jne generic;
-            movq rax, rsi;
-            andq rax, 3;
-            cmpq rax, 2;
-            jne generic;
-        );
-        self.gen_rdi_to_f64();
-        self.gen_rsi_to_f64();
-    }
-
     fn store_rax(&mut self, ret: u16) {
         monoasm!(self.jit,
             // store the result to return reg.
@@ -507,6 +431,46 @@ impl Codegen {
                 movq  xmm(dst as u64 + 2), xmm(src as u64 + 2);
             );
         }
+    }
+
+    fn xmm_save(&mut self) {
+        monoasm!(self.jit,
+            subq rsp, 112;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+        );
+    }
+
+    fn xmm_restore(&mut self) {
+        monoasm!(self.jit,
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            addq rsp, 112;
+        );
     }
 
     ///

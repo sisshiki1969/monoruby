@@ -406,7 +406,7 @@ impl Codegen {
             pushq rdi;
             pushq rsi;
             movq  rax, (Value::get_class);
-            call  rax;
+            call rax;
             movl  [r13 - 8], rax;
             popq  rsi;
             popq  rdi;

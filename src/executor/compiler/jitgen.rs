@@ -2,7 +2,7 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 enum TIr {
     /// branch(dest)
     Br(i32),
@@ -317,6 +317,43 @@ impl FloatContext {
     }
 }
 
+macro_rules! cmp_main {
+    ($op:ident) => {
+        paste! {
+            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel) {
+                let exit = self.jit.label();
+                monoasm! { self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                exit:
+                };
+                self.jit.select(1);
+                monoasm!(self.jit,
+                    generic:
+                );
+                self.xmm_save();
+                monoasm!(self.jit,
+                    // generic path
+                    movq rax, ([<cmp_ $op _values>]);
+                    call rax;
+                );
+                self.xmm_restore();
+                monoasm!(self.jit,
+                    jmp  exit;
+                );
+                self.jit.select(0);
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmp_main!($op1);
+        cmp_main!($($op2),+);
+    };
+}
+
 macro_rules! cmp_opt_main {
     ($op:ident) => {
         paste! {
@@ -348,10 +385,16 @@ macro_rules! cmp_opt_main {
                 self.jit.bind_label(cont);
                 self.jit.select(1);
                 monoasm!(self.jit,
-                generic:
+                    generic:
+                );
+                self.xmm_save();
+                monoasm!(self.jit,
                     // generic path
                     movq rax, ([<cmp_ $op _values>]);
                     call rax;
+                );
+                self.xmm_restore();
+                monoasm!(self.jit,
                     orq  rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
                     // if true, Z=0(not set).
@@ -385,6 +428,7 @@ macro_rules! cmp_opt_main {
 
 impl Codegen {
     cmp_opt_main!(eq, ne, lt, le, gt, ge);
+    cmp_main!(eq, ne, lt, le, gt, ge);
 
     pub(super) fn jit_compile_normal(
         &mut self,
@@ -598,11 +642,17 @@ impl Codegen {
                                 mulsd xmm0, xmm(frhs as u64 + 2);
                                 movq  xmm(fret as u64 + 2), xmm0;
                             ),
-                            BinOpK::Div => monoasm!(self.jit,
-                                movq  xmm0, xmm(flhs as u64 + 2);
-                                divsd xmm0, xmm(frhs as u64 + 2);
-                                movq  xmm(fret as u64 + 2), xmm0;
-                            ),
+                            BinOpK::Div => {
+                                let div_by_zero = self.div_by_zero;
+                                monoasm!(self.jit,
+                                    movq  rax, xmm(frhs as u64 + 2);
+                                    cmpq  rax, 0;
+                                    jeq   div_by_zero;
+                                    movq  xmm0, xmm(flhs as u64 + 2);
+                                    divsd xmm0, xmm(frhs as u64 + 2);
+                                    movq  xmm(fret as u64 + 2), xmm0;
+                                )
+                            }
                             _ => unimplemented!(),
                         }
                     } else {
@@ -668,9 +718,15 @@ impl Codegen {
                             BinOpK::Mul => monoasm!(self.jit,
                                 mulsd xmm(fret as u64 + 2), [rip + imm];
                             ),
-                            BinOpK::Div => monoasm!(self.jit,
-                                divsd xmm(fret as u64 + 2), [rip + imm];
-                            ),
+                            BinOpK::Div => {
+                                let div_by_zero = self.div_by_zero;
+                                monoasm!(self.jit,
+                                    xorq  rax, rax;
+                                    cmpq  rax, [rip + imm];
+                                    jeq   div_by_zero;
+                                    divsd xmm(fret as u64 + 2), [rip + imm];
+                                )
+                            }
                             _ => unimplemented!(),
                         }
                     } else {
@@ -720,17 +776,17 @@ impl Codegen {
                 }
 
                 BcOp1::Cmp(kind, ret, lhs, rhs, optimizable) => {
-                    if op.is_float() {
-                        let flhs = ctx.get_float(self, lhs);
-                        let frhs = ctx.get_float(self, rhs);
-                        ctx.dealloc(ret);
-                        ctx.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, optimizable));
-                    } else {
-                        ctx.dealloc(ret);
-                        ctx.write_back(self, lhs);
-                        ctx.write_back(self, rhs);
-                        ctx.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, op.classid()));
-                    }
+                    //if op.is_float() {
+                    //    let flhs = ctx.get_float(self, lhs);
+                    //    let frhs = ctx.get_float(self, rhs);
+                    //    ctx.dealloc(ret);
+                    //    ctx.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, optimizable));
+                    //} else {
+                    ctx.dealloc(ret);
+                    ctx.write_back(self, lhs);
+                    ctx.write_back(self, rhs);
+                    ctx.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, op.classid()));
+                    //}
                     if optimizable {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(*op);
@@ -742,15 +798,15 @@ impl Codegen {
                     }
                 }
                 BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
-                    if op.is_float() {
-                        let flhs = ctx.get_float(self, lhs);
-                        ctx.dealloc(ret);
-                        ctx.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, optimizable));
-                    } else {
-                        ctx.dealloc(ret);
-                        ctx.write_back(self, lhs);
-                        ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, op.classid()));
-                    }
+                    //if op.is_float() {
+                    //    let flhs = ctx.get_float(self, lhs);
+                    //    ctx.dealloc(ret);
+                    //    ctx.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, optimizable));
+                    //} else {
+                    ctx.dealloc(ret);
+                    ctx.write_back(self, lhs);
+                    ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, op.classid()));
+                    //}
                     if optimizable {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(*op);
@@ -785,6 +841,7 @@ impl Codegen {
                     ctx.push(TIr::ConcatStr(ret, arg, len));
                     ctx.write_back_range(self, arg, len);
                     ctx.dealloc(ret);
+                    self.xmm_save();
                     monoasm!(self.jit,
                         movq rdi, r12;
                         lea rsi, [rbp - (conv(arg))];
@@ -792,6 +849,7 @@ impl Codegen {
                         movq rax, (concatenate_string);
                         call rax;
                     );
+                    self.xmm_restore();
                     if ret != 0 {
                         self.store_rax(ret);
                     }
@@ -1171,26 +1229,6 @@ impl Codegen {
         self.jit.select(0);
     }
 
-    fn side_generic_op_with_rhs_integer(
-        &mut self,
-        rhs: i16,
-        generic: DestLabel,
-        exit: DestLabel,
-        ret: u16,
-        func: u64,
-    ) {
-        self.jit.select(1);
-        self.jit.bind_label(generic);
-        monoasm!(self.jit,
-            movq rsi, (Value::int32(rhs as i32).get());
-        );
-        self.generic_binop(ret, func);
-        monoasm!(self.jit,
-            jmp  exit;
-        );
-        self.jit.select(0);
-    }
-
     fn generic_binop(&mut self, ret: u16, func: u64) {
         self.call_binop(func);
         self.store_rax(ret);
@@ -1228,6 +1266,7 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
         let entry_return = self.vm_return;
+        self.xmm_save();
         if recv != 0 {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];
@@ -1271,6 +1310,9 @@ impl Codegen {
             // patch point
             call entry_panic;
         patch_adr:
+        );
+        self.xmm_restore();
+        monoasm!(self.jit,
             testq rax, rax;
             jeq entry_return;
         );

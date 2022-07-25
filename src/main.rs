@@ -592,6 +592,22 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_while_float() {
+        run_test(
+            r#"
+            a = 7.9
+            i = 0.0
+            while i < 15
+              a = 1 * a + 2 + a * 2
+              puts i, a
+              i = i + 1.0
+            end
+            a
+            "#,
+        );
+    }
+
     /*#[test]
     fn test_for1() {
         run_test(
@@ -612,6 +628,20 @@ mod test {
                 if a == 77 then break a/7 end
             end
             b
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_for_float() {
+        run_test(
+            r#"
+            a = 7.9
+            for i in 0..15
+              a = 1.1 * a + 2 + a * 2
+              puts i, a
+            end
+            a
             "#,
         );
     }

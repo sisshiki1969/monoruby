@@ -25,6 +25,7 @@ extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize
         bytes.extend(b"\n");
         globals.write_stdout(&bytes);
     }
+    globals.flush_stdout();
     Some(Value::nil())
 }
 
