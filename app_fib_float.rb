@@ -6,4 +6,4 @@ def fib(x)
   end
 end;
 
-puts fib 40.0
+puts fib 38.0

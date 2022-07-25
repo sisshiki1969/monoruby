@@ -4,12 +4,12 @@ use super::*;
 
 #[derive(PartialEq)]
 enum TIr {
-    /// branch(dest)
-    Br(i32),
-    /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
-    CondBr(u16, i32, bool),
-    /// conditional branch(%reg, dest, optimizable)  : branch when reg was false.
-    CondNotBr(u16, i32, bool),
+    /// branch(dest, write_back)
+    Br(i32, Vec<(u16, u16)>),
+    /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was true.
+    CondBr(u16, i32, bool, Vec<(u16, u16)>),
+    /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was false.
+    CondNotBr(u16, i32, bool, Vec<(u16, u16)>),
     /// integer(%reg, i32)
     Integer(u16, i32),
     /// Symbol(%reg, IdentId)
@@ -56,8 +56,6 @@ enum TIr {
     FLoad(u16, u16),
     /// store float to register(Fsrc, %dst)
     FStore(u16, u16),
-    /// write back float to registers(Vec<(Fsrc, %dst)>).
-    WriteBack(Vec<(u16, u16)>),
 }
 
 impl std::fmt::Debug for TIr {
@@ -82,14 +80,33 @@ impl std::fmt::Debug for TIr {
                 .fold(String::new(), |acc, s| acc + &s)
         }
         match self {
-            TIr::Br(disp) => {
-                writeln!(f, "br => {}", disp_str(disp),)
+            TIr::Br(disp, write_back) => {
+                writeln!(
+                    f,
+                    "br => {}; {}",
+                    disp_str(disp),
+                    disp_write_back(write_back)
+                )
             }
-            TIr::CondBr(reg, disp, opt) => {
-                writeln!(f, "condbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            TIr::CondBr(reg, disp, opt, write_back) => {
+                writeln!(
+                    f,
+                    "condbr {}%{} => {}; {}",
+                    optstr(opt),
+                    reg,
+                    disp_str(disp),
+                    disp_write_back(write_back)
+                )
             }
-            TIr::CondNotBr(reg, disp, opt) => {
-                writeln!(f, "condnbr {}%{} => {}", optstr(opt), reg, disp_str(disp))
+            TIr::CondNotBr(reg, disp, opt, write_back) => {
+                writeln!(
+                    f,
+                    "condnbr {}%{} => {}; {}",
+                    optstr(opt),
+                    reg,
+                    disp_str(disp),
+                    disp_write_back(write_back)
+                )
             }
             TIr::Integer(reg, num) => writeln!(f, "%{} = {}: i32", reg, num),
             TIr::Symbol(reg, id) => {
@@ -187,12 +204,11 @@ impl std::fmt::Debug for TIr {
                 0 => writeln!(f, "_ = concat(%{}; {})", args, len),
                 ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
             },
-            TIr::WriteBack(v) => writeln!(f, "write_back {}", disp_write_back(v)),
         }
     }
 }
 
-struct FloatContext {
+pub(crate) struct FloatContext {
     reg_info: Vec<Option<u16>>,
     xmm: [Vec<u16>; 13],
     tir: Vec<TIr>,
@@ -260,7 +276,6 @@ impl FloatContext {
 
     fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: u16) {
         if let Some(freg) = self.reg_info[reg as usize] {
-            //self.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -276,28 +291,33 @@ impl FloatContext {
         }
     }
 
-    fn branch_write_back(&mut self, codegen: &mut Codegen) {
-        let v = self.get_write_back();
-        v.iter()
+    fn branch_write_back(&mut self, codegen: &mut Codegen, dest: DestLabel) {
+        self.get_write_back()
+            .iter()
             .for_each(|(_, reg)| self.write_back_no_dealloc(codegen, *reg));
+        monoasm!(codegen.jit,
+            jmp  dest;
+        )
     }
 
     fn all_write_back(&mut self, codegen: &mut Codegen) {
-        let v = self.get_write_back();
-        v.iter().for_each(|(_, reg)| self.write_back(codegen, *reg));
-        /*if !v.is_empty() {
-            self.push(TIr::WriteBack(v));
-        }*/
+        self.get_write_back()
+            .iter()
+            .for_each(|(_, reg)| self.write_back(codegen, *reg));
+
         assert!(self.xmm.iter().all(|v| v.is_empty()));
         assert!(self.reg_info.iter().all(|r| r.is_none()));
     }
 
-    fn get_write_back(&mut self) -> Vec<(u16, u16)> {
+    fn get_write_back(&self) -> Vec<(u16, u16)> {
+        self.write_back_iter().collect()
+    }
+
+    fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, u16)> + 'a {
         self.reg_info
             .iter()
             .enumerate()
             .filter_map(|(reg, freg)| freg.map(|freg| (freg as u16, reg as u16)))
-            .collect()
     }
 
     fn get_float(&mut self, codegen: &mut Codegen, reg: u16) -> u16 {
@@ -320,7 +340,7 @@ impl FloatContext {
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel) {
+            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, ctx: Option<&FloatContext>) {
                 let exit = self.jit.label();
                 monoasm! { self.jit,
                     xorq rax, rax;
@@ -334,13 +354,17 @@ macro_rules! cmp_main {
                 monoasm!(self.jit,
                     generic:
                 );
-                self.xmm_save();
+                if let Some(ctx) = ctx {
+                    self.xmm_save(ctx);
+                }
                 monoasm!(self.jit,
                     // generic path
                     movq rax, ([<cmp_ $op _values>]);
                     call rax;
                 );
-                self.xmm_restore();
+                if let Some(ctx) = ctx {
+                    self.xmm_restore(ctx);
+                }
                 monoasm!(self.jit,
                     jmp  exit;
                 );
@@ -369,31 +393,25 @@ macro_rules! cmp_opt_main {
                         jmp cont;
                     write_back:
                     };
-                    ctx.branch_write_back(self);
-                    monoasm! { self.jit,
-                        jmp dest;
-                    };
+                    ctx.branch_write_back(self, dest);
                 } else {
                     monoasm! { self.jit,
                         [<j $op>] cont;
                     };
-                    ctx.branch_write_back(self);
-                    monoasm! { self.jit,
-                        jmp dest;
-                    };
+                    ctx.branch_write_back(self, dest);
                 }
                 self.jit.bind_label(cont);
                 self.jit.select(1);
                 monoasm!(self.jit,
                     generic:
                 );
-                self.xmm_save();
+                self.xmm_save(ctx);
                 monoasm!(self.jit,
                     // generic path
                     movq rax, ([<cmp_ $op _values>]);
                     call rax;
                 );
-                self.xmm_restore();
+                self.xmm_restore(ctx);
                 monoasm!(self.jit,
                     orq  rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -403,18 +421,12 @@ macro_rules! cmp_opt_main {
                     monoasm!(self.jit,
                         jz   cont;
                     );
-                    ctx.branch_write_back(self);
-                    monoasm! { self.jit,
-                        jmp dest;
-                    };
+                    ctx.branch_write_back(self, dest);
                 } else {
                     monoasm!(self.jit,
                         jnz  cont;
                     );
-                    ctx.branch_write_back(self);
-                    monoasm! { self.jit,
-                        jmp dest;
-                    };
+                    ctx.branch_write_back(self, dest);
                 }
                 self.jit.select(0);
             }
@@ -502,8 +514,6 @@ impl Codegen {
                             movq r13, (pc.0);
                             jmp fetch;
                         );
-
-                        eprint!("{:?}", ctx.tir);
                         break;
                     }
                 }
@@ -602,14 +612,22 @@ impl Codegen {
                         ctx.dealloc(dst);
                         let fdst = ctx.alloc(dst);
                         ctx.push(TIr::FNeg(fdst, fsrc));
-                        monoasm!(self.jit,
-                            movq rax, (-1);
-                            movq xmm(fdst as u64 + 2), rax;
-                            mulsd xmm(fdst as u64 + 2), xmm(fsrc as u64 + 2);
-                        );
+                        if fdst != fsrc {
+                            monoasm!(self.jit,
+                                movq rax, ((-1.0f64).to_bits());
+                                movq xmm(fdst as u64 + 2), rax;
+                                mulsd xmm(fdst as u64 + 2), xmm(fsrc as u64 + 2);
+                            );
+                        } else {
+                            monoasm!(self.jit,
+                                movq rax, ((-1.0f64).to_bits());
+                                movq xmm0, rax;
+                                mulsd xmm(fdst as u64 + 2), xmm0;
+                            );
+                        }
                     } else {
-                        ctx.dealloc(dst);
                         ctx.write_back(self, src);
+                        ctx.dealloc(dst);
                         ctx.push(TIr::Neg(dst, src));
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(src))];
@@ -656,9 +674,9 @@ impl Codegen {
                             _ => unimplemented!(),
                         }
                     } else {
-                        ctx.dealloc(ret);
                         ctx.write_back(self, lhs);
                         ctx.write_back(self, rhs);
+                        ctx.dealloc(ret);
                         ctx.push(TIr::BinOp(kind, ret, lhs, rhs, op.classid()));
                         self.load_binary_args(lhs, rhs);
                         match kind {
@@ -730,8 +748,8 @@ impl Codegen {
                             _ => unimplemented!(),
                         }
                     } else {
-                        ctx.dealloc(ret);
                         ctx.write_back(self, lhs);
+                        ctx.dealloc(ret);
                         ctx.push(TIr::BinOpRi(kind, ret, lhs, rhs, op.classid()));
 
                         monoasm!(self.jit,
@@ -782,9 +800,9 @@ impl Codegen {
                     //    ctx.dealloc(ret);
                     //    ctx.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, optimizable));
                     //} else {
-                    ctx.dealloc(ret);
                     ctx.write_back(self, lhs);
                     ctx.write_back(self, rhs);
+                    ctx.dealloc(ret);
                     ctx.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, op.classid()));
                     //}
                     if optimizable {
@@ -794,7 +812,7 @@ impl Codegen {
                         let generic = self.jit.label();
                         self.load_binary_args(lhs, rhs);
                         self.guard_rdi_rsi_fixnum(generic);
-                        self.gen_cmp_kind(kind, generic, ret);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
                 BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
@@ -803,8 +821,8 @@ impl Codegen {
                     //    ctx.dealloc(ret);
                     //    ctx.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, optimizable));
                     //} else {
-                    ctx.dealloc(ret);
                     ctx.write_back(self, lhs);
+                    ctx.dealloc(ret);
                     ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, op.classid()));
                     //}
                     if optimizable {
@@ -817,7 +835,7 @@ impl Codegen {
                             movq rsi, (Value::new_integer(rhs as i64).get());
                         );
                         self.guard_rdi_fixnum(generic);
-                        self.gen_cmp_kind(kind, generic, ret);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
                 BcOp1::Mov(dst, src) => {
@@ -830,8 +848,8 @@ impl Codegen {
                     }
                 }
                 BcOp1::Ret(lhs) => {
-                    ctx.push(TIr::Ret(lhs));
                     ctx.write_back(self, lhs);
+                    ctx.push(TIr::Ret(lhs));
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(lhs))];
                     );
@@ -841,7 +859,7 @@ impl Codegen {
                     ctx.push(TIr::ConcatStr(ret, arg, len));
                     ctx.write_back_range(self, arg, len);
                     ctx.dealloc(ret);
-                    self.xmm_save();
+                    self.xmm_save(&ctx);
                     monoasm!(self.jit,
                         movq rdi, r12;
                         lea rsi, [rbp - (conv(arg))];
@@ -849,7 +867,7 @@ impl Codegen {
                         movq rax, (concatenate_string);
                         call rax;
                     );
-                    self.xmm_restore();
+                    self.xmm_restore(&ctx);
                     if ret != 0 {
                         self.store_rax(ret);
                     }
@@ -868,7 +886,7 @@ impl Codegen {
                     match BcOp1::from_bc(op) {
                         BcOp1::MethodCall(ret, name) => {
                             ctx.dealloc(ret);
-                            self.jit_method_call(recv, name, ret, args, len)
+                            self.jit_method_call(recv, name, ret, args, len, &ctx);
                         }
                         _ => unreachable!(),
                     }
@@ -889,15 +907,15 @@ impl Codegen {
                     );
                 }
                 BcOp1::Br(disp) => {
+                    ctx.push(TIr::Br(disp, ctx.get_write_back()));
                     ctx.all_write_back(self);
-                    ctx.push(TIr::Br(disp));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                         jmp dest;
                     );
                 }
                 BcOp1::CondBr(cond_, disp, false) => {
-                    ctx.push(TIr::CondBr(cond_, disp, false));
+                    ctx.push(TIr::CondBr(cond_, disp, false, ctx.get_write_back()));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let cont = self.jit.label();
                     monoasm!(self.jit,
@@ -906,14 +924,11 @@ impl Codegen {
                         cmpq rax, (FALSE_VALUE);
                         jeq cont;
                     );
-                    ctx.branch_write_back(self);
-                    monoasm!(self.jit,
-                        jmp dest;
-                    cont:
-                    );
+                    ctx.branch_write_back(self, dest);
+                    self.jit.bind_label(cont);
                 }
                 BcOp1::CondNotBr(cond_, disp, false) => {
-                    ctx.push(TIr::CondNotBr(cond_, disp, false));
+                    ctx.push(TIr::CondNotBr(cond_, disp, false, ctx.get_write_back()));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let cont = self.jit.label();
                     monoasm!(self.jit,
@@ -922,24 +937,23 @@ impl Codegen {
                         cmpq rax, (FALSE_VALUE);
                         jne cont;
                     );
-                    ctx.branch_write_back(self);
-                    monoasm!(self.jit,
-                        jmp dest;
-                    cont:
-                    );
+                    ctx.branch_write_back(self, dest);
+                    self.jit.bind_label(cont);
                 }
                 BcOp1::CondBr(cond_, disp, true) => {
-                    ctx.push(TIr::CondBr(cond_, disp, true));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
                     let op = std::mem::take(&mut self.opt_buf).unwrap();
                     let kind = match BcOp1::from_bc(op) {
                         BcOp1::Cmp(kind, _ret, lhs, rhs, true) => {
+                            ctx.write_back(self, lhs);
+                            ctx.write_back(self, rhs);
                             self.load_binary_args(lhs, rhs);
                             self.guard_rdi_rsi_fixnum(generic);
                             kind
                         }
                         BcOp1::Cmpri(kind, _ret, lhs, rhs, true) => {
+                            ctx.write_back(self, lhs);
                             monoasm!(self.jit,
                                 movq rdi, [rbp - (conv(lhs))];
                                 movq rsi, (Value::new_integer(rhs as i64).get());
@@ -949,20 +963,23 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
+                    ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back()));
                     self.gen_cmp_opt(kind, dest, generic, true, &mut ctx);
                 }
                 BcOp1::CondNotBr(cond_, disp, true) => {
-                    ctx.push(TIr::CondBr(cond_, disp, true));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
                     let op = std::mem::take(&mut self.opt_buf).unwrap();
                     let kind = match BcOp1::from_bc(op) {
                         BcOp1::Cmp(kind, _ret, lhs, rhs, true) => {
+                            ctx.write_back(self, lhs);
+                            ctx.write_back(self, rhs);
                             self.load_binary_args(lhs, rhs);
                             self.guard_rdi_rsi_fixnum(generic);
                             kind
                         }
                         BcOp1::Cmpri(kind, _ret, lhs, rhs, true) => {
+                            ctx.write_back(self, lhs);
                             monoasm!(self.jit,
                                 movq rdi, [rbp - (conv(lhs))];
                                 movq rsi, (Value::new_integer(rhs as i64).get());
@@ -972,11 +989,12 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     };
+                    ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back()));
                     self.gen_cmp_opt(kind, dest, generic, false, &mut ctx);
                 }
             }
         }
-
+        eprintln!("{:?}", ctx.tir);
         self.jit.finalize();
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -1051,14 +1069,40 @@ impl Codegen {
         );
     }
 
-    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: u16) {
+    fn xmm_save(&mut self, ctx: &FloatContext) {
+        let len = ctx.write_back_iter().count();
+        let sp_offset = (len + len % 2) * 8;
+        monoasm!(self.jit,
+            subq rsp, (sp_offset);
+        );
+        for (i, (_, freg)) in ctx.write_back_iter().enumerate() {
+            monoasm!(self.jit,
+                movq [rsp + (8 * i)], xmm(freg as u64 + 2);
+            );
+        }
+    }
+
+    fn xmm_restore(&mut self, ctx: &FloatContext) {
+        let len = ctx.write_back_iter().count();
+        let sp_offset = (len + len % 2) * 8;
+        for (i, (_, freg)) in ctx.write_back_iter().enumerate() {
+            monoasm!(self.jit,
+                movq xmm(freg as u64 + 2), [rsp + (8 * i)];
+            );
+        }
+        monoasm!(self.jit,
+            addq rsp, (sp_offset);
+        );
+    }
+
+    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         match kind {
-            CmpKind::Eq => self.cmp_eq(generic),
-            CmpKind::Ne => self.cmp_ne(generic),
-            CmpKind::Ge => self.cmp_ge(generic),
-            CmpKind::Gt => self.cmp_gt(generic),
-            CmpKind::Le => self.cmp_le(generic),
-            CmpKind::Lt => self.cmp_lt(generic),
+            CmpKind::Eq => self.cmp_eq(generic, Some(ctx)),
+            CmpKind::Ne => self.cmp_ne(generic, Some(ctx)),
+            CmpKind::Ge => self.cmp_ge(generic, Some(ctx)),
+            CmpKind::Gt => self.cmp_gt(generic, Some(ctx)),
+            CmpKind::Le => self.cmp_le(generic, Some(ctx)),
+            CmpKind::Lt => self.cmp_lt(generic, Some(ctx)),
             _ => unimplemented!(),
         }
         self.store_rax(ret);
@@ -1234,7 +1278,15 @@ impl Codegen {
         self.store_rax(ret);
     }
 
-    fn jit_method_call(&mut self, recv: u16, name: IdentId, ret: u16, args: u16, len: u16) {
+    fn jit_method_call(
+        &mut self,
+        recv: u16,
+        name: IdentId,
+        ret: u16,
+        args: u16,
+        len: u16,
+        ctx: &FloatContext,
+    ) {
         // set arguments to a callee stack.
         //
         //       +-------------+
@@ -1266,7 +1318,7 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
         let entry_return = self.vm_return;
-        self.xmm_save();
+        self.xmm_save(ctx);
         if recv != 0 {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];
@@ -1311,7 +1363,7 @@ impl Codegen {
             call entry_panic;
         patch_adr:
         );
-        self.xmm_restore();
+        self.xmm_restore(ctx);
         monoasm!(self.jit,
             testq rax, rax;
             jeq entry_return;

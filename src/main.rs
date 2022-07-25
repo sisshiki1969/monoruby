@@ -467,19 +467,23 @@ mod test {
                     fib(x-1)+fib(x-2)
                 end
             end;
-            fib(32)
+            fib(32.0)
             "#,
         );
+    }
+
+    #[test]
+    fn bench_factorialpoly() {
         run_test(
             r#"
-            def fib(x)
-                if x<3.0 then
+            def fact(x)
+                if x <= 1.0 then
                     1.0
                 else
-                    fib(x-1.0)+fib(x-2.0)
+                    x * fact(x-1.0)
                 end
             end;
-            fib(32.0)
+            fact 400.0
             "#,
         );
     }
@@ -638,7 +642,7 @@ mod test {
             r#"
             a = 7.9
             for i in 0..15
-              a = 1.1 * a + 2 + a * 2
+              a = -(1.1 * a + 2 + a * 2)
               puts i, a
             end
             a

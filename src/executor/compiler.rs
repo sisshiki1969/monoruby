@@ -139,7 +139,9 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, rbp;
             movq rax, (op::_dump_stacktrace);
+            pushq rax;
             call rax;
+            popq rax;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (panic);
@@ -189,7 +191,7 @@ impl Codegen {
             // we must save xmm registers.
         );
         monoasm!(&mut jit,
-            subq rsp, 112;
+            subq rsp, 120;
             movq [rsp + 104], xmm15;
             movq [rsp + 96], xmm14;
             movq [rsp + 88], xmm13;
@@ -220,7 +222,7 @@ impl Codegen {
             movq xmm13, [rsp + 88];
             movq xmm14, [rsp + 96];
             movq xmm15, [rsp + 104];
-            addq rsp, 112;
+            addq rsp, 120;
             ret;
         );
         //
@@ -433,46 +435,7 @@ impl Codegen {
         }
     }
 
-    fn xmm_save(&mut self) {
-        monoasm!(self.jit,
-            subq rsp, 112;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-        );
-    }
-
-    fn xmm_restore(&mut self) {
-        monoasm!(self.jit,
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            addq rsp, 112;
-        );
-    }
-
+    /*
     ///
     /// Convert Value(rdi) to f64(xmm0).
     ///
@@ -489,7 +452,6 @@ impl Codegen {
     /// - rax
     ///
     fn gen_rdi_to_f64(&mut self) {
-        const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
         let exit = self.jit.label();
         monoasm!(self.jit,
             xorq rax, rax;
@@ -506,42 +468,7 @@ impl Codegen {
             movq xmm0, rdi;
         exit:
         );
-    }
-
-    ///
-    /// Convert Value(rsi) to f64(xmm1).
-    ///
-    /// ### in
-    ///
-    /// - rsi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm1: f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
-    ///
-    fn gen_rsi_to_f64(&mut self) {
-        const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
-        let exit = self.jit.label();
-        monoasm!(self.jit,
-            xorq rax, rax;
-            movq xmm1, rax;
-            movq rax, (FLOAT_ZERO);
-            cmpq rsi, rax;
-            je exit;
-            movq rax, rsi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rsi, (-4);
-            orq rsi, rax;
-            rolq rsi, 61;
-            movq xmm1, rsi;
-        exit:
-        );
-    }
+    }*/
 
     fn call_unop(&mut self, func: u64) {
         let entry_return = self.vm_return;
@@ -788,27 +715,12 @@ fn float_test() {
     let mut gen = Codegen::new();
 
     let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
-
-    let to_f64_entry1 = gen.jit.get_current_address();
-    gen.gen_rdi_to_f64();
-    monoasm!(gen.jit,
-        ret;
-    );
-
-    let to_f64_entry2 = gen.jit.get_current_address();
-    monoasm!(gen.jit,
-        movq rsi, rdi;
-    );
-    gen.gen_rsi_to_f64();
-    monoasm!(gen.jit,
-        movq xmm0, xmm1;
-        ret;
-    );
+    let to_f64_entry = gen.jit.get_label_address(gen.val_to_f64);
 
     gen.jit.finalize();
     let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
-    let to_f641: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry1.as_ptr()) };
-    let to_f642: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry2.as_ptr()) };
+    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+
     for n in [
         0.0,
         4.2,
@@ -817,8 +729,7 @@ fn float_test() {
     ] {
         let v = from_f64(n);
         assert_eq!(Value::new_float(n), v);
-        assert_eq!(n, to_f641(v));
-        assert_eq!(n, to_f642(v));
+        assert_eq!(n, to_f64(v));
     }
 }
 
@@ -831,5 +742,7 @@ fn float_test2() {
     gen.jit.finalize();
     let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
     assert_eq!(3.574, to_f64(Value::new_float(3.574)));
+    assert_eq!(0.0, to_f64(Value::new_float(0.0)));
     assert_eq!(143.0, to_f64(Value::new_integer(143)));
+    assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
 }
