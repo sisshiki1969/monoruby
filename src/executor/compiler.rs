@@ -129,12 +129,11 @@ impl Codegen {
         let jit_return = jit.label();
         let vm_return = jit.label();
         let val_to_f64 = jit.label();
-        let not_integer = jit.label();
         let f64_to_val = jit.label();
         let div_by_zero = jit.label();
         jit.select(1);
         monoasm!(&mut jit,
-        entry_panic:
+            entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rbp;
@@ -146,12 +145,12 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (panic);
             jmp rax;
-        entry_find_method:
+            entry_find_method:
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (find_method);
             jmp  rax;
-        vm_return:
+            vm_return:
             // check call_kind.
             //movl r15, [rbp - 8];
             //testq r15, r15;
@@ -167,64 +166,86 @@ impl Codegen {
             call rax;
             // restore return value
             movq rax, r15;
-        jit_return:
+            jit_return:
             leave;
             ret;
         div_by_zero:
-            movq rdi, r12;
-            movq rax, (error_divide_by_zero);
+        movq rdi, r12;
+        movq rax, (error_divide_by_zero);
             call rax;
             xorq rax, rax;
             leave;
             ret;
-        val_to_f64:
-            // convert Value to f64.
-            // panic if Value is not Integer or Float.
-            // - in rdi: Value
-            // - out xmm0: f64
-            testq rdi, 0b01;
-            jz not_integer;
-            sarq rdi, 1;
-            cvtsi2sdq xmm0, rdi;
-            ret;
-        not_integer:
+        );
+        {
+            let not_integer = jit.label();
+            let not_flonum = jit.label();
+            let exit = jit.label();
+            monoasm!(&mut jit,
+                val_to_f64:
+                // convert Value to f64.
+                // panic if Value is not Integer or Float.
+                // - in rdi: Value
+                // - out xmm0: f64
+                testq rdi, 0b01;
+                jz not_integer;
+                sarq rdi, 1;
+                cvtsi2sdq xmm0, rdi;
+                ret;
+            not_integer:
+                testq rdi, 0b10;
+                jz not_flonum;
+                xorq rax, rax;
+                movq xmm0, rax;
+                movq rax, (FLOAT_ZERO);
+                cmpq rdi, rax;
+                je exit;
+                movq rax, rdi;
+                sarq rax, 63;
+                addq rax, 2;
+                andq rdi, (-4);
+                orq rdi, rax;
+                rolq rdi, 61;
+                movq xmm0, rdi;
+            exit:
+                ret;
+            not_flonum:
             // we must save xmm registers.
-        );
-        monoasm!(&mut jit,
-            subq rsp, 120;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-            movq rax, (Value::val_tof);
-            call rax;
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            addq rsp, 120;
-            ret;
-        );
+                subq rsp, 120;
+                movq [rsp + 104], xmm15;
+                movq [rsp + 96], xmm14;
+                movq [rsp + 88], xmm13;
+                movq [rsp + 80], xmm12;
+                movq [rsp + 72], xmm11;
+                movq [rsp + 64], xmm10;
+                movq [rsp + 56], xmm9;
+                movq [rsp + 48], xmm8;
+                movq [rsp + 40], xmm7;
+                movq [rsp + 32], xmm6;
+                movq [rsp + 24], xmm5;
+                movq [rsp + 16], xmm4;
+                movq [rsp + 8], xmm3;
+                movq [rsp + 0], xmm2;
+                movq rax, (Value::val_tof);
+                call rax;
+                movq xmm2, [rsp + 0];
+                movq xmm3, [rsp + 8];
+                movq xmm4, [rsp + 16];
+                movq xmm5, [rsp + 24];
+                movq xmm6, [rsp + 32];
+                movq xmm7, [rsp + 40];
+                movq xmm8, [rsp + 48];
+                movq xmm9, [rsp + 56];
+                movq xmm10, [rsp + 64];
+                movq xmm11, [rsp + 72];
+                movq xmm12, [rsp + 80];
+                movq xmm13, [rsp + 88];
+                movq xmm14, [rsp + 96];
+                movq xmm15, [rsp + 104];
+                addq rsp, 120;
+                ret;
+            );
+        }
         //
         // Convert f64 to Value.
         //
@@ -241,7 +262,6 @@ impl Codegen {
         // - rcx, xmm1
         //
         {
-            let return_zero = jit.label();
             let normal = jit.label();
             let heap_alloc = jit.label();
             monoasm!(jit,
@@ -251,11 +271,42 @@ impl Codegen {
                 ucomisd xmm0, xmm1;
                 jne normal;
                 jp normal;
-            return_zero:
                 movq rax, (Value::new_float(0.0).get());
                 ret;
             heap_alloc:
-                jmp entry_panic;
+                subq rsp, 120;
+                movq [rsp + 104], xmm15;
+                movq [rsp + 96], xmm14;
+                movq [rsp + 88], xmm13;
+                movq [rsp + 80], xmm12;
+                movq [rsp + 72], xmm11;
+                movq [rsp + 64], xmm10;
+                movq [rsp + 56], xmm9;
+                movq [rsp + 48], xmm8;
+                movq [rsp + 40], xmm7;
+                movq [rsp + 32], xmm6;
+                movq [rsp + 24], xmm5;
+                movq [rsp + 16], xmm4;
+                movq [rsp + 8], xmm3;
+                movq [rsp + 0], xmm2;
+                movq rax, (Value::new_float);
+                call rax;
+                movq xmm2, [rsp + 0];
+                movq xmm3, [rsp + 8];
+                movq xmm4, [rsp + 16];
+                movq xmm5, [rsp + 24];
+                movq xmm6, [rsp + 32];
+                movq xmm7, [rsp + 40];
+                movq xmm8, [rsp + 48];
+                movq xmm9, [rsp + 56];
+                movq xmm10, [rsp + 64];
+                movq xmm11, [rsp + 72];
+                movq xmm12, [rsp + 80];
+                movq xmm13, [rsp + 88];
+                movq xmm14, [rsp + 96];
+                movq xmm15, [rsp + 104];
+                addq rsp, 120;
+                ret;
             normal:
                 movq rax, xmm0;
                 movq rcx, rax;
@@ -726,10 +777,19 @@ fn float_test() {
         4.2,
         35354354354.2135365,
         -3535354345111.5696876565435432,
+        f64::MAX,
+        f64::MAX / 10.0,
+        f64::MIN * 10.0,
+        f64::NAN,
     ] {
         let v = from_f64(n);
-        assert_eq!(Value::new_float(n), v);
-        assert_eq!(n, to_f64(v));
+        //assert!(Value::eq(Value::new_float(n), v));
+        let (lhs, rhs) = (n, to_f64(v));
+        if lhs.is_nan() {
+            assert!(rhs.is_nan());
+        } else {
+            assert_eq!(n, to_f64(v));
+        }
     }
 }
 
@@ -744,5 +804,6 @@ fn float_test2() {
     assert_eq!(3.574, to_f64(Value::new_float(3.574)));
     assert_eq!(0.0, to_f64(Value::new_float(0.0)));
     assert_eq!(143.0, to_f64(Value::new_integer(143)));
+    assert_eq!(14354813558.0, to_f64(Value::new_integer(14354813558)));
     assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
 }

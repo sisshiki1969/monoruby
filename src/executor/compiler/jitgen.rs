@@ -210,13 +210,13 @@ impl std::fmt::Debug for TIr {
 
 pub(crate) struct FloatContext {
     reg_info: Vec<Option<u16>>,
-    xmm: [Vec<u16>; 13],
+    xmm: [Vec<u16>; 14],
     tir: Vec<TIr>,
 }
 
 impl FloatContext {
     fn new(reg_num: usize) -> Self {
-        let xmm = (0..13)
+        let xmm = (0..14)
             .map(|_| vec![])
             .collect::<Vec<Vec<u16>>>()
             .try_into()
@@ -259,6 +259,12 @@ impl FloatContext {
             self.xmm[freg as usize].push(dst);
         }
         f
+    }
+
+    fn clear_write_back(&mut self) {
+        self.get_write_back()
+            .iter()
+            .for_each(|(_, reg)| self.dealloc(*reg));
     }
 
     fn write_back(&mut self, codegen: &mut Codegen, reg: u16) {
@@ -491,9 +497,7 @@ impl Codegen {
                 skip = false;
                 continue;
             }
-            if let Some(_) = info[start_pos + idx] {
-                ctx.all_write_back(self);
-            }
+
             self.jit.bind_label(labels[idx]);
             let ops = BcOp1::from_bc(*op);
             match ops {
@@ -643,35 +647,60 @@ impl Codegen {
                         ctx.dealloc(ret);
                         let fret = ctx.alloc(ret);
                         ctx.push(TIr::FBinOp(kind, fret as u16, flhs as u16, frhs as u16));
-                        //self.xmm_mov(flhs, fret);
-                        match kind {
-                            BinOpK::Add => monoasm!(self.jit,
-                                movq  xmm0, xmm(flhs as u64 + 2);
-                                addsd xmm0, xmm(frhs as u64 + 2);
-                                movq  xmm(fret as u64 + 2), xmm0;
-                            ),
-                            BinOpK::Sub => monoasm!(self.jit,
-                                movq  xmm0, xmm(flhs as u64 + 2);
-                                subsd xmm0, xmm(frhs as u64 + 2);
-                                movq  xmm(fret as u64 + 2), xmm0;
-                            ),
-                            BinOpK::Mul => monoasm!(self.jit,
-                                movq  xmm0, xmm(flhs as u64 + 2);
-                                mulsd xmm0, xmm(frhs as u64 + 2);
-                                movq  xmm(fret as u64 + 2), xmm0;
-                            ),
-                            BinOpK::Div => {
-                                let div_by_zero = self.div_by_zero;
-                                monoasm!(self.jit,
-                                    movq  rax, xmm(frhs as u64 + 2);
-                                    cmpq  rax, 0;
-                                    jeq   div_by_zero;
+
+                        if fret == frhs {
+                            match kind {
+                                BinOpK::Add => monoasm!(self.jit,
                                     movq  xmm0, xmm(flhs as u64 + 2);
-                                    divsd xmm0, xmm(frhs as u64 + 2);
+                                    addsd xmm0, xmm(frhs as u64 + 2);
                                     movq  xmm(fret as u64 + 2), xmm0;
-                                )
+                                ),
+                                BinOpK::Sub => monoasm!(self.jit,
+                                    movq  xmm0, xmm(flhs as u64 + 2);
+                                    subsd xmm0, xmm(frhs as u64 + 2);
+                                    movq  xmm(fret as u64 + 2), xmm0;
+                                ),
+                                BinOpK::Mul => monoasm!(self.jit,
+                                    movq  xmm0, xmm(flhs as u64 + 2);
+                                    mulsd xmm0, xmm(frhs as u64 + 2);
+                                    movq  xmm(fret as u64 + 2), xmm0;
+                                ),
+                                BinOpK::Div => {
+                                    let div_by_zero = self.div_by_zero;
+                                    monoasm!(self.jit,
+                                        movq  rax, xmm(frhs as u64 + 2);
+                                        cmpq  rax, 0;
+                                        jeq   div_by_zero;
+                                        movq  xmm0, xmm(flhs as u64 + 2);
+                                        divsd xmm0, xmm(frhs as u64 + 2);
+                                        movq  xmm(fret as u64 + 2), xmm0;
+                                    )
+                                }
+                                _ => unimplemented!(),
                             }
-                            _ => unimplemented!(),
+                        } else {
+                            self.xmm_mov(flhs, fret);
+                            match kind {
+                                BinOpK::Add => monoasm!(self.jit,
+                                    addsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Sub => monoasm!(self.jit,
+                                    subsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Mul => monoasm!(self.jit,
+                                    mulsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Div => {
+                                    let div_by_zero = self.div_by_zero;
+                                    monoasm!(self.jit,
+                                        movq  rax, xmm(frhs as u64 + 2);
+                                        cmpq  rax, 0;
+                                        jeq   div_by_zero;
+                                        divsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                    )
+                                }
+                                _ => unimplemented!(),
+                            }
                         }
                     } else {
                         ctx.write_back(self, lhs);
@@ -684,33 +713,33 @@ impl Codegen {
                                 INTEGER_CLASS => {
                                     let generic = self.jit.label();
                                     self.guard_rdi_rsi_fixnum(generic);
-                                    self.gen_add(generic, ret);
+                                    self.gen_add(generic, ret, &ctx);
                                 }
-                                _ => self.generic_binop(ret, add_values as _),
+                                _ => self.generic_binop(ret, add_values as _, &ctx),
                             },
                             BinOpK::Sub => match op.classid() {
                                 INTEGER_CLASS => {
                                     let generic = self.jit.label();
                                     self.guard_rdi_rsi_fixnum(generic);
-                                    self.gen_sub(generic, ret);
+                                    self.gen_sub(generic, ret, &ctx);
                                 }
-                                _ => self.generic_binop(ret, sub_values as _),
+                                _ => self.generic_binop(ret, sub_values as _, &ctx),
                             },
                             BinOpK::Mul => {
-                                self.generic_binop(ret, mul_values as _);
+                                self.generic_binop(ret, mul_values as _, &ctx);
                             }
                             BinOpK::Div => {
-                                self.generic_binop(ret, div_values as _);
+                                self.generic_binop(ret, div_values as _, &ctx);
                             }
                             _ => {
                                 let generic = self.jit.label();
                                 self.guard_rdi_rsi_fixnum(generic);
                                 match kind {
-                                    BinOpK::BitOr => self.gen_bit_or(generic, ret),
-                                    BinOpK::BitAnd => self.gen_bit_and(generic, ret),
-                                    BinOpK::BitXor => self.gen_bit_xor(generic, ret),
-                                    BinOpK::Shr => self.gen_shr(generic, ret),
-                                    BinOpK::Shl => self.gen_shl(generic, ret),
+                                    BinOpK::BitOr => self.gen_bit_or(generic, ret, &ctx),
+                                    BinOpK::BitAnd => self.gen_bit_and(generic, ret, &ctx),
+                                    BinOpK::BitXor => self.gen_bit_xor(generic, ret, &ctx),
+                                    BinOpK::Shr => self.gen_shr(generic, ret, &ctx),
+                                    BinOpK::Shl => self.gen_shl(generic, ret, &ctx),
                                     _ => unimplemented!(),
                                 }
                             }
@@ -763,13 +792,13 @@ impl Codegen {
                                         movq rsi, (Value::int32(rhs as i32).get());
                                     );
                                     self.guard_rdi_fixnum(generic);
-                                    self.gen_add(generic, ret);
+                                    self.gen_add(generic, ret, &ctx);
                                 }
                                 _ => {
                                     monoasm!(self.jit,
                                         movq rsi, (Value::int32(rhs as i32).get());
                                     );
-                                    self.generic_binop(ret, add_values as _);
+                                    self.generic_binop(ret, add_values as _, &ctx);
                                 }
                             },
                             BinOpK::Sub => match op.classid() {
@@ -779,13 +808,13 @@ impl Codegen {
                                         movq rsi, (Value::int32(rhs as i32).get());
                                     );
                                     self.guard_rdi_fixnum(generic);
-                                    self.gen_sub(generic, ret);
+                                    self.gen_sub(generic, ret, &ctx);
                                 }
                                 _ => {
                                     monoasm!(self.jit,
                                         movq rsi, (Value::int32(rhs as i32).get());
                                     );
-                                    self.generic_binop(ret, sub_values as _);
+                                    self.generic_binop(ret, sub_values as _, &ctx);
                                 }
                             },
                             _ => unimplemented!(),
@@ -854,6 +883,8 @@ impl Codegen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
+                    ctx.clear_write_back();
+                    continue;
                 }
                 BcOp1::ConcatStr(ret, arg, len) => {
                     ctx.push(TIr::ConcatStr(ret, arg, len));
@@ -913,6 +944,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         jmp dest;
                     );
+                    continue;
                 }
                 BcOp1::CondBr(cond_, disp, false) => {
                     ctx.push(TIr::CondBr(cond_, disp, false, ctx.get_write_back()));
@@ -993,7 +1025,13 @@ impl Codegen {
                     self.gen_cmp_opt(kind, dest, generic, false, &mut ctx);
                 }
             }
+
+            if let Some(Some(_)) = info.get(start_pos + idx + 1) {
+                ctx.all_write_back(self);
+            }
         }
+
+        #[cfg(any(feature = "emit-asm"))]
         eprintln!("{:?}", ctx.tir);
         self.jit.finalize();
 
@@ -1070,12 +1108,18 @@ impl Codegen {
     }
 
     fn xmm_save(&mut self, ctx: &FloatContext) {
-        let len = ctx.write_back_iter().count();
+        let xmm_using: Vec<usize> = ctx
+            .xmm
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
+            .collect();
+        let len = xmm_using.len();
         let sp_offset = (len + len % 2) * 8;
         monoasm!(self.jit,
             subq rsp, (sp_offset);
         );
-        for (i, (_, freg)) in ctx.write_back_iter().enumerate() {
+        for (i, freg) in xmm_using.into_iter().enumerate() {
             monoasm!(self.jit,
                 movq [rsp + (8 * i)], xmm(freg as u64 + 2);
             );
@@ -1083,9 +1127,15 @@ impl Codegen {
     }
 
     fn xmm_restore(&mut self, ctx: &FloatContext) {
-        let len = ctx.write_back_iter().count();
+        let xmm_using: Vec<usize> = ctx
+            .xmm
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
+            .collect();
+        let len = xmm_using.len();
         let sp_offset = (len + len % 2) * 8;
-        for (i, (_, freg)) in ctx.write_back_iter().enumerate() {
+        for (i, freg) in xmm_using.into_iter().enumerate() {
             monoasm!(self.jit,
                 movq xmm(freg as u64 + 2), [rsp + (8 * i)];
             );
@@ -1127,7 +1177,7 @@ impl Codegen {
         }
     }
 
-    fn gen_add(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_add(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1136,10 +1186,10 @@ impl Codegen {
             jo generic;
         );
         self.store_rax(ret);
-        self.side_generic_op(generic, ret, add_values as _);
+        self.side_generic_op(generic, ret, add_values as _, &ctx);
     }
 
-    fn gen_sub(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_sub(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1148,35 +1198,35 @@ impl Codegen {
             addq rax, 1;
         );
         self.store_rax(ret);
-        self.side_generic_op(generic, ret, sub_values as _);
+        self.side_generic_op(generic, ret, sub_values as _, &ctx);
     }
 
-    fn gen_bit_or(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_bit_or(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         monoasm!(self.jit,
             // fastpath
             orq rdi, rsi;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitor_values as _);
+        self.side_generic_op(generic, ret, bitor_values as _, &ctx);
     }
 
-    fn gen_bit_and(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_bit_and(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         monoasm!(self.jit,
             // fastpath
             andq rdi, rsi;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitand_values as _);
+        self.side_generic_op(generic, ret, bitand_values as _, &ctx);
     }
 
-    fn gen_bit_xor(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_bit_xor(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         monoasm!(self.jit,
             // fastpath
             xorq rdi, rsi;
             addq rdi, 1;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitxor_values as _);
+        self.side_generic_op(generic, ret, bitxor_values as _, &ctx);
     }
 
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
@@ -1196,7 +1246,7 @@ impl Codegen {
         self.jit.select(0);
     }
 
-    fn gen_shr(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_shr(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1212,7 +1262,7 @@ impl Codegen {
             orq rdi, 1;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, shr_values as _);
+        self.side_generic_op(generic, ret, shr_values as _, &ctx);
         self.jit.select(1);
         monoasm!(self.jit,
         shl:
@@ -1228,7 +1278,7 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn gen_shl(&mut self, generic: DestLabel, ret: u16) {
+    fn gen_shl(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1247,7 +1297,7 @@ impl Codegen {
         );
         self.store_rdi(ret);
 
-        self.side_generic_op(generic, ret, shl_values as _);
+        self.side_generic_op(generic, ret, shl_values as _, &ctx);
         self.jit.select(1);
         monoasm!(self.jit,
         shr:
@@ -1261,20 +1311,22 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn side_generic_op(&mut self, generic: DestLabel, ret: u16, func: u64) {
+    fn side_generic_op(&mut self, generic: DestLabel, ret: u16, func: u64, ctx: &FloatContext) {
         let exit = self.jit.label();
         self.jit.bind_label(exit);
         self.jit.select(1);
         self.jit.bind_label(generic);
-        self.generic_binop(ret, func);
+        self.generic_binop(ret, func, ctx);
         monoasm!(self.jit,
             jmp  exit;
         );
         self.jit.select(0);
     }
 
-    fn generic_binop(&mut self, ret: u16, func: u64) {
+    fn generic_binop(&mut self, ret: u16, func: u64, ctx: &FloatContext) {
+        self.xmm_save(ctx);
         self.call_binop(func);
+        self.xmm_restore(ctx);
         self.store_rax(ret);
     }
 

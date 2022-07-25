@@ -462,7 +462,7 @@ mod test {
             r#"
             def fib(x)
                 if x<3 then
-                    1
+                    1.0
                 else
                     fib(x-1)+fib(x-2)
                 end
@@ -483,7 +483,7 @@ mod test {
                     x * fact(x-1.0)
                 end
             end;
-            fact 400.0
+            fact 130.0
             "#,
         );
     }
