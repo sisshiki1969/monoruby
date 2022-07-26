@@ -595,13 +595,13 @@ impl Codegen {
         let compile = self.jit.label();
         monoasm! { self.jit,
             movq rax, [r13 - 8];
-            cmpq rax, 0;
+            testq rax, rax;
             jeq count;
             jmp rax;
         count:
             addl [r13 - 16], 1;
             cmpl [r13 - 16], 10;
-            jge   compile;
+            jae   compile;
         };
         self.fetch_and_dispatch();
         monoasm!(self.jit,

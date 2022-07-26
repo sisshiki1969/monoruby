@@ -16,6 +16,8 @@ enum TIr {
     Symbol(u16, IdentId),
     /// literal(%ret, literal_id)
     Literal(u16, u32),
+    /// float_literal(Fret, f64)
+    FLiteral(u16, f64),
     LoadConst(u16, ConstSiteId),
     StoreConst(u16, IdentId),
     /// nil(%reg)
@@ -115,6 +117,9 @@ impl std::fmt::Debug for TIr {
             TIr::Literal(reg, id) => {
                 writeln!(f, "%{} = literal[#{}]", reg, id)
             }
+            TIr::FLiteral(freg, float) => {
+                writeln!(f, "F{} = {}: f64", freg, float)
+            }
             TIr::LoadConst(reg, id) => {
                 writeln!(f, "%{} = const[{:?}]", reg, id)
             }
@@ -209,7 +214,9 @@ impl std::fmt::Debug for TIr {
 }
 
 pub(crate) struct FloatContext {
+    /// information for registers.
     reg_info: Vec<Option<u16>>,
+    /// information for xmm registers.
     xmm: [Vec<u16>; 14],
     tir: Vec<TIr>,
 }
@@ -538,26 +545,37 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
-                BcOp1::Literal(ret, id) => {
-                    ctx.push(TIr::Literal(ret, id));
-                    ctx.dealloc(ret);
+                BcOp1::Literal(dst, id) => {
+                    ctx.dealloc(dst);
                     let v = store.get_literal(id);
-                    if v.is_packed_value() {
+                    if let RV::Float(f) = v.unpack() {
+                        let fdst = ctx.alloc(dst);
+                        ctx.push(TIr::FLiteral(fdst, f));
                         monoasm!(self.jit,
-                          movq rax, (v.get());
+                            movq rax, (f.to_bits());
+                            movq xmm(fdst as u64 + 2), rax;
                         );
                     } else {
-                        monoasm!(self.jit,
-                          movq rdi, (v.get());
-                          movq rax, (Value::dup);
-                          call rax;
-                        );
+                        ctx.push(TIr::Literal(dst, id));
+                        if v.is_packed_value() {
+                            monoasm!(self.jit,
+                              movq rax, (v.get());
+                            );
+                        } else {
+                            self.xmm_save(&ctx);
+                            monoasm!(self.jit,
+                              movq rdi, (v.get());
+                              movq rax, (Value::dup);
+                              call rax;
+                            );
+                            self.xmm_restore(&ctx);
+                        }
+                        self.store_rax(dst);
                     }
-                    self.store_rax(ret);
                 }
-                BcOp1::LoadConst(ret, id) => {
-                    ctx.push(TIr::LoadConst(ret, id));
-                    ctx.dealloc(ret);
+                BcOp1::LoadConst(dst, id) => {
+                    ctx.push(TIr::LoadConst(dst, id));
+                    ctx.dealloc(dst);
                     let jit_return = self.vm_return;
                     let cached_const_version = self.jit.const_i64(-1);
                     let cached_value = self.jit.const_i64(0);
@@ -571,7 +589,7 @@ impl Codegen {
                         movq rax, [rip + cached_value];
                     exit:
                     );
-                    self.store_rax(ret);
+                    self.store_rax(dst);
                     self.jit.select(1);
                     monoasm!(self.jit,
                     slow_path:
@@ -589,13 +607,13 @@ impl Codegen {
                     );
                     self.jit.select(0);
                 }
-                BcOp1::StoreConst(ret, id) => {
-                    ctx.push(TIr::StoreConst(ret, id));
-                    ctx.dealloc(ret);
+                BcOp1::StoreConst(src, id) => {
+                    ctx.push(TIr::StoreConst(src, id));
+                    ctx.write_back(self, src);
                     let const_version = self.const_version;
                     monoasm!(self.jit,
                       movq rdx, (id.get());  // name: IdentId
-                      movq rcx, [rbp - (conv(ret))];  // val: Value
+                      movq rcx, [rbp - (conv(src))];  // val: Value
                       movq rdi, rbx;  // &mut Interp
                       movq rsi, r12;  // &mut Globals
                       addq [rip + const_version], 1;
@@ -766,13 +784,16 @@ impl Codegen {
                                 mulsd xmm(fret as u64 + 2), [rip + imm];
                             ),
                             BinOpK::Div => {
-                                let div_by_zero = self.div_by_zero;
-                                monoasm!(self.jit,
-                                    xorq  rax, rax;
-                                    cmpq  rax, [rip + imm];
-                                    jeq   div_by_zero;
-                                    divsd xmm(fret as u64 + 2), [rip + imm];
-                                )
+                                if rhs == 0 {
+                                    let div_by_zero = self.div_by_zero;
+                                    monoasm!(self.jit,
+                                        jmp   div_by_zero;
+                                    )
+                                } else {
+                                    monoasm!(self.jit,
+                                        divsd xmm(fret as u64 + 2), [rip + imm];
+                                    )
+                                }
                             }
                             _ => unimplemented!(),
                         }
