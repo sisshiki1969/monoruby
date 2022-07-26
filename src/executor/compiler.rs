@@ -128,12 +128,10 @@ impl Codegen {
         let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
-        let val_to_f64 = jit.label();
-        let f64_to_val = jit.label();
         let div_by_zero = jit.label();
         jit.select(1);
         monoasm!(&mut jit,
-            entry_panic:
+        entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rbp;
@@ -145,7 +143,7 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (panic);
             jmp rax;
-            entry_find_method:
+        entry_find_method:
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (find_method);
@@ -170,157 +168,14 @@ impl Codegen {
             leave;
             ret;
         div_by_zero:
-        movq rdi, r12;
-        movq rax, (error_divide_by_zero);
+            movq rdi, r12;
+            movq rax, (error_divide_by_zero);
             call rax;
             xorq rax, rax;
             leave;
             ret;
         );
-        {
-            let not_integer = jit.label();
-            let not_flonum = jit.label();
-            let exit = jit.label();
-            monoasm!(&mut jit,
-                val_to_f64:
-                // convert Value to f64.
-                // panic if Value is not Integer or Float.
-                // - in rdi: Value
-                // - out xmm0: f64
-                testq rdi, 0b01;
-                jz not_integer;
-                sarq rdi, 1;
-                cvtsi2sdq xmm0, rdi;
-                ret;
-            not_integer:
-                testq rdi, 0b10;
-                jz not_flonum;
-                xorq rax, rax;
-                movq xmm0, rax;
-                movq rax, (FLOAT_ZERO);
-                cmpq rdi, rax;
-                je exit;
-                movq rax, rdi;
-                sarq rax, 63;
-                addq rax, 2;
-                andq rdi, (-4);
-                orq rdi, rax;
-                rolq rdi, 61;
-                movq xmm0, rdi;
-            exit:
-                ret;
-            not_flonum:
-            // we must save xmm registers.
-                subq rsp, 120;
-                movq [rsp + 104], xmm15;
-                movq [rsp + 96], xmm14;
-                movq [rsp + 88], xmm13;
-                movq [rsp + 80], xmm12;
-                movq [rsp + 72], xmm11;
-                movq [rsp + 64], xmm10;
-                movq [rsp + 56], xmm9;
-                movq [rsp + 48], xmm8;
-                movq [rsp + 40], xmm7;
-                movq [rsp + 32], xmm6;
-                movq [rsp + 24], xmm5;
-                movq [rsp + 16], xmm4;
-                movq [rsp + 8], xmm3;
-                movq [rsp + 0], xmm2;
-                movq rax, (Value::val_tof);
-                call rax;
-                movq xmm2, [rsp + 0];
-                movq xmm3, [rsp + 8];
-                movq xmm4, [rsp + 16];
-                movq xmm5, [rsp + 24];
-                movq xmm6, [rsp + 32];
-                movq xmm7, [rsp + 40];
-                movq xmm8, [rsp + 48];
-                movq xmm9, [rsp + 56];
-                movq xmm10, [rsp + 64];
-                movq xmm11, [rsp + 72];
-                movq xmm12, [rsp + 80];
-                movq xmm13, [rsp + 88];
-                movq xmm14, [rsp + 96];
-                movq xmm15, [rsp + 104];
-                addq rsp, 120;
-                ret;
-            );
-        }
-        //
-        // Convert f64 to Value.
-        //
-        // ### in
-        //
-        // - xmm0: f64
-        //
-        // ### out
-        //
-        // - rax: Value
-        //
-        // ### registers destroyed
-        //
-        // - rcx, xmm1
-        //
-        {
-            let normal = jit.label();
-            let heap_alloc = jit.label();
-            monoasm!(jit,
-            f64_to_val:
-                xorq rax, rax;
-                movq xmm1, rax;
-                ucomisd xmm0, xmm1;
-                jne normal;
-                jp normal;
-                movq rax, (Value::new_float(0.0).get());
-                ret;
-            heap_alloc:
-                subq rsp, 120;
-                movq [rsp + 104], xmm15;
-                movq [rsp + 96], xmm14;
-                movq [rsp + 88], xmm13;
-                movq [rsp + 80], xmm12;
-                movq [rsp + 72], xmm11;
-                movq [rsp + 64], xmm10;
-                movq [rsp + 56], xmm9;
-                movq [rsp + 48], xmm8;
-                movq [rsp + 40], xmm7;
-                movq [rsp + 32], xmm6;
-                movq [rsp + 24], xmm5;
-                movq [rsp + 16], xmm4;
-                movq [rsp + 8], xmm3;
-                movq [rsp + 0], xmm2;
-                movq rax, (Value::new_float);
-                call rax;
-                movq xmm2, [rsp + 0];
-                movq xmm3, [rsp + 8];
-                movq xmm4, [rsp + 16];
-                movq xmm5, [rsp + 24];
-                movq xmm6, [rsp + 32];
-                movq xmm7, [rsp + 40];
-                movq xmm8, [rsp + 48];
-                movq xmm9, [rsp + 56];
-                movq xmm10, [rsp + 64];
-                movq xmm11, [rsp + 72];
-                movq xmm12, [rsp + 80];
-                movq xmm13, [rsp + 88];
-                movq xmm14, [rsp + 96];
-                movq xmm15, [rsp + 104];
-                addq rsp, 120;
-                ret;
-            normal:
-                movq rax, xmm0;
-                movq rcx, rax;
-                shrq rcx, 60;
-                addl rcx, 1;
-                andl rcx, 6;
-                cmpl rcx, 4;
-                jne heap_alloc;
-                rolq rax, 3;
-                andq rax, (-4);
-                orq rax, 2;
-                ret;
-            );
-        }
+
         // method invoker.
         let invoker: extern "C" fn(
             &mut Interp,
@@ -419,13 +274,15 @@ impl Codegen {
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_point_return: entry_unimpl,
             vm_return,
-            val_to_f64,
-            f64_to_val,
+            val_to_f64: entry_panic,
+            f64_to_val: entry_panic,
             div_by_zero,
             dispatch,
             invoker,
             opt_buf: None,
         };
+        codegen.val_to_f64 = codegen.generate_val_to_f64();
+        codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm();
         codegen.get_entry_point();
         codegen.jit.finalize();
@@ -484,6 +341,169 @@ impl Codegen {
                 movq  xmm(dst as u64 + 2), xmm(src as u64 + 2);
             );
         }
+    }
+
+    ///
+    /// Convert Value to f64.
+    ///
+    /// panic if Value is not Integer or Float.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - volatile registers
+    ///
+    fn generate_val_to_f64(&mut self) -> DestLabel {
+        let entry = self.jit.label();
+        let not_integer = self.jit.label();
+        let not_flonum = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+        entry:
+            testq rdi, 0b01;
+            jz not_integer;
+            sarq rdi, 1;
+            cvtsi2sdq xmm0, rdi;
+            ret;
+        not_integer:
+            testq rdi, 0b10;
+            jz not_flonum;
+            xorq rax, rax;
+            movq xmm0, rax;
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            je exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm0, rdi;
+        exit:
+            ret;
+        not_flonum:
+            // we must save xmm registers.
+            subq rsp, 120;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::val_tof);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            addq rsp, 120;
+            ret;
+        );
+        entry
+    }
+
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    ///
+    /// - xmm0: f64
+    ///
+    /// ### out
+    ///
+    /// - rax: Value
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rcx, xmm1
+    ///
+    fn generate_f64_to_val(&mut self) -> DestLabel {
+        let entry = self.jit.label();
+        let normal = self.jit.label();
+        let heap_alloc = self.jit.label();
+        monoasm!(self.jit,
+        entry:
+            xorq rax, rax;
+            movq xmm1, rax;
+            ucomisd xmm0, xmm1;
+            jne normal;
+            jp normal;
+            movq rax, (Value::new_float(0.0).get());
+            ret;
+        heap_alloc:
+            subq rsp, 120;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::new_float);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            addq rsp, 120;
+            ret;
+        normal:
+            movq rax, xmm0;
+            movq rcx, rax;
+            shrq rcx, 60;
+            addl rcx, 1;
+            andl rcx, 6;
+            cmpl rcx, 4;
+            jne heap_alloc;
+            rolq rax, 3;
+            andq rax, (-4);
+            orq rax, 2;
+            ret;
+        );
+        entry
     }
 
     /*

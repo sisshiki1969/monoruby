@@ -722,6 +722,11 @@ mod test {
     }
 
     #[test]
+    fn test7x() {
+        run_test("234.2345 == 17");
+    }
+
+    #[test]
     fn test7() {
         run_test(
             r#"
