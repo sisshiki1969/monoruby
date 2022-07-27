@@ -101,6 +101,10 @@ impl Bc {
     pub(crate) fn is_float(&self) -> bool {
         self.classid() == FLOAT_CLASS
     }
+
+    pub(crate) fn is_binary_float(&self) -> bool {
+        self.classid() == FLOAT_CLASS || self.classid2() == FLOAT_CLASS
+    }
 }
 
 impl std::fmt::Debug for Bc {

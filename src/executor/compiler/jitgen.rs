@@ -213,9 +213,22 @@ impl std::fmt::Debug for TIr {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LinkMode {
+    RW(u16),
+    R(u16),
+    None,
+}
+
+impl LinkMode {
+    fn is_none(&self) -> bool {
+        !matches!(self, LinkMode::RW(_))
+    }
+}
+
 pub(crate) struct FloatContext {
     /// information for registers.
-    reg_info: Vec<Option<u16>>,
+    reg_info: Vec<LinkMode>,
     /// information for xmm registers.
     xmm: [Vec<u16>; 14],
     tir: Vec<TIr>,
@@ -229,7 +242,7 @@ impl FloatContext {
             .try_into()
             .unwrap();
         Self {
-            reg_info: vec![None; reg_num],
+            reg_info: vec![LinkMode::None; reg_num],
             xmm,
             tir: vec![],
         }
@@ -239,8 +252,11 @@ impl FloatContext {
         self.tir.push(tir);
     }
 
+    ///
+    /// Allocate new xmm register to the given stack slot for read/write f64.
+    ///
     fn alloc_xmm(&mut self, reg: u16) -> u16 {
-        if let Some(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
             if self.xmm[freg as usize].len() == 1 {
                 assert_eq!(reg, self.xmm[freg as usize][0]);
                 return freg;
@@ -249,7 +265,31 @@ impl FloatContext {
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.reg_info[reg as usize] = Some(flhs as u16);
+                self.reg_info[reg as usize] = LinkMode::RW(flhs as u16);
+                xmm.push(reg);
+                return flhs as u16;
+            }
+        }
+        unreachable!()
+    }
+
+    ///
+    /// Allocate new xmm register to the given stack slot for read f64.
+    ///
+    fn alloc_read_xmm(&mut self, reg: u16) -> u16 {
+        match self.reg_info[reg as usize] {
+            LinkMode::RW(freg) | LinkMode::R(freg) => {
+                if self.xmm[freg as usize].len() == 1 {
+                    assert_eq!(reg, self.xmm[freg as usize][0]);
+                    return freg;
+                }
+            }
+            _ => {}
+        };
+        self.dealloc_xmm(reg);
+        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
+            if xmm.is_empty() {
+                self.reg_info[reg as usize] = LinkMode::R(flhs as u16);
                 xmm.push(reg);
                 return flhs as u16;
             }
@@ -258,21 +298,32 @@ impl FloatContext {
     }
 
     fn dealloc_xmm(&mut self, reg: u16) {
-        if let Some(freg) = self.reg_info[reg as usize] {
-            assert!(self.xmm[freg as usize].contains(&reg));
-            self.xmm[freg as usize].retain(|e| *e != reg);
-            self.reg_info[reg as usize] = None;
-        };
+        match self.reg_info[reg as usize] {
+            LinkMode::R(freg) | LinkMode::RW(freg) => {
+                assert!(self.xmm[freg as usize].contains(&reg));
+                self.xmm[freg as usize].retain(|e| *e != reg);
+                self.reg_info[reg as usize] = LinkMode::None;
+            }
+            _ => {}
+        }
     }
 
     fn copy(&mut self, src: u16, dst: u16) -> Option<u16> {
         self.dealloc_xmm(dst);
         let f = self.reg_info[src as usize];
-        if let Some(freg) = f {
-            self.reg_info[dst as usize] = Some(freg);
-            self.xmm[freg as usize].push(dst);
+        match f {
+            LinkMode::RW(freg) => {
+                self.reg_info[dst as usize] = LinkMode::RW(freg);
+                self.xmm[freg as usize].push(dst);
+                Some(freg)
+            }
+            LinkMode::R(freg) => {
+                self.reg_info[dst as usize] = LinkMode::R(freg);
+                self.xmm[freg as usize].push(dst);
+                Some(freg)
+            }
+            _ => None,
         }
-        f
     }
 
     fn clear_write_back(&mut self) {
@@ -282,7 +333,7 @@ impl FloatContext {
     }
 
     fn write_back(&mut self, codegen: &mut Codegen, reg: u16) {
-        if let Some(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
             self.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
@@ -295,7 +346,7 @@ impl FloatContext {
     }
 
     fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: u16) {
-        if let Some(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -330,34 +381,49 @@ impl FloatContext {
             .iter()
             .for_each(|(_, reg)| self.write_back(codegen, *reg));
 
-        assert!(self.xmm.iter().all(|v| v.is_empty()));
+        self.xmm.iter_mut().for_each(|info| *info = vec![]);
         assert!(self.reg_info.iter().all(|r| r.is_none()));
+        self.reg_info
+            .iter_mut()
+            .for_each(|info| *info = LinkMode::None);
     }
 
     fn get_write_back(&self) -> Vec<(u16, u16)> {
         self.write_back_iter().collect()
     }
 
-    fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, u16)> + 'a {
-        self.reg_info
+    fn get_xmm_using(&self) -> Vec<usize> {
+        self.xmm
             .iter()
             .enumerate()
-            .filter_map(|(reg, freg)| freg.map(|freg| (freg as u16, reg as u16)))
+            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
+            .collect()
+    }
+
+    fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, u16)> + 'a {
+        self.reg_info.iter().enumerate().filter_map(|(reg, freg)| {
+            if let LinkMode::RW(freg) = freg {
+                Some((*freg as u16, reg as u16))
+            } else {
+                None
+            }
+        })
     }
 
     fn get_float(&mut self, codegen: &mut Codegen, reg: u16) -> u16 {
-        if let Some(freg) = self.reg_info[reg as usize] {
-            freg
-        } else {
-            let freg = self.alloc_xmm(reg);
-            self.push(TIr::FLoad(reg, freg as u16));
-            let val_to_f64 = codegen.val_to_f64;
-            monoasm!(codegen.jit,
-                movq rdi, [rbp - (conv(reg))];
-                call val_to_f64;
-                movq xmm(freg as u64 + 2), xmm0;
-            );
-            freg
+        match self.reg_info[reg as usize] {
+            LinkMode::R(freg) | LinkMode::RW(freg) => freg,
+            _ => {
+                let freg = self.alloc_read_xmm(reg);
+                self.push(TIr::FLoad(reg, freg as u16));
+                let val_to_f64 = codegen.val_to_f64;
+                monoasm!(codegen.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                    call val_to_f64;
+                    movq xmm(freg as u64 + 2), xmm0;
+                );
+                freg
+            }
         }
     }
 }
@@ -380,15 +446,20 @@ macro_rules! cmp_main {
                     generic:
                 );
                 if let Some(ctx) = ctx {
-                    self.xmm_save(ctx);
-                }
-                monoasm!(self.jit,
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                );
-                if let Some(ctx) = ctx {
-                    self.xmm_restore(ctx);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm!(self.jit,
+                        // generic path
+                        movq rax, ([<cmp_ $op _values>]);
+                        call rax;
+                    );
+                    self.xmm_restore(&xmm_using);
+                } else {
+                    monoasm!(self.jit,
+                        // generic path
+                        movq rax, ([<cmp_ $op _values>]);
+                        call rax;
+                    );
                 }
                 monoasm!(self.jit,
                     jmp  exit;
@@ -442,13 +513,14 @@ macro_rules! cmp_opt_main2 {
                 monoasm!(self.jit,
                     generic:
                 );
-                self.xmm_save(ctx);
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
                     // generic path
                     movq rax, ([<cmp_ $sop _values>]);
                     call rax;
                 );
-                self.xmm_restore(ctx);
+                self.xmm_restore(&xmm_using);
                 monoasm!(self.jit,
                     orq  rax, 0x10;
                     cmpq rax, (FALSE_VALUE);
@@ -576,9 +648,9 @@ impl Codegen {
                     if let RV::Float(f) = v.unpack() {
                         let fdst = ctx.alloc_xmm(dst);
                         ctx.push(TIr::FLiteral(fdst, f));
+                        let imm = self.jit.const_f64(f);
                         monoasm!(self.jit,
-                            movq rax, (f.to_bits());
-                            movq xmm(fdst as u64 + 2), rax;
+                            movq xmm(fdst as u64 + 2), [rip + imm];
                         );
                     } else {
                         ctx.push(TIr::Literal(dst, id));
@@ -587,13 +659,14 @@ impl Codegen {
                               movq rax, (v.get());
                             );
                         } else {
-                            self.xmm_save(&ctx);
+                            let xmm_using = ctx.get_xmm_using();
+                            self.xmm_save(&xmm_using);
                             monoasm!(self.jit,
                               movq rdi, (v.get());
                               movq rax, (Value::dup);
                               call rax;
                             );
-                            self.xmm_restore(&ctx);
+                            self.xmm_restore(&xmm_using);
                         }
                         self.store_rax(dst);
                     }
@@ -683,7 +756,7 @@ impl Codegen {
                     }
                 }
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
-                    if op.is_float() {
+                    if op.is_binary_float() {
                         let flhs = ctx.get_float(self, lhs);
                         let frhs = ctx.get_float(self, rhs);
                         let fret = ctx.alloc_xmm(ret);
@@ -801,7 +874,7 @@ impl Codegen {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(*op);
                     } else {
-                        if op.is_float() {
+                        if op.is_binary_float() {
                             let flhs = ctx.get_float(self, lhs);
                             let frhs = ctx.get_float(self, rhs);
                             ctx.dealloc_xmm(ret);
@@ -867,7 +940,8 @@ impl Codegen {
                     ctx.push(TIr::ConcatStr(ret, arg, len));
                     ctx.write_back_range(self, arg, len);
                     ctx.dealloc_xmm(ret);
-                    self.xmm_save(&ctx);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
                         movq rdi, r12;
                         lea rsi, [rbp - (conv(arg))];
@@ -875,7 +949,7 @@ impl Codegen {
                         movq rax, (concatenate_string);
                         call rax;
                     );
-                    self.xmm_restore(&ctx);
+                    self.xmm_restore(&xmm_using);
                     if ret != 0 {
                         self.store_rax(ret);
                     }
@@ -1096,37 +1170,25 @@ impl Codegen {
         );
     }
 
-    fn xmm_save(&mut self, ctx: &FloatContext) {
-        let xmm_using: Vec<usize> = ctx
-            .xmm
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
-            .collect();
+    fn xmm_save(&mut self, xmm_using: &Vec<usize>) {
         let len = xmm_using.len();
         let sp_offset = (len + len % 2) * 8;
         monoasm!(self.jit,
             subq rsp, (sp_offset);
         );
-        for (i, freg) in xmm_using.into_iter().enumerate() {
+        for (i, freg) in xmm_using.iter().enumerate() {
             monoasm!(self.jit,
-                movq [rsp + (8 * i)], xmm(freg as u64 + 2);
+                movq [rsp + (8 * i)], xmm(*freg as u64 + 2);
             );
         }
     }
 
-    fn xmm_restore(&mut self, ctx: &FloatContext) {
-        let xmm_using: Vec<usize> = ctx
-            .xmm
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
-            .collect();
+    fn xmm_restore(&mut self, xmm_using: &Vec<usize>) {
         let len = xmm_using.len();
         let sp_offset = (len + len % 2) * 8;
-        for (i, freg) in xmm_using.into_iter().enumerate() {
+        for (i, freg) in xmm_using.iter().enumerate() {
             monoasm!(self.jit,
-                movq xmm(freg as u64 + 2), [rsp + (8 * i)];
+                movq xmm(*freg as u64 + 2), [rsp + (8 * i)];
             );
         }
         monoasm!(self.jit,
@@ -1419,9 +1481,10 @@ impl Codegen {
     }
 
     fn generic_binop(&mut self, ret: u16, func: u64, ctx: &FloatContext) {
-        self.xmm_save(ctx);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
         self.call_binop(func);
-        self.xmm_restore(ctx);
+        self.xmm_restore(&xmm_using);
         self.store_rax(ret);
     }
 
@@ -1465,7 +1528,8 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
         let entry_return = self.vm_return;
-        self.xmm_save(ctx);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
         if recv != 0 {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];
@@ -1510,7 +1574,7 @@ impl Codegen {
             call entry_panic;
         patch_adr:
         );
-        self.xmm_restore(ctx);
+        self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
             testq rax, rax;
             jeq entry_return;
