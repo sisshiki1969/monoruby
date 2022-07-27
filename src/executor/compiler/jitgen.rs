@@ -240,6 +240,12 @@ impl FloatContext {
     }
 
     fn alloc_xmm(&mut self, reg: u16) -> u16 {
+        if let Some(freg) = self.reg_info[reg as usize] {
+            if self.xmm[freg as usize].len() == 1 {
+                assert_eq!(reg, self.xmm[freg as usize][0]);
+                return freg;
+            }
+        };
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
