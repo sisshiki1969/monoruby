@@ -590,7 +590,7 @@ impl NormalFuncInfo {
     }
 
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn dump(&self, globals: &Globals) {
+    pub(crate) fn dump_bc(&self, globals: &Globals) {
         fn optstr(opt: bool) -> &'static str {
             if opt {
                 "_"
@@ -659,25 +659,41 @@ impl NormalFuncInfo {
                 BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
-                    let class_id = inst.classid();
                     let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
-                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
+                    eprintln!(
+                        "{:36} [{}][{}]",
+                        op1,
+                        inst.classid().get_name(globals),
+                        inst.classid2().get_name(globals)
+                    );
                 }
                 BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
-                    let class_id = inst.classid();
                     let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
-                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
+                    eprintln!(
+                        "{:36} [{}][{}]",
+                        op1,
+                        inst.classid().get_name(globals),
+                        inst.classid2().get_name(globals)
+                    );
                 }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
-                    let class_id = inst.classid();
                     let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
-                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
+                    eprintln!(
+                        "{:36} [{}][{}]",
+                        op1,
+                        inst.classid().get_name(globals),
+                        inst.classid2().get_name(globals)
+                    );
                 }
                 BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
-                    let class_id = inst.classid();
                     let op1 =
                         format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
-                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
+                    eprintln!(
+                        "{:36} [{}][{}]",
+                        op1,
+                        inst.classid().get_name(globals),
+                        inst.classid2().get_name(globals)
+                    );
                 }
 
                 BcOp1::Ret(reg) => eprintln!("ret %{}", reg),
@@ -703,7 +719,7 @@ impl NormalFuncInfo {
                         args,
                         len,
                     );
-                    eprintln!("{:36} {}", op1, class_id.get_name(globals));
+                    eprintln!("{:36} [{}]", op1, class_id.get_name(globals));
                     skip = true;
                 }
                 BcOp1::MethodDef(id) => {

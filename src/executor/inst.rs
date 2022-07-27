@@ -83,8 +83,19 @@ impl Bc {
         }
     }
 
+    pub(crate) fn from_with_class2(op1: u64, class_id1: ClassId, class_id2: ClassId) -> Self {
+        Self {
+            op1: Bc1::from(op1),
+            op2: Bc2::class2(class_id1, class_id2),
+        }
+    }
+
     pub(crate) fn classid(&self) -> ClassId {
         ClassId::new(self.op2.0 as u32)
+    }
+
+    pub(crate) fn classid2(&self) -> ClassId {
+        ClassId::new((self.op2.0 >> 32) as u32)
     }
 
     pub(crate) fn is_float(&self) -> bool {
@@ -214,6 +225,12 @@ impl Bc2 {
         Self(((version as u64) << 32) + (id as u64))
     }
 
+    fn class2(class_id1: ClassId, class_id2: ClassId) -> Self {
+        let id1: u32 = class_id1.into();
+        let id2: u32 = class_id2.into();
+        Self(((id2 as u64) << 32) + (id1 as u64))
+    }
+
     //#[cfg(feature = "emit-bc")]
     pub(crate) fn from_jit_addr(bcop: Bc) -> u64 {
         bcop.op2.0
@@ -327,36 +344,36 @@ impl BcOp1 {
 
             Neg(op1, op2) => enc_ww(129, *op1, *op2),
             BinOp(kind, op1, op2, op3) => {
-                return Bc::from_with_class_and_version(
+                return Bc::from_with_class2(
                     enc_www(170 + *kind as u16, *op1, *op2, *op3),
                     INTEGER_CLASS,
-                    -1i32 as u32,
+                    INTEGER_CLASS,
                 )
             }
+            BinOpRi(BinOpK::Add, op1, op2, op3) => {
+                let op1 = enc_wwsw(140, *op1, *op2, *op3);
+                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
+            }
+            BinOpRi(BinOpK::Sub, op1, op2, op3) => {
+                let op1 = enc_wwsw(141, *op1, *op2, *op3);
+                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
+            }
+            BinOpRi(..) => unimplemented!(),
             Cmp(kind, op1, op2, op3, opt) => {
                 let op1 = if *opt {
                     enc_www(156 + *kind as u16, *op1, *op2, *op3)
                 } else {
                     enc_www(134 + *kind as u16, *op1, *op2, *op3)
                 };
-                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
+                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
-            BinOpRi(BinOpK::Add, op1, op2, op3) => {
-                let op1 = enc_wwsw(140, *op1, *op2, *op3);
-                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
-            }
-            BinOpRi(BinOpK::Sub, op1, op2, op3) => {
-                let op1 = enc_wwsw(141, *op1, *op2, *op3);
-                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
-            }
-            BinOpRi(..) => unimplemented!(),
             Cmpri(kind, op1, op2, op3, opt) => {
                 let op1 = if *opt {
                     enc_wwsw(162 + *kind as u16, *op1, *op2, *op3)
                 } else {
                     enc_wwsw(142 + *kind as u16, *op1, *op2, *op3)
                 };
-                return Bc::from_with_class_and_version(op1, INTEGER_CLASS, -1i32 as u32);
+                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
             Ret(op1) => enc_w(148, *op1),
             Mov(op1, op2) => enc_ww(149, *op1, *op2),

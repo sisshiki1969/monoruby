@@ -19,7 +19,7 @@ macro_rules! cmp_ops {
               self.fetch_and_dispatch();
               self.jit.select(1);
               self.jit.bind_label(generic0);
-              self.vm_save_recv_class();
+              self.vm_save_binary_class();
               monoasm!(self.jit,
                   jmp  generic1;
               );
@@ -43,7 +43,7 @@ macro_rules! cmp_ops {
             self.fetch_and_dispatch();
             self.jit.select(1);
             self.jit.bind_label(generic0);
-            self.vm_save_recv_class();
+            self.vm_save_lhs_class();
             monoasm!(self.jit,
                 jmp  generic1;
             );
@@ -401,13 +401,29 @@ impl Codegen {
         self.jit.bind_label(exit);
     }
 
-    fn vm_save_recv_class(&mut self) {
+    fn vm_save_lhs_class(&mut self) {
         monoasm! { self.jit,
             pushq rdi;
             pushq rsi;
             movq  rax, (Value::get_class);
             call rax;
             movl  [r13 - 8], rax;
+            popq  rsi;
+            popq  rdi;
+        };
+    }
+
+    fn vm_save_binary_class(&mut self) {
+        monoasm! { self.jit,
+            pushq rdi;
+            pushq rsi;
+            movq  rax, (Value::get_class);
+            call rax;
+            movl  [r13 - 8], rax;
+            movq  rdi, [rsp];
+            movq  rax, (Value::get_class);
+            call rax;
+            movl  [r13 - 4], rax;
             popq  rsi;
             popq  rdi;
         };
@@ -422,7 +438,7 @@ impl Codegen {
 
     fn vm_generic_binop(&mut self, generic: DestLabel, exit: DestLabel, func: u64) {
         self.jit.bind_label(generic);
-        self.vm_save_recv_class();
+        self.vm_save_binary_class();
         self.call_binop(func);
         self.vm_store_r15();
         monoasm! { self.jit,
@@ -789,7 +805,7 @@ impl Codegen {
             // generic path
             addq rsi, 1;
         };
-        self.vm_save_recv_class();
+        self.vm_save_lhs_class();
         self.call_binop(add_values as _);
         monoasm! { self.jit,
             // store the result to return reg.
@@ -824,7 +840,7 @@ impl Codegen {
     fn vm_mulrr(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.vm_get_rdi_rsi_addr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_save_recv_class();
+        self.vm_save_binary_class();
         self.call_binop(mul_values as _);
         self.vm_store_r15();
         self.fetch_and_dispatch();
@@ -834,7 +850,7 @@ impl Codegen {
     fn vm_divrr(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.vm_get_rdi_rsi_addr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_save_recv_class();
+        self.vm_save_binary_class();
         self.call_binop(div_values as _);
         self.vm_store_r15();
         self.fetch_and_dispatch();
