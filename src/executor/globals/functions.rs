@@ -714,7 +714,7 @@ impl NormalFuncInfo {
                     let op1 = format!(
                         "{} = %{}.call {}(%{}; {})",
                         match ret {
-                            0 => "_".to_string(),
+                            SlotId(0) => "_".to_string(),
                             ret => format!("%{:?}", ret),
                         },
                         recv,
@@ -731,7 +731,7 @@ impl NormalFuncInfo {
                     eprintln!("define {:?}: {:?}", name, func)
                 }
                 BcOp1::ConcatStr(ret, args, len) => match ret {
-                    0 => eprintln!("_ = concat(%{}; {})", args, len),
+                    SlotId(0) => eprintln!("_ = concat(%{}; {})", args, len),
                     ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
                 },
                 BcOp1::LoopStart(count) => eprintln!(
@@ -747,12 +747,13 @@ impl NormalFuncInfo {
 }
 
 impl NormalFuncInfo {
-    pub(crate) fn get_index(&self, reg: &BcReg) -> u16 {
-        match reg {
+    pub(crate) fn get_index(&self, reg: &BcReg) -> SlotId {
+        let id = match reg {
             BcReg::Self_ => 0,
             BcReg::Temp(i) => 1 + self.locals.len() as u16 + i.0,
             BcReg::Local(i) => 1 + i.0,
-        }
+        };
+        SlotId(id)
     }
 
     pub(crate) fn add_constsite(

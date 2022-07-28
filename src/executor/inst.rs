@@ -177,7 +177,7 @@ impl std::fmt::Debug for Bc {
                 let op1 = format!(
                     "{} = call {:?}",
                     match ret {
-                        0 => "_".to_string(),
+                        SlotId(0) => "_".to_string(),
                         ret => format!("%{:?}", ret),
                     },
                     name,
@@ -191,7 +191,7 @@ impl std::fmt::Debug for Bc {
                 writeln!(f, "define {:?}", id)
             }
             BcOp1::ConcatStr(ret, args, len) => match ret {
-                0 => writeln!(f, "_ = concat(%{}; {})", args, len),
+                SlotId(0) => writeln!(f, "_ = concat(%{}; {})", args, len),
                 ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
             },
             BcOp1::LoopStart(count) => writeln!(
@@ -249,41 +249,41 @@ pub(super) enum BcOp1 {
     /// branch(dest)
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
-    CondBr(u16, i32, bool),
+    CondBr(SlotId, i32, bool),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was false.
-    CondNotBr(u16, i32, bool),
+    CondNotBr(SlotId, i32, bool),
     /// integer(%reg, i32)
-    Integer(u16, i32),
+    Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
-    Symbol(u16, IdentId),
+    Symbol(SlotId, IdentId),
     /// literal(%ret, literal_id)
-    Literal(u16, u32),
-    LoadConst(u16, ConstSiteId),
-    StoreConst(u16, IdentId),
+    Literal(SlotId, u32),
+    LoadConst(SlotId, ConstSiteId),
+    StoreConst(SlotId, IdentId),
     /// nil(%reg)
-    Nil(u16),
+    Nil(SlotId),
     /// negate(%ret, %src)
-    Neg(u16, u16),
+    Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
-    BinOp(BinOpK, u16, u16, u16),
+    BinOp(BinOpK, SlotId, SlotId, SlotId),
     /// binop with small integer(kind, %ret, %lhs, %rhs)
-    BinOpRi(BinOpK, u16, u16, i16),
+    BinOpRi(BinOpK, SlotId, SlotId, i16),
     /// cmp(%ret, %lhs, %rhs, optimizable)
-    Cmp(CmpKind, u16, u16, u16, bool),
+    Cmp(CmpKind, SlotId, SlotId, SlotId, bool),
     /// cmpri(%ret, %lhs, rhs: i16, optimizable)
-    Cmpri(CmpKind, u16, u16, i16, bool),
+    Cmpri(CmpKind, SlotId, SlotId, i16, bool),
     /// return(%ret)
-    Ret(u16),
+    Ret(SlotId),
     /// move(%dst, %src)
-    Mov(u16, u16),
+    Mov(SlotId, SlotId),
     /// func call(%ret, name)
-    MethodCall(u16, IdentId),
-    /// func call 2nd opecode(%recv, %args, %len)
-    MethodArgs(u16, u16, u16),
+    MethodCall(SlotId, IdentId),
+    /// func call 2nd opecode(%recv, %args, len)
+    MethodArgs(SlotId, SlotId, u16),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
-    ConcatStr(u16, u16, u16),
+    ConcatStr(SlotId, SlotId, u16),
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -327,67 +327,67 @@ impl BcOp1 {
         let op = match self {
             MethodCall(op1, op2) => {
                 return Bc::from_with_class_and_version(
-                    enc_wl(1, *op1, op2.get()),
+                    enc_wl(1, op1.0, op2.get()),
                     ClassId::new(0),
                     -1i32 as u32,
                 )
             }
-            MethodArgs(op1, op2, op3) => enc_www(130, *op1, *op2, *op3),
+            MethodArgs(op1, op2, op3) => enc_www(130, op1.0, op2.0, *op3),
             MethodDef(op1) => enc_l(2, op1.0),
             Br(op1) => enc_l(3, *op1 as u32),
-            CondBr(op1, op2, opt) => enc_wl(if *opt { 12 } else { 4 }, *op1, *op2 as u32),
-            CondNotBr(op1, op2, opt) => enc_wl(if *opt { 13 } else { 5 }, *op1, *op2 as u32),
-            Integer(op1, op2) => enc_wl(6, *op1, *op2 as u32),
-            Literal(op1, op2) => enc_wl(7, *op1, *op2),
-            Nil(op1) => enc_w(8, *op1),
-            Symbol(op1, op2) => enc_wl(9, *op1, op2.get()),
-            LoadConst(op1, op2) => enc_wl(10, *op1, op2.get()),
-            StoreConst(op1, op2) => enc_wl(11, *op1, op2.get()),
+            CondBr(op1, op2, opt) => enc_wl(if *opt { 12 } else { 4 }, op1.0, *op2 as u32),
+            CondNotBr(op1, op2, opt) => enc_wl(if *opt { 13 } else { 5 }, op1.0, *op2 as u32),
+            Integer(op1, op2) => enc_wl(6, op1.0, *op2 as u32),
+            Literal(op1, op2) => enc_wl(7, op1.0, *op2),
+            Nil(op1) => enc_w(8, op1.0),
+            Symbol(op1, op2) => enc_wl(9, op1.0, op2.get()),
+            LoadConst(op1, op2) => enc_wl(10, op1.0, op2.get()),
+            StoreConst(op1, op2) => enc_wl(11, op1.0, op2.get()),
             LoopStart(_) => enc_l(14, 0),
             LoopEnd => enc_l(15, 0),
 
             Neg(op1, op2) => {
                 return Bc::from_with_class_and_version(
-                    enc_ww(129, *op1, *op2),
+                    enc_ww(129, op1.0, op2.0),
                     INTEGER_CLASS,
                     -1i32 as u32,
                 )
             }
             BinOp(kind, op1, op2, op3) => {
                 return Bc::from_with_class2(
-                    enc_www(170 + *kind as u16, *op1, *op2, *op3),
+                    enc_www(170 + *kind as u16, op1.0, op2.0, op3.0),
                     INTEGER_CLASS,
                     INTEGER_CLASS,
                 )
             }
             BinOpRi(BinOpK::Add, op1, op2, op3) => {
-                let op1 = enc_wwsw(140, *op1, *op2, *op3);
+                let op1 = enc_wwsw(140, op1.0, op2.0, *op3);
                 return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
             BinOpRi(BinOpK::Sub, op1, op2, op3) => {
-                let op1 = enc_wwsw(141, *op1, *op2, *op3);
+                let op1 = enc_wwsw(141, op1.0, op2.0, *op3);
                 return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
             BinOpRi(..) => unimplemented!(),
             Cmp(kind, op1, op2, op3, opt) => {
                 let op1 = if *opt {
-                    enc_www(156 + *kind as u16, *op1, *op2, *op3)
+                    enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
                 } else {
-                    enc_www(134 + *kind as u16, *op1, *op2, *op3)
+                    enc_www(134 + *kind as u16, op1.0, op2.0, op3.0)
                 };
                 return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
             Cmpri(kind, op1, op2, op3, opt) => {
                 let op1 = if *opt {
-                    enc_wwsw(162 + *kind as u16, *op1, *op2, *op3)
+                    enc_wwsw(162 + *kind as u16, op1.0, op2.0, *op3)
                 } else {
-                    enc_wwsw(142 + *kind as u16, *op1, *op2, *op3)
+                    enc_wwsw(142 + *kind as u16, op1.0, op2.0, *op3)
                 };
                 return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
             }
-            Ret(op1) => enc_w(148, *op1),
-            Mov(op1, op2) => enc_ww(149, *op1, *op2),
-            ConcatStr(op1, op2, op3) => enc_www(155, *op1, *op2, *op3),
+            Ret(op1) => enc_w(148, op1.0),
+            Mov(op1, op2) => enc_ww(149, op1.0, op2.0),
+            ConcatStr(op1, op2, op3) => enc_www(155, op1.0, op2.0, *op3),
         };
         Bc::from(Bc1::from(op), Bc2::from(0))
     }
@@ -398,19 +398,19 @@ impl BcOp1 {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::MethodCall(op1, IdentId::from(op2)),
+                1 => Self::MethodCall(SlotId::new(op1), IdentId::from(op2)),
                 2 => Self::MethodDef(MethodDefId(op2)),
                 3 => Self::Br(op2 as i32),
-                4 => Self::CondBr(op1, op2 as i32, false),
-                5 => Self::CondNotBr(op1, op2 as i32, false),
-                6 => Self::Integer(op1, op2 as i32),
-                7 => Self::Literal(op1, op2),
-                8 => Self::Nil(op1),
-                9 => Self::Symbol(op1, IdentId::from(op2)),
-                10 => Self::LoadConst(op1, ConstSiteId(op2)),
-                11 => Self::StoreConst(op1, IdentId::from(op2)),
-                12 => Self::CondBr(op1, op2 as i32, true),
-                13 => Self::CondNotBr(op1, op2 as i32, true),
+                4 => Self::CondBr(SlotId::new(op1), op2 as i32, false),
+                5 => Self::CondNotBr(SlotId::new(op1), op2 as i32, false),
+                6 => Self::Integer(SlotId::new(op1), op2 as i32),
+                7 => Self::Literal(SlotId::new(op1), op2),
+                8 => Self::Nil(SlotId::new(op1)),
+                9 => Self::Symbol(SlotId::new(op1), IdentId::from(op2)),
+                10 => Self::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
+                11 => Self::StoreConst(SlotId::new(op1), IdentId::from(op2)),
+                12 => Self::CondBr(SlotId::new(op1), op2 as i32, true),
+                13 => Self::CondNotBr(SlotId::new(op1), op2 as i32, true),
                 14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
                 _ => unreachable!(),
@@ -418,46 +418,199 @@ impl BcOp1 {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
-                129 => Self::Neg(op1, op2),
-                130 => Self::MethodArgs(op1, op2, op3),
-                134 => Self::Cmp(CmpKind::Eq, op1, op2, op3, false),
-                135 => Self::Cmp(CmpKind::Ne, op1, op2, op3, false),
-                136 => Self::Cmp(CmpKind::Lt, op1, op2, op3, false),
-                137 => Self::Cmp(CmpKind::Le, op1, op2, op3, false),
-                138 => Self::Cmp(CmpKind::Gt, op1, op2, op3, false),
-                139 => Self::Cmp(CmpKind::Ge, op1, op2, op3, false),
-                140 => Self::BinOpRi(BinOpK::Add, op1, op2, op3 as i16),
-                141 => Self::BinOpRi(BinOpK::Sub, op1, op2, op3 as i16),
-                142 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16, false),
-                143 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16, false),
-                144 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16, false),
-                145 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16, false),
-                146 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16, false),
-                147 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16, false),
-                148 => Self::Ret(op1),
-                149 => Self::Mov(op1, op2),
-                155 => Self::ConcatStr(op1, op2, op3),
-                156 => Self::Cmp(CmpKind::Eq, op1, op2, op3, true),
-                157 => Self::Cmp(CmpKind::Ne, op1, op2, op3, true),
-                158 => Self::Cmp(CmpKind::Lt, op1, op2, op3, true),
-                159 => Self::Cmp(CmpKind::Le, op1, op2, op3, true),
-                160 => Self::Cmp(CmpKind::Gt, op1, op2, op3, true),
-                161 => Self::Cmp(CmpKind::Ge, op1, op2, op3, true),
-                162 => Self::Cmpri(CmpKind::Eq, op1, op2, op3 as i16, true),
-                163 => Self::Cmpri(CmpKind::Ne, op1, op2, op3 as i16, true),
-                164 => Self::Cmpri(CmpKind::Lt, op1, op2, op3 as i16, true),
-                165 => Self::Cmpri(CmpKind::Le, op1, op2, op3 as i16, true),
-                166 => Self::Cmpri(CmpKind::Gt, op1, op2, op3 as i16, true),
-                167 => Self::Cmpri(CmpKind::Ge, op1, op2, op3 as i16, true),
-                170 => Self::BinOp(BinOpK::Add, op1, op2, op3),
-                171 => Self::BinOp(BinOpK::Sub, op1, op2, op3),
-                172 => Self::BinOp(BinOpK::Mul, op1, op2, op3),
-                173 => Self::BinOp(BinOpK::Div, op1, op2, op3),
-                174 => Self::BinOp(BinOpK::BitOr, op1, op2, op3),
-                175 => Self::BinOp(BinOpK::BitAnd, op1, op2, op3),
-                176 => Self::BinOp(BinOpK::BitXor, op1, op2, op3),
-                177 => Self::BinOp(BinOpK::Shr, op1, op2, op3),
-                178 => Self::BinOp(BinOpK::Shl, op1, op2, op3),
+                129 => Self::Neg(SlotId::new(op1), SlotId::new(op2)),
+                130 => Self::MethodArgs(SlotId::new(op1), SlotId::new(op2), op3),
+                134 => Self::Cmp(
+                    CmpKind::Eq,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                135 => Self::Cmp(
+                    CmpKind::Ne,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                136 => Self::Cmp(
+                    CmpKind::Lt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                137 => Self::Cmp(
+                    CmpKind::Le,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                138 => Self::Cmp(
+                    CmpKind::Gt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                139 => Self::Cmp(
+                    CmpKind::Ge,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                    false,
+                ),
+                140 => Self::BinOpRi(BinOpK::Add, SlotId::new(op1), SlotId::new(op2), op3 as i16),
+                141 => Self::BinOpRi(BinOpK::Sub, SlotId::new(op1), SlotId::new(op2), op3 as i16),
+                142 => Self::Cmpri(
+                    CmpKind::Eq,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                143 => Self::Cmpri(
+                    CmpKind::Ne,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                144 => Self::Cmpri(
+                    CmpKind::Lt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                145 => Self::Cmpri(
+                    CmpKind::Le,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                146 => Self::Cmpri(
+                    CmpKind::Gt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                147 => Self::Cmpri(
+                    CmpKind::Ge,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    false,
+                ),
+                148 => Self::Ret(SlotId::new(op1)),
+                149 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
+                155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
+                156 => Self::Cmp(CmpKind::Eq, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                157 => Self::Cmp(CmpKind::Ne, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                158 => Self::Cmp(CmpKind::Lt, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                159 => Self::Cmp(CmpKind::Le, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                160 => Self::Cmp(CmpKind::Gt, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                161 => Self::Cmp(CmpKind::Ge, SlotId(op1), SlotId(op2), SlotId(op3), true),
+                162 => Self::Cmpri(
+                    CmpKind::Eq,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                163 => Self::Cmpri(
+                    CmpKind::Ne,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                164 => Self::Cmpri(
+                    CmpKind::Lt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                165 => Self::Cmpri(
+                    CmpKind::Le,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                166 => Self::Cmpri(
+                    CmpKind::Gt,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                167 => Self::Cmpri(
+                    CmpKind::Ge,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
+                    true,
+                ),
+                170 => Self::BinOp(
+                    BinOpK::Add,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                171 => Self::BinOp(
+                    BinOpK::Sub,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                172 => Self::BinOp(
+                    BinOpK::Mul,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                173 => Self::BinOp(
+                    BinOpK::Div,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                174 => Self::BinOp(
+                    BinOpK::BitOr,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                175 => Self::BinOp(
+                    BinOpK::BitAnd,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                176 => Self::BinOp(
+                    BinOpK::BitXor,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                177 => Self::BinOp(
+                    BinOpK::Shr,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
+                178 => Self::BinOp(
+                    BinOpK::Shl,
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
+                ),
                 _ => unreachable!(),
             }
         }

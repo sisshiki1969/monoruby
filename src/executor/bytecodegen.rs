@@ -1354,7 +1354,7 @@ impl IrContext {
                 BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)).to_bc(),
                 BcIr::MethodCall(ret, name) => {
                     let ret = match ret {
-                        None => 0,
+                        None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
                     BcOp1::MethodCall(ret, *name).to_bc()
@@ -1370,7 +1370,7 @@ impl IrContext {
                     BcOp1::MethodDef(store.add_method_def(*name, *func_id)).to_bc()
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
-                    let ret = ret.map_or(0, |ret| info.get_index(&ret));
+                    let ret = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
                     BcOp1::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16).to_bc()
                 }
             };

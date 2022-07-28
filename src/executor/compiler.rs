@@ -46,8 +46,8 @@ pub struct Codegen {
     opt_buf: Option<Bc>,
 }
 
-fn conv(reg: u16) -> i64 {
-    reg as i64 * 8 + 16
+fn conv(reg: SlotId) -> i64 {
+    reg.0 as i64 * 8 + 16
 }
 
 //
@@ -321,14 +321,14 @@ impl Codegen {
         );
     }
 
-    fn store_rax(&mut self, ret: u16) {
+    fn store_rax(&mut self, ret: SlotId) {
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
         );
     }
 
-    fn store_rdi(&mut self, ret: u16) {
+    fn store_rdi(&mut self, ret: SlotId) {
         monoasm!(self.jit,
             // store the result to return reg.
             movq [rbp - (conv(ret))], rdi;
