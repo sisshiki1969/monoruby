@@ -189,11 +189,17 @@ impl IrContext {
     }
 
     fn gen_condbr(&mut self, cond: BcReg, then_pos: usize, optimizable: bool) {
-        self.push(BcIr::CondBr(cond, then_pos, optimizable), Loc::default());
+        self.push(
+            BcIr::CondBr(cond, then_pos, optimizable, BrKind::BrIf),
+            Loc::default(),
+        );
     }
 
     fn gen_condnotbr(&mut self, cond: BcReg, else_pos: usize, optimizable: bool) {
-        self.push(BcIr::CondNotBr(cond, else_pos, optimizable), Loc::default());
+        self.push(
+            BcIr::CondBr(cond, else_pos, optimizable, BrKind::BrIfNot),
+            Loc::default(),
+        );
     }
 }
 
@@ -1303,17 +1309,11 @@ impl IrContext {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     BcOp1::Br(dst - idx as i32 - 1).to_bc()
                 }
-                BcIr::CondBr(reg, dst, optimizable) => {
+                BcIr::CondBr(reg, dst, optimizable, kind) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let cond_reg = info.get_index(reg);
                     let disp = dst - idx as i32 - 1;
-                    BcOp1::CondBr(cond_reg, disp, *optimizable).to_bc()
-                }
-                BcIr::CondNotBr(reg, dst, optimizable) => {
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let cond_reg = info.get_index(reg);
-                    let disp = dst - idx as i32 - 1;
-                    BcOp1::CondNotBr(cond_reg, disp, *optimizable).to_bc()
+                    BcOp1::CondBr(cond_reg, disp, *optimizable, *kind).to_bc()
                 }
                 BcIr::Integer(reg, num) => BcOp1::Integer(info.get_index(reg), *num).to_bc(),
                 BcIr::Symbol(reg, name) => BcOp1::Symbol(info.get_index(reg), *name).to_bc(),

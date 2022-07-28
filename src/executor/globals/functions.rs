@@ -571,7 +571,7 @@ impl NormalFuncInfo {
                 BcOp1::MethodArgs(..) => {
                     skip = true;
                 }
-                BcOp1::Br(disp) | BcOp1::CondBr(_, disp, _) | BcOp1::CondNotBr(_, disp, _) => {
+                BcOp1::Br(disp) | BcOp1::CondBr(_, disp, _, _) => {
                     info[((idx + 1) as i32 + disp) as usize] = Some(0);
                 }
                 _ => {}
@@ -625,17 +625,10 @@ impl NormalFuncInfo {
                 BcOp1::Br(disp) => {
                     eprintln!("br =>:{:05}", i as i32 + 1 + disp);
                 }
-                BcOp1::CondBr(reg, disp, opt) => {
+                BcOp1::CondBr(reg, disp, opt, kind) => {
                     eprintln!(
-                        "condbr {}%{} =>:{:05}",
-                        optstr(opt),
-                        reg,
-                        i as i32 + 1 + disp
-                    );
-                }
-                BcOp1::CondNotBr(reg, disp, opt) => {
-                    eprintln!(
-                        "condnbr {}%{} =>:{:05}",
+                        "cond{}br {}%{} =>:{:05}",
+                        kind.to_s(),
                         optstr(opt),
                         reg,
                         i as i32 + 1 + disp

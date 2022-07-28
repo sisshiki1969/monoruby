@@ -14,9 +14,7 @@ enum TIr {
     /// branch(dest, write_back)
     Br(i32, Vec<(u16, SlotId)>),
     /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was true.
-    CondBr(SlotId, i32, bool, Vec<(u16, SlotId)>),
-    /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was false.
-    CondNotBr(SlotId, i32, bool, Vec<(u16, SlotId)>),
+    CondBr(SlotId, i32, bool, Vec<(u16, SlotId)>, BrKind),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -97,20 +95,11 @@ impl std::fmt::Debug for TIr {
                     disp_write_back(write_back)
                 )
             }
-            TIr::CondBr(reg, disp, opt, write_back) => {
+            TIr::CondBr(reg, disp, opt, write_back, kind) => {
                 writeln!(
                     f,
-                    "condbr {}%{} => {}; {}",
-                    optstr(opt),
-                    reg,
-                    disp_str(disp),
-                    disp_write_back(write_back)
-                )
-            }
-            TIr::CondNotBr(reg, disp, opt, write_back) => {
-                writeln!(
-                    f,
-                    "condnbr {}%{} => {}; {}",
+                    "cond{}br {}%{} => {}; {}",
+                    kind.to_s(),
                     optstr(opt),
                     reg,
                     disp_str(disp),
@@ -201,7 +190,7 @@ impl std::fmt::Debug for TIr {
                     "{} = call {:?}",
                     match ret {
                         SlotId(0) => "_".to_string(),
-                        ret => format!("%{:?}", ret),
+                        ret => format!("%{}", ret),
                     },
                     name,
                 )
@@ -225,20 +214,21 @@ impl std::fmt::Debug for TIr {
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LinkMode {
-    /// Read and write.
     ///
-    /// mutation of the corresponding xmm register affects the stack slot.
+    /// Linked to an xmm register and we can read and write.
     ///
-    RW(u16),
-    /// Read only.
-    R(u16),
-    /// No linkage with any of stack slots.
+    /// mutation of the corresponding xmm register (lazily) affects the stack slot.
+    ///
+    XmmRW(u16),
+    /// Linked to an xmm register but we can only read.
+    XmmR(u16),
+    /// No linkage with any xmm regiter.
     None,
 }
 
 impl LinkMode {
     fn is_none(&self) -> bool {
-        !matches!(self, LinkMode::RW(_))
+        !matches!(self, LinkMode::XmmRW(_))
     }
 }
 
@@ -278,7 +268,7 @@ impl StackSlotInfo {
 
     fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, SlotId)> + 'a {
         self.0.iter().enumerate().filter_map(|(reg, freg)| {
-            if let LinkMode::RW(freg) = freg {
+            if let LinkMode::XmmRW(freg) = freg {
                 Some((*freg as u16, SlotId::new(reg as u16)))
             } else {
                 None
@@ -309,7 +299,7 @@ impl BBContext {
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
     fn alloc_xmm(&mut self, reg: SlotId) -> u16 {
-        if let LinkMode::RW(freg) = self.stack_slot[reg] {
+        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
             if self.xmm[freg as usize].len() == 1 {
                 assert_eq!(reg, self.xmm[freg as usize][0]);
                 return freg;
@@ -318,7 +308,7 @@ impl BBContext {
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.stack_slot[reg] = LinkMode::RW(flhs as u16);
+                self.stack_slot[reg] = LinkMode::XmmRW(flhs as u16);
                 xmm.push(reg);
                 return flhs as u16;
             }
@@ -331,7 +321,7 @@ impl BBContext {
     ///
     fn alloc_read_xmm(&mut self, reg: SlotId) -> u16 {
         match self.stack_slot[reg] {
-            LinkMode::RW(freg) | LinkMode::R(freg) => {
+            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
                 if self.xmm[freg as usize].len() == 1 {
                     assert_eq!(reg, self.xmm[freg as usize][0]);
                     return freg;
@@ -342,7 +332,7 @@ impl BBContext {
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.stack_slot[reg] = LinkMode::R(flhs as u16);
+                self.stack_slot[reg] = LinkMode::XmmR(flhs as u16);
                 xmm.push(reg);
                 return flhs as u16;
             }
@@ -352,7 +342,7 @@ impl BBContext {
 
     fn dealloc_xmm(&mut self, reg: SlotId) {
         match self.stack_slot[reg] {
-            LinkMode::R(freg) | LinkMode::RW(freg) => {
+            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => {
                 assert!(self.xmm[freg as usize].contains(&reg));
                 self.xmm[freg as usize].retain(|e| *e != reg);
                 self.stack_slot[reg] = LinkMode::None;
@@ -365,13 +355,13 @@ impl BBContext {
         self.dealloc_xmm(dst);
         let f = self.stack_slot[src];
         match f {
-            LinkMode::RW(freg) => {
-                self.stack_slot[dst] = LinkMode::RW(freg);
+            LinkMode::XmmRW(freg) => {
+                self.stack_slot[dst] = LinkMode::XmmRW(freg);
                 self.xmm[freg as usize].push(dst);
                 Some(freg)
             }
-            LinkMode::R(freg) => {
-                self.stack_slot[dst] = LinkMode::R(freg);
+            LinkMode::XmmR(freg) => {
+                self.stack_slot[dst] = LinkMode::XmmR(freg);
                 self.xmm[freg as usize].push(dst);
                 Some(freg)
             }
@@ -386,7 +376,7 @@ impl BBContext {
     }
 
     fn write_back(&mut self, codegen: &mut Codegen, reg: SlotId) {
-        if let LinkMode::RW(freg) = self.stack_slot[reg] {
+        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
             self.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
@@ -399,7 +389,7 @@ impl BBContext {
     }
 
     fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: SlotId) {
-        if let LinkMode::RW(freg) = self.stack_slot[reg] {
+        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -457,7 +447,7 @@ impl BBContext {
 
     fn get_float(&mut self, codegen: &mut Codegen, reg: SlotId) -> u16 {
         match self.stack_slot[reg] {
-            LinkMode::R(freg) | LinkMode::RW(freg) => freg,
+            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let freg = self.alloc_read_xmm(reg);
                 self.push(TIr::FLoad(reg, freg as u16));
@@ -1016,33 +1006,25 @@ impl Codegen {
                     );
                     continue;
                 }
-                BcOp1::CondBr(cond_, disp, false) => {
-                    ctx.push(TIr::CondBr(cond_, disp, false, ctx.get_write_back()));
+                BcOp1::CondBr(cond_, disp, false, kind) => {
+                    ctx.push(TIr::CondBr(cond_, disp, false, ctx.get_write_back(), kind));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let side_exit = ctx.branch_write_back(self, dest);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
                         cmpq rax, (FALSE_VALUE);
-                        jne side_exit;
                     );
+                    match kind {
+                        BrKind::BrIf => monoasm!(self.jit, jne side_exit;),
+                        BrKind::BrIfNot => monoasm!(self.jit, jeq side_exit;),
+                    }
                 }
-                BcOp1::CondNotBr(cond_, disp, false) => {
-                    ctx.push(TIr::CondNotBr(cond_, disp, false, ctx.get_write_back()));
-                    let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    let side_exit = ctx.branch_write_back(self, dest);
-                    monoasm!(self.jit,
-                        movq rax, [rbp - (conv(cond_))];
-                        orq rax, 0x10;
-                        cmpq rax, (FALSE_VALUE);
-                        jeq side_exit;
-                    );
-                }
-                BcOp1::CondBr(cond_, disp, true) => {
+                BcOp1::CondBr(cond_, disp, true, brkind) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
                     let op = std::mem::take(&mut self.opt_buf).unwrap();
-                    if op.is_float() {
+                    if op.is_binary_float() {
                         let kind = match BcOp1::from_bc(op) {
                             BcOp1::Cmp(kind, ret, lhs, rhs, true) => {
                                 let flhs = ctx.get_float(self, lhs);
@@ -1066,8 +1048,8 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back()));
-                        self.gen_cmp_opt(kind, dest, generic, true, &mut ctx);
+                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back(), brkind));
+                        self.gen_cmp_opt(kind, dest, generic, brkind == BrKind::BrIf, &mut ctx);
                     } else {
                         let kind = match BcOp1::from_bc(op) {
                             BcOp1::Cmp(kind, ret, lhs, rhs, true) => {
@@ -1082,35 +1064,12 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back()));
+                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back(), brkind));
                         monoasm! { self.jit,
                             cmpq rdi, rsi;
                         };
-                        self.gen_cmp_opt(kind, dest, generic, true, &mut ctx);
+                        self.gen_cmp_opt(kind, dest, generic, brkind == BrKind::BrIf, &mut ctx);
                     }
-                }
-                BcOp1::CondNotBr(cond_, disp, true) => {
-                    let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    let generic = self.jit.label();
-                    let op = std::mem::take(&mut self.opt_buf).unwrap();
-                    let kind = match BcOp1::from_bc(op) {
-                        BcOp1::Cmp(kind, ret, lhs, rhs, true) => {
-                            self.gen_cmp_prep(&mut ctx, ret, lhs, rhs, generic);
-                            ctx.push(TIr::Cmp(kind, ret, lhs, rhs, true, op.classid()));
-                            kind
-                        }
-                        BcOp1::Cmpri(kind, ret, lhs, rhs, true) => {
-                            self.gen_cmpri_prep(&mut ctx, ret, lhs, rhs, generic);
-                            ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, true, op.classid()));
-                            kind
-                        }
-                        _ => unreachable!(),
-                    };
-                    ctx.push(TIr::CondNotBr(cond_, disp, true, ctx.get_write_back()));
-                    monoasm! { self.jit,
-                        cmpq rdi, rsi;
-                    };
-                    self.gen_cmp_opt(kind, dest, generic, false, &mut ctx);
                 }
             }
 
