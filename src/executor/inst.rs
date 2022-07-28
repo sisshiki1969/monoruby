@@ -346,7 +346,13 @@ impl BcOp1 {
             LoopStart(_) => enc_l(14, 0),
             LoopEnd => enc_l(15, 0),
 
-            Neg(op1, op2) => enc_ww(129, *op1, *op2),
+            Neg(op1, op2) => {
+                return Bc::from_with_class_and_version(
+                    enc_ww(129, *op1, *op2),
+                    INTEGER_CLASS,
+                    -1i32 as u32,
+                )
+            }
             BinOp(kind, op1, op2, op3) => {
                 return Bc::from_with_class2(
                     enc_www(170 + *kind as u16, *op1, *op2, *op3),

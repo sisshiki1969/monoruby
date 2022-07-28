@@ -657,7 +657,10 @@ impl NormalFuncInfo {
                     eprintln!("const[{}] = %{}", globals.id_store.get_name(id), reg)
                 }
                 BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
-                BcOp1::Neg(dst, src) => eprintln!("%{} = neg %{}", dst, src),
+                BcOp1::Neg(dst, src) => {
+                    let op1 = format!("%{} = neg %{}", dst, src);
+                    eprintln!("{:36} [{}]", op1, inst.classid().get_name(globals),);
+                }
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
                     let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
                     eprintln!(

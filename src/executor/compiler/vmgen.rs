@@ -431,6 +431,7 @@ impl Codegen {
 
     fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
         self.jit.bind_label(generic);
+        self.vm_save_lhs_class();
         self.call_unop(func);
         self.vm_store_r15();
         self.fetch_and_dispatch();

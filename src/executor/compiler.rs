@@ -375,8 +375,7 @@ impl Codegen {
         not_integer:
             testq rdi, 0b10;
             jz not_flonum;
-            xorq rax, rax;
-            movq xmm0, rax;
+            xorps xmm0, xmm0;
             movq rax, (FLOAT_ZERO);
             cmpq rdi, rax;
             je exit;
@@ -449,8 +448,7 @@ impl Codegen {
         let heap_alloc = self.jit.label();
         monoasm!(self.jit,
         entry:
-            xorq rax, rax;
-            movq xmm1, rax;
+            xorps xmm1, xmm1;
             ucomisd xmm0, xmm1;
             jne normal;
             jp normal;
@@ -505,41 +503,6 @@ impl Codegen {
         );
         entry
     }
-
-    /*
-    ///
-    /// Convert Value(rdi) to f64(xmm0).
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm0: f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
-    ///
-    fn gen_rdi_to_f64(&mut self) {
-        let exit = self.jit.label();
-        monoasm!(self.jit,
-            xorq rax, rax;
-            movq xmm0, rax;
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            je exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm0, rdi;
-        exit:
-        );
-    }*/
 
     fn call_unop(&mut self, func: u64) {
         let entry_return = self.vm_return;

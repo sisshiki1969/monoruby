@@ -2,6 +2,13 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+//
+// Just-in-time compiler module.
+//
+
+///
+/// Type Ir.
+///
 #[derive(PartialEq)]
 enum TIr {
     /// branch(dest, write_back)
@@ -213,10 +220,19 @@ impl std::fmt::Debug for TIr {
     }
 }
 
+///
+/// Mode if linkage between stack slot and xmm registers.
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LinkMode {
+    /// Read and write.
+    ///
+    /// mutation of the corresponding xmm register affects the stack slot.
+    ///
     RW(u16),
+    /// Read only.
     R(u16),
+    /// No linkage with any of stack slots.
     None,
 }
 
@@ -226,15 +242,50 @@ impl LinkMode {
     }
 }
 
-pub(crate) struct FloatContext {
-    /// information for registers.
-    reg_info: Vec<LinkMode>,
+///
+/// Context of the current Basic block.
+///
+pub(crate) struct BBContext {
+    /// information for stack slots.
+    stack_slot: StackSlotInfo,
     /// information for xmm registers.
     xmm: [Vec<u16>; 14],
+    /// typed IR.
     tir: Vec<TIr>,
 }
 
-impl FloatContext {
+struct StackSlotInfo(Vec<LinkMode>);
+
+impl std::ops::Index<u16> for StackSlotInfo {
+    type Output = LinkMode;
+    fn index(&self, i: u16) -> &Self::Output {
+        &self.0[i as usize]
+    }
+}
+
+impl std::ops::IndexMut<u16> for StackSlotInfo {
+    fn index_mut(&mut self, i: u16) -> &mut Self::Output {
+        &mut self.0[i as usize]
+    }
+}
+
+impl StackSlotInfo {
+    fn clear(&mut self) {
+        self.0.iter_mut().for_each(|info| *info = LinkMode::None);
+    }
+
+    fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, u16)> + 'a {
+        self.0.iter().enumerate().filter_map(|(reg, freg)| {
+            if let LinkMode::RW(freg) = freg {
+                Some((*freg as u16, reg as u16))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl BBContext {
     fn new(reg_num: usize) -> Self {
         let xmm = (0..14)
             .map(|_| vec![])
@@ -242,7 +293,7 @@ impl FloatContext {
             .try_into()
             .unwrap();
         Self {
-            reg_info: vec![LinkMode::None; reg_num],
+            stack_slot: StackSlotInfo(vec![LinkMode::None; reg_num]),
             xmm,
             tir: vec![],
         }
@@ -256,7 +307,7 @@ impl FloatContext {
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
     fn alloc_xmm(&mut self, reg: u16) -> u16 {
-        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.stack_slot[reg] {
             if self.xmm[freg as usize].len() == 1 {
                 assert_eq!(reg, self.xmm[freg as usize][0]);
                 return freg;
@@ -265,7 +316,7 @@ impl FloatContext {
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.reg_info[reg as usize] = LinkMode::RW(flhs as u16);
+                self.stack_slot[reg] = LinkMode::RW(flhs as u16);
                 xmm.push(reg);
                 return flhs as u16;
             }
@@ -277,7 +328,7 @@ impl FloatContext {
     /// Allocate new xmm register to the given stack slot for read f64.
     ///
     fn alloc_read_xmm(&mut self, reg: u16) -> u16 {
-        match self.reg_info[reg as usize] {
+        match self.stack_slot[reg] {
             LinkMode::RW(freg) | LinkMode::R(freg) => {
                 if self.xmm[freg as usize].len() == 1 {
                     assert_eq!(reg, self.xmm[freg as usize][0]);
@@ -289,7 +340,7 @@ impl FloatContext {
         self.dealloc_xmm(reg);
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.reg_info[reg as usize] = LinkMode::R(flhs as u16);
+                self.stack_slot[reg] = LinkMode::R(flhs as u16);
                 xmm.push(reg);
                 return flhs as u16;
             }
@@ -298,11 +349,11 @@ impl FloatContext {
     }
 
     fn dealloc_xmm(&mut self, reg: u16) {
-        match self.reg_info[reg as usize] {
+        match self.stack_slot[reg] {
             LinkMode::R(freg) | LinkMode::RW(freg) => {
                 assert!(self.xmm[freg as usize].contains(&reg));
                 self.xmm[freg as usize].retain(|e| *e != reg);
-                self.reg_info[reg as usize] = LinkMode::None;
+                self.stack_slot[reg] = LinkMode::None;
             }
             _ => {}
         }
@@ -310,15 +361,15 @@ impl FloatContext {
 
     fn copy(&mut self, src: u16, dst: u16) -> Option<u16> {
         self.dealloc_xmm(dst);
-        let f = self.reg_info[src as usize];
+        let f = self.stack_slot[src];
         match f {
             LinkMode::RW(freg) => {
-                self.reg_info[dst as usize] = LinkMode::RW(freg);
+                self.stack_slot[dst] = LinkMode::RW(freg);
                 self.xmm[freg as usize].push(dst);
                 Some(freg)
             }
             LinkMode::R(freg) => {
-                self.reg_info[dst as usize] = LinkMode::R(freg);
+                self.stack_slot[dst] = LinkMode::R(freg);
                 self.xmm[freg as usize].push(dst);
                 Some(freg)
             }
@@ -333,7 +384,7 @@ impl FloatContext {
     }
 
     fn write_back(&mut self, codegen: &mut Codegen, reg: u16) {
-        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.stack_slot[reg] {
             self.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
@@ -346,7 +397,7 @@ impl FloatContext {
     }
 
     fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: u16) {
-        if let LinkMode::RW(freg) = self.reg_info[reg as usize] {
+        if let LinkMode::RW(freg) = self.stack_slot[reg] {
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -382,10 +433,8 @@ impl FloatContext {
             .for_each(|(_, reg)| self.write_back(codegen, *reg));
 
         self.xmm.iter_mut().for_each(|info| *info = vec![]);
-        assert!(self.reg_info.iter().all(|r| r.is_none()));
-        self.reg_info
-            .iter_mut()
-            .for_each(|info| *info = LinkMode::None);
+        assert!(self.stack_slot.0.iter().all(|r| r.is_none()));
+        self.stack_slot.clear()
     }
 
     fn get_write_back(&self) -> Vec<(u16, u16)> {
@@ -401,17 +450,11 @@ impl FloatContext {
     }
 
     fn write_back_iter<'a>(&'a self) -> impl Iterator<Item = (u16, u16)> + 'a {
-        self.reg_info.iter().enumerate().filter_map(|(reg, freg)| {
-            if let LinkMode::RW(freg) = freg {
-                Some((*freg as u16, reg as u16))
-            } else {
-                None
-            }
-        })
+        self.stack_slot.write_back_iter()
     }
 
     fn get_float(&mut self, codegen: &mut Codegen, reg: u16) -> u16 {
-        match self.reg_info[reg as usize] {
+        match self.stack_slot[reg] {
             LinkMode::R(freg) | LinkMode::RW(freg) => freg,
             _ => {
                 let freg = self.alloc_read_xmm(reg);
@@ -431,7 +474,7 @@ impl FloatContext {
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, ctx: Option<&FloatContext>) {
+            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, ctx: Option<&BBContext>) {
                 let exit = self.jit.label();
                 monoasm! { self.jit,
                     xorq rax, rax;
@@ -477,7 +520,7 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     ($op:ident) => {
         paste! {
-            fn [<cmp_opt_ $op>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut FloatContext) {
+            fn [<cmp_opt_ $op>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext) {
                 monoasm! { self.jit,
                     cmpq rdi, rsi;
                 };
@@ -494,7 +537,7 @@ macro_rules! cmp_opt_main {
 macro_rules! cmp_opt_main2 {
     (($op:ident, $sop:ident)) => {
         paste! {
-            fn [<cmp_opt_ $sop _float>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut FloatContext) {
+            fn [<cmp_opt_ $sop _float>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext) {
                 let cont = self.jit.label();
                 let side_exit = ctx.branch_write_back(self, dest);
                 if switch {
@@ -595,7 +638,7 @@ impl Codegen {
 
         let mut skip = false;
         let mut loop_count = 0;
-        let mut ctx = FloatContext::new(func.total_reg_num());
+        let mut ctx = BBContext::new(func.total_reg_num());
         for (idx, op) in func.bytecode()[start_pos..].iter().enumerate() {
             if skip {
                 skip = false;
@@ -731,19 +774,11 @@ impl Codegen {
                         let fsrc = ctx.get_float(self, src);
                         let fdst = ctx.alloc_xmm(dst);
                         ctx.push(TIr::FNeg(fdst, fsrc));
-                        if fdst != fsrc {
-                            monoasm!(self.jit,
-                                movq rax, ((-1.0f64).to_bits());
-                                movq xmm(fdst as u64 + 2), rax;
-                                mulsd xmm(fdst as u64 + 2), xmm(fsrc as u64 + 2);
-                            );
-                        } else {
-                            monoasm!(self.jit,
-                                movq rax, ((-1.0f64).to_bits());
-                                movq xmm0, rax;
-                                mulsd xmm(fdst as u64 + 2), xmm0;
-                            );
-                        }
+                        let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
+                        self.xmm_mov(fsrc, fdst);
+                        monoasm!(self.jit,
+                            xorps xmm(fdst as u64 + 2), [rip + imm];
+                        );
                     } else {
                         ctx.write_back(self, src);
                         ctx.dealloc_xmm(dst);
@@ -1195,7 +1230,7 @@ impl Codegen {
         );
     }
 
-    fn gen_binop_kind(&mut self, ctx: &FloatContext, op: &Bc, kind: BinOpK, ret: u16) {
+    fn gen_binop_kind(&mut self, ctx: &BBContext, op: &Bc, kind: BinOpK, ret: u16) {
         match kind {
             BinOpK::Add => match op.classid() {
                 INTEGER_CLASS => {
@@ -1252,7 +1287,7 @@ impl Codegen {
 
     fn gen_cmp_prep(
         &mut self,
-        ctx: &mut FloatContext,
+        ctx: &mut BBContext,
         ret: u16,
         lhs: u16,
         rhs: u16,
@@ -1267,7 +1302,7 @@ impl Codegen {
 
     fn gen_cmpri_prep(
         &mut self,
-        ctx: &mut FloatContext,
+        ctx: &mut BBContext,
         ret: u16,
         lhs: u16,
         rhs: i16,
@@ -1282,7 +1317,7 @@ impl Codegen {
         self.guard_rdi_fixnum(generic);
     }
 
-    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: u16, ctx: &BBContext) {
         match kind {
             CmpKind::Eq => self.cmp_eq(generic, Some(ctx)),
             CmpKind::Ne => self.cmp_ne(generic, Some(ctx)),
@@ -1301,7 +1336,7 @@ impl Codegen {
         dest: DestLabel,
         generic: DestLabel,
         switch: bool,
-        ctx: &mut FloatContext,
+        ctx: &mut BBContext,
     ) {
         match kind {
             CmpKind::Eq => self.cmp_opt_eq(dest, generic, switch, ctx),
@@ -1320,7 +1355,7 @@ impl Codegen {
         dest: DestLabel,
         generic: DestLabel,
         switch: bool,
-        ctx: &mut FloatContext,
+        ctx: &mut BBContext,
     ) {
         match kind {
             CmpKind::Eq => self.cmp_opt_eq_float(dest, generic, switch, ctx),
@@ -1333,7 +1368,7 @@ impl Codegen {
         }
     }
 
-    fn gen_add(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_add(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1345,7 +1380,7 @@ impl Codegen {
         self.side_generic_op(generic, ret, add_values as _, &ctx);
     }
 
-    fn gen_sub(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_sub(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1357,7 +1392,7 @@ impl Codegen {
         self.side_generic_op(generic, ret, sub_values as _, &ctx);
     }
 
-    fn gen_bit_or(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_bit_or(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         monoasm!(self.jit,
             // fastpath
             orq rdi, rsi;
@@ -1366,7 +1401,7 @@ impl Codegen {
         self.side_generic_op(generic, ret, bitor_values as _, &ctx);
     }
 
-    fn gen_bit_and(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_bit_and(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         monoasm!(self.jit,
             // fastpath
             andq rdi, rsi;
@@ -1375,7 +1410,7 @@ impl Codegen {
         self.side_generic_op(generic, ret, bitand_values as _, &ctx);
     }
 
-    fn gen_bit_xor(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_bit_xor(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         monoasm!(self.jit,
             // fastpath
             xorq rdi, rsi;
@@ -1402,7 +1437,7 @@ impl Codegen {
         self.jit.select(0);
     }
 
-    fn gen_shr(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_shr(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1434,7 +1469,7 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn gen_shl(&mut self, generic: DestLabel, ret: u16, ctx: &FloatContext) {
+    fn gen_shl(&mut self, generic: DestLabel, ret: u16, ctx: &BBContext) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1467,7 +1502,7 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn side_generic_op(&mut self, generic: DestLabel, ret: u16, func: u64, ctx: &FloatContext) {
+    fn side_generic_op(&mut self, generic: DestLabel, ret: u16, func: u64, ctx: &BBContext) {
         let exit = self.jit.label();
         self.jit.bind_label(exit);
         self.jit.select(1);
@@ -1479,7 +1514,7 @@ impl Codegen {
         self.jit.select(0);
     }
 
-    fn generic_binop(&mut self, ret: u16, func: u64, ctx: &FloatContext) {
+    fn generic_binop(&mut self, ret: u16, func: u64, ctx: &BBContext) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.call_binop(func);
@@ -1494,7 +1529,7 @@ impl Codegen {
         ret: u16,
         args: u16,
         len: u16,
-        ctx: &FloatContext,
+        ctx: &BBContext,
     ) {
         // set arguments to a callee stack.
         //
