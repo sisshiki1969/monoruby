@@ -1094,14 +1094,13 @@ impl Codegen {
             }
         }
 
-        #[cfg(any(feature = "emit-asm"))]
-        eprintln!("{:?}", ctx.tir);
         self.jit.finalize();
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let elapsed = now.elapsed();
         #[cfg(any(feature = "emit-asm"))]
         {
+            eprintln!("{:?}", ctx.tir);
             let (start, code_end, end) = self.jit.code_block.last().unwrap();
             eprintln!(
                 "offset:{:?} code: {} bytes  data: {} bytes",
