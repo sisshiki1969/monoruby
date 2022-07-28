@@ -33,6 +33,13 @@ impl SlotId {
     pub(crate) fn is_zero(&self) -> bool {
         self.0 == 0
     }
+
+    pub(crate) fn ret_str(&self) -> String {
+        match self.0 {
+            0 => "_".to_string(),
+            ret => format!("%{}", ret),
+        }
+    }
 }
 
 impl std::fmt::Display for SlotId {

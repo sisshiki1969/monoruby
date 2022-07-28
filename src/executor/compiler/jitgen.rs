@@ -31,8 +31,10 @@ enum TIr {
     Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp(BinOpK, SlotId, SlotId, SlotId, ClassId),
-    /// binop with small integer(kind, %ret, %lhs, %rhs)
+    /// binop with small integer(kind, %ret, %lhs, rhs)
     BinOpRi(BinOpK, SlotId, SlotId, i16, ClassId),
+    /// binop with small integer(kind, %ret, lhs, %rhs)
+    BinOpIr(BinOpK, SlotId, i16, SlotId, ClassId),
     /// cmp(%ret, %lhs, %rhs, optimizable)
     Cmp(CmpKind, SlotId, SlotId, SlotId, bool, ClassId),
     /// cmpri(%ret, %lhs, rhs: i16, optimizable)
@@ -53,6 +55,8 @@ enum TIr {
     FBinOp(BinOpK, u16, u16, u16),
     /// float_binop(kind, Fret, Flhs, f64)
     FBinOpRf(BinOpK, u16, u16, f64),
+    /// float_binop(kind, Fret, f64, Frhs)
+    FBinOpFr(BinOpK, u16, f64, u16),
     /// float_cmp(%ret, Flhs, Frhs, optimizable)
     FCmp(CmpKind, SlotId, u16, u16, bool),
     /// float_cmpri(%ret, Flhs, rhs: f16, optimizable)
@@ -137,11 +141,17 @@ impl std::fmt::Debug for TIr {
             TIr::BinOpRi(kind, dst, lhs, rhs, class) => {
                 writeln!(f, "%{} = %{}:{:?} {} {}: i16", dst, lhs, class, kind, rhs)
             }
+            TIr::BinOpIr(kind, dst, lhs, rhs, class) => {
+                writeln!(f, "%{} = {}:i16 {} %{}: {:?}", dst, lhs, kind, rhs, class)
+            }
             TIr::FBinOp(kind, dst, lhs, rhs) => {
                 writeln!(f, "F{} = F{} {} F{}", dst, lhs, kind, rhs)
             }
             TIr::FBinOpRf(kind, dst, lhs, rhs) => {
                 writeln!(f, "F{} = F{} {} {}: f64", dst, lhs, kind, rhs)
+            }
+            TIr::FBinOpFr(kind, dst, lhs, rhs) => {
+                writeln!(f, "F{} = {}: f64 {} F{}", dst, lhs, kind, rhs)
             }
             TIr::Cmp(kind, dst, lhs, rhs, opt, class) => {
                 writeln!(
@@ -185,15 +195,7 @@ impl std::fmt::Debug for TIr {
             TIr::Ret(reg) => writeln!(f, "ret %{}", reg),
             TIr::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
             TIr::MethodCall(ret, name) => {
-                writeln!(
-                    f,
-                    "{} = call {:?}",
-                    match ret {
-                        SlotId(0) => "_".to_string(),
-                        ret => format!("%{}", ret),
-                    },
-                    name,
-                )
+                writeln!(f, "{} = call {:?}", ret.ret_str(), name,)
             }
             TIr::MethodArgs(recv, args, len) => {
                 writeln!(f, "%{}.call_args (%{}; {})", recv, args, len)
@@ -201,10 +203,9 @@ impl std::fmt::Debug for TIr {
             TIr::MethodDef(id) => {
                 writeln!(f, "define {:?}", id)
             }
-            TIr::ConcatStr(ret, args, len) => match ret {
-                SlotId(0) => writeln!(f, "_ = concat(%{}; {})", args, len),
-                ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
-            },
+            TIr::ConcatStr(ret, args, len) => {
+                writeln!(f, "{} = concat(%{}; {})", ret.ret_str(), args, len)
+            }
         }
     }
 }
@@ -836,7 +837,7 @@ impl Codegen {
                 }
 
                 BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
-                    if op.is_float() {
+                    if op.is_binary_float() {
                         let flhs = ctx.get_float(self, lhs);
                         let fret = ctx.alloc_xmm(ret);
                         ctx.push(TIr::FBinOpRf(kind, fret as u16, flhs as u16, rhs as f64));
@@ -873,6 +874,76 @@ impl Codegen {
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(lhs))];
                             movq rsi, (Value::int32(rhs as i32).get());
+                        );
+                        self.gen_binop_kind(&ctx, op, kind, ret);
+                    }
+                }
+
+                BcOp1::BinOpIr(kind, ret, lhs, rhs) => {
+                    if op.is_binary_float() {
+                        let frhs = ctx.get_float(self, rhs);
+                        let fret = ctx.alloc_xmm(ret);
+                        ctx.push(TIr::FBinOpFr(kind, fret as u16, lhs as f64, frhs as u16));
+                        let imm0 = self.jit.const_f64(lhs as f64);
+                        if fret != frhs {
+                            monoasm!(self.jit,
+                                movq xmm(fret as u64 + 2), [rip + imm0];
+                            );
+                            match kind {
+                                BinOpK::Add => monoasm!(self.jit,
+                                    addsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Sub => monoasm!(self.jit,
+                                    subsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Mul => monoasm!(self.jit,
+                                    mulsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                ),
+                                BinOpK::Div => {
+                                    let div_by_zero = self.div_by_zero;
+                                    monoasm!(self.jit,
+                                        movq  rax, xmm(frhs as u64 + 2);
+                                        cmpq  rax, 0;
+                                        jeq   div_by_zero;
+                                        divsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
+                                    )
+                                }
+                                _ => unimplemented!(),
+                            }
+                        } else {
+                            match kind {
+                                BinOpK::Add => monoasm!(self.jit,
+                                    addsd xmm(fret as u64 + 2), [rip + imm0];
+                                ),
+                                BinOpK::Sub => monoasm!(self.jit,
+                                    movq  xmm0, xmm(frhs as u64 + 2);
+                                    movq  xmm(fret as u64 + 2), [rip + imm0];
+                                    subsd xmm(fret as u64 + 2), xmm0;
+                                ),
+                                BinOpK::Mul => monoasm!(self.jit,
+                                    mulsd xmm(fret as u64 + 2), [rip + imm0];
+                                ),
+                                BinOpK::Div => {
+                                    let div_by_zero = self.div_by_zero;
+                                    monoasm!(self.jit,
+                                        movq  rax, xmm(frhs as u64 + 2);
+                                        cmpq  rax, 0;
+                                        jeq   div_by_zero;
+                                        movq  xmm(fret as u64 + 2), [rip + imm0];
+                                        movq  xmm0, rax;
+                                        divsd xmm(fret as u64 + 2), xmm0;
+                                    );
+                                }
+                                _ => unimplemented!(),
+                            }
+                        }
+                    } else {
+                        ctx.write_back(self, rhs);
+                        ctx.dealloc_xmm(ret);
+                        ctx.push(TIr::BinOpIr(kind, ret, lhs, rhs, op.classid()));
+                        monoasm!(self.jit,
+                            movq rdi, (Value::int32(lhs as i32).get());
+                            movq rsi, [rbp - (conv(rhs))];
                         );
                         self.gen_binop_kind(&ctx, op, kind, ret);
                     }

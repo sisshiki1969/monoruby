@@ -67,6 +67,7 @@ pub(super) enum BcIr {
     Neg(BcReg, BcReg),                       // ret, src
     BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
     BinOpRi(BinOpK, BcReg, BcReg, i16),      // kind, ret, lhs, rhs
+    BinOpIr(BinOpK, BcReg, i16, BcReg),      // kind, ret, lhs, rhs
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
@@ -179,6 +180,11 @@ impl std::fmt::Debug for Bc {
                 let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
+            BcOp1::BinOpIr(kind, dst, lhs, rhs) => {
+                let class_id = self.classid();
+                let op1 = format!("%{} = {}: i16 {} %{}", dst, lhs, kind, rhs,);
+                writeln!(f, "{:36} {:?}", op1, class_id)
+            }
             BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid();
                 let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
@@ -194,14 +200,7 @@ impl std::fmt::Debug for Bc {
             BcOp1::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
             BcOp1::MethodCall(ret, name) => {
                 let class_id = self.classid();
-                let op1 = format!(
-                    "{} = call {:?}",
-                    match ret {
-                        SlotId(0) => "_".to_string(),
-                        ret => format!("%{:?}", ret),
-                    },
-                    name,
-                );
+                let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
                 writeln!(f, "{:36} {:?}", op1, class_id)
             }
             BcOp1::MethodArgs(recv, args, len) => {
@@ -210,10 +209,9 @@ impl std::fmt::Debug for Bc {
             BcOp1::MethodDef(id) => {
                 writeln!(f, "define {:?}", id)
             }
-            BcOp1::ConcatStr(ret, args, len) => match ret {
-                SlotId(0) => writeln!(f, "_ = concat(%{}; {})", args, len),
-                ret => writeln!(f, "%{:?} = concat(%{}; {})", ret, args, len),
-            },
+            BcOp1::ConcatStr(ret, args, len) => {
+                writeln!(f, "{} = concat(%{}; {})", ret.ret_str(), args, len)
+            }
             BcOp1::LoopStart(count) => writeln!(
                 f,
                 "loop_start counter={} jit-addr={:016x}",
@@ -284,8 +282,10 @@ pub(super) enum BcOp1 {
     Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp(BinOpK, SlotId, SlotId, SlotId),
-    /// binop with small integer(kind, %ret, %lhs, %rhs)
+    /// binop with small integer(kind, %ret, %lhs, rhs)
     BinOpRi(BinOpK, SlotId, SlotId, i16),
+    /// binop with small integer(kind, %ret, lhs, %rhs)
+    BinOpIr(BinOpK, SlotId, i16, SlotId),
     /// cmp(%ret, %lhs, %rhs, optimizable)
     Cmp(CmpKind, SlotId, SlotId, SlotId, bool),
     /// cmpri(%ret, %lhs, rhs: i16, optimizable)
@@ -354,6 +354,10 @@ fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
     enc_www(opcode, op1, op2, op3 as u16)
 }
 
+fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
+    enc_www(opcode, op1, op2 as u16, op3)
+}
+
 fn dec_wl(op: u64) -> (u16, u32) {
     ((op >> 32) as u16, op as u32)
 }
@@ -403,15 +407,20 @@ impl BcOp1 {
                     INTEGER_CLASS,
                 )
             }
-            BinOpRi(BinOpK::Add, op1, op2, op3) => {
-                let op1 = enc_wwsw(140, op1.0, op2.0, *op3);
-                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
+            BinOpIr(kind, op1, op2, op3) => {
+                return Bc::from_with_class2(
+                    enc_wsww(180 + *kind as u16, op1.0, *op2, op3.0),
+                    INTEGER_CLASS,
+                    INTEGER_CLASS,
+                )
             }
-            BinOpRi(BinOpK::Sub, op1, op2, op3) => {
-                let op1 = enc_wwsw(141, op1.0, op2.0, *op3);
-                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
+            BinOpRi(kind, op1, op2, op3) => {
+                return Bc::from_with_class2(
+                    enc_wwsw(190 + *kind as u16, op1.0, op2.0, *op3),
+                    INTEGER_CLASS,
+                    INTEGER_CLASS,
+                );
             }
-            BinOpRi(..) => unimplemented!(),
             Cmp(kind, op1, op2, op3, opt) => {
                 let op1 = if *opt {
                     enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
@@ -474,8 +483,6 @@ impl BcOp1 {
                     SlotId::new(op3),
                     false,
                 ),
-                140 => Self::BinOpRi(BinOpK::Add, SlotId::new(op1), SlotId::new(op2), op3 as i16),
-                141 => Self::BinOpRi(BinOpK::Sub, SlotId::new(op1), SlotId::new(op2), op3 as i16),
                 142..=147 => Self::Cmpri(
                     CmpKind::from(opcode - 142),
                     SlotId::new(op1),
@@ -505,6 +512,18 @@ impl BcOp1 {
                     SlotId::new(op1),
                     SlotId::new(op2),
                     SlotId::new(op3),
+                ),
+                180..=188 => Self::BinOpIr(
+                    BinOpK::from(opcode - 180),
+                    SlotId::new(op1),
+                    op2 as i16,
+                    SlotId::new(op3),
+                ),
+                190..=198 => Self::BinOpRi(
+                    BinOpK::from(opcode - 190),
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
                 ),
                 _ => unreachable!(),
             }

@@ -672,6 +672,15 @@ impl NormalFuncInfo {
                         inst.classid2().get_name(globals)
                     );
                 }
+                BcOp1::BinOpIr(kind, dst, lhs, rhs) => {
+                    let op1 = format!("%{} = {}: i16 {} %{}", dst, lhs, kind, rhs,);
+                    eprintln!(
+                        "{:36} [{}][{}]",
+                        op1,
+                        inst.classid().get_name(globals),
+                        inst.classid2().get_name(globals)
+                    );
+                }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
                     let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
                     eprintln!(
@@ -706,10 +715,7 @@ impl NormalFuncInfo {
                     let name = globals.id_store.get_name(name);
                     let op1 = format!(
                         "{} = %{}.call {}(%{}; {})",
-                        match ret {
-                            SlotId(0) => "_".to_string(),
-                            ret => format!("%{:?}", ret),
-                        },
+                        ret.ret_str(),
                         recv,
                         name,
                         args,
@@ -723,10 +729,9 @@ impl NormalFuncInfo {
                     let name = globals.id_store.get_name(name);
                     eprintln!("define {:?}: {:?}", name, func)
                 }
-                BcOp1::ConcatStr(ret, args, len) => match ret {
-                    SlotId(0) => eprintln!("_ = concat(%{}; {})", args, len),
-                    ret => eprintln!("%{:?} = concat(%{}; {})", ret, args, len),
-                },
+                BcOp1::ConcatStr(ret, args, len) => {
+                    eprintln!("{} = concat(%{}; {})", ret.ret_str(), args, len)
+                }
                 BcOp1::LoopStart(count) => eprintln!(
                     "loop_start counter={} jit-addr={:016x}",
                     count,
