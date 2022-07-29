@@ -19,7 +19,7 @@ impl Interp {
     pub fn eval_toplevel(globals: &mut Globals, aot_flag: bool) -> Result<Value> {
         let mut eval = Self::new();
         if !aot_flag {
-            eval.codegen.precompile(&mut globals.func)
+            eval.codegen.set_jit_stab(&mut globals.func)
         };
         let main_id = globals.get_main_func();
         let main_data = eval.get_func_data(globals, main_id) as *const _;

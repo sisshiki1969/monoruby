@@ -643,7 +643,6 @@ mod test {
             a = 7.9
             for i in 0..15
               a = -(1.1 * a + 2 + a * 2)
-              puts i, a
             end
             a
             "#,
@@ -719,11 +718,6 @@ mod test {
         run_test("def f; a=5; return a; end; f");
         run_test("def f; a=5; b=6; return a+b; end; f");
         run_test("def foo; end");
-    }
-
-    #[test]
-    fn test7x() {
-        run_test("234.2345 == 17");
     }
 
     #[test]

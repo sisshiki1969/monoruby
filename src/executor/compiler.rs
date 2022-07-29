@@ -703,7 +703,12 @@ impl Codegen {
         interp.codegen.jit.get_label_address(label)
     }
 
-    pub fn precompile(&mut self, store: &mut FnStore) {
+    ///
+    /// Set jit compilation stab code for an entry point of each Ruby methods.
+    ///
+    /// This code will not be executed in "AOT" mode.
+    ///
+    pub fn set_jit_stab(&mut self, store: &mut FnStore) {
         let vm_entry = self.vm_entry;
         for func in store.funcs_mut().iter_mut() {
             match &func.kind {

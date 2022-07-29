@@ -195,9 +195,10 @@ impl Codegen {
         self.fetch_and_dispatch();
 
         let (shl, shr) = self.vm_shift();
-        let (add_rr, add_ri, add_ir) = self.vm_add();
-        let (div_rr, div_ri, div_ir) = self.vm_mul_div(div_values as _);
-        let (mul_rr, mul_ri, mul_ir) = self.vm_mul_div(mul_values as _);
+        let (add_rr, add_ri, add_ir) = self.vm_binops_opt(Self::int_add, add_values as _);
+        let (sub_rr, sub_ri, sub_ir) = self.vm_binops_opt(Self::int_sub, sub_values as _);
+        let (div_rr, div_ri, div_ir) = self.vm_binops(div_values as _);
+        let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
 
         self.vm_entry = entry;
         self.dispatch[1] = self.vm_method_call();
@@ -250,7 +251,7 @@ impl Codegen {
         self.dispatch[167] = self.vm_geri();
 
         self.dispatch[170] = add_rr;
-        self.dispatch[171] = self.vm_subrr();
+        self.dispatch[171] = sub_rr;
         self.dispatch[172] = mul_rr;
         self.dispatch[173] = div_rr;
         self.dispatch[174] = self.vm_bitorrr();
@@ -260,12 +261,12 @@ impl Codegen {
         self.dispatch[178] = shl;
 
         self.dispatch[180] = add_ir;
-        self.dispatch[181] = self.vm_subir();
+        self.dispatch[181] = sub_ir;
         self.dispatch[182] = mul_ir;
         self.dispatch[183] = div_ir;
 
         self.dispatch[190] = add_ri;
-        self.dispatch[191] = self.vm_subri();
+        self.dispatch[191] = sub_ri;
         self.dispatch[192] = mul_ri;
         self.dispatch[193] = div_ri;
     }
@@ -806,126 +807,76 @@ impl Codegen {
         label
     }
 
-    fn gen_ri_ir(&mut self, generic: DestLabel, common: DestLabel) -> (CodePtr, CodePtr) {
-        let ptr_ri = self.jit.get_current_address();
-        self.vm_get_ri_r15();
-        self.guard_rdi_fixnum(generic);
-        monoasm!(self.jit,
-            jmp common;
-        );
-
-        let ptr_ir = self.jit.get_current_address();
-        self.vm_get_ir_r15();
-        self.guard_rsi_fixnum(generic);
-        monoasm!(self.jit,
-            jmp common;
-        );
-        (ptr_ri, ptr_ir)
-    }
-
-    fn vm_add(&mut self) -> (CodePtr, CodePtr, CodePtr) {
-        let common = self.jit.label();
-        let ptr_rr = self.jit.get_current_address();
-        let generic = self.jit.label();
-        let exit = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.guard_rdi_rsi_fixnum(generic);
-        self.jit.bind_label(common);
-        self.vm_save_binary_integer();
+    fn int_add(&mut self, generic: DestLabel) {
         monoasm! { self.jit,
             movq rax, rdi;
             subq rax, 1;
             addq rax, rsi;
             jo generic;
         };
-        self.vm_store_r15();
-        self.jit.bind_label(exit);
-        self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, add_values as _);
-
-        let (ptr_ri, ptr_ir) = self.gen_ri_ir(generic, common);
-
-        (ptr_rr, ptr_ri, ptr_ir)
     }
 
-    fn vm_subrr(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
+    fn int_sub(&mut self, generic: DestLabel) {
+        monoasm! { self.jit,
+            movq rax, rdi;
+            subq rax, rsi;
+            jo generic;
+            addq rax, 1;
+        };
+    }
+
+    fn vm_binops_opt(
+        &mut self,
+        opt_func: fn(&mut Codegen, DestLabel),
+        generic_func: u64,
+    ) -> (CodePtr, CodePtr, CodePtr) {
+        let common = self.jit.label();
+        let ptr_rr = self.jit.get_current_address();
         let generic = self.jit.label();
         let exit = self.jit.label();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
         self.guard_rdi_rsi_fixnum(generic);
+        self.jit.bind_label(common);
         self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            movq rax, rdi;
-            subq rax, rsi;
-            jo generic;
-            addq rax, 1;
-        };
+        opt_func(self, generic);
         self.vm_store_r15();
         self.jit.bind_label(exit);
         self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, sub_values as _);
-        label
-    }
+        self.vm_generic_binop(generic, exit, generic_func);
 
-    fn vm_subri(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        let exit = self.jit.label();
+        let ptr_ri = self.jit.get_current_address();
         self.vm_get_ri_r15();
         self.guard_rdi_fixnum(generic);
-        self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            movq rax, rdi;
-            subq rax, rsi;
-            jo generic;
-            addq rax, 1;
-        };
-        self.vm_store_r15();
-        self.jit.bind_label(exit);
-        self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, sub_values as _);
-        label
-    }
+        monoasm!(self.jit,
+            jmp common;
+        );
 
-    fn vm_subir(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        let exit = self.jit.label();
+        let ptr_ir = self.jit.get_current_address();
         self.vm_get_ir_r15();
         self.guard_rsi_fixnum(generic);
-        self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            movq rax, rdi;
-            subq rax, rsi;
-            jo generic;
-            addq rax, 1;
-        };
-        self.vm_store_r15();
-        self.jit.bind_label(exit);
-        self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, sub_values as _);
-        label
+        monoasm!(self.jit,
+            jmp common;
+        );
+
+        (ptr_rr, ptr_ri, ptr_ir)
     }
 
-    fn vm_mul_div(&mut self, func: u64) -> (CodePtr, CodePtr, CodePtr) {
+    fn vm_binops(&mut self, func: u64) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_save_binary_class();
         self.jit.bind_label(common);
+        self.vm_save_binary_class();
         self.call_binop(func);
         self.vm_store_r15();
         self.fetch_and_dispatch();
 
         let ptr_ri = self.jit.get_current_address();
         self.vm_get_ri_r15();
-        self.vm_save_binary_class();
         monoasm!(self.jit, jmp common; );
 
         let ptr_ir = self.jit.get_current_address();
         self.vm_get_ir_r15();
-        self.vm_save_binary_class();
         monoasm!(self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
