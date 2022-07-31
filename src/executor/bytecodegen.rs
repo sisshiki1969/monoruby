@@ -1304,84 +1304,164 @@ impl IrContext {
     );
 }
 
+fn enc_w(opcode: u16, op1: u16) -> u64 {
+    enc_www(opcode, op1, 0, 0)
+}
+
+fn enc_wl(opcode: u16, op1: u16, op2: u32) -> u64 {
+    ((opcode as u64) << 48) + ((op1 as u64) << 32) + (op2 as u64)
+}
+
+fn enc_l(opcode: u16, op1: u32) -> u64 {
+    enc_wl(opcode, 0, op1)
+}
+
+fn enc_ww(opcode: u16, op1: u16, op2: u16) -> u64 {
+    enc_www(opcode, op1, op2, 0)
+}
+
+fn enc_www(opcode: u16, op1: u16, op2: u16, op3: u16) -> u64 {
+    ((opcode as u64) << 48) + ((op1 as u64) << 32) + ((op2 as u64) << 16) + (op3 as u64)
+}
+
+fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
+    enc_www(opcode, op1, op2 as u16, op3)
+}
+
+fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
+    enc_www(opcode, op1, op2, op3 as u16)
+}
+
 impl IrContext {
     pub(crate) fn ir_to_bytecode(&mut self, info: &mut NormalFuncInfo, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
-                BcIr::LoopStart => BcOp1::LoopStart(0).to_bc(),
-                BcIr::LoopEnd => BcOp1::LoopEnd.to_bc(),
+                BcIr::LoopStart => Bc::from(enc_l(14, 0)),
+                BcIr::LoopEnd => Bc::from(enc_l(15, 0)),
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
-                    BcOp1::Br(dst - idx as i32 - 1).to_bc()
+                    let op1 = dst - idx as i32 - 1;
+                    Bc::from(enc_l(3, op1 as u32))
                 }
                 BcIr::CondBr(reg, dst, optimizable, kind) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
-                    let cond_reg = info.get_index(reg);
-                    let disp = dst - idx as i32 - 1;
-                    BcOp1::CondBr(cond_reg, disp, *optimizable, *kind).to_bc()
+                    let op1 = info.get_index(reg);
+                    let op2 = dst - idx as i32 - 1;
+                    let kind = *kind as u16;
+                    let op = enc_wl(
+                        if *optimizable { 12 + kind } else { 4 + kind },
+                        op1.0,
+                        op2 as u32,
+                    );
+                    Bc::from(op)
                 }
-                BcIr::Integer(reg, num) => BcOp1::Integer(info.get_index(reg), *num).to_bc(),
-                BcIr::Symbol(reg, name) => BcOp1::Symbol(info.get_index(reg), *name).to_bc(),
-                BcIr::Literal(reg, num) => BcOp1::Literal(info.get_index(reg), *num).to_bc(),
-                BcIr::LoadConst(reg, name) => BcOp1::LoadConst(
-                    info.get_index(reg),
-                    info.add_constsite(store, *name, vec![], false),
-                )
-                .to_bc(),
+                BcIr::Integer(reg, num) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(6, op1.0, *num as u32))
+                }
+                BcIr::Symbol(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(9, op1.0, name.get()))
+                }
+                BcIr::Nil(reg) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_w(8, op1.0))
+                }
+                BcIr::Literal(reg, num) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(7, op1.0, *num))
+                }
+                BcIr::LoadConst(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    let op2 = info.add_constsite(store, *name, vec![], false);
+                    Bc::from(enc_wl(10, op1.0, op2.get()))
+                }
                 BcIr::StoreConst(reg, name) => {
-                    BcOp1::StoreConst(info.get_index(reg), *name).to_bc()
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(11, op1.0, name.get()))
                 }
-                BcIr::Nil(reg) => BcOp1::Nil(info.get_index(reg)).to_bc(),
-                BcIr::Neg(dst, src) => BcOp1::Neg(info.get_index(dst), info.get_index(src)).to_bc(),
-                BcIr::BinOp(kind, dst, lhs, rhs) => BcOp1::BinOp(
-                    *kind,
-                    info.get_index(dst),
-                    info.get_index(lhs),
-                    info.get_index(rhs),
-                )
-                .to_bc(),
+                BcIr::Neg(dst, src) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(src);
+                    Bc::from_with_class_and_version(
+                        enc_ww(129, op1.0, op2.0),
+                        INTEGER_CLASS,
+                        -1i32 as u32,
+                    )
+                }
+                BcIr::BinOp(kind, dst, lhs, rhs) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    let op3 = info.get_index(rhs);
+                    Bc::from_with_class2(enc_www(170 + *kind as u16, op1.0, op2.0, op3.0))
+                }
                 BcIr::BinOpRi(kind, dst, lhs, rhs) => {
-                    BcOp1::BinOpRi(*kind, info.get_index(dst), info.get_index(lhs), *rhs).to_bc()
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    Bc::from_with_class2(enc_wwsw(190 + *kind as u16, op1.0, op2.0, *rhs))
                 }
                 BcIr::BinOpIr(kind, dst, lhs, rhs) => {
-                    BcOp1::BinOpIr(*kind, info.get_index(dst), *lhs, info.get_index(rhs)).to_bc()
+                    let op1 = info.get_index(dst);
+                    let op3 = info.get_index(rhs);
+                    Bc::from_with_class2(enc_wsww(180 + *kind as u16, op1.0, *lhs, op3.0))
                 }
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
-                    let dst = info.get_index(dst);
-                    let lhs = info.get_index(lhs);
-                    let rhs = info.get_index(rhs);
-                    BcOp1::Cmp(*kind, dst, lhs, rhs, *optimizable).to_bc()
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    let op3 = info.get_index(rhs);
+                    let op = if *optimizable {
+                        enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
+                    } else {
+                        enc_www(134 + *kind as u16, op1.0, op2.0, op3.0)
+                    };
+                    Bc::from_with_class2(op)
                 }
                 BcIr::Cmpri(kind, dst, lhs, rhs, optimizable) => {
-                    let dst = info.get_index(dst);
-                    let lhs = info.get_index(lhs);
-                    let rhs = *rhs;
-                    BcOp1::Cmpri(*kind, dst, lhs, rhs, *optimizable).to_bc()
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    let op = if *optimizable {
+                        enc_wwsw(162 + *kind as u16, op1.0, op2.0, *rhs)
+                    } else {
+                        enc_wwsw(142 + *kind as u16, op1.0, op2.0, *rhs)
+                    };
+                    Bc::from(op)
                 }
-                BcIr::Ret(reg) => BcOp1::Ret(info.get_index(reg)).to_bc(),
-                BcIr::Mov(dst, src) => BcOp1::Mov(info.get_index(dst), info.get_index(src)).to_bc(),
+                BcIr::Ret(reg) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_w(148, op1.0))
+                }
+                BcIr::Mov(dst, src) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(src);
+                    Bc::from(enc_ww(149, op1.0, op2.0))
+                }
                 BcIr::MethodCall(ret, name) => {
-                    let ret = match ret {
+                    let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
-                    BcOp1::MethodCall(ret, *name).to_bc()
+                    Bc::from_with_class_and_version(
+                        enc_wl(1, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
                 }
-                BcIr::MethodArgs(recv, args, len) => BcOp1::MethodArgs(
-                    info.get_index(recv),
-                    info.get_index(&BcReg::from(*args)),
-                    *len as u16,
-                )
-                .to_bc(),
-                BcIr::InlineCache => Bc::from(Bc1::from(0), Bc2::from(0)),
+                BcIr::MethodArgs(recv, args, len) => {
+                    let op1 = info.get_index(recv);
+                    let op2 = info.get_index(&BcReg::from(*args));
+                    Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
+                }
+                BcIr::InlineCache => Bc::from(0),
                 BcIr::MethodDef(name, func_id) => {
-                    BcOp1::MethodDef(store.add_method_def(*name, *func_id)).to_bc()
+                    let op1 = store.add_method_def(*name, *func_id);
+                    Bc::from(enc_l(2, op1.0))
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
-                    let ret = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
-                    BcOp1::ConcatStr(ret, info.get_index(&BcReg::from(*arg)), *len as u16).to_bc()
+                    let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
+                    let op2 = info.get_index(&BcReg::from(*arg));
+                    Bc::from(enc_www(155, op1.0, op2.0, *len as u16))
                 }
             };
             ops.push(op);

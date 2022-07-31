@@ -84,26 +84,29 @@ pub(super) enum BcIr {
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
 pub(crate) struct Bc {
-    pub(crate) op1: Bc1,
+    pub(crate) op1: u64,
     pub(crate) op2: Bc2,
 }
 
 impl Bc {
-    pub(crate) fn from(op1: Bc1, op2: Bc2) -> Self {
-        Self { op1, op2 }
+    pub(crate) fn from(op1: u64) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(0),
+        }
     }
 
     pub(crate) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
         Self {
-            op1: Bc1::from(op1),
+            op1,
             op2: Bc2::class_and_version(class_id, version),
         }
     }
 
-    pub(crate) fn from_with_class2(op1: u64, class_id1: ClassId, class_id2: ClassId) -> Self {
+    pub(crate) fn from_with_class2(op1: u64) -> Self {
         Self {
-            op1: Bc1::from(op1),
-            op2: Bc2::class2(class_id1, class_id2),
+            op1,
+            op2: Bc2::class2(INTEGER_CLASS, INTEGER_CLASS),
         }
     }
 
@@ -225,16 +228,6 @@ impl std::fmt::Debug for Bc {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub(crate) struct Bc1(u64);
-
-impl Bc1 {
-    pub(crate) fn from(op: u64) -> Self {
-        Self(op)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(transparent)]
 pub(crate) struct Bc2(u64);
 
 impl Bc2 {
@@ -330,34 +323,6 @@ impl BrKind {
     }
 }
 
-fn enc_wl(opcode: u16, op1: u16, op2: u32) -> u64 {
-    ((opcode as u64) << 48) + ((op1 as u64) << 32) + (op2 as u64)
-}
-
-fn enc_l(opcode: u16, op1: u32) -> u64 {
-    enc_wl(opcode, 0, op1)
-}
-
-fn enc_www(opcode: u16, op1: u16, op2: u16, op3: u16) -> u64 {
-    ((opcode as u64) << 48) + ((op1 as u64) << 32) + ((op2 as u64) << 16) + (op3 as u64)
-}
-
-fn enc_ww(opcode: u16, op1: u16, op2: u16) -> u64 {
-    enc_www(opcode, op1, op2, 0)
-}
-
-fn enc_w(opcode: u16, op1: u16) -> u64 {
-    enc_www(opcode, op1, 0, 0)
-}
-
-fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
-    enc_www(opcode, op1, op2, op3 as u16)
-}
-
-fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
-    enc_www(opcode, op1, op2 as u16, op3)
-}
-
 fn dec_wl(op: u64) -> (u16, u32) {
     ((op >> 32) as u16, op as u32)
 }
@@ -367,85 +332,8 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl BcOp1 {
-    pub fn to_bc(&self) -> Bc {
-        use BcOp1::*;
-        let op = match self {
-            MethodCall(op1, op2) => {
-                return Bc::from_with_class_and_version(
-                    enc_wl(1, op1.0, op2.get()),
-                    ClassId::new(0),
-                    -1i32 as u32,
-                )
-            }
-            MethodArgs(op1, op2, op3) => enc_www(130, op1.0, op2.0, *op3),
-            MethodDef(op1) => enc_l(2, op1.0),
-            Br(op1) => enc_l(3, *op1 as u32),
-            CondBr(op1, op2, opt, kind) => {
-                let kind = *kind as u16;
-                enc_wl(if *opt { 12 + kind } else { 4 + kind }, op1.0, *op2 as u32)
-            }
-            Integer(op1, op2) => enc_wl(6, op1.0, *op2 as u32),
-            Literal(op1, op2) => enc_wl(7, op1.0, *op2),
-            Nil(op1) => enc_w(8, op1.0),
-            Symbol(op1, op2) => enc_wl(9, op1.0, op2.get()),
-            LoadConst(op1, op2) => enc_wl(10, op1.0, op2.get()),
-            StoreConst(op1, op2) => enc_wl(11, op1.0, op2.get()),
-            LoopStart(_) => enc_l(14, 0),
-            LoopEnd => enc_l(15, 0),
-
-            Neg(op1, op2) => {
-                return Bc::from_with_class_and_version(
-                    enc_ww(129, op1.0, op2.0),
-                    INTEGER_CLASS,
-                    -1i32 as u32,
-                )
-            }
-            BinOp(kind, op1, op2, op3) => {
-                return Bc::from_with_class2(
-                    enc_www(170 + *kind as u16, op1.0, op2.0, op3.0),
-                    INTEGER_CLASS,
-                    INTEGER_CLASS,
-                )
-            }
-            BinOpIr(kind, op1, op2, op3) => {
-                return Bc::from_with_class2(
-                    enc_wsww(180 + *kind as u16, op1.0, *op2, op3.0),
-                    INTEGER_CLASS,
-                    INTEGER_CLASS,
-                )
-            }
-            BinOpRi(kind, op1, op2, op3) => {
-                return Bc::from_with_class2(
-                    enc_wwsw(190 + *kind as u16, op1.0, op2.0, *op3),
-                    INTEGER_CLASS,
-                    INTEGER_CLASS,
-                );
-            }
-            Cmp(kind, op1, op2, op3, opt) => {
-                let op1 = if *opt {
-                    enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
-                } else {
-                    enc_www(134 + *kind as u16, op1.0, op2.0, op3.0)
-                };
-                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
-            }
-            Cmpri(kind, op1, op2, op3, opt) => {
-                let op1 = if *opt {
-                    enc_wwsw(162 + *kind as u16, op1.0, op2.0, *op3)
-                } else {
-                    enc_wwsw(142 + *kind as u16, op1.0, op2.0, *op3)
-                };
-                return Bc::from_with_class2(op1, INTEGER_CLASS, INTEGER_CLASS);
-            }
-            Ret(op1) => enc_w(148, op1.0),
-            Mov(op1, op2) => enc_ww(149, op1.0, op2.0),
-            ConcatStr(op1, op2, op3) => enc_www(155, op1.0, op2.0, *op3),
-        };
-        Bc::from(Bc1::from(op), Bc2::from(0))
-    }
-
     pub fn from_bc(bcop: Bc) -> Self {
-        let op = bcop.op1.0;
+        let op = bcop.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
