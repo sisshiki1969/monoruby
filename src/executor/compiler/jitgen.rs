@@ -430,10 +430,40 @@ impl BBContext {
         let pc = BcPc::from(pc);
         monoasm!(codegen.jit,
             movq r13, (pc.0);
+        );
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        monoasm!(codegen.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [rbp - 8];
+            movq rcx, r13;
+            movq rax, (Self::log_deoptimize);
+            call rax;
+        );
+        monoasm!(codegen.jit,
             jmp fetch;
         );
         codegen.jit.select(0);
         entry
+    }
+
+    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+    extern "C" fn log_deoptimize(
+        _interp: &mut Interp,
+        globals: &mut Globals,
+        func_id: FuncId,
+        pc: &Bc,
+    ) {
+        let name = match globals.func[func_id].as_normal().name() {
+            Some(name) => name.to_string(),
+            None => "<unnamed>".to_string(),
+        };
+        if let BcOp1::LoopEnd = BcOp1::from_bc(*pc) {
+            eprintln!("<-- exited from JIT code in {} {:?}.", name, func_id);
+        } else {
+            eprintln!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+        }
+        eprint!("    bytecode: {:?}", *pc);
     }
 
     ///
@@ -1240,7 +1270,7 @@ impl Codegen {
             eprintln!("{}", self.jit.dump_code().unwrap());
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        eprintln!("<-- finished compile. elapsed:{:?}", elapsed);
+        eprintln!("    finished compile. elapsed:{:?}", elapsed);
 
         entry
     }

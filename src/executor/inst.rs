@@ -175,28 +175,33 @@ impl std::fmt::Debug for Bc {
             BcOp1::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
             BcOp1::BinOp(kind, dst, lhs, rhs) => {
                 let class_id = self.classid();
+                let class_id2 = self.classid2();
                 let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
                 let class_id = self.classid();
+                let class_id2 = self.classid2();
                 let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::BinOpIr(kind, dst, lhs, rhs) => {
                 let class_id = self.classid();
+                let class_id2 = self.classid2();
                 let op1 = format!("%{} = {}: i16 {} %{}", dst, lhs, kind, rhs,);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid();
+                let class_id2 = self.classid2();
                 let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid();
+                let class_id2 = self.classid2();
                 let op1 = format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
 
             BcOp1::Ret(reg) => writeln!(f, "ret %{}", reg),
@@ -204,7 +209,7 @@ impl std::fmt::Debug for Bc {
             BcOp1::MethodCall(ret, name) => {
                 let class_id = self.classid();
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                writeln!(f, "{:36} {:?}", op1, class_id)
+                writeln!(f, "{:28} {:?}", op1, class_id)
             }
             BcOp1::MethodArgs(recv, args, len) => {
                 writeln!(f, "%{}.call_args (%{}; {})", recv, args, len)
