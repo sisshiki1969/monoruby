@@ -1,8 +1,7 @@
-def fact(x)
-  if x <= 1.0 then
-      1.0
-  else
-      x * fact(x-1.0)
+a = 2.3
+for i in 0..20
+  if i==10
+    a = 42
   end
-end;
-puts fact 180.0
+  puts "#{a}, #{a+a}"
+end

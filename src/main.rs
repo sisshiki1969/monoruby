@@ -604,7 +604,6 @@ mod test {
             i = 0.0
             while i < 15
               a = 1 * a + 2 + a * 2
-              puts i, a
               i = i + 1.0
             end
             a

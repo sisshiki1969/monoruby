@@ -355,6 +355,7 @@ impl Codegen {
     /// ### out
     ///
     /// - xmm0: f64
+    /// - rax: error code (0 for error)
     ///
     /// ### registers destroyed
     ///
@@ -371,6 +372,7 @@ impl Codegen {
             jz not_integer;
             sarq rdi, 1;
             cvtsi2sdq xmm0, rdi;
+            movq rax, 1;
             ret;
         not_integer:
             testq rdi, 0b10;
@@ -387,6 +389,7 @@ impl Codegen {
             rolq rdi, 61;
             movq xmm0, rdi;
         exit:
+            movq rax, 1;
             ret;
         not_flonum:
             // we must save xmm registers.
@@ -714,7 +717,7 @@ impl Codegen {
             match &func.kind {
                 FuncKind::Normal(_) => {
                     let codeptr = self.jit.get_current_address();
-                    let counter = self.jit.const_i32(100);
+                    let counter = self.jit.const_i32(5);
                     let entry = self.jit.label();
                     monoasm!(self.jit,
                     entry:

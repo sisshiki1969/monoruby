@@ -249,6 +249,12 @@ pub struct F2 {
     f2: f64,
 }
 
+#[repr(C)]
+pub struct ValTofResult {
+    result: f64,
+    code: u64,
+}
+
 impl Value {
     /*fn is_nil(&self) -> bool {
         self.0.get() == NIL_VALUE
@@ -259,12 +265,20 @@ impl Value {
         (v | 0x10) != 0x14
     }*/
 
-    pub extern "C" fn val_tof(v: Value) -> f64 {
-        match v.unpack() {
-            RV::Integer(n) => n.to_f64().unwrap(),
-            RV::BigInt(n) => n.to_f64().unwrap(),
-            RV::Float(n) => n,
-            _ => unimplemented!("to_f is not implemented for {:?}", v),
+    pub extern "C" fn val_tof(v: Value) -> ValTofResult {
+        ValTofResult {
+            result: match v.unpack() {
+                RV::Integer(n) => n.to_f64().unwrap(),
+                RV::BigInt(n) => n.to_f64().unwrap(),
+                RV::Float(n) => n,
+                _ => {
+                    return ValTofResult {
+                        result: 0.0,
+                        code: 0,
+                    }
+                }
+            },
+            code: 1,
         }
     }
 

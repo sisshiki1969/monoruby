@@ -36,6 +36,12 @@ impl BcPcBase {
 #[repr(transparent)]
 pub struct BcPc(pub(crate) *const Bc);
 
+impl BcPc {
+    pub(crate) fn from(bc: &Bc) -> Self {
+        Self(bc as *const _)
+    }
+}
+
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
     fn sub(self, rhs: BcPcBase) -> usize {
