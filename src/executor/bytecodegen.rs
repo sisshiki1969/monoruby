@@ -318,6 +318,26 @@ impl IrContext {
         self.gen_literal(ctx, info, dst, Value::new_string(b));
     }
 
+    fn gen_array(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut NormalFuncInfo,
+        id_store: &mut IdentifierTable,
+        ret: Option<BcLocal>,
+        nodes: Vec<Node>,
+        loc: Loc,
+    ) -> Result<()> {
+        let ret = match ret {
+            Some(local) => local.into(),
+            None => info.push().into(),
+        };
+        let len = nodes.len() as u16;
+        let src = self.gen_args(ctx, info, id_store, nodes)?.into();
+        self.push(BcIr::Array(ret, src, len), loc);
+        info.temp -= len;
+        Ok(())
+    }
+
     fn gen_bigint(
         &mut self,
         ctx: &mut FnStore,
@@ -482,6 +502,9 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(ctx, info, None, bigint),
             NodeKind::Float(f) => self.gen_float(ctx, info, None, f),
             NodeKind::String(s) => self.gen_string(ctx, info, None, s.into_bytes()),
+            NodeKind::Array(nodes, is_const) => {
+                self.gen_array(ctx, info, id_store, None, nodes, loc)?
+            }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
@@ -766,6 +789,9 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(ctx, info, Some(local), bigint),
             NodeKind::Float(f) => self.gen_float(ctx, info, Some(local), f),
             NodeKind::String(s) => self.gen_string(ctx, info, Some(local), s.into_bytes()),
+            NodeKind::Array(nodes, _) => {
+                self.gen_array(ctx, info, id_store, Some(local), nodes, loc)?
+            }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
@@ -1372,6 +1398,11 @@ impl IrContext {
                 BcIr::Literal(reg, num) => {
                     let op1 = info.get_index(reg);
                     Bc::from(enc_wl(7, op1.0, *num))
+                }
+                BcIr::Array(ret, src, len) => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(src);
+                    Bc::from(enc_www(131, op1.0, op2.0, *len))
                 }
                 BcIr::LoadConst(reg, name) => {
                     let op1 = info.get_index(reg);

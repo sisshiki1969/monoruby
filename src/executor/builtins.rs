@@ -54,6 +54,10 @@ pub fn init_builtins(globals: &mut Globals) {
         TIME_CLASS,
         globals.define_class_under_obj("Time").as_class()
     );
+    assert_eq!(
+        ARRAY_CLASS,
+        globals.define_class_under_obj("Array").as_class()
+    );
     globals.define_class_under_obj("Process");
     let file_class = globals.define_class_under_obj("File").as_class();
 

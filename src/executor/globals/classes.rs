@@ -10,6 +10,7 @@ pub const FLOAT_CLASS: ClassId = ClassId::new(7);
 pub const STRING_CLASS: ClassId = ClassId::new(8);
 pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
+pub const ARRAY_CLASS: ClassId = ClassId::new(11);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]

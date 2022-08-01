@@ -7,8 +7,11 @@ pub type ValueTable = HashMap<IdentId, Value>;
 /// Heap-allocated objects.
 #[derive(Clone)]
 pub struct RValue {
+    /// flags. 8 bytes
     flags: RVFlag,
+    /// instance variable table. 8 bytes
     var_table: Option<Box<ValueTable>>,
+    /// object data. 48 bytes.
     pub kind: ObjKind,
 }
 
@@ -125,6 +128,14 @@ impl RValue {
         }
     }
 
+    pub(crate) fn new_array(v: Vec<Value>) -> Self {
+        RValue {
+            flags: RVFlag::new(ARRAY_CLASS),
+            kind: ObjKind::Array(v),
+            var_table: None,
+        }
+    }
+
     pub(crate) fn new_time(time: TimeInfo) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS),
@@ -180,5 +191,6 @@ pub enum ObjKind {
     Bytes(SmallVec<[u8; 31]>),
     Time(TimeInfo),
     Invalid,
+    Array(Vec<Value>),
     //Dummy(u64, u64, u64, u64, u64),
 }

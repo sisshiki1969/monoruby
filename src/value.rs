@@ -208,6 +208,10 @@ impl Value {
         RValue::new_bytes_from_slice(b).pack()
     }
 
+    pub fn new_array(v: Vec<Value>) -> Self {
+        RValue::new_array(v).pack()
+    }
+
     pub fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }

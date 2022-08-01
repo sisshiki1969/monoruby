@@ -799,6 +799,17 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
+                BcOp1::Array(ret, src, len) => {
+                    ctx.write_back_range(self, src, len);
+                    ctx.dealloc_xmm(ret);
+                    monoasm!(self.jit,
+                        lea  rdi, [rbp - (conv(src))];
+                        movq rsi, (len);
+                        movq rax, (super::vmgen::gen_array);
+                        call rax;
+                    );
+                    self.store_rax(ret);
+                }
                 BcOp1::LoadConst(dst, id) => {
                     ctx.push(TIr::LoadConst(dst, id));
                     ctx.dealloc_xmm(dst);

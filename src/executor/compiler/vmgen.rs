@@ -62,6 +62,16 @@ extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_i
     Value::dup(globals.func.get_literal(literal_id))
 }
 
+pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
+    let mut v = if len == 0 {
+        vec![]
+    } else {
+        unsafe { std::slice::from_raw_parts(src.sub(len - 1), len).to_vec() }
+    };
+    v.reverse();
+    Value::new_array(v)
+}
+
 extern "C" fn vm_define_method(_interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
     let MethodDefInfo { name, func } = globals.func[def_id];
     globals.class.add_method(OBJECT_CLASS, name, func);
@@ -218,6 +228,7 @@ impl Codegen {
         self.dispatch[15] = self.vm_loop_end();
 
         self.dispatch[129] = self.vm_neg();
+        self.dispatch[131] = self.vm_array();
         self.dispatch[134] = self.vm_eqrr();
         self.dispatch[135] = self.vm_nerr();
         self.dispatch[136] = self.vm_ltrr();
@@ -748,6 +759,21 @@ impl Codegen {
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (get_literal);
+            call rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_array(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        self.vm_get_addr_rdi();
+        monoasm! { self.jit,
+            // src: *const Value
+            movzxw rsi, rsi;  // len: usize
+            movq rax, (gen_array);
             call rax;
         };
         self.vm_store_r15();

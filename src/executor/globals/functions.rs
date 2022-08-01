@@ -642,6 +642,9 @@ impl NormalFuncInfo {
                     let v = globals.func.get_literal(id);
                     eprintln!("%{} = literal[{}]", reg, globals.val_inspect(v))
                 }
+                BcOp1::Array(ret, src, len) => {
+                    eprintln!("%{} = array[%{}; {}]", ret, src, len)
+                }
                 BcOp1::LoadConst(reg, id) => {
                     let name = globals.func[id].name;
                     eprintln!("%{} = const[{}]", reg, globals.id_store.get_name(name))

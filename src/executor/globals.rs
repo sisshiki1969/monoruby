@@ -130,6 +130,18 @@ impl Globals {
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
+                ObjKind::Array(v) => match v.len() {
+                    0 => "[]".to_string(),
+                    1 => format!("[{}]", self.val_inspect(v[0])),
+                    _ => {
+                        let mut s = format!("[{}", self.val_inspect(v[0]));
+                        for val in v[1..].iter() {
+                            s += &format!(", {}", self.val_inspect(*val));
+                        }
+                        s += "]";
+                        s
+                    }
+                },
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -167,6 +179,18 @@ impl Globals {
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
+                ObjKind::Array(v) => match v.len() {
+                    0 => "[]".to_string(),
+                    1 => format!("[{}]", self.val_inspect(v[0])),
+                    _ => {
+                        let mut s = format!("[{}", self.val_inspect(v[0]));
+                        for val in v[1..].iter() {
+                            s += &format!(", {}", self.val_inspect(*val));
+                        }
+                        s += "]";
+                        s
+                    }
+                },
                 _ => unreachable!(),
             },
         }
