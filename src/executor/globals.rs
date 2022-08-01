@@ -23,18 +23,21 @@ pub struct Globals {
     error: Option<MonorubyErr>,
     /// warning level.
     pub warning: u8,
+    /// suppress jit compilation.
+    pub no_jit: bool,
     /// stdout.
     stdout: BufWriter<Stdout>,
 }
 
 impl Globals {
-    pub fn new(warning: u8) -> Self {
+    pub fn new(warning: u8, no_jit: bool) -> Self {
         let mut globals = Self {
             func: FnStore::new(),
             id_store: IdentifierTable::new(),
             class: ClassStore::new(),
             error: None,
             warning,
+            no_jit,
             stdout: BufWriter::new(stdout()),
         };
         builtins::init_builtins(&mut globals);
@@ -48,6 +51,7 @@ impl Globals {
             class: self.class.clone(),
             error: None,
             warning: self.warning,
+            no_jit: self.no_jit,
             stdout: BufWriter::new(stdout()),
         }
     }

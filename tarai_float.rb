@@ -1,4 +1,5 @@
 def tarai(x,y,z)
+  #puts "#{x} #{y} #{z}"
   if x <= y
     y
   else

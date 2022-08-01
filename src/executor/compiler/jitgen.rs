@@ -43,10 +43,10 @@ enum TIr {
     Ret(SlotId),
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
-    /// func call(%ret, name)
-    MethodCall(SlotId, IdentId),
-    /// func call 2nd opecode(%recv, %args, len)
-    MethodArgs(SlotId, SlotId, u16),
+    /// float_move(Fdst, Fsrc)
+    FMov(SlotId, u16),
+    /// func call(%ret, name, %recv, %args, len)
+    MethodCall(SlotId, IdentId, SlotId, SlotId, u16),
     /// method definition(method_def_id)
     MethodDef(MethodDefId),
     /// concatenate strings(ret, args, args_len)
@@ -194,11 +194,17 @@ impl std::fmt::Debug for TIr {
 
             TIr::Ret(reg) => writeln!(f, "ret %{}", reg),
             TIr::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
-            TIr::MethodCall(ret, name) => {
-                writeln!(f, "{} = call {:?}", ret.ret_str(), name,)
-            }
-            TIr::MethodArgs(recv, args, len) => {
-                writeln!(f, "%{}.call_args (%{}; {})", recv, args, len)
+            TIr::FMov(dst, src) => writeln!(f, "%{} = F{}", dst, src),
+            TIr::MethodCall(ret, name, recv, args, len) => {
+                writeln!(
+                    f,
+                    "{} = %{}.call {:?}(%{}; {})",
+                    ret.ret_str(),
+                    recv,
+                    name,
+                    args,
+                    len
+                )
             }
             TIr::MethodDef(id) => {
                 writeln!(f, "define {:?}", id)
@@ -345,21 +351,21 @@ impl BBContext {
         }
     }
 
-    fn copy(&mut self, src: SlotId, dst: SlotId) -> Option<u16> {
+    fn copy(&mut self, codegen: &mut Codegen, src: SlotId, dst: SlotId) {
         self.dealloc_xmm(dst);
-        let f = self.stack_slot[src];
-        match f {
-            LinkMode::XmmRW(freg) => {
+        match self.stack_slot[src] {
+            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
                 self.stack_slot[dst] = LinkMode::XmmRW(freg);
                 self.xmm[freg as usize].push(dst);
-                Some(freg)
+                self.push(TIr::FMov(dst, freg));
             }
-            LinkMode::XmmR(freg) => {
-                self.stack_slot[dst] = LinkMode::XmmR(freg);
-                self.xmm[freg as usize].push(dst);
-                Some(freg)
+            _ => {
+                self.push(TIr::Mov(dst, src));
+                monoasm!(codegen.jit,
+                  movq rax, [rbp - (conv(src))];
+                  movq [rbp - (conv(dst))], rax;
+                );
             }
-            _ => None,
         }
     }
 
@@ -431,7 +437,7 @@ impl BBContext {
         monoasm!(codegen.jit,
             movq r13, (pc.0);
         );
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(any(feature = "log-jit"))]
         monoasm!(codegen.jit,
             movq rdi, rbx;
             movq rsi, r12;
@@ -447,7 +453,7 @@ impl BBContext {
         entry
     }
 
-    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+    #[cfg(any(feature = "log-jit"))]
     extern "C" fn log_deoptimize(
         _interp: &mut Interp,
         globals: &mut Globals,
@@ -1100,13 +1106,7 @@ impl Codegen {
                     }
                 }
                 BcOp1::Mov(dst, src) => {
-                    if ctx.copy(src, dst).is_none() {
-                        ctx.push(TIr::Mov(dst, src));
-                        monoasm!(self.jit,
-                          movq rax, [rbp - (conv(src))];
-                          movq [rbp - (conv(dst))], rax;
-                        );
-                    }
+                    ctx.copy(self, src, dst);
                 }
                 BcOp1::Ret(lhs) => {
                     ctx.write_back(self, lhs);
@@ -1136,19 +1136,18 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                BcOp1::MethodCall(ret, name) => {
-                    ctx.push(TIr::MethodCall(ret, name));
+                BcOp1::MethodCall(..) => {
                     assert!(self.opt_buf.is_none());
                     self.opt_buf = Some(*op);
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
                     ctx.write_back(self, recv);
                     ctx.write_back_range(self, args, len);
-                    ctx.push(TIr::MethodArgs(recv, args, len));
 
                     let op = std::mem::take(&mut self.opt_buf).unwrap();
                     match BcOp1::from_bc(op) {
                         BcOp1::MethodCall(ret, name) => {
+                            ctx.push(TIr::MethodCall(ret, name, recv, args, len));
                             ctx.dealloc_xmm(ret);
                             self.jit_method_call(recv, name, ret, args, len, &ctx);
                         }

@@ -38,6 +38,9 @@ struct CommandLineArgs {
     /// switch ahead-of-time compilation.
     #[clap(short, long)]
     aot: bool,
+    /// switch just-in-time compilation.
+    #[clap(short, long)]
+    no_jit: bool,
     #[clap(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
@@ -50,7 +53,13 @@ fn main() {
 
     if !args.exec.is_empty() {
         for code in args.exec {
-            exec(&code, args.aot, args.warning, std::path::Path::new("REPL"));
+            exec(
+                &code,
+                args.aot,
+                args.no_jit,
+                args.warning,
+                std::path::Path::new("REPL"),
+            );
         }
         return;
     }
@@ -63,6 +72,7 @@ fn main() {
             exec(
                 &code,
                 args.aot,
+                args.no_jit,
                 args.warning,
                 &std::path::Path::new(&file_name),
             );
@@ -75,7 +85,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes, args.aot, args.warning);
+                        run_repl(&code, &mut all_codes, args.aot, args.no_jit, args.warning);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -93,8 +103,8 @@ fn main() {
     }
 }
 
-fn exec(code: &str, aot_flag: bool, warning: u8, path: &std::path::Path) {
-    let mut globals = Globals::new(warning);
+fn exec(code: &str, aot_flag: bool, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
+    let mut globals = Globals::new(warning, no_jit_flag);
     match globals.compile_script(code.to_string(), path) {
         Ok(_) => {}
         Err(err) => {
@@ -116,9 +126,14 @@ fn exec(code: &str, aot_flag: bool, warning: u8, path: &std::path::Path) {
     };
 }
 
-fn repl_exec(code: &str, aot_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
+fn repl_exec(
+    code: &str,
+    aot_flag: bool,
+    no_jit_flag: bool,
+    warning: u8,
+) -> Result<(), MonorubyErr> {
     if !aot_flag {
-        let mut globals = Globals::new(warning);
+        let mut globals = Globals::new(warning, no_jit_flag);
         match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
             Ok(_) => {}
             Err(err) => {
@@ -136,7 +151,7 @@ fn repl_exec(code: &str, aot_flag: bool, warning: u8) -> Result<(), MonorubyErr>
         }
     }
 
-    let mut globals = Globals::new(warning);
+    let mut globals = Globals::new(warning, no_jit_flag);
     match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
         Ok(_) => {}
         Err(err) => {
@@ -158,9 +173,15 @@ fn repl_exec(code: &str, aot_flag: bool, warning: u8) -> Result<(), MonorubyErr>
     }
 }
 
-fn run_repl(code: &str, all_codes: &mut Vec<String>, aot_flag: bool, warning: u8) {
+fn run_repl(
+    code: &str,
+    all_codes: &mut Vec<String>,
+    aot_flag: bool,
+    no_jit_flag: bool,
+    warning: u8,
+) {
     all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";"), aot_flag, warning) {
+    if let Err(_) = repl_exec(&all_codes.join(";"), aot_flag, no_jit_flag, warning) {
         all_codes.pop();
     };
 }
@@ -168,7 +189,7 @@ fn run_repl(code: &str, all_codes: &mut Vec<String>, aot_flag: bool, warning: u8
 pub fn run_test(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let mut globals = Globals::new(1);
+    let mut globals = Globals::new(1, false);
     let interp_val = run_test_main(&mut globals, code);
     let all_codes = vec![code.to_string()];
     let ruby_res = run_ruby(&all_codes, &mut globals);
@@ -179,7 +200,7 @@ pub fn run_test(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let mut globals = Globals::new(1);
+    let mut globals = Globals::new(1, false);
     run_test_main(&mut globals, code)
 }
 
@@ -212,7 +233,7 @@ pub fn run_test_main(globals: &mut Globals, code: &str) -> Value {
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let mut globals = Globals::new(1);
+    let mut globals = Globals::new(1, false);
     match globals.compile_script(code.to_string(), std::path::Path::new("")) {
         Ok(_) => {}
         Err(err) => {

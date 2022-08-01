@@ -121,7 +121,7 @@ impl Codegen {
     ///
     /// Generator of virtual machine.
     ///
-    pub(super) fn construct_vm(&mut self) {
+    pub(super) fn construct_vm(&mut self, no_jit: bool) {
         let entry = self.jit.label();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
@@ -214,7 +214,7 @@ impl Codegen {
         self.dispatch[11] = self.vm_store_const();
         self.dispatch[12] = self.vm_condbr(branch);
         self.dispatch[13] = self.vm_condnotbr(branch);
-        self.dispatch[14] = self.vm_loop_start();
+        self.dispatch[14] = self.vm_loop_start(no_jit);
         self.dispatch[15] = self.vm_loop_end();
 
         self.dispatch[129] = self.vm_neg();
@@ -667,39 +667,41 @@ impl Codegen {
         label
     }
 
-    fn vm_loop_start(&mut self) -> CodePtr {
+    fn vm_loop_start(&mut self, no_jit: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let count = self.jit.label();
         let compile = self.jit.label();
-        monoasm! { self.jit,
-            movq rax, [r13 - 8];
-            testq rax, rax;
-            jeq count;
-            jmp rax;
-        count:
-            addl [r13 - 16], 1;
-            cmpl [r13 - 16], 10;
-            jae   compile;
+        if !no_jit {
+            monoasm! { self.jit,
+                movq rax, [r13 - 8];
+                testq rax, rax;
+                jeq count;
+                jmp rax;
+            count:
+                addl [r13 - 16], 1;
+                cmpl [r13 - 16], 10;
+                jae   compile;
+            };
         };
         self.fetch_and_dispatch();
-        monoasm!(self.jit,
-        compile:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movl rdx, [rbp - 8];
-            lea rcx, [r13 - 16];
-            movq rax, (Self::exec_jit_partial_compile);
-            call rax;
-            movq [r13 - 8], rax;
-            jmp rax;
-        );
+        if !no_jit {
+            monoasm!(self.jit,
+            compile:
+                movq rdi, rbx;
+                movq rsi, r12;
+                movl rdx, [rbp - 8];
+                lea rcx, [r13 - 16];
+                movq rax, (Self::exec_jit_partial_compile);
+                call rax;
+                movq [r13 - 8], rax;
+                jmp rax;
+            );
+        }
         label
     }
 
     fn vm_loop_end(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        monoasm! { self.jit,
-        };
         self.fetch_and_dispatch();
         label
     }

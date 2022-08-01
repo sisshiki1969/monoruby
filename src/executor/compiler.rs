@@ -118,7 +118,7 @@ extern "C" fn get_error_location(
 }
 
 impl Codegen {
-    pub fn new() -> Self {
+    pub fn new(no_jit: bool) -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
 
@@ -283,7 +283,7 @@ impl Codegen {
         };
         codegen.val_to_f64 = codegen.generate_val_to_f64();
         codegen.f64_to_val = codegen.generate_f64_to_val();
-        codegen.construct_vm();
+        codegen.construct_vm(no_jit);
         codegen.get_entry_point();
         codegen.jit.finalize();
         codegen.class_version_addr =
@@ -750,11 +750,31 @@ impl Codegen {
         }
         self.jit.finalize();
     }
+
+    pub fn set_vm_stab(&mut self, store: &mut FnStore) {
+        let vm_entry = self.vm_entry;
+        for func in store.funcs_mut().iter_mut() {
+            match &func.kind {
+                FuncKind::Normal(_) => {
+                    let codeptr = self.jit.get_current_address();
+                    monoasm!(self.jit,
+                        jmp vm_entry;
+                    );
+                    assert_eq!(
+                        None,
+                        std::mem::replace(&mut func.data.codeptr, Some(codeptr))
+                    );
+                }
+                _ => {}
+            };
+        }
+        self.jit.finalize();
+    }
 }
 
 #[test]
 fn float_test() {
-    let mut gen = Codegen::new();
+    let mut gen = Codegen::new(false);
 
     let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
     let to_f64_entry = gen.jit.get_label_address(gen.val_to_f64);
@@ -786,7 +806,7 @@ fn float_test() {
 
 #[test]
 fn float_test2() {
-    let mut gen = Codegen::new();
+    let mut gen = Codegen::new(false);
 
     let to_f64_entry = gen.jit.get_label_address(gen.val_to_f64);
 
