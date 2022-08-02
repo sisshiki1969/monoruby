@@ -331,14 +331,14 @@ impl IrContext {
         nodes: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
+        let len = nodes.len();
+        let src = self.gen_args(ctx, info, id_store, nodes)?.into();
+        info.popn(len);
         let ret = match ret {
             Some(local) => local.into(),
             None => info.push().into(),
         };
-        let len = nodes.len();
-        let src = self.gen_args(ctx, info, id_store, nodes)?.into();
         self.emit_array(ret, src, len, loc);
-        info.popn(len);
         Ok(())
     }
 
@@ -431,7 +431,7 @@ impl IrContext {
         id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcTemp> {
-        self.gen_expr(ctx, info, id_store, expr, true, false)?;
+        self.push_expr(ctx, info, id_store, expr)?;
         Ok(info.pop())
     }
 
@@ -471,6 +471,18 @@ impl IrContext {
         Ok(())
     }
 
+    fn push_expr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut NormalFuncInfo,
+        id_store: &mut IdentifierTable,
+        expr: Node,
+    ) -> Result<BcReg> {
+        let ret = info.next_reg().into();
+        self.gen_expr(ctx, info, id_store, expr, true, false)?;
+        Ok(ret)
+    }
+
     /// Generate bytecode Ir for *expr*.
     fn gen_expr(
         &mut self,
@@ -506,8 +518,16 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(ctx, info, None, bigint),
             NodeKind::Float(f) => self.gen_float(ctx, info, None, f),
             NodeKind::String(s) => self.gen_string(ctx, info, None, s.into_bytes()),
-            NodeKind::Array(nodes, is_const) => {
-                self.gen_array(ctx, info, id_store, None, nodes, loc)?
+            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, id_store, None, nodes, loc)?,
+            NodeKind::Index {
+                box base,
+                mut index,
+            } => {
+                assert_eq!(1, index.len());
+                let ret = self.push_expr(ctx, info, id_store, base)?;
+                let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
+                info.pop();
+                self.push(BcIr::Index(ret, ret, idx), loc);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
@@ -515,7 +535,7 @@ impl IrContext {
                     //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
                     NodeKind::Float(f) => self.gen_float(ctx, info, None, -f),
                     _ => {
-                        self.gen_expr(ctx, info, id_store, rhs, true, false)?;
+                        self.push_expr(ctx, info, id_store, rhs)?;
                         self.gen_neg(info, None, loc);
                     }
                 };
@@ -573,8 +593,7 @@ impl IrContext {
                         } => {
                             assert!(!toplevel);
                             let name = id_store.get_ident_id_from_string(name);
-                            let src = info.next_reg();
-                            self.gen_expr(ctx, info, id_store, rhs, true, false)?;
+                            let src = self.push_expr(ctx, info, id_store, rhs)?;
                             self.gen_store_const(src.into(), name, loc);
                         }
                         _ => {
@@ -748,7 +767,7 @@ impl IrContext {
                 let len = nodes.len();
                 let arg = info.next_reg();
                 for expr in nodes {
-                    self.gen_expr(ctx, info, id_store, expr, true, false)?;
+                    self.push_expr(ctx, info, id_store, expr)?;
                 }
                 info.temp -= len as u16;
                 let ret = match use_value {
@@ -819,6 +838,17 @@ impl IrContext {
                             self.gen_store_expr(ctx, info, id_store, src, rhs, false)?;
                             self.gen_mov(local.into(), src.into());
                         }
+                        NodeKind::Const {
+                            toplevel,
+                            name,
+                            parent: _,
+                            prefix: _,
+                        } => {
+                            assert!(!toplevel);
+                            let name = id_store.get_ident_id_from_string(name);
+                            self.gen_store_expr(ctx, info, id_store, local, rhs, false)?;
+                            self.gen_store_const(local.into(), name, loc);
+                        }
                         _ => {
                             return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone()))
                         }
@@ -876,8 +906,7 @@ impl IrContext {
                 )
             }
             _ => {
-                let ret = info.next_reg();
-                self.gen_expr(ctx, info, id_store, rhs, true, false)?;
+                let ret = self.push_expr(ctx, info, id_store, rhs)?;
                 self.gen_mov(local.into(), ret.into());
                 if !use_value {
                     info.pop();
@@ -928,7 +957,7 @@ impl IrContext {
     ) -> Result<BcTemp> {
         let arg = info.next_reg();
         for arg in args {
-            self.gen_expr(ctx, info, id_store, arg, true, false)?;
+            self.push_expr(ctx, info, id_store, arg)?;
         }
         Ok(arg)
     }
@@ -991,7 +1020,7 @@ impl IrContext {
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
             (BcReg::Self_, arg, len)
         } else {
-            self.gen_expr(ctx, info, id_store, receiver, true, false)?;
+            self.push_expr(ctx, info, id_store, receiver)?;
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
             let recv = info.pop().into();
             (recv, arg, len)
@@ -1049,8 +1078,8 @@ impl IrContext {
                 (lhs, rhs)
             }
             (None, None) => {
-                self.gen_expr(ctx, info, id_store, lhs, true, false)?;
-                self.gen_expr(ctx, info, id_store, rhs, true, false)?;
+                self.push_expr(ctx, info, id_store, lhs)?;
+                self.push_expr(ctx, info, id_store, rhs)?;
                 let rhs = info.pop().into();
                 let lhs = info.pop().into();
                 (lhs, rhs)
@@ -1121,7 +1150,7 @@ impl IrContext {
         let mut temp_reg = info.next_reg();
         // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
-            self.gen_expr(ctx, info, id_store, rhs, true, false)?;
+            self.push_expr(ctx, info, id_store, rhs)?;
         }
         // Assign values to left-hand side expressions.
         for lhs in mlhs {

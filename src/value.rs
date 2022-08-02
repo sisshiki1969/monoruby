@@ -22,6 +22,12 @@ impl std::fmt::Debug for Value {
     }
 }
 
+impl std::default::Default for Value {
+    fn default() -> Self {
+        Value::nil()
+    }
+}
+
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         match self.try_rvalue() {

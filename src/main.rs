@@ -826,10 +826,13 @@ mod test {
 
     #[test]
     fn test_array() {
-        run_test(
-            r#"
-            [1,"2", true, nil]
-        "#,
-        );
+        run_test(r#"[1,"2", true, nil]"#);
+        run_test(r#"[1,"2", true, nil][-5]"#);
+        run_test(r#"[1,"2", true, nil][-1]"#);
+        run_test(r#"[1,"2", true, nil][0]"#);
+        run_test(r#"[1,"2", true, nil][1]"#);
+        run_test(r#"[1,"2", true, nil][2]"#);
+        run_test(r#"[1,"2", true, nil][3]"#);
+        run_test(r#"[1,"2", true, nil][4]"#);
     }
 }

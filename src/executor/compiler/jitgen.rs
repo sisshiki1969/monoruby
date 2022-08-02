@@ -21,6 +21,10 @@ enum TIr {
     Symbol(SlotId, IdentId),
     /// literal(%ret, literal_id)
     Literal(SlotId, u32),
+    /// array(%ret, %src, len)
+    Array(SlotId, SlotId, u16),
+    /// index(%ret, %base, %idx)
+    Index(SlotId, SlotId, SlotId),
     /// float_literal(Fret, f64)
     FLiteral(u16, f64),
     LoadConst(SlotId, ConstSiteId),
@@ -116,6 +120,12 @@ impl std::fmt::Debug for TIr {
             }
             TIr::Literal(reg, id) => {
                 writeln!(f, "%{} = literal[#{}]", reg, id)
+            }
+            TIr::Array(ret, src, len) => {
+                writeln!(f, "%{} = [%{}; {}]", ret, src, len)
+            }
+            TIr::Index(ret, base, idx) => {
+                writeln!(f, "%{} = %{}.[%{}]", ret, base, idx)
             }
             TIr::FLiteral(freg, float) => {
                 writeln!(f, "F{} = {}: f64", freg, float)
@@ -802,10 +812,11 @@ impl Codegen {
                 BcOp1::Array(ret, src, len) => {
                     ctx.write_back_range(self, src, len);
                     ctx.dealloc_xmm(ret);
+                    ctx.push(TIr::Array(ret, src, len));
                     monoasm!(self.jit,
                         lea  rdi, [rbp - (conv(src))];
                         movq rsi, (len);
-                        movq rax, (super::vmgen::gen_array);
+                        movq rax, (gen_array);
                         call rax;
                     );
                     self.store_rax(ret);
@@ -814,14 +825,20 @@ impl Codegen {
                     ctx.write_back(self, base);
                     ctx.write_back(self, idx);
                     ctx.dealloc_xmm(ret);
-                    /*monoasm!(self.jit,
-                        lea  rdi, [rbp - (conv(src))];
-                        movq rsi, (len);
-                        movq rax, (super::vmgen::gen_array);
+                    ctx.push(TIr::Index(ret, base, idx));
+                    let jit_return = self.vm_return;
+                    monoasm! { self.jit,
+                        movq rdx, [rbp - (conv(base))]; // base: Value
+                        movq rcx, [rbp - (conv(idx))]; // idx: Value
+                        movq rdi, rbx; // &mut Interp
+                        movq rsi, r12; // &mut Globals
+                        movq rax, (get_index);
                         call rax;
-                    );*/
+                        testq rax, rax;
+                        jeq  jit_return;
+                    };
                     self.store_rax(ret);
-                    unimplemented!()
+                    //unimplemented!()
                 }
                 BcOp1::LoadConst(dst, id) => {
                     ctx.push(TIr::LoadConst(dst, id));

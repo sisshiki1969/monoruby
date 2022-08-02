@@ -80,11 +80,51 @@ extern "C" fn define_method(
     globals.class.add_method(OBJECT_CLASS, name, func);
 }
 
-pub extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
+extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
+    let mut v = if len == 0 {
+        vec![]
+    } else {
+        unsafe { std::slice::from_raw_parts(src.sub(len - 1), len).to_vec() }
+    };
+    v.reverse();
+    Value::new_array(v)
+}
+
+extern "C" fn get_index(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    base: Value,
+    index: Value,
+) -> Option<Value> {
+    match base.unpack() {
+        RV::Object(rv) => match &rv.kind {
+            ObjKind::Array(v) => {
+                if let Some(idx) = index.try_fixnum() {
+                    return Some(if idx >= 0 {
+                        v.get(idx as usize).cloned().unwrap_or_default()
+                    } else {
+                        let idx = v.len() as i64 + idx;
+                        if idx < 0 {
+                            Value::nil()
+                        } else {
+                            v.get(idx as usize).cloned().unwrap_or_default()
+                        }
+                    });
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    let method = globals.get_ident_id("[]");
+    interp.invoke_method(globals, method, base, &[index])
+}
+
+extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
     panic!("unimplemented inst. {:016x}", opcode);
 }
 
-pub extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
+extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
