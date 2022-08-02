@@ -149,7 +149,7 @@ impl Globals {
 
     pub fn val_tobytes(&self, val: Value) -> Vec<u8> {
         match val.unpack() {
-            RV::Symbol(id) => return self.get_ident_name(id).to_string().into_bytes(),
+            RV::String(s) => return s.clone().into_vec(),
             _ => {}
         };
         self.val_tos(val).into_bytes()

@@ -478,7 +478,6 @@ impl BBContext {
             eprintln!("<-- exited from JIT code in {} {:?}.", name, func_id);
         } else {
             eprintln!("<-- deoptimization occurs in {} {:?}.", name, func_id);
-            //panic!();
         }
         eprint!("    bytecode: {:?}", *pc);
     }
@@ -1245,7 +1244,7 @@ impl Codegen {
                                 let flhs = ctx.get_float(self, lhs, op);
                                 let frhs = ctx.get_float(self, rhs, op);
                                 monoasm! { self.jit,
-                                    xorq rax, rax;
+                                    //xorq rax, rax;
                                     ucomisd xmm(flhs as u64 + 2), xmm(frhs as u64 + 2);
                                 };
                                 ctx.push(TIr::FCmp(kind, ret, flhs, frhs, true));
@@ -1255,7 +1254,7 @@ impl Codegen {
                                 let rhs_label = self.jit.const_f64(rhs as f64);
                                 let flhs = ctx.get_float(self, lhs, op);
                                 monoasm! { self.jit,
-                                    xorq rax, rax;
+                                    //xorq rax, rax;
                                     ucomisd xmm(flhs as u64 + 2), [rip + rhs_label];
                                 };
                                 ctx.push(TIr::FCmpRf(kind, ret, flhs, rhs as f64, true));
