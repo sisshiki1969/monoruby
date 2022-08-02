@@ -411,9 +411,11 @@ impl IrContext {
         }
         match ret {
             Some(ret) => {
-                self.gen_store_expr(ctx, info, id_store, ret, last, use_value)?;
+                self.gen_store_expr(ctx, info, id_store, ret, last)?;
                 if is_ret {
                     self.gen_ret(info, ret.into());
+                } else if use_value {
+                    self.gen_temp_mov(info, ret.into());
                 }
             }
             None => {
@@ -577,11 +579,11 @@ impl IrContext {
                     match lhs.kind {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                             let local = info.find_local(&lhs);
+                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                             if is_ret {
-                                self.gen_store_expr(ctx, info, id_store, local, rhs, false)?;
                                 self.gen_ret(info, Some(local));
-                            } else {
-                                self.gen_store_expr(ctx, info, id_store, local, rhs, use_value)?;
+                            } else if use_value {
+                                self.gen_temp_mov(info, local.into());
                             }
                             return Ok(());
                         }
@@ -797,7 +799,6 @@ impl IrContext {
         id_store: &mut IdentifierTable,
         local: BcLocal,
         rhs: Node,
-        use_value: bool,
     ) -> Result<()> {
         let loc = rhs.loc;
         match rhs.kind {
@@ -821,7 +822,7 @@ impl IrContext {
                     NodeKind::Integer(i) => self.gen_integer(ctx, info, Some(local), -i),
                     NodeKind::Float(f) => self.gen_float(ctx, info, Some(local), -f),
                     _ => {
-                        self.gen_store_expr(ctx, info, id_store, local, rhs, false)?;
+                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                         self.gen_neg(info, Some(local), loc);
                     }
                 };
@@ -835,7 +836,7 @@ impl IrContext {
                     match lhs.kind {
                         NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
                             let src = info.find_local(&lhs);
-                            self.gen_store_expr(ctx, info, id_store, src, rhs, false)?;
+                            self.gen_store_expr(ctx, info, id_store, src, rhs)?;
                             self.gen_mov(local.into(), src.into());
                         }
                         NodeKind::Const {
@@ -846,7 +847,7 @@ impl IrContext {
                         } => {
                             assert!(!toplevel);
                             let name = id_store.get_ident_id_from_string(name);
-                            self.gen_store_expr(ctx, info, id_store, local, rhs, false)?;
+                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                             self.gen_store_const(local.into(), name, loc);
                         }
                         _ => {
@@ -895,28 +896,15 @@ impl IrContext {
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(
-                    ctx,
-                    info,
-                    id_store,
-                    nodes,
-                    Some(local),
-                    use_value,
-                    false,
-                )
+                return self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)
             }
             _ => {
                 let ret = self.push_expr(ctx, info, id_store, rhs)?;
                 self.gen_mov(local.into(), ret.into());
-                if !use_value {
-                    info.pop();
-                }
+                info.pop();
                 return Ok(());
             }
         };
-        if use_value {
-            self.gen_temp_mov(info, local.into());
-        }
         Ok(())
     }
 
@@ -1215,7 +1203,7 @@ impl IrContext {
         {
             let loop_entry = self.new_label();
             let loop_exit = self.new_label();
-            self.gen_store_expr(ctx, info, id_store, counter, start, false)?;
+            self.gen_store_expr(ctx, info, id_store, counter, start)?;
             self.gen_temp_expr(ctx, info, id_store, end)?;
             let end = info.push().into();
 
@@ -1499,7 +1487,7 @@ impl IrContext {
                     } else {
                         enc_wwsw(142 + *kind as u16, op1.0, op2.0, *rhs)
                     };
-                    Bc::from(op)
+                    Bc::from_with_class2(op)
                 }
                 BcIr::Ret(reg) => {
                     let op1 = info.get_index(reg);

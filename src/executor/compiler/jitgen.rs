@@ -478,6 +478,7 @@ impl BBContext {
             eprintln!("<-- exited from JIT code in {} {:?}.", name, func_id);
         } else {
             eprintln!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+            //panic!();
         }
         eprint!("    bytecode: {:?}", *pc);
     }
