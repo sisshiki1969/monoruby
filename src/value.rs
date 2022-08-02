@@ -41,6 +41,10 @@ impl Value {
                 (ObjKind::Bignum(lhs), ObjKind::Bignum(rhs)) => lhs == rhs,
                 (ObjKind::Float(lhs), ObjKind::Float(rhs)) => lhs == rhs,
                 (ObjKind::Bytes(lhs), ObjKind::Bytes(rhs)) => lhs == rhs,
+                (ObjKind::Array(lhs), ObjKind::Array(rhs)) => lhs
+                    .iter()
+                    .zip(rhs.iter())
+                    .all(|(lhs, rhs)| Value::eq(*lhs, *rhs)),
                 _ => false,
             },
             _ => false,
@@ -242,6 +246,42 @@ impl Value {
                 FALSE_VALUE => RV::Bool(false),
                 _ => unreachable!("Illegal packed value. {:x}", self.0),
             }
+        }
+    }
+
+    pub fn from_ast(node: &Node, globals: &mut Globals) -> Value {
+        match &node.kind {
+            NodeKind::CompStmt(stmts) => {
+                assert_eq!(1, stmts.len());
+                Self::from_ast(&stmts[0], globals)
+            }
+            NodeKind::Integer(num) => Value::new_integer(*num),
+            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
+            NodeKind::Float(num) => Value::new_float(*num),
+            NodeKind::Bool(b) => Value::bool(*b),
+            NodeKind::Nil => Value::nil(),
+            NodeKind::Symbol(sym) => Value::new_symbol(globals.get_ident_id(sym)),
+            NodeKind::String(s) => Value::new_string(s.as_bytes().to_vec()),
+            NodeKind::Array(v, _) => {
+                let v = v
+                    .iter()
+                    .map(|node| Value::from_ast(node, globals))
+                    .collect();
+                Value::new_array(v)
+            }
+            NodeKind::Const {
+                toplevel,
+                parent,
+                prefix,
+                name,
+            } => {
+                assert_eq!(false, *toplevel);
+                assert_eq!(None, *parent);
+                assert_eq!(0, prefix.len());
+                let constant = globals.get_ident_id(name);
+                globals.get_constant(constant).unwrap()
+            }
+            _ => unimplemented!(),
         }
     }
 }

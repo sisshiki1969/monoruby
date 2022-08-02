@@ -3,9 +3,9 @@
 pub use alloc::*;
 pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;
-use num::BigInt;
 pub use ruruby_parse::*;
 use std::io::Write;
+use std::path::PathBuf;
 use tempfile::NamedTempFile;
 //use std::collections::HashMap;
 use std::fs::File;
@@ -280,31 +280,11 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
                 .split('\n')
                 .last()
                 .unwrap();
-            if let Ok(n) = res.parse::<i64>() {
-                Value::new_integer(n)
-            } else if let Ok(n) = res.parse::<BigInt>() {
-                Value::new_bigint(n)
-            } else if let Ok(n) = res.parse::<f64>() {
-                Value::new_float(n)
-            } else if res == "true" {
-                Value::bool(true)
-            } else if res == "false" {
-                Value::bool(false)
-            } else if res == "nil" {
-                Value::nil()
-            } else if res.starts_with('"') {
-                let s = res.trim_matches('"').to_string();
-                Value::new_string(s.into_bytes())
-            } else if res.starts_with(':') {
-                let sym = globals.get_ident_id(res.trim_matches(':'));
-                Value::new_symbol(sym)
-            } else if res.starts_with(|c: char| c.is_ascii_uppercase()) {
-                let constant = globals.get_ident_id(res);
-                globals.get_constant(constant).unwrap()
-            } else {
-                eprintln!("Ruby: {:?}", res);
-                Value::bool(false)
-            }
+            let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
+                .unwrap()
+                .node;
+
+            Value::from_ast(&nodes, globals)
         }
         Err(err) => {
             panic!("Error occured in executing Ruby. {:?}", err);
@@ -840,6 +820,15 @@ mod test {
             def f(x); end
             f(:windows)
             a = :linux
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_array() {
+        run_test(
+            r#"
+            [1,"2", true, nil]
         "#,
         );
     }
