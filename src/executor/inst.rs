@@ -62,6 +62,7 @@ pub(super) enum BcIr {
     Symbol(BcReg, IdentId),
     Literal(BcReg, u32),
     Array(BcReg, BcReg, u16),
+    Index(BcReg, BcReg, BcReg),
     LoadConst(BcReg, IdentId),
     StoreConst(BcReg, IdentId),
     Nil(BcReg),
@@ -168,6 +169,9 @@ impl std::fmt::Debug for Bc {
             }
             BcOp1::Array(ret, src, len) => {
                 writeln!(f, "%{} = array[%{}; {}]", ret, src, len)
+            }
+            BcOp1::Index(ret, base, idx) => {
+                writeln!(f, "%{} = %{}.[%{}]", ret, base, idx)
             }
             BcOp1::LoadConst(reg, id) => {
                 writeln!(f, "%{} = const[{:?}]", reg, id)
@@ -278,6 +282,8 @@ pub(super) enum BcOp1 {
     Literal(SlotId, u32),
     /// array(%ret, %src, len)
     Array(SlotId, SlotId, u16),
+    /// index(%ret, %base, %idx)
+    Index(SlotId, SlotId, SlotId),
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
     /// nil(%reg)
@@ -376,6 +382,7 @@ impl BcOp1 {
                 129 => Self::Neg(SlotId::new(op1), SlotId::new(op2)),
                 130 => Self::MethodArgs(SlotId::new(op1), SlotId::new(op2), op3),
                 131 => Self::Array(SlotId::new(op1), SlotId::new(op2), op3),
+                132 => Self::Index(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
                 134..=139 => Self::Cmp(
                     CmpKind::from(opcode - 134),
                     SlotId::new(op1),

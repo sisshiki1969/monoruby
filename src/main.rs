@@ -430,9 +430,9 @@ mod test {
 
     #[test]
     fn test_assign() {
-        run_test("a=8; b=2; a,b=b,a; b/a");
-        run_test("a,b,c=1,2,3; a-b-c");
-        run_test("a=b=c=7; a+b+c");
+        run_test("a=8; b=2; c = (a,b=b,a); [a,b,c]");
+        run_test("e = (a,b,c=1,2,3); [e, a, b, c]");
+        run_test("a=b=c=7; [a,b,c]");
     }
 
     #[test]

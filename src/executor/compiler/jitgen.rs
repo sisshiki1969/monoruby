@@ -810,6 +810,19 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
+                BcOp1::Index(ret, base, idx) => {
+                    ctx.write_back(self, base);
+                    ctx.write_back(self, idx);
+                    ctx.dealloc_xmm(ret);
+                    /*monoasm!(self.jit,
+                        lea  rdi, [rbp - (conv(src))];
+                        movq rsi, (len);
+                        movq rax, (super::vmgen::gen_array);
+                        call rax;
+                    );*/
+                    self.store_rax(ret);
+                    unimplemented!()
+                }
                 BcOp1::LoadConst(dst, id) => {
                     ctx.push(TIr::LoadConst(dst, id));
                     ctx.dealloc_xmm(dst);

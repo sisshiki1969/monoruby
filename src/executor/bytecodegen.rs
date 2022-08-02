@@ -318,6 +318,10 @@ impl IrContext {
         self.gen_literal(ctx, info, dst, Value::new_string(b));
     }
 
+    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
+        self.push(BcIr::Array(ret, src, len as u16), loc);
+    }
+
     fn gen_array(
         &mut self,
         ctx: &mut FnStore,
@@ -331,10 +335,10 @@ impl IrContext {
             Some(local) => local.into(),
             None => info.push().into(),
         };
-        let len = nodes.len() as u16;
+        let len = nodes.len();
         let src = self.gen_args(ctx, info, id_store, nodes)?.into();
-        self.push(BcIr::Array(ret, src, len), loc);
-        info.temp -= len;
+        self.emit_array(ret, src, len, loc);
+        info.popn(len);
         Ok(())
     }
 
@@ -1111,7 +1115,9 @@ impl IrContext {
         is_ret: bool,
     ) -> Result<()> {
         let mlhs_len = mlhs.len();
-        assert!(mlhs_len == mrhs.len());
+        let mrhs_len = mrhs.len();
+        let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
+        assert!(mlhs_len == mrhs_len);
         let mut temp_reg = info.next_reg();
         // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
@@ -1137,13 +1143,14 @@ impl IrContext {
             }
             temp_reg += 1;
         }
-        info.popn(mlhs_len);
-        // TODO: This is not correct. We must make an Array.
+        info.popn(mrhs_len);
+
+        if is_ret || use_value {
+            let ret = info.push().into();
+            self.emit_array(ret, ret, mrhs_len, loc);
+        }
         if is_ret {
-            self.gen_nil(info, None);
             self.gen_ret(info, None);
-        } else if use_value {
-            self.gen_nil(info, None);
         }
         Ok(())
     }
@@ -1403,6 +1410,12 @@ impl IrContext {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
                     Bc::from(enc_www(131, op1.0, op2.0, *len))
+                }
+                BcIr::Index(ret, base, idx) => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(base);
+                    let op3 = info.get_index(idx);
+                    Bc::from(enc_www(132, op1.0, op2.0, op3.0))
                 }
                 BcIr::LoadConst(reg, name) => {
                     let op1 = info.get_index(reg);
