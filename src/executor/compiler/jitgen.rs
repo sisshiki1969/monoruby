@@ -479,7 +479,9 @@ impl BBContext {
         } else {
             eprintln!("<-- deoptimization occurs in {} {:?}.", name, func_id);
         }
-        eprint!("    bytecode: {:?}", *pc);
+        let bc_begin = globals.func[func_id].as_normal().get_bytecode_address(0);
+        let index = BcPc::from(pc) - bc_begin;
+        eprint!("    bytecode: {:05}:{:?}", index, *pc);
     }
 
     ///
@@ -545,6 +547,26 @@ impl BBContext {
         }
     }
 
+    fn assume_integer(&mut self, codegen: &mut Codegen, reg: SlotId, side_exit: DestLabel) -> u16 {
+        let freg = self.alloc_read_xmm(reg);
+        self.push(TIr::FLoad(reg, freg as u16));
+        monoasm!(codegen.jit,
+            movq rdi, [rbp - (conv(reg))];
+        );
+        codegen.assume_int_to_f64(freg as u64 + 2, side_exit);
+        freg
+    }
+
+    fn assume_float(&mut self, codegen: &mut Codegen, reg: SlotId, side_exit: DestLabel) -> u16 {
+        let freg = self.alloc_read_xmm(reg);
+        self.push(TIr::FLoad(reg, freg as u16));
+        monoasm!(codegen.jit,
+            movq rdi, [rbp - (conv(reg))];
+        );
+        codegen.assume_float_to_f64(freg as u64 + 2, side_exit);
+        freg
+    }
+
     fn get_binary_float(
         &mut self,
         codegen: &mut Codegen,
@@ -552,36 +574,53 @@ impl BBContext {
         rhs: SlotId,
         op: &Bc,
     ) -> (u16, u16) {
-        match (self.stack_slot[lhs], self.stack_slot[rhs]) {
-            (LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs), xrhs) => match xrhs {
-                LinkMode::None => (lhs, self.get_float(codegen, rhs, op)),
-                LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs) => (lhs, rhs),
-            },
-            (LinkMode::None, xrhs) => match xrhs {
-                LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs) => {
-                    (self.get_float(codegen, lhs, op), rhs)
+        let side_exit = self.get_fallback_dest(codegen, op);
+        if lhs != rhs {
+            match (self.stack_slot[lhs], self.stack_slot[rhs]) {
+                (
+                    LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs),
+                    LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs),
+                ) => (lhs, rhs),
+                (LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs), LinkMode::None) => match op.classid2()
+                {
+                    INTEGER_CLASS => (lhs, self.assume_integer(codegen, rhs, side_exit)),
+                    FLOAT_CLASS => (lhs, self.assume_float(codegen, rhs, side_exit)),
+                    _ => unreachable!(),
+                },
+                (LinkMode::None, LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs)) => {
+                    match op.classid() {
+                        INTEGER_CLASS => (self.assume_integer(codegen, lhs, side_exit), rhs),
+                        FLOAT_CLASS => (self.assume_float(codegen, lhs, side_exit), rhs),
+                        _ => unreachable!(),
+                    }
                 }
-                LinkMode::None => {
-                    let cont = codegen.jit.label();
-                    let fallback = self.get_fallback_dest(codegen, op);
-                    // if both of lhs and rhs were not Flonum, deoptimize.
-                    monoasm!(codegen.jit,
-                        movq  rax, [rbp - (conv(lhs))];
-                        andq  rax, 3;
-                        cmpq  rax, 2;
-                        jeq   cont;
-                        movq  rax, [rbp - (conv(rhs))];
-                        andq  rax, 3;
-                        cmpq  rax, 2;
-                        jne   fallback;
-                    cont:
-                    );
-                    (
-                        self.get_float(codegen, lhs, op),
-                        self.get_float(codegen, rhs, op),
-                    )
-                }
-            },
+                (LinkMode::None, LinkMode::None) => match (op.classid(), op.classid2()) {
+                    (FLOAT_CLASS, FLOAT_CLASS) => (
+                        self.assume_float(codegen, lhs, side_exit),
+                        self.assume_float(codegen, rhs, side_exit),
+                    ),
+                    (FLOAT_CLASS, INTEGER_CLASS) => (
+                        self.assume_float(codegen, lhs, side_exit),
+                        self.assume_integer(codegen, rhs, side_exit),
+                    ),
+                    (INTEGER_CLASS, FLOAT_CLASS) => (
+                        self.assume_integer(codegen, lhs, side_exit),
+                        self.assume_float(codegen, rhs, side_exit),
+                    ),
+                    _ => unreachable!(),
+                },
+            }
+        } else {
+            match self.stack_slot[lhs] {
+                LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs) => (lhs, lhs),
+                LinkMode::None => match op.classid() {
+                    FLOAT_CLASS => {
+                        let lhs = self.assume_float(codegen, lhs, side_exit);
+                        (lhs, lhs)
+                    }
+                    _ => unreachable!(),
+                },
+            }
         }
     }
 }

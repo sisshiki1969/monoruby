@@ -1,0 +1,101 @@
+FuncId(16) name:/main args:[] bc:BcPcBase(0x558f58a8aca0)
+:00000 %1 = 600: i32
+:00001 %15 = literal["P4\n"]
+:00002 %16 = %1
+:00003 %17 = literal["\ "]
+:00004 %18 = %1
+:00005 %15 = concat(%15; 4)
+:00006 _ = %0.call puts(%15; 1)             [NilClass]
+:00009 %15 = 49: i32
+:00010 const[ITER] = %15
+:00011 %15 = literal[4.0]
+:00012 const[LIMIT_SQUARED] = %15
+:00013 %2 = 0: i32
+:00014 %3 = 0: i32
+:00015 %4 = %1 - 1: i16                     [Integer][Integer]
+:00016 %5 = 0: i32
+:00017 %15 = %4
+:00018 loop_start counter=10 jit-addr=00007f1acce86d08
+:00019 _%16 = %5 > %15                      [Integer][Integer]
+:00020 condbr _%16 =>:00107
+:00021 %6 = 0: i32
+:00022 %16 = %4
+:00023 loop_start counter=10 jit-addr=00007f1acce8648e
+:00024 _%17 = %6 > %16                      [Integer][Integer]
+:00025 condbr _%17 =>:00104
+:00026 %7 = literal[0.0]
+:00027 %8 = literal[0.0]
+:00028 %17 = literal[2.0]
+:00029 %17 = %17 * %6                       [Float][Integer]
+:00030 %17 = %17 / %1                       [Float][Integer]
+:00031 %18 = literal[1.5]
+:00032 %9 = %17 - %18                       [Float][Float]
+:00033 %17 = literal[2.0]
+:00034 %17 = %17 * %5                       [Float][Integer]
+:00035 %17 = %17 / %1                       [Float][Integer]
+:00036 %18 = literal[1.0]
+:00037 %10 = %17 - %18                      [Float][Float]
+:00038 %11 = literal[false]
+:00039 %12 = 0: i32
+:00040 %17 = const[ITER]
+:00041 loop_start counter=10 jit-addr=00007f1acce861e3
+:00042 _%18 = %12 > %17                     [Integer][Integer]
+:00043 condbr _%18 =>:00066
+:00044 %18 = %7 * %7                        [Float][Float]
+:00045 %19 = %8 * %8                        [Float][Float]
+:00046 %18 = %18 - %19                      [Float][Float]
+:00047 %13 = %18 + %9                       [Float][Float]
+:00048 %18 = 2: i16 * %7                    [Integer][Float]
+:00049 %18 = %18 * %8                       [Float][Float]
+:00050 %14 = %18 + %10                      [Float][Float]
+:00051 %18 = %13
+:00052 %19 = %14
+:00053 %7 = %18
+:00054 %8 = %19
+:00055 %18 = %7 * %7                        [Float][Float]
+:00056 %19 = %8 * %8                        [Float][Float]
+:00057 %18 = %18 + %19                      [Float][Float]
+:00058 %19 = const[LIMIT_SQUARED]
+:00059 _%18 = %18 > %19                     [Float][Float]
+:00060 condbr _%18 =>:00062
+:00061 br =>:00064
+:00062 %11 = literal[true]
+:00063 br =>:00066
+:00064 %12 = %12 + 1: i16                   [Integer][Integer]
+:00065 br =>:00041
+:00066 loop_end
+:00067 %17 = 1: i32
+:00068 %17 = %2 << %17                      [Integer][Integer]
+:00069 %18 = %11
+:00070 condbr %18 =>:00073
+:00071 %18 = 1: i32
+:00072 br =>:00074
+:00073 %18 = 0: i32
+:00074 %2 = %17 | %18                       [Integer][Integer]
+:00075 %3 = %3 + 1: i16                     [Integer][Integer]
+:00076 %17 = %3 == 8: i16                   [Integer][Integer]
+:00077 condbr %17 =>:00093
+:00078 %17 = %6 == %4                       [Integer][Integer]
+:00079 condbr %17 =>:00081
+:00080 br =>:00092
+:00081 %17 = 8: i16 - %3                    [Integer][Integer]
+:00082 %2 = %2 << %17                       [Integer][Integer]
+:00083 %18 = %2
+:00084 %17 = %18.call chr(%19; 0)           [<INVALID>]
+:00087 _ = %0.call print(%17; 1)            [<INVALID>]
+:00090 %2 = 0: i32
+:00091 %3 = 0: i32
+:00092 br =>:00102
+:00093 %18 = %2
+:00094 %17 = %18.call chr(%19; 0)           [Integer]
+:00097 _ = %0.call print(%17; 1)            [NilClass]
+:00100 %2 = 0: i32
+:00101 %3 = 0: i32
+:00102 %6 = %6 + 1: i16                     [Integer][Integer]
+:00103 br =>:00023
+:00104 loop_end
+:00105 %5 = %5 + 1: i16                     [Integer][Integer]
+:00106 br =>:00018
+:00107 %15 = nil
+:00108 loop_end
+:00109 ret %15

@@ -471,6 +471,73 @@ impl Codegen {
     }
 
     ///
+    /// Assume the Value in Integer, and convert to f64.
+    ///
+    /// side-exit if not Integer.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: f64
+    ///
+    fn assume_int_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+        let entry = self.jit.label();
+        monoasm!(&mut self.jit,
+        entry:
+            testq rdi, 0b01;
+            jz side_exit;
+            sarq rdi, 1;
+            cvtsi2sdq xmm(xmm), rdi;
+        );
+        entry
+    }
+
+    ///
+    /// Assume the Value in Float, and convert to f64.
+    ///
+    /// side-exit if not Float.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm0: f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
+    fn assume_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+        let entry = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+        entry:
+            testq rdi, 0b01;
+            jnz side_exit;
+            testq rdi, 0b10;
+            jz side_exit;
+            xorps xmm(xmm), xmm(xmm);
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            je exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm(xmm), rdi;
+        exit:
+        );
+        entry
+    }
+
+    ///
     /// Convert f64 to Value.
     ///
     /// ### in
