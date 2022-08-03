@@ -561,13 +561,13 @@ impl NormalFuncInfo {
     pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
         let mut info = vec![None; self.bytecode().len()];
         let mut skip = false;
-        for (idx, op) in self.bytecode().iter().enumerate() {
+        for (idx, pc) in self.bytecode().iter().enumerate() {
+            let pc = BcPc::from(pc);
             if skip {
                 skip = false;
                 continue;
             }
-            let ops = BcOp1::from_bc(*op);
-            match ops {
+            match pc.op1() {
                 BcOp1::MethodArgs(..) => {
                     skip = true;
                 }
@@ -611,12 +611,13 @@ impl NormalFuncInfo {
         );
         let mut buf = None;
         let mut skip = false;
-        for (i, inst) in self.bytecode.iter().enumerate() {
+        for (i, pc) in self.bytecode.iter().enumerate() {
+            let pc = BcPc::from(pc);
             if skip {
                 skip = false;
                 continue;
             }
-            let bcop1 = BcOp1::from_bc(*inst);
+            let bcop1 = pc.op1();
             if let BcOp1::MethodArgs(..) = bcop1 {
             } else {
                 eprint!(":{:05} ", i)
@@ -658,15 +659,15 @@ impl NormalFuncInfo {
                 BcOp1::Nil(reg) => eprintln!("%{} = nil", reg),
                 BcOp1::Neg(dst, src) => {
                     let op1 = format!("%{} = neg %{}", dst, src);
-                    eprintln!("{:36} [{}]", op1, inst.classid().get_name(globals),);
+                    eprintln!("{:36} [{}]", op1, pc.classid1().get_name(globals),);
                 }
                 BcOp1::BinOp(kind, dst, lhs, rhs) => {
                     let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
-                        inst.classid().get_name(globals),
-                        inst.classid2().get_name(globals)
+                        pc.classid1().get_name(globals),
+                        pc.classid2().get_name(globals)
                     );
                 }
                 BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
@@ -674,8 +675,8 @@ impl NormalFuncInfo {
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
-                        inst.classid().get_name(globals),
-                        inst.classid2().get_name(globals)
+                        pc.classid1().get_name(globals),
+                        pc.classid2().get_name(globals)
                     );
                 }
                 BcOp1::BinOpIr(kind, dst, lhs, rhs) => {
@@ -683,8 +684,8 @@ impl NormalFuncInfo {
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
-                        inst.classid().get_name(globals),
-                        inst.classid2().get_name(globals)
+                        pc.classid1().get_name(globals),
+                        pc.classid2().get_name(globals)
                     );
                 }
                 BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
@@ -692,8 +693,8 @@ impl NormalFuncInfo {
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
-                        inst.classid().get_name(globals),
-                        inst.classid2().get_name(globals)
+                        pc.classid1().get_name(globals),
+                        pc.classid2().get_name(globals)
                     );
                 }
                 BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
@@ -702,8 +703,8 @@ impl NormalFuncInfo {
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
-                        inst.classid().get_name(globals),
-                        inst.classid2().get_name(globals)
+                        pc.classid1().get_name(globals),
+                        pc.classid2().get_name(globals)
                     );
                 }
 
@@ -711,7 +712,7 @@ impl NormalFuncInfo {
                 BcOp1::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
                 BcOp1::MethodCall(..) => {
                     assert!(buf.is_none());
-                    buf = Some((bcop1.clone(), inst.classid()));
+                    buf = Some((bcop1.clone(), pc.classid1()));
                 }
                 BcOp1::MethodArgs(recv, args, len) => {
                     let (recv, ret, name, class_id) = match std::mem::take(&mut buf).unwrap() {
@@ -741,7 +742,7 @@ impl NormalFuncInfo {
                 BcOp1::LoopStart(count) => eprintln!(
                     "loop_start counter={} jit-addr={:016x}",
                     count,
-                    Bc2::from_jit_addr(*inst)
+                    Bc2::from_jit_addr(*pc)
                 ),
                 BcOp1::LoopEnd => eprintln!("loop_end"),
             }

@@ -85,7 +85,7 @@ pub(super) enum BcIr {
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
-pub(crate) struct Bc {
+pub struct Bc {
     pub(crate) op1: u64,
     pub(crate) op2: Bc2,
 }
@@ -112,7 +112,7 @@ impl Bc {
         }
     }
 
-    pub(crate) fn classid(&self) -> ClassId {
+    pub(crate) fn classid1(&self) -> ClassId {
         ClassId::new(self.op2.0 as u32)
     }
 
@@ -120,12 +120,16 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
-    pub(crate) fn is_float(&self) -> bool {
-        self.classid() == FLOAT_CLASS
+    pub(crate) fn is_float1(&self) -> bool {
+        self.classid1() == FLOAT_CLASS
+    }
+
+    pub(crate) fn is_float2(&self) -> bool {
+        self.classid2() == FLOAT_CLASS
     }
 
     pub(crate) fn is_binary_float(&self) -> bool {
-        self.classid() == FLOAT_CLASS || self.classid2() == FLOAT_CLASS
+        self.classid1() == FLOAT_CLASS || self.classid2() == FLOAT_CLASS
     }
 }
 
@@ -145,8 +149,7 @@ impl std::fmt::Debug for Bc {
                 format!("{:05}", disp + 1)
             }
         }
-        let bcop1 = BcOp1::from_bc(*self);
-        match bcop1 {
+        match BcOp1::from_bc(self) {
             BcOp1::Br(disp) => {
                 writeln!(f, "br => {}", disp_str(disp))
             }
@@ -182,31 +185,31 @@ impl std::fmt::Debug for Bc {
             BcOp1::Nil(reg) => writeln!(f, "%{} = nil", reg),
             BcOp1::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
             BcOp1::BinOp(kind, dst, lhs, rhs) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
                 writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::BinOpRi(kind, dst, lhs, rhs) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
                 writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::BinOpIr(kind, dst, lhs, rhs) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("%{} = {}: i16 {} %{}", dst, lhs, kind, rhs,);
                 writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::Cmp(kind, dst, lhs, rhs, opt) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
                 writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp1::Cmpri(kind, dst, lhs, rhs, opt) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
                 writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
@@ -215,7 +218,7 @@ impl std::fmt::Debug for Bc {
             BcOp1::Ret(reg) => writeln!(f, "ret %{}", reg),
             BcOp1::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
             BcOp1::MethodCall(ret, name) => {
-                let class_id = self.classid();
+                let class_id = self.classid1();
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
                 writeln!(f, "{:28} {:?}", op1, class_id)
             }
@@ -349,7 +352,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl BcOp1 {
-    pub fn from_bc(bcop: Bc) -> Self {
+    pub fn from_bc(bcop: &Bc) -> Self {
         let op = bcop.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {

@@ -43,7 +43,7 @@ pub struct Codegen {
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    opt_buf: Option<Bc>,
+    opt_buf: Option<BcPc>,
 }
 
 fn conv(reg: SlotId) -> i64 {

@@ -74,6 +74,19 @@ impl std::default::Default for BcPc {
     }
 }
 
+impl std::ops::Deref for BcPc {
+    type Target = Bc;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0 }
+    }
+}
+
+impl BcPc {
+    pub(super) fn op1(&self) -> BcOp1 {
+        BcOp1::from_bc(&*self)
+    }
+}
+
 ///
 /// ID of instruction.
 ///

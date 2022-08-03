@@ -449,9 +449,9 @@ impl<'a> std::fmt::Debug for RV<'a> {
         match self {
             RV::Nil => write!(f, "nil"),
             RV::Bool(b) => write!(f, "{:?}", b),
-            RV::Integer(n) => write!(f, "Integer({})", n),
+            RV::Integer(n) => write!(f, "{}", n),
             RV::BigInt(n) => write!(f, "Bignum({})", n),
-            RV::Float(n) => write!(f, "{}", n),
+            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n).to_string(),),
             RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{}\"", s),
