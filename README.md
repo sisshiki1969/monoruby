@@ -30,10 +30,10 @@ This project still remains in early-alpha stage. Currently, only the functionali
 
 |   impl \ bench   | app_fib (fib 40)  | so_mandelbrot  |  tarai  |
 |:----------------:|------------------:|---------------:|--------:|
-|  monoruby        |      1.135        |     5.730      |  29.819 |
-|  ruby(3.2.0dev)  |      0.203        |     0.665      |  6.557  |
-|  ruby --yjit     |      0.786        |     0.888      |  27.440 |
-|  ruby --mjit     |      0.595        |     0.762      |  6.288  |
+|  monoruby        |      0.987        |     6.923      |  27.727 |
+|  ruby(3.2.0dev)  |      0.206        |     0.659      |  6.662  |
+|  ruby --yjit     |      0.826        |     0.877      |  27.247 |
+|  ruby --mjit     |      0.574        |     0.785      |  6.716  |
 
 ## How to run
 

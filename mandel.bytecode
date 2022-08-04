@@ -15,6 +15,7 @@ FuncId(16) name:/main args:[] bc:BcPcBase(0x558f58a8aca0)
 :00015 %4 = %1 - 1: i16                     [Integer][Integer]
 :00016 %5 = 0: i32
 :00017 %15 = %4
+
 :00018 loop_start counter=10 jit-addr=00007f1acce86d08
 :00019 _%16 = %5 > %15                      [Integer][Integer]
 :00020 condbr _%16 =>:00107
@@ -38,6 +39,7 @@ FuncId(16) name:/main args:[] bc:BcPcBase(0x558f58a8aca0)
 :00038 %11 = literal[false]
 :00039 %12 = 0: i32
 :00040 %17 = const[ITER]
+
 :00041 loop_start counter=10 jit-addr=00007f1acce861e3
 :00042 _%18 = %12 > %17                     [Integer][Integer]
 :00043 condbr _%18 =>:00066
@@ -61,9 +63,11 @@ FuncId(16) name:/main args:[] bc:BcPcBase(0x558f58a8aca0)
 :00061 br =>:00064
 :00062 %11 = literal[true]
 :00063 br =>:00066
+
 :00064 %12 = %12 + 1: i16                   [Integer][Integer]
 :00065 br =>:00041
 :00066 loop_end
+
 :00067 %17 = 1: i32
 :00068 %17 = %2 << %17                      [Integer][Integer]
 :00069 %18 = %11
