@@ -100,6 +100,13 @@ impl Globals {
         )));
     }
 
+    pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
+        self.set_error(MonorubyErr::indexerr(format!(
+            " index {} too small for array; minimum: {}",
+            actual, minimum,
+        )));
+    }
+
     pub fn take_error(&mut self) -> Option<MonorubyErr> {
         std::mem::take(&mut self.error)
     }
@@ -369,6 +376,7 @@ impl Globals {
             MonorubyErrKind::DivideByZero => format!("divided by 0"),
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
+            MonorubyErrKind::Index(msg) => msg.to_string(),
         }
     }
 }

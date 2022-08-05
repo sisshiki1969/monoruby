@@ -119,6 +119,44 @@ extern "C" fn get_index(
     interp.invoke_method(globals, method, base, &[index])
 }
 
+extern "C" fn set_index(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    base: Value,
+    index: Value,
+    src: Value,
+) -> Option<Value> {
+    match base.class_id() {
+        ARRAY_CLASS => {
+            let v = base.as_array_mut();
+            if let Some(idx) = index.try_fixnum() {
+                if idx >= 0 {
+                    match v.get_mut(idx as usize) {
+                        Some(v) => *v = src,
+                        None => {
+                            let idx = idx as usize;
+                            v.extend((v.len()..idx).into_iter().map(|_| Value::nil()));
+                            v.push(src);
+                        }
+                    }
+                } else {
+                    let idx_positive = v.len() as i64 + idx;
+                    if idx_positive < 0 {
+                        globals.err_index_too_small(idx, -(v.len() as i64));
+                        return None;
+                    } else {
+                        v[idx_positive as usize] = src;
+                    }
+                };
+                return Some(src);
+            }
+        }
+        _ => {}
+    }
+    let method = globals.get_ident_id("[]=");
+    interp.invoke_method(globals, method, base, &[index, src])
+}
+
 extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
     panic!("unimplemented inst. {:016x}", opcode);
 }

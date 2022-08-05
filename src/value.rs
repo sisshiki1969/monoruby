@@ -409,6 +409,13 @@ impl Value {
         unsafe { &mut *(self.get() as *mut RValue) }
     }
 
+    pub(crate) fn as_array_mut(&self) -> &mut Vec<Value> {
+        match &mut self.rvalue_mut().kind {
+            ObjKind::Array(v) => v,
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn as_class(&self) -> ClassId {
         match self.unpack() {
             RV::Object(rv) => match rv.kind {

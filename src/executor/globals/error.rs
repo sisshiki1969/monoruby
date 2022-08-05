@@ -18,6 +18,7 @@ pub enum MonorubyErrKind {
     DivideByZero,
     Range(String),
     Type(String),
+    Index(String),
 }
 
 impl MonorubyErr {
@@ -143,5 +144,9 @@ impl MonorubyErr {
 
     pub fn typeerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type(msg))
+    }
+
+    pub fn indexerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Index(msg))
     }
 }

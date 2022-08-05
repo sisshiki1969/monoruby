@@ -611,6 +611,17 @@ impl IrContext {
                             let src = self.push_expr(ctx, info, id_store, rhs)?;
                             self.gen_store_const(src.into(), name, loc);
                         }
+                        NodeKind::Index {
+                            box base,
+                            mut index,
+                        } => {
+                            assert_eq!(1, index.len());
+                            let src = self.push_expr(ctx, info, id_store, rhs)?;
+                            let base = self.push_expr(ctx, info, id_store, base)?;
+                            let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
+                            info.temp -= 2;
+                            self.push(BcIr::IndexAssign(src, base, idx), loc);
+                        }
                         _ => {
                             return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone()))
                         }
@@ -1446,6 +1457,12 @@ impl IrContext {
                     let op2 = info.get_index(base);
                     let op3 = info.get_index(idx);
                     Bc::from(enc_www(132, op1.0, op2.0, op3.0))
+                }
+                BcIr::IndexAssign(src, base, idx) => {
+                    let op1 = info.get_index(src);
+                    let op2 = info.get_index(base);
+                    let op3 = info.get_index(idx);
+                    Bc::from(enc_www(133, op1.0, op2.0, op3.0))
                 }
                 BcIr::LoadConst(reg, name) => {
                     let op1 = info.get_index(reg);

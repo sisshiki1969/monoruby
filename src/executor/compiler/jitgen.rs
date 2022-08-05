@@ -25,6 +25,8 @@ enum TIr {
     Array(SlotId, SlotId, u16),
     /// index(%ret, %base, %idx)
     Index(SlotId, SlotId, SlotId),
+    /// vm_index_assign(%src, %base, %idx)
+    IndexAssign(SlotId, SlotId, SlotId),
     /// float_literal(Fret, f64)
     FLiteral(u16, f64),
     LoadConst(SlotId, ConstSiteId),
@@ -126,6 +128,9 @@ impl std::fmt::Debug for TIr {
             }
             TIr::Index(ret, base, idx) => {
                 writeln!(f, "%{} = %{}.[%{}]", ret, base, idx)
+            }
+            TIr::IndexAssign(src, base, idx) => {
+                writeln!(f, "%{}.[%{}] = %{}", base, idx, src)
             }
             TIr::FLiteral(freg, float) => {
                 writeln!(f, "F{} = {}: f64", freg, float)
@@ -945,7 +950,24 @@ impl Codegen {
                         jeq  jit_return;
                     };
                     self.store_rax(ret);
-                    //unimplemented!()
+                }
+                BcOp1::IndexAssign(src, base, idx) => {
+                    ctx.read_slot(self, base);
+                    ctx.read_slot(self, idx);
+                    ctx.read_slot(self, src);
+                    ctx.push(TIr::IndexAssign(src, base, idx));
+                    let jit_return = self.vm_return;
+                    monoasm! { self.jit,
+                        movq rdx, [rbp - (conv(base))]; // base: Value
+                        movq rcx, [rbp - (conv(idx))]; // idx: Value
+                        movq r8, [rbp - (conv(src))];  // src: Value
+                        movq rdi, rbx; // &mut Interp
+                        movq rsi, r12; // &mut Globals
+                        movq rax, (set_index);
+                        call rax;
+                        testq rax, rax;
+                        jeq  jit_return;
+                    };
                 }
                 BcOp1::LoadConst(dst, id) => {
                     ctx.push(TIr::LoadConst(dst, id));
@@ -1160,7 +1182,7 @@ impl Codegen {
                                     let div_by_zero = self.div_by_zero;
                                     monoasm!(self.jit,
                                         movq  rax, xmm(frhs as u64 + 2);
-                                        testq rax, 0;
+                                        testq rax, rax;
                                         jeq   div_by_zero;
                                         divsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
                                     )
@@ -1184,7 +1206,7 @@ impl Codegen {
                                     let div_by_zero = self.div_by_zero;
                                     monoasm!(self.jit,
                                         movq  rax, xmm(frhs as u64 + 2);
-                                        testq rax, 0;
+                                        testq rax, rax;
                                         jeq   div_by_zero;
                                         movq  xmm(fret as u64 + 2), [rip + imm0];
                                         movq  xmm0, rax;

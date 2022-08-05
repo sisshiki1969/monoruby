@@ -333,6 +333,13 @@ mod test {
                 run_test_error(&format!("{} / {}", lhs, rhs));
             }
         }
+        run_test_error(
+            r#"
+            a = [1,2,3,4,5]
+            a[-6] = "Rust"
+            a
+        "#,
+        );
     }
 
     #[test]
@@ -834,5 +841,15 @@ mod test {
         run_test(r#"[1,"2", true, nil][2]"#);
         run_test(r#"[1,"2", true, nil][3]"#);
         run_test(r#"[1,"2", true, nil][4]"#);
+        run_test(
+            r#"
+            a = [1,2,3,4,5]
+            a[0] = 42
+            a[3] = 77
+            a[9] = "God"
+            a[-4] = "Ruby"
+            a
+        "#,
+        );
     }
 }

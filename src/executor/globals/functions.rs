@@ -649,6 +649,9 @@ impl NormalFuncInfo {
                 BcOp1::Index(ret, base, idx) => {
                     eprintln!("%{} = %{}.[%{}]", ret, base, idx)
                 }
+                BcOp1::IndexAssign(src, base, idx) => {
+                    eprintln!("%{}.[%{}] = %{}", base, idx, src)
+                }
                 BcOp1::LoadConst(reg, id) => {
                     let name = globals.func[id].name;
                     eprintln!("%{} = const[{}]", reg, globals.id_store.get_name(name))

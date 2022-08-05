@@ -220,6 +220,7 @@ impl Codegen {
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
         self.dispatch[132] = self.vm_index();
+        self.dispatch[133] = self.vm_index_assign();
         self.dispatch[134] = self.vm_eqrr();
         self.dispatch[135] = self.vm_nerr();
         self.dispatch[136] = self.vm_ltrr();
@@ -365,6 +366,20 @@ impl Codegen {
         monoasm! { self.jit,
             negq rsi;
             movq rsi, [rbp + rsi * 8 - 16];
+        };
+    }
+
+    ///
+    /// Get value of the register.
+    /// #### args
+    /// - *r15*: register number
+    /// #### return
+    /// - *r15*: value of the register
+    ///
+    fn vm_get_r15(&mut self) {
+        monoasm! { self.jit,
+            negq r15;
+            movq r15, [rbp + r15 * 8 - 16];
         };
     }
 
@@ -789,6 +804,27 @@ impl Codegen {
             jeq  entry_return;
         };
         self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_index_assign(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let entry_return = self.vm_return;
+        self.vm_get_r15();
+        self.vm_get_rdi();
+        self.vm_get_rsi();
+        monoasm! { self.jit,
+            movq rdx, rdi; // base: Value
+            movq rcx, rsi; // idx: Value
+            movq r8, r15;  // src: Value
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (set_index);
+            call rax;
+            testq rax, rax;
+            jeq  entry_return;
+        };
         self.fetch_and_dispatch();
         label
     }
