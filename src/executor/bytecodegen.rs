@@ -445,8 +445,29 @@ impl IrContext {
                 info.pop().into()
             }
         })
-        //self.push_expr(ctx, info, id_store, expr)?;
-        //Ok(info.pop())
+    }
+
+    fn gen_binary_temp_expr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut NormalFuncInfo,
+        id_store: &mut IdentifierTable,
+        lhs: Node,
+        rhs: Node,
+    ) -> Result<(BcReg, BcReg)> {
+        match (info.is_local(&lhs), info.is_local(&rhs)) {
+            (None, None) => {
+                let lhs = self.push_expr(ctx, info, id_store, lhs)?;
+                let rhs = self.push_expr(ctx, info, id_store, rhs)?;
+                info.temp -= 2;
+                Ok((lhs, rhs))
+            }
+            _ => {
+                let lhs = self.gen_temp_expr(ctx, info, id_store, lhs)?;
+                let rhs = self.gen_temp_expr(ctx, info, id_store, rhs)?;
+                Ok((lhs, rhs))
+            }
+        }
     }
 
     /// Generate bytecode Ir for binary operations.
@@ -460,20 +481,18 @@ impl IrContext {
         rhs: Node,
         dst: Option<BcLocal>,
         loc: Loc,
-    ) -> Result<()> {
+    ) -> Result<BcReg> {
         match op {
-            BinOp::Add => self.gen_add(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Sub => self.gen_sub(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Mul => self.gen_mul(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Div => self.gen_div(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::BitOr => self.gen_bitor(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::BitAnd => self.gen_bitand(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::BitXor => self.gen_bitxor(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Shr => self.gen_shr(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Shl => self.gen_shl(ctx, info, id_store, dst, lhs, rhs, loc)?,
-            BinOp::Cmp(kind) => {
-                self.gen_cmp(ctx, info, id_store, dst, kind, lhs, rhs, false, loc)?
-            }
+            BinOp::Add => self.gen_add(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Sub => self.gen_sub(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Mul => self.gen_mul(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Div => self.gen_div(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::BitOr => self.gen_bitor(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::BitAnd => self.gen_bitand(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::BitXor => self.gen_bitxor(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Shr => self.gen_shr(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Shl => self.gen_shl(ctx, info, id_store, dst, lhs, rhs, loc),
+            BinOp::Cmp(kind) => self.gen_cmp(ctx, info, id_store, dst, kind, lhs, rhs, false, loc),
             _ => {
                 return Err(MonorubyErr::unsupported_operator(
                     op,
@@ -481,8 +500,7 @@ impl IrContext {
                     info.sourceinfo.clone(),
                 ))
             }
-        };
-        Ok(())
+        }
     }
 
     fn push_expr(
@@ -513,7 +531,10 @@ impl IrContext {
                 | NodeKind::Bool(_)
                 | NodeKind::SelfValue
                 | NodeKind::Integer(_)
-                | NodeKind::Float(_) => return Ok(()),
+                | NodeKind::Symbol(_)
+                | NodeKind::Bignum(_)
+                | NodeKind::Float(_)
+                | NodeKind::String(_) => return Ok(()),
                 _ => {}
             }
         }
@@ -538,10 +559,10 @@ impl IrContext {
                 mut index,
             } => {
                 assert_eq!(1, index.len());
-                let ret = self.push_expr(ctx, info, id_store, base)?;
-                let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
-                info.pop();
-                self.push(BcIr::Index(ret, ret, idx), loc);
+                let (base, idx) =
+                    self.gen_binary_temp_expr(ctx, info, id_store, base, index.remove(0))?;
+                let ret = info.push().into();
+                self.push(BcIr::Index(ret, base, idx), loc);
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
@@ -583,7 +604,7 @@ impl IrContext {
                 };
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?
+                self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -850,7 +871,7 @@ impl IrContext {
                 };
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?
+                self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -1071,19 +1092,7 @@ impl IrContext {
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg, BcReg)> {
-        let (lhs, rhs) = match (info.is_local(&lhs), info.is_local(&rhs)) {
-            (None, None) => {
-                let lhs = self.push_expr(ctx, info, id_store, lhs)?;
-                let rhs = self.push_expr(ctx, info, id_store, rhs)?;
-                info.temp -= 2;
-                (lhs, rhs)
-            }
-            _ => {
-                let lhs = self.gen_temp_expr(ctx, info, id_store, lhs)?;
-                let rhs = self.gen_temp_expr(ctx, info, id_store, rhs)?;
-                (lhs, rhs)
-            }
-        };
+        let (lhs, rhs) = self.gen_binary_temp_expr(ctx, info, id_store, lhs, rhs)?;
         let dst = match dst {
             None => info.push().into(),
             Some(local) => local.into(),
@@ -1118,15 +1127,16 @@ impl IrContext {
         rhs: Node,
         optimizable: bool,
         loc: Loc,
-    ) -> Result<()> {
+    ) -> Result<BcReg> {
         if let Some(i) = is_smi(&rhs) {
             let (dst, lhs) = self.gen_singular(ctx, info, id_store, dst, lhs)?;
             self.push(BcIr::Cmpri(kind, dst, lhs, i, optimizable), loc);
+            Ok(dst)
         } else {
             let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
             self.push(BcIr::Cmp(kind, dst, lhs, rhs, optimizable), loc);
+            Ok(dst)
         }
-        Ok(())
     }
 
     fn gen_mul_assign(
@@ -1304,10 +1314,10 @@ macro_rules! gen_ops {
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
-            ) -> Result<()> {
+            ) -> Result<BcReg> {
                 let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
                 self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
-                Ok(())
+                Ok(dst)
             }
         }
     };
@@ -1329,18 +1339,20 @@ macro_rules! gen_ri_ops {
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
-            ) -> Result<()> {
+            ) -> Result<BcReg> {
                 if let Some(i) = is_smi(&rhs) {
                     let (dst, lhs) = self.gen_singular(ctx, info, id_store, dst, lhs)?;
                     self.push(BcIr::BinOpRi(BinOpK::$inst, dst, lhs, i), loc);
+                    Ok(dst)
                 } else if let Some(i) = is_smi(&lhs) {
                     let (dst, rhs) = self.gen_singular(ctx, info, id_store, dst, rhs)?;
                     self.push(BcIr::BinOpIr(BinOpK::$inst, dst, i, rhs), loc);
+                    Ok(dst)
                 } else {
                     let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
                     self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
+                    Ok(dst)
                 }
-                Ok(())
             }
         }
     };
