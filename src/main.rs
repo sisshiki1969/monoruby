@@ -78,7 +78,7 @@ fn main() {
             );
         }
         None => {
-            let mut rl = Editor::<()>::new();
+            let mut rl = Editor::<()>::new().unwrap();
             let mut all_codes = vec![];
             loop {
                 let readline = rl.readline("monoruby> ");
