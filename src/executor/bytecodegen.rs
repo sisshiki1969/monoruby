@@ -231,14 +231,6 @@ pub fn is_smi(node: &Node) -> Option<i16> {
     None
 }
 
-pub fn is_local(node: &Node) -> Option<&String> {
-    if let NodeKind::LocalVar(name) = &node.kind {
-        Some(name)
-    } else {
-        None
-    }
-}
-
 impl IrContext {
     pub fn compile_ast(
         info: &mut NormalFuncInfo,
@@ -557,7 +549,8 @@ impl IrContext {
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 match &lhs.kind {
-                    NodeKind::LocalVar(lhs_) | NodeKind::Ident(lhs_) => {
+                    NodeKind::Ident(lhs) => unreachable!("Illegal NodeKind::Ident({})", lhs),
+                    NodeKind::LocalVar(lhs_) => {
                         let local = info.find_local(lhs_);
                         self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
                         if is_ret {
@@ -590,7 +583,8 @@ impl IrContext {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     match lhs.kind {
-                        NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                        NodeKind::Ident(lhs) => unreachable!("Illegal NodeKind::Ident({})", lhs),
+                        NodeKind::LocalVar(lhs) => {
                             let local = info.find_local(&lhs);
                             self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                             if is_ret {
@@ -631,7 +625,7 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local = info.load_local(&ident, loc)?;
+                let local = info.find_local(&ident);
                 if is_ret {
                     self.gen_ret(info, Some(local));
                 } else if use_value {
@@ -755,8 +749,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
-                if let Some(local) = is_local(&expr) {
-                    let local = info.load_local(local, expr.loc)?;
+                if let Some(local) = info.is_local(&expr) {
                     self.gen_ret(info, Some(local));
                 } else {
                     self.gen_expr(ctx, info, id_store, expr, true, true)?;
@@ -858,7 +851,8 @@ impl IrContext {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     match lhs.kind {
-                        NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                        NodeKind::Ident(lhs) => unreachable!("Illegal NodeKind::Ident({})", lhs),
+                        NodeKind::LocalVar(lhs) => {
                             let src = info.find_local(&lhs);
                             self.gen_store_expr(ctx, info, id_store, src, rhs)?;
                             self.gen_mov(local.into(), src.into());
@@ -885,7 +879,7 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local2 = info.load_local(&ident, loc)?;
+                let local2 = info.find_local(&ident);
                 self.gen_mov(local.into(), local2.into());
             }
             NodeKind::Const {
@@ -1073,21 +1067,15 @@ impl IrContext {
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg, BcReg)> {
-        let (lhs, rhs) = match (is_local(&lhs), is_local(&rhs)) {
-            (Some(lhs), Some(rhs)) => {
-                let lhs = info.find_local(lhs).into();
-                let rhs = info.find_local(rhs).into();
-                (lhs, rhs)
-            }
+        let (lhs, rhs) = match (info.is_local(&lhs), info.is_local(&rhs)) {
+            (Some(lhs), Some(rhs)) => (lhs.into(), rhs.into()),
             (Some(lhs), None) => {
-                let lhs = info.find_local(lhs).into();
                 let rhs = self.gen_temp_expr(ctx, info, id_store, rhs)?.into();
-                (lhs, rhs)
+                (lhs.into(), rhs)
             }
             (None, Some(rhs)) => {
                 let lhs = self.gen_temp_expr(ctx, info, id_store, lhs)?.into();
-                let rhs = info.find_local(rhs).into();
-                (lhs, rhs)
+                (lhs, rhs.into())
             }
             (None, None) => {
                 self.push_expr(ctx, info, id_store, lhs)?;
@@ -1112,8 +1100,8 @@ impl IrContext {
         dst: Option<BcLocal>,
         lhs: Node,
     ) -> Result<(BcReg, BcReg)> {
-        let lhs = match is_local(&lhs) {
-            Some(lhs) => info.find_local(lhs).into(),
+        let lhs = match info.is_local(&lhs) {
+            Some(lhs) => lhs.into(),
             None => self.gen_temp_expr(ctx, info, id_store, lhs)?.into(),
         };
         let dst = match dst {
@@ -1167,7 +1155,8 @@ impl IrContext {
         // Assign values to left-hand side expressions.
         for lhs in mlhs {
             match lhs.kind {
-                NodeKind::LocalVar(lhs) | NodeKind::Ident(lhs) => {
+                NodeKind::Ident(lhs) => unreachable!("Illegal NodeKind::Ident({})", lhs),
+                NodeKind::LocalVar(lhs) => {
                     let local = info.find_local(&lhs);
                     self.gen_mov(local.into(), temp_reg.into());
                 }

@@ -533,17 +533,6 @@ impl NormalFuncInfo {
         self.temp -= len as u16;
     }
 
-    pub(crate) fn load_local(&mut self, ident: &str, loc: Loc) -> Result<BcLocal> {
-        match self.locals.get(ident) {
-            Some(local) => Ok(BcLocal(*local)),
-            None => Err(MonorubyErr::undefined_local(
-                ident.to_owned(),
-                loc,
-                self.sourceinfo.clone(),
-            )),
-        }
-    }
-
     pub(crate) fn find_local(&mut self, ident: &str) -> BcLocal {
         match self.locals.get(ident) {
             Some(local) => BcLocal(*local),
@@ -556,6 +545,14 @@ impl NormalFuncInfo {
         let local = self.locals.len() as u16;
         assert!(self.locals.insert(ident, local).is_none());
         BcLocal(local)
+    }
+
+    pub(crate) fn is_local(&mut self, node: &Node) -> Option<BcLocal> {
+        if let NodeKind::LocalVar(name) = &node.kind {
+            Some(self.find_local(name))
+        } else {
+            None
+        }
     }
 
     pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
