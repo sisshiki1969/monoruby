@@ -12,9 +12,9 @@ use super::*;
 #[derive(PartialEq)]
 enum TIr {
     /// branch(dest, write_back)
-    Br(i32, Vec<(u16, SlotId)>),
+    Br(i32, Vec<u16>),
     /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was true.
-    CondBr(SlotId, i32, bool, Vec<(u16, SlotId)>, BrKind),
+    CondBr(SlotId, i32, bool, Vec<u16>, BrKind),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -91,9 +91,9 @@ impl std::fmt::Debug for TIr {
                 format!("{:05}", disp + 1)
             }
         }
-        fn disp_write_back(v: &[(u16, SlotId)]) -> String {
+        fn disp_write_back(v: &[u16]) -> String {
             v.iter()
-                .map(|(fsrc, dst)| format!("%{}:=F{} ", dst, fsrc))
+                .map(|freg| format!("F{} ", freg))
                 .fold(String::new(), |acc, s| acc + &s)
         }
         match self {
@@ -252,12 +252,6 @@ enum LinkMode {
     None,
 }
 
-impl LinkMode {
-    fn is_none(&self) -> bool {
-        !matches!(self, LinkMode::XmmRW(_))
-    }
-}
-
 ///
 /// Context of the current Basic block.
 ///
@@ -386,10 +380,12 @@ impl BBContext {
         }
     }
 
-    fn clear_write_back(&mut self) {
-        self.get_write_back()
-            .iter()
-            .for_each(|(_, reg)| self.dealloc_xmm(*reg));
+    fn clear_write_back(&mut self, wb: Vec<u16>) {
+        wb.iter().for_each(|freg| {
+            for reg in self.xmm[*freg as usize].clone() {
+                self.dealloc_xmm(reg);
+            }
+        });
     }
 
     ///
@@ -404,11 +400,18 @@ impl BBContext {
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
                 call f64_to_val;
-                movq [rbp - (conv(reg))], rax;
             );
+            codegen.store_rax(reg);
             self.stack_slot[reg] = LinkMode::XmmR(freg);
-            //self.dealloc_xmm(reg);
         }
+    }
+
+    fn all_write_back(&mut self, codegen: &mut Codegen) {
+        let wb = self.get_write_back();
+        self.write_back_no_dealloc(codegen, wb);
+
+        self.xmm.iter_mut().for_each(|info| info.clear());
+        self.stack_slot.clear()
     }
 
     ///
@@ -416,14 +419,25 @@ impl BBContext {
     ///
     /// xmms are not deallocated.
     ///
-    fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, reg: SlotId) {
-        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
+    fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, wb: Vec<u16>) {
+        for freg in wb {
+            let v: Vec<_> = self.xmm[freg as usize]
+                .iter()
+                .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
+                .cloned()
+                .collect();
+            if v.is_empty() {
+                continue;
+            }
+
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
                 call f64_to_val;
-                movq [rbp - (conv(reg))], rax;
             );
+            for reg in v {
+                codegen.store_rax(reg);
+            }
         }
     }
 
@@ -436,13 +450,16 @@ impl BBContext {
     ///
     /// Get *DestLabel* for a branch to *dest*.
     ///
-    fn get_branch_dest(&mut self, codegen: &mut Codegen, dest: DestLabel) -> DestLabel {
+    fn get_branch_dest(
+        &mut self,
+        codegen: &mut Codegen,
+        dest: DestLabel,
+        wb: Vec<u16>,
+    ) -> DestLabel {
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
-        self.get_write_back()
-            .iter()
-            .for_each(|(_, reg)| self.write_back_no_dealloc(codegen, *reg));
+        self.write_back_no_dealloc(codegen, wb);
         monoasm!(codegen.jit,
             jmp  dest;
         );
@@ -453,13 +470,11 @@ impl BBContext {
     ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
-    fn get_deopt_dest(&mut self, codegen: &mut Codegen, pc: BcPc) -> DestLabel {
+    fn get_deopt_dest(&mut self, codegen: &mut Codegen, pc: BcPc, wb: Vec<u16>) -> DestLabel {
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
-        self.get_write_back()
-            .iter()
-            .for_each(|(_, reg)| self.write_back_no_dealloc(codegen, *reg));
+        self.write_back_no_dealloc(codegen, wb);
         let fetch = codegen.vm_fetch;
         monoasm!(codegen.jit,
             movq r13, (pc.0);
@@ -509,36 +524,31 @@ impl BBContext {
     ///
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
-    fn deopt(&mut self, codegen: &mut Codegen, pc: BcPc) {
-        let fallback = self.get_deopt_dest(codegen, pc);
+    fn deopt(&mut self, codegen: &mut Codegen, pc: BcPc, wb: Vec<u16>) {
+        let fallback = self.get_deopt_dest(codegen, pc, wb);
         monoasm!(codegen.jit,
             jmp fallback;
         );
     }
 
-    fn all_write_back(&mut self, codegen: &mut Codegen) {
-        self.get_write_back()
-            .iter()
-            .for_each(|(_, reg)| self.read_slot(codegen, *reg));
-
-        self.xmm.iter_mut().for_each(|info| *info = vec![]);
-        assert!(self.stack_slot.0.iter().all(|r| r.is_none()));
-        self.stack_slot.clear()
-    }
-
-    fn get_write_back(&self) -> Vec<(u16, SlotId)> {
-        self.stack_slot
-            .0
+    fn get_write_back(&self) -> Vec<u16> {
+        self.xmm
             .iter()
             .enumerate()
-            .filter_map(|(reg, freg)| {
-                if let LinkMode::XmmRW(freg) = freg {
-                    Some((*freg as u16, SlotId::new(reg as u16)))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i as u16) })
             .collect()
+        /*self.stack_slot
+        .0
+        .iter()
+        .enumerate()
+        .filter_map(|(reg, freg)| {
+            if let LinkMode::XmmRW(freg) = freg {
+                Some((*freg as u16, SlotId::new(reg as u16)))
+            } else {
+                None
+            }
+        })
+        .collect()*/
     }
 
     fn get_xmm_using(&self) -> Vec<usize> {
@@ -597,7 +607,8 @@ impl BBContext {
         match self.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
-                let side_exit = self.get_deopt_dest(codegen, op);
+                let wb = self.get_write_back();
+                let side_exit = self.get_deopt_dest(codegen, op, wb);
                 self.convf64_assume_float(codegen, reg, side_exit)
             }
         }
@@ -617,21 +628,24 @@ impl BBContext {
                     LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs),
                 ) => (lhs, rhs),
                 (LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs), LinkMode::None) => {
-                    let side_exit = self.get_deopt_dest(codegen, op);
+                    let wb = self.get_write_back();
+                    let side_exit = self.get_deopt_dest(codegen, op, wb);
                     (
                         lhs,
                         self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
                     )
                 }
                 (LinkMode::None, LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs)) => {
-                    let side_exit = self.get_deopt_dest(codegen, op);
+                    let wb = self.get_write_back();
+                    let side_exit = self.get_deopt_dest(codegen, op, wb);
                     (
                         self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
                         rhs,
                     )
                 }
                 (LinkMode::None, LinkMode::None) => {
-                    let side_exit = self.get_deopt_dest(codegen, op);
+                    let wb = self.get_write_back();
+                    let side_exit = self.get_deopt_dest(codegen, op, wb);
                     (
                         self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
                         self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
@@ -642,7 +656,8 @@ impl BBContext {
             match self.stack_slot[lhs] {
                 LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs) => (lhs, lhs),
                 LinkMode::None => {
-                    let side_exit = self.get_deopt_dest(codegen, op);
+                    let wb = self.get_write_back();
+                    let side_exit = self.get_deopt_dest(codegen, op, wb);
                     match op.classid1() {
                         FLOAT_CLASS => {
                             let lhs = self.convf64_assume_float(codegen, lhs, side_exit);
@@ -705,9 +720,9 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     (($op:ident, $sop:ident)) => {
         paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext) {
+            fn [<cmp_opt_int_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext, v:Vec<u16>) {
                 let cont = self.jit.label();
-                let branch_dest = ctx.get_branch_dest(self, dest);
+                let branch_dest = ctx.get_branch_dest(self, dest, v);
                 if switch {
                     monoasm! { self.jit,
                         [<j $sop>] branch_dest;
@@ -751,9 +766,9 @@ macro_rules! cmp_opt_main {
                 self.jit.select(0);
             }
 
-            fn [<cmp_opt_float_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext) {
+            fn [<cmp_opt_float_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext, v:Vec<u16>) {
                 let cont = self.jit.label();
-                let branch_dest = ctx.get_branch_dest(self, dest);
+                let branch_dest = ctx.get_branch_dest(self, dest, v);
                 if switch {
                     monoasm! { self.jit,
                         [<j $op>] branch_dest;
@@ -870,8 +885,8 @@ impl Codegen {
                     if position.is_some() && loop_count == 0 {
                         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
                         eprintln!("    end:[{:05}]", start_pos + idx + 1);
-
-                        ctx.deopt(self, pc);
+                        let wb = ctx.get_write_back();
+                        ctx.deopt(self, pc, wb);
                         break;
                     }
                 }
@@ -1285,7 +1300,8 @@ impl Codegen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
-                    ctx.clear_write_back();
+                    let wb = ctx.get_write_back();
+                    ctx.clear_write_back(wb);
                     continue;
                 }
                 BcOp1::ConcatStr(ret, arg, len) => {
@@ -1350,9 +1366,10 @@ impl Codegen {
                     continue;
                 }
                 BcOp1::CondBr(cond_, disp, false, kind) => {
-                    ctx.push(TIr::CondBr(cond_, disp, false, ctx.get_write_back(), kind));
+                    let wb = ctx.get_write_back();
+                    ctx.push(TIr::CondBr(cond_, disp, false, wb.clone(), kind));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    let branch_dest = ctx.get_branch_dest(self, dest);
+                    let branch_dest = ctx.get_branch_dest(self, dest, wb);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
@@ -1388,13 +1405,15 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back(), brkind));
+                        let wb = ctx.get_write_back();
+                        ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
                         self.gen_cmp_float_opt(
                             kind,
                             dest,
                             generic,
                             brkind == BrKind::BrIf,
                             &mut ctx,
+                            wb,
                         );
                     } else {
                         let kind = match pc.op1() {
@@ -1410,11 +1429,19 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        ctx.push(TIr::CondBr(cond_, disp, true, ctx.get_write_back(), brkind));
+                        let wb = ctx.get_write_back();
+                        ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
                         monoasm! { self.jit,
                             cmpq rdi, rsi;
                         };
-                        self.gen_cmp_int_opt(kind, dest, generic, brkind == BrKind::BrIf, &mut ctx);
+                        self.gen_cmp_int_opt(
+                            kind,
+                            dest,
+                            generic,
+                            brkind == BrKind::BrIf,
+                            &mut ctx,
+                            wb,
+                        );
                     }
                 }
             }
@@ -1632,14 +1659,15 @@ impl Codegen {
         generic: DestLabel,
         switch: bool,
         ctx: &mut BBContext,
+        v: Vec<u16>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_int_eq(dest, generic, switch, ctx),
-            CmpKind::Ne => self.cmp_opt_int_ne(dest, generic, switch, ctx),
-            CmpKind::Ge => self.cmp_opt_int_ge(dest, generic, switch, ctx),
-            CmpKind::Gt => self.cmp_opt_int_gt(dest, generic, switch, ctx),
-            CmpKind::Le => self.cmp_opt_int_le(dest, generic, switch, ctx),
-            CmpKind::Lt => self.cmp_opt_int_lt(dest, generic, switch, ctx),
+            CmpKind::Eq => self.cmp_opt_int_eq(dest, generic, switch, ctx, v),
+            CmpKind::Ne => self.cmp_opt_int_ne(dest, generic, switch, ctx, v),
+            CmpKind::Ge => self.cmp_opt_int_ge(dest, generic, switch, ctx, v),
+            CmpKind::Gt => self.cmp_opt_int_gt(dest, generic, switch, ctx, v),
+            CmpKind::Le => self.cmp_opt_int_le(dest, generic, switch, ctx, v),
+            CmpKind::Lt => self.cmp_opt_int_lt(dest, generic, switch, ctx, v),
             _ => unimplemented!(),
         }
     }
@@ -1651,14 +1679,15 @@ impl Codegen {
         generic: DestLabel,
         switch: bool,
         ctx: &mut BBContext,
+        v: Vec<u16>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_float_eq(dest, generic, switch, ctx),
-            CmpKind::Ne => self.cmp_opt_float_ne(dest, generic, switch, ctx),
-            CmpKind::Ge => self.cmp_opt_float_ge(dest, generic, switch, ctx),
-            CmpKind::Gt => self.cmp_opt_float_gt(dest, generic, switch, ctx),
-            CmpKind::Le => self.cmp_opt_float_le(dest, generic, switch, ctx),
-            CmpKind::Lt => self.cmp_opt_float_lt(dest, generic, switch, ctx),
+            CmpKind::Eq => self.cmp_opt_float_eq(dest, generic, switch, ctx, v),
+            CmpKind::Ne => self.cmp_opt_float_ne(dest, generic, switch, ctx, v),
+            CmpKind::Ge => self.cmp_opt_float_ge(dest, generic, switch, ctx, v),
+            CmpKind::Gt => self.cmp_opt_float_gt(dest, generic, switch, ctx, v),
+            CmpKind::Le => self.cmp_opt_float_le(dest, generic, switch, ctx, v),
+            CmpKind::Lt => self.cmp_opt_float_lt(dest, generic, switch, ctx, v),
             _ => unimplemented!(),
         }
     }

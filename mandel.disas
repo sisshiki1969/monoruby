@@ -326,16 +326,26 @@
  L4c5:   or     rdi,0x1
  L4c9:   mov    QWORD PTR [rbp-0x98],rdi
 
-
+:00069 %18 = %11
  L4d0:   mov    rax,QWORD PTR [rbp-0x68]
  L4d4:   mov    QWORD PTR [rbp-0xa0],rax
+
+:00070 condbr %18 =>:00073
  L4db:   mov    rax,QWORD PTR [rbp-0xa0]
  L4e2:   or     rax,0x10
  L4e6:   cmp    rax,0x14
  L4ea:   jne    0xfffbc5db
+
+:00071 %18 = 1: i32
  L4f0:   mov    QWORD PTR [rbp-0xa0],0x3
+
+:00072 br =>:00074
  L4fb:   jmp    0x50b
+
+:00073 %18 = 0: i32
  L500:   mov    QWORD PTR [rbp-0xa0],0x1
+
+:00074 %2 = %17 | %18                       [Integer][Integer]
  L50b:   mov    rdi,QWORD PTR [rbp-0x98]
  L512:   mov    rsi,QWORD PTR [rbp-0xa0]
  L519:   test   rdi,0x1
@@ -344,6 +354,8 @@
  L52d:   je     0xfffbc5e0
  L533:   or     rdi,rsi
  L536:   mov    QWORD PTR [rbp-0x20],rdi
+
+:00075 %3 = %3 + 1: i16                     [Integer][Integer]
  L53a:   mov    rdi,QWORD PTR [rbp-0x28]
  L53e:   mov    rsi,0x3
  L545:   test   rdi,0x1
@@ -355,6 +367,8 @@
  L566:   add    rax,rsi
  L569:   jo     0xfffbc612
  L56f:   mov    QWORD PTR [rbp-0x28],rax
+
+:00076 %17 = %3 == 8: i16                   [Integer][Integer]
  L573:   mov    rdi,QWORD PTR [rbp-0x28]
  L577:   mov    rsi,0x11
  L57e:   test   rdi,0x1
@@ -365,10 +379,14 @@
  L595:   shl    rax,0x3
  L599:   or     rax,0x14
  L59d:   mov    QWORD PTR [rbp-0x98],rax
+
+:00077 condbr %17 =>:00093
  L5a4:   mov    rax,QWORD PTR [rbp-0x98]
  L5ab:   or     rax,0x10
  L5af:   cmp    rax,0x14
  L5b3:   jne    0xfffbc65d
+
+:00078 %17 = %6 == %4 
  L5b9:   mov    rdi,QWORD PTR [rbp-0x40]
  L5bd:   mov    rsi,QWORD PTR [rbp-0x30]
  L5c1:   test   rdi,0x1
@@ -381,11 +399,17 @@
  L5e5:   shl    rax,0x3
  L5e9:   or     rax,0x14
  L5ed:   mov    QWORD PTR [rbp-0x98],rax
+
+:00079 condbr %17 =>:00081
  L5f4:   mov    rax,QWORD PTR [rbp-0x98]
  L5fb:   or     rax,0x10
  L5ff:   cmp    rax,0x14
  L603:   jne    0xfffbc67b
+
+:00080 br =>:00092
  L609:   jmp    0x78e
+
+:00081 %17 = 8: i16 - %3                    [Integer][Integer]
  L60e:   mov    rdi,0x11
  L615:   mov    rsi,QWORD PTR [rbp-0x28]
  L619:   test   rdi,0x1

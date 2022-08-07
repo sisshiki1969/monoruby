@@ -595,10 +595,9 @@ impl IrContext {
                     } => {
                         assert!(!toplevel);
                         let name = id_store.get_ident_id(name);
-                        let src = info.next_reg();
                         let lhs_loc = lhs.loc;
-                        self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
-                        self.gen_store_const(src.into(), name, lhs_loc);
+                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                        self.gen_store_const(src, name, lhs_loc);
                     }
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
                 };
