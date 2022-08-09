@@ -225,7 +225,7 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (find_method);
             jmp  rax;
-            vm_return:
+        vm_return:
             // check call_kind.
             //movl r15, [rbp - 8];
             //testq r15, r15;
@@ -241,7 +241,7 @@ impl Codegen {
             call rax;
             // restore return value
             movq rax, r15;
-            jit_return:
+        jit_return:
             leave;
             ret;
         div_by_zero:

@@ -416,6 +416,16 @@ impl Value {
         }
     }
 
+    pub(crate) fn as_array(&self) -> Option<&Vec<Value>> {
+        match self.try_rvalue() {
+            None => None,
+            Some(rvalue) => match &rvalue.kind {
+                ObjKind::Array(v) => Some(v),
+                _ => None,
+            },
+        }
+    }
+
     pub(crate) fn as_class(&self) -> ClassId {
         match self.unpack() {
             RV::Object(rv) => match rv.kind {

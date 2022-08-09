@@ -961,6 +961,7 @@ impl Codegen {
                         movq rsi, r12; // &mut Globals
                         movq rax, (get_index);
                         call rax;
+                        movq r13, ((pc + 1).0);
                         testq rax, rax;
                         jeq  jit_return;
                     };
@@ -980,6 +981,7 @@ impl Codegen {
                         movq rsi, r12; // &mut Globals
                         movq rax, (set_index);
                         call rax;
+                        movq r13, ((pc + 1).0);
                         testq rax, rax;
                         jeq  jit_return;
                     };
@@ -1009,6 +1011,7 @@ impl Codegen {
                         movq rsi, r12;  // &mut Globals
                         movq rax, (get_constant);
                         call rax;
+                        movq r13, ((pc + 1).0);
                         testq rax, rax;
                         jeq  jit_return;
                         movq [rip + cached_value], rax;
@@ -1330,12 +1333,11 @@ impl Codegen {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);
 
-                    let pc = std::mem::take(&mut self.opt_buf).unwrap();
-                    match pc.op1() {
+                    match std::mem::take(&mut self.opt_buf).unwrap().op1() {
                         BcOp1::MethodCall(ret, name) => {
                             ctx.push(TIr::MethodCall(ret, name, recv, args, len));
                             ctx.dealloc_xmm(ret);
-                            self.jit_method_call(recv, name, ret, args, len, &ctx);
+                            self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
                         }
                         _ => unreachable!(),
                     }
@@ -1552,39 +1554,39 @@ impl Codegen {
         );
     }
 
-    fn gen_binop_kind(&mut self, ctx: &BBContext, op: BcPc, kind: BinOpK, ret: SlotId) {
+    fn gen_binop_kind(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, ret: SlotId) {
         match kind {
-            BinOpK::Add => match op.classid1() {
+            BinOpK::Add => match pc.classid1() {
                 INTEGER_CLASS => {
                     let generic = self.jit.label();
                     self.guard_rdi_rsi_fixnum(generic);
-                    self.gen_add(generic, ret, &ctx);
+                    self.gen_add(generic, ret, &ctx, pc + 1);
                 }
-                _ => self.generic_binop(ret, add_values as _, &ctx),
+                _ => self.generic_binop(ret, add_values as _, &ctx, pc + 1),
             },
-            BinOpK::Sub => match op.classid1() {
+            BinOpK::Sub => match pc.classid1() {
                 INTEGER_CLASS => {
                     let generic = self.jit.label();
                     self.guard_rdi_rsi_fixnum(generic);
-                    self.gen_sub(generic, ret, &ctx);
+                    self.gen_sub(generic, ret, &ctx, pc + 1);
                 }
-                _ => self.generic_binop(ret, sub_values as _, &ctx),
+                _ => self.generic_binop(ret, sub_values as _, &ctx, pc + 1),
             },
             BinOpK::Mul => {
-                self.generic_binop(ret, mul_values as _, &ctx);
+                self.generic_binop(ret, mul_values as _, &ctx, pc + 1);
             }
             BinOpK::Div => {
-                self.generic_binop(ret, div_values as _, &ctx);
+                self.generic_binop(ret, div_values as _, &ctx, pc + 1);
             }
             _ => {
                 let generic = self.jit.label();
                 self.guard_rdi_rsi_fixnum(generic);
                 match kind {
-                    BinOpK::BitOr => self.gen_bit_or(generic, ret, &ctx),
-                    BinOpK::BitAnd => self.gen_bit_and(generic, ret, &ctx),
-                    BinOpK::BitXor => self.gen_bit_xor(generic, ret, &ctx),
-                    BinOpK::Shr => self.gen_shr(generic, ret, &ctx),
-                    BinOpK::Shl => self.gen_shl(generic, ret, &ctx),
+                    BinOpK::BitOr => self.gen_bit_or(generic, ret, &ctx, pc + 1),
+                    BinOpK::BitAnd => self.gen_bit_and(generic, ret, &ctx, pc + 1),
+                    BinOpK::BitXor => self.gen_bit_xor(generic, ret, &ctx, pc + 1),
+                    BinOpK::Shr => self.gen_shr(generic, ret, &ctx, pc + 1),
+                    BinOpK::Shl => self.gen_shl(generic, ret, &ctx, pc + 1),
                     _ => unimplemented!(),
                 }
             }
@@ -1692,7 +1694,7 @@ impl Codegen {
         }
     }
 
-    fn gen_add(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_add(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1701,10 +1703,10 @@ impl Codegen {
             jo generic;
         );
         self.store_rax(ret);
-        self.side_generic_op(generic, ret, add_values as _, &ctx);
+        self.side_generic_op(generic, ret, add_values as _, &ctx, pc);
     }
 
-    fn gen_sub(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_sub(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         monoasm!(self.jit,
             // fastpath
             movq rax, rdi;
@@ -1713,35 +1715,35 @@ impl Codegen {
             addq rax, 1;
         );
         self.store_rax(ret);
-        self.side_generic_op(generic, ret, sub_values as _, &ctx);
+        self.side_generic_op(generic, ret, sub_values as _, &ctx, pc);
     }
 
-    fn gen_bit_or(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_bit_or(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         monoasm!(self.jit,
             // fastpath
             orq rdi, rsi;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitor_values as _, &ctx);
+        self.side_generic_op(generic, ret, bitor_values as _, &ctx, pc);
     }
 
-    fn gen_bit_and(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_bit_and(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         monoasm!(self.jit,
             // fastpath
             andq rdi, rsi;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitand_values as _, &ctx);
+        self.side_generic_op(generic, ret, bitand_values as _, &ctx, pc);
     }
 
-    fn gen_bit_xor(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_bit_xor(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         monoasm!(self.jit,
             // fastpath
             xorq rdi, rsi;
             addq rdi, 1;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, bitxor_values as _, &ctx);
+        self.side_generic_op(generic, ret, bitxor_values as _, &ctx, pc);
     }
 
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
@@ -1761,7 +1763,7 @@ impl Codegen {
         self.jit.select(0);
     }
 
-    fn gen_shr(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_shr(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1777,7 +1779,7 @@ impl Codegen {
             orq rdi, 1;
         );
         self.store_rdi(ret);
-        self.side_generic_op(generic, ret, shr_values as _, &ctx);
+        self.side_generic_op(generic, ret, shr_values as _, &ctx, pc);
         self.jit.select(1);
         monoasm!(self.jit,
         shl:
@@ -1793,7 +1795,7 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn gen_shl(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_shl(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
@@ -1812,7 +1814,7 @@ impl Codegen {
         );
         self.store_rdi(ret);
 
-        self.side_generic_op(generic, ret, shl_values as _, &ctx);
+        self.side_generic_op(generic, ret, shl_values as _, &ctx, pc);
         self.jit.select(1);
         monoasm!(self.jit,
         shr:
@@ -1826,21 +1828,31 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn side_generic_op(&mut self, generic: DestLabel, ret: SlotId, func: u64, ctx: &BBContext) {
+    fn side_generic_op(
+        &mut self,
+        generic: DestLabel,
+        ret: SlotId,
+        func: u64,
+        ctx: &BBContext,
+        pc: BcPc,
+    ) {
         let exit = self.jit.label();
         self.jit.bind_label(exit);
         self.jit.select(1);
         self.jit.bind_label(generic);
-        self.generic_binop(ret, func, ctx);
+        self.generic_binop(ret, func, ctx, pc);
         monoasm!(self.jit,
             jmp  exit;
         );
         self.jit.select(0);
     }
 
-    fn generic_binop(&mut self, ret: SlotId, func: u64, ctx: &BBContext) {
+    fn generic_binop(&mut self, ret: SlotId, func: u64, ctx: &BBContext, pc: BcPc) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq r13, (pc.0);
+        );
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.store_rax(ret);
@@ -1854,6 +1866,7 @@ impl Codegen {
         args: SlotId,
         len: u16,
         ctx: &BBContext,
+        pc: BcPc,
     ) {
         // set arguments to a callee stack.
         //
@@ -1934,6 +1947,7 @@ impl Codegen {
         );
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
+            movq r13, (pc.0);
             testq rax, rax;
             jeq entry_return;
         );
@@ -1950,6 +1964,7 @@ impl Codegen {
             movq r8, [rbp - (conv(recv))]; // receiver: Value
             call entry_find_method;
             // absolute address was returned to rax.
+            movq r13, (pc.0);
             testq rax, rax;
             jeq entry_return;
 

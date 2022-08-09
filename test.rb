@@ -1,7 +1,13 @@
-a = 2.3
-for i in 0..20
-  if i==18
-    a = "42"
+def f
+  dump
+  4/0
+end
+
+for i in 1..50
+  puts i
+  if i==30
+    ACT
+  else
+    [1,2,3][2]
   end
-  puts "#{i}, #{a + a}"
 end

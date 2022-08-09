@@ -1,5 +1,6 @@
 use super::*;
 
+mod array;
 mod class;
 mod file;
 mod integer;
@@ -65,6 +66,7 @@ pub fn init_builtins(globals: &mut Globals) {
     integer::init(globals);
     class::init(globals);
     string::init(globals);
+    array::init(globals);
     time::init(globals);
     file::init(globals, file_class);
 }

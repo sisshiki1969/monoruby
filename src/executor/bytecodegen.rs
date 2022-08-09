@@ -55,8 +55,16 @@ impl std::ops::Sub<BcPc> for BcPc {
     type Output = usize;
     fn sub(self, rhs: BcPc) -> usize {
         let offset = unsafe { self.0.offset_from(rhs.0) };
-        assert!(offset >= 0);
+        assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
+        eprintln!("offset:{:05}", offset);
         offset as usize
+    }
+}
+
+impl std::ops::Add<isize> for BcPc {
+    type Output = BcPc;
+    fn add(self, rhs: isize) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs) })
     }
 }
 

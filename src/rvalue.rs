@@ -192,5 +192,4 @@ pub enum ObjKind {
     Time(TimeInfo),
     Invalid,
     Array(Vec<Value>),
-    //Dummy(u64, u64, u64, u64, u64),
 }
