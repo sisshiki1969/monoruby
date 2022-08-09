@@ -56,7 +56,6 @@ impl std::ops::Sub<BcPc> for BcPc {
     fn sub(self, rhs: BcPc) -> usize {
         let offset = unsafe { self.0.offset_from(rhs.0) };
         assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
-        eprintln!("offset:{:05}", offset);
         offset as usize
     }
 }

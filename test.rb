@@ -6,7 +6,7 @@ end
 for i in 1..50
   puts i
   if i==30
-    ACT
+    [1,2,3]+5
   else
     [1,2,3][2]
   end
