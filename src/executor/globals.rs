@@ -85,6 +85,9 @@ impl Globals {
         self.set_error(MonorubyErr::uninitialized_constant(name));
     }
 
+    ///
+    /// Set RangeError with message "*val* out of char range".
+    ///
     pub fn err_char_out_of_range(&mut self, val: Value) {
         self.set_error(MonorubyErr::range(format!(
             "{} out of char range",
@@ -92,6 +95,9 @@ impl Globals {
         )));
     }
 
+    ///
+    /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
+    ///
     pub fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
@@ -100,6 +106,9 @@ impl Globals {
         )));
     }
 
+    ///
+    /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
+    ///
     pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
         self.set_error(MonorubyErr::indexerr(format!(
             " index {} too small for array; minimum: {}",

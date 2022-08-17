@@ -1,4 +1,5 @@
 use super::*;
+use std::pin::Pin;
 
 ///
 /// ID of function.
@@ -437,7 +438,7 @@ pub(crate) struct NormalFuncInfo {
     pub(crate) id: FuncId,
     name: Option<String>,
     /// Bytecode.
-    pub(super) bytecode: Box<[Bc]>,
+    pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
@@ -464,7 +465,7 @@ impl NormalFuncInfo {
         let mut info = NormalFuncInfo {
             id,
             name,
-            bytecode: Box::new([]),
+            bytecode: None,
             sourcemap: vec![],
             args: args.clone(),
             locals: HashMap::default(),
@@ -481,7 +482,7 @@ impl NormalFuncInfo {
 
     /// set bytecode.
     pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
-        self.bytecode = bc.into_boxed_slice();
+        self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
     /// get bytecode address.
@@ -502,12 +503,12 @@ impl NormalFuncInfo {
 
     /// get bytecode.
     pub(crate) fn bytecode(&self) -> &[Bc] {
-        &self.bytecode
+        &self.bytecode.as_ref().unwrap()
     }
 
     /// get bytecode address.
     pub(crate) fn bytecode_top(&self) -> *const Bc {
-        self.bytecode.as_ptr()
+        self.bytecode().as_ptr()
     }
 
     /// get the next register id.
@@ -608,7 +609,7 @@ impl NormalFuncInfo {
         );
         let mut buf = None;
         let mut skip = false;
-        for (i, pc) in self.bytecode.iter().enumerate() {
+        for (i, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
                 skip = false;

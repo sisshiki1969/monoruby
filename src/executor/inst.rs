@@ -121,6 +121,14 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
+    pub(crate) fn is_integer1(&self) -> bool {
+        self.classid1() == INTEGER_CLASS
+    }
+
+    pub(crate) fn is_integer2(&self) -> bool {
+        self.classid2() == INTEGER_CLASS
+    }
+
     pub(crate) fn is_float1(&self) -> bool {
         self.classid1() == FLOAT_CLASS
     }
@@ -129,8 +137,16 @@ impl Bc {
         self.classid2() == FLOAT_CLASS
     }
 
+    pub(crate) fn is_binary_integer(&self) -> bool {
+        self.classid1() == INTEGER_CLASS && self.classid2() == INTEGER_CLASS
+    }
+
     pub(crate) fn is_binary_float(&self) -> bool {
-        self.classid1() == FLOAT_CLASS || self.classid2() == FLOAT_CLASS
+        match (self.classid1(), self.classid2()) {
+            (INTEGER_CLASS, INTEGER_CLASS) => false,
+            (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,
+            _ => false,
+        }
     }
 }
 
@@ -383,7 +399,7 @@ impl BcOp1 {
                 ),
                 14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
-                _ => unreachable!(),
+                _ => unreachable!("{:016x}", op),
             }
         } else {
             let (op1, op2, op3) = dec_www(op);
@@ -442,7 +458,7 @@ impl BcOp1 {
                     SlotId::new(op2),
                     op3 as i16,
                 ),
-                _ => unreachable!(),
+                _ => unreachable!("{:016x}", op),
             }
         }
     }

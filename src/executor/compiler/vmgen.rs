@@ -696,7 +696,7 @@ impl Codegen {
                 jmp rax;
             count:
                 addl [r13 - 16], 1;
-                cmpl [r13 - 16], 10;
+                cmpl [r13 - 16], 5;
                 jae   compile;
             };
         };

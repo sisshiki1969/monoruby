@@ -187,12 +187,27 @@ fn run_repl(
 }
 
 pub fn run_test(code: &str) {
-    #[cfg(debug_assertions)]
-    dbg!(code);
-    let mut globals = Globals::new(1, false);
-    let interp_val = run_test_main(&mut globals, code);
-    let all_codes = vec![code.to_string()];
-    let ruby_res = run_ruby(&all_codes, &mut globals);
+    let wrapped = format!(
+        r##"
+        res = ({0})
+        for __i in 0..15 do
+            res2 = ({0})
+            __assert(res, res2)
+        end
+        res
+    "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let interp_val = run_test_main(&wrapped);
+    let ruby_res = run_ruby(code);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
+pub fn run_test2(code: &str) {
+    let interp_val = run_test_main(code);
+    let ruby_res = run_ruby(code);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -200,61 +215,56 @@ pub fn run_test(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let mut globals = Globals::new(1, false);
-    run_test_main(&mut globals, code)
+    run_test_main(code)
 }
 
-pub fn run_test_main(globals: &mut Globals, code: &str) -> Value {
-    globals
-        .compile_script(code.to_string(), std::path::Path::new(""))
-        .unwrap_or_else(|err| {
-            err.show_all_loc();
-            panic!("Error in compiling AST. {:?}", err)
-        });
+pub fn run_test_main(code: &str) -> Value {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
-    #[cfg(not(debug_assertions))]
-    eprintln!("interp: {:?} elapsed:{:?}", interp_val, now.elapsed());
-    #[cfg(debug_assertions)]
-    eprintln!("interp: {:?}", interp_val);
-
-    let jit_val = Interp::eval_toplevel(globals, true);
-
-    let interp_val = interp_val.unwrap();
+    let jit_val = Interp::eval_toplevel(&mut new_globals(code), false);
     let jit_val = jit_val.unwrap();
+    #[cfg(not(debug_assertions))]
+    eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("jit: {:?}", jit_val);
 
-    assert!(Value::eq(interp_val, jit_val));
-    jit_val
+    let aot_val = Interp::eval_toplevel(&mut new_globals(code), true);
+    let aot_val = aot_val.unwrap();
+    #[cfg(debug_assertions)]
+    eprintln!("aot: {:?}", aot_val);
+
+    assert!(Value::eq(jit_val, aot_val));
+    aot_val
 }
 
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
+    let jit_val = Interp::eval_toplevel(&mut new_globals(code), false);
+    eprintln!("interp: {:?}", jit_val);
+
+    let aot_val = Interp::eval_toplevel(&mut new_globals(code), true);
+    eprintln!("aot: {:?}", aot_val);
+
+    eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
+    eprintln!("Error in AOT. {:?}", aot_val.unwrap_err());
+}
+
+fn new_globals(code: &str) -> Globals {
     let mut globals = Globals::new(1, false);
     match globals.compile_script(code.to_string(), std::path::Path::new("")) {
         Ok(_) => {}
         Err(err) => {
             err.show_all_loc();
-            eprintln!("Error in compiling AST. {:?}", err);
-            return;
+            panic!("Error in compiling AST. {:?}", err);
         }
     };
-    let interp_val = Interp::eval_toplevel(&mut globals.clone(), false);
-    eprintln!("interp: {:?}", interp_val);
-
-    let jit_val = Interp::eval_toplevel(&mut globals, true);
-    eprintln!("jit: {:?}", jit_val);
-
-    eprintln!("Error in VM. {:?}", interp_val.unwrap_err());
-    eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
+    globals
 }
 
-fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
+fn run_ruby(code: &str) -> Value {
     use std::process::Command;
-    let code = code.join(";");
+    let mut globals = new_globals(code);
     let mut tmp_file = NamedTempFile::new().unwrap();
     tmp_file
         .write_all(
@@ -284,14 +294,14 @@ fn run_ruby(code: &Vec<String>, globals: &mut Globals) -> Value {
                 .unwrap()
                 .node;
 
-            Value::from_ast(&nodes, globals)
+            Value::from_ast(&nodes, &mut globals)
         }
         Err(err) => {
             panic!("Error occured in executing Ruby. {:?}", err);
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", res.to_s(&globals));
+    eprintln!("ruby: {}", res.inspect(&globals));
     res
 }
 
@@ -385,7 +395,7 @@ mod test {
     }
 
     #[test]
-    #[ignore]
+    //#[ignore]
     fn test_call() {
         run_test("print 1"); // max number of 63bit signed int.
     }
@@ -453,7 +463,7 @@ mod test {
             r##"
         def f(x)
             if x < 2
-                dump
+                __dump
                 1
             else
                 x*f(x-1)
@@ -466,7 +476,7 @@ mod test {
 
     #[test]
     fn test_fibpoly() {
-        run_test(
+        run_test2(
             r#"
             def fib(x)
                 if x<3 then
@@ -482,7 +492,7 @@ mod test {
 
     #[test]
     fn bench_factorialpoly() {
-        run_test(
+        run_test2(
             r#"
             def fact(x)
                 if x <= 1.0 then
@@ -499,7 +509,7 @@ mod test {
     #[test]
     #[ignore]
     fn bench_fibo() {
-        run_test(
+        run_test2(
             r#"
             def fib(x)
                 if x<3 then
@@ -516,7 +526,7 @@ mod test {
     #[test]
     #[ignore]
     fn bench_factorial() {
-        run_test(
+        run_test2(
             r#"
             def fact(x)
                 if x <= 1 then
@@ -532,8 +542,8 @@ mod test {
 
     #[test]
     #[ignore]
-    fn bench_while() {
-        run_test(
+    fn bench_while2() {
+        run_test2(
             r#"
             i = 0
             while i < 1000000000
@@ -547,7 +557,7 @@ mod test {
     #[test]
     #[ignore]
     fn bench_for() {
-        run_test(
+        run_test2(
             r#"
             j = 0
             for i in 0..1000000000
@@ -561,7 +571,7 @@ mod test {
     #[test]
     #[ignore]
     fn bench_redefine() {
-        run_test(
+        run_test2(
             r#"
             def f; 1; end
             a = 0; i = 0
@@ -581,7 +591,7 @@ mod test {
     fn test_while1() {
         run_test(
             r#"
-            a=1
+            a=1;
             b=while a<2500 do
                 a=a+1
             end
@@ -736,7 +746,7 @@ mod test {
         end
         a = 0
         i = 0
-        while i < 1000000
+        while i < 10000
           a = a + f()
           if i == 500
             def f

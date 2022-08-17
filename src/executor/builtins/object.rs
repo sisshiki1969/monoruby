@@ -7,8 +7,8 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "assert", assert, 2);
-    globals.define_builtin_func(OBJECT_CLASS, "dump", dump, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
@@ -53,7 +53,7 @@ extern "C" fn assert(
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
-    assert_eq!(expected, actual);
+    assert!(Value::eq(expected, actual));
     Some(Value::nil())
 }
 
@@ -143,10 +143,10 @@ mod test {
 
     #[test]
     fn test_builtin() {
-        run_test(":sym.class");
-        run_test("5.class");
-        run_test("5.7.class");
-        run_test("'windows'.class");
+        run_test(":sym.class.to_s");
+        run_test("5.class.to_s");
+        run_test("5.7.class.to_s");
+        run_test("'windows'.class.to_s");
         run_test("puts 100");
         run_test("print '100'");
         run_test("nil.respond_to?(:foo)");

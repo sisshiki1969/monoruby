@@ -84,7 +84,7 @@ mod test {
         run_test(
             "
             before = Time.now
-            (Time.now - before).class",
+            (Time.now - before).class.to_s",
         );
     }
 }

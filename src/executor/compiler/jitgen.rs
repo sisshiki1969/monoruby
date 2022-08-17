@@ -819,6 +819,12 @@ macro_rules! cmp_opt_main {
     };
 }
 
+enum BinOpMode {
+    RR,
+    RI,
+    IR,
+}
+
 impl Codegen {
     cmp_opt_main!((eq, eq), (ne, ne), (a, gt), (b, lt), (ae, ge), (be, le));
     cmp_main!(eq, ne, lt, le, gt, ge);
@@ -834,7 +840,7 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         {
             eprintln!(
-                "--> start {} compile: {} {:?} start:[{:05}]",
+                "--> start {} compile: {} {:?} start:[{:05}] bytecode:{:?}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -845,7 +851,8 @@ impl Codegen {
                     None => "<unnamed>",
                 },
                 func.id,
-                start_pos
+                start_pos,
+                func.bytecode().as_ptr(),
             );
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -1064,7 +1071,14 @@ impl Codegen {
                     }
                 }
                 BcOp1::BinOp(kind, ret, lhs, rhs) => {
-                    if pc.is_binary_float() {
+                    if pc.is_binary_integer() {
+                        ctx.read_slot(self, lhs);
+                        ctx.read_slot(self, rhs);
+                        ctx.dealloc_xmm(ret);
+                        ctx.push(TIr::BinOp(kind, ret, lhs, rhs, pc.classid1()));
+                        self.load_binary_args(lhs, rhs);
+                        self.gen_binop_integer(&ctx, pc, kind, ret, BinOpMode::RR);
+                    } else if pc.is_binary_float() {
                         let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         ctx.push(TIr::FBinOp(kind, fret, flhs, frhs));
@@ -1088,7 +1102,7 @@ impl Codegen {
                                     let div_by_zero = self.div_by_zero;
                                     monoasm!(self.jit,
                                         movq  rax, xmm(ret);
-                                        cmpq  rax, 0;
+                                        testq  rax, rax;
                                         jeq   div_by_zero;
                                         movq  xmm0, xmm(lhs);
                                         divsd xmm0, xmm(ret);
@@ -1134,7 +1148,16 @@ impl Codegen {
                 }
 
                 BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
-                    if pc.is_float1() {
+                    if pc.is_integer1() {
+                        ctx.read_slot(self, lhs);
+                        ctx.dealloc_xmm(ret);
+                        ctx.push(TIr::BinOpRi(kind, ret, lhs, rhs, pc.classid1()));
+                        monoasm!(self.jit,
+                            movq rdi, [rbp - (conv(lhs))];
+                            movq rsi, (Value::int32(rhs as i32).get());
+                        );
+                        self.gen_binop_integer(&ctx, pc, kind, ret, BinOpMode::RI);
+                    } else if pc.is_float1() {
                         let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
                         let fret = ctx.xmm_write(ret);
                         ctx.push(TIr::FBinOpRf(kind, fret, flhs, rhs as f64));
@@ -1177,7 +1200,16 @@ impl Codegen {
                 }
 
                 BcOp1::BinOpIr(kind, ret, lhs, rhs) => {
-                    if pc.is_float2() {
+                    if pc.is_integer2() {
+                        ctx.read_slot(self, rhs);
+                        ctx.dealloc_xmm(ret);
+                        ctx.push(TIr::BinOpIr(kind, ret, lhs, rhs, pc.classid1()));
+                        monoasm!(self.jit,
+                            movq rdi, (Value::int32(lhs as i32).get());
+                            movq rsi, [rbp - (conv(rhs))];
+                        );
+                        self.gen_binop_integer(&ctx, pc, kind, ret, BinOpMode::IR);
+                    } else if pc.is_float2() {
                         let frhs = ctx.xmm_read_assume_float(self, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         ctx.push(TIr::FBinOpFr(kind, fret as u16, lhs as f64, frhs as u16));
@@ -1530,6 +1562,9 @@ impl Codegen {
 
     fn xmm_save(&mut self, xmm_using: &Vec<usize>) {
         let len = xmm_using.len();
+        if len == 0 {
+            return;
+        }
         let sp_offset = (len + len % 2) * 8;
         monoasm!(self.jit,
             subq rsp, (sp_offset);
@@ -1543,6 +1578,9 @@ impl Codegen {
 
     fn xmm_restore(&mut self, xmm_using: &Vec<usize>) {
         let len = xmm_using.len();
+        if len == 0 {
+            return;
+        }
         let sp_offset = (len + len % 2) * 8;
         for (i, freg) in xmm_using.iter().enumerate() {
             monoasm!(self.jit,
@@ -1554,24 +1592,33 @@ impl Codegen {
         );
     }
 
-    fn gen_binop_kind(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, ret: SlotId) {
+    fn guard_binary_fixnum_with_mode(&mut self, generic: DestLabel, mode: BinOpMode) {
+        match mode {
+            BinOpMode::RR => self.guard_rdi_rsi_fixnum(generic),
+            BinOpMode::RI => self.guard_rdi_fixnum(generic),
+            BinOpMode::IR => self.guard_rsi_fixnum(generic),
+        }
+    }
+
+    fn gen_binop_integer(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        kind: BinOpK,
+        ret: SlotId,
+        mode: BinOpMode,
+    ) {
         match kind {
-            BinOpK::Add => match pc.classid1() {
-                INTEGER_CLASS => {
-                    let generic = self.jit.label();
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.gen_add(generic, ret, &ctx, pc + 1);
-                }
-                _ => self.generic_binop(ret, add_values as _, &ctx, pc + 1),
-            },
-            BinOpK::Sub => match pc.classid1() {
-                INTEGER_CLASS => {
-                    let generic = self.jit.label();
-                    self.guard_rdi_rsi_fixnum(generic);
-                    self.gen_sub(generic, ret, &ctx, pc + 1);
-                }
-                _ => self.generic_binop(ret, sub_values as _, &ctx, pc + 1),
-            },
+            BinOpK::Add => {
+                let generic = self.jit.label();
+                self.guard_binary_fixnum_with_mode(generic, mode);
+                self.gen_add(generic, ret, &ctx, pc + 1);
+            }
+            BinOpK::Sub => {
+                let generic = self.jit.label();
+                self.guard_binary_fixnum_with_mode(generic, mode);
+                self.gen_sub(generic, ret, &ctx, pc + 1);
+            }
             BinOpK::Mul => {
                 self.generic_binop(ret, mul_values as _, &ctx, pc + 1);
             }
@@ -1580,7 +1627,7 @@ impl Codegen {
             }
             _ => {
                 let generic = self.jit.label();
-                self.guard_rdi_rsi_fixnum(generic);
+                self.guard_binary_fixnum_with_mode(generic, mode);
                 match kind {
                     BinOpK::BitOr => self.gen_bit_or(generic, ret, &ctx, pc + 1),
                     BinOpK::BitAnd => self.gen_bit_and(generic, ret, &ctx, pc + 1),
@@ -1589,6 +1636,54 @@ impl Codegen {
                     BinOpK::Shl => self.gen_shl(generic, ret, &ctx, pc + 1),
                     _ => unimplemented!(),
                 }
+            }
+        }
+    }
+
+    fn gen_add(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
+        monoasm!(self.jit,
+            // fastpath
+            movq rax, rdi;
+            subq rax, 1;
+            addq rax, rsi;
+            jo generic;
+        );
+        self.store_rax(ret);
+        self.side_generic_op(generic, ret, add_values as _, &ctx, pc);
+    }
+
+    fn gen_sub(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
+        monoasm!(self.jit,
+            // fastpath
+            movq rax, rdi;
+            subq rax, rsi;
+            jo generic;
+            addq rax, 1;
+        );
+        self.store_rax(ret);
+        self.side_generic_op(generic, ret, sub_values as _, &ctx, pc);
+    }
+
+    fn gen_binop_kind(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, ret: SlotId) {
+        match kind {
+            BinOpK::Add => self.generic_binop(ret, add_values as _, &ctx, pc + 1),
+            BinOpK::Sub => self.generic_binop(ret, sub_values as _, &ctx, pc + 1),
+            BinOpK::Mul => self.generic_binop(ret, mul_values as _, &ctx, pc + 1),
+            BinOpK::Div => self.generic_binop(ret, div_values as _, &ctx, pc + 1),
+            _ => {
+                self.generic_binop(
+                    ret,
+                    match kind {
+                        BinOpK::BitOr => bitor_values,
+                        BinOpK::BitAnd => bitand_values,
+                        BinOpK::BitXor => bitxor_values,
+                        BinOpK::Shr => shr_values,
+                        BinOpK::Shl => shl_values,
+                        _ => unimplemented!(),
+                    } as _,
+                    &ctx,
+                    pc + 1,
+                );
             }
         }
     }
@@ -1692,30 +1787,6 @@ impl Codegen {
             CmpKind::Lt => self.cmp_opt_float_lt(dest, generic, switch, ctx, v),
             _ => unimplemented!(),
         }
-    }
-
-    fn gen_add(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
-        monoasm!(self.jit,
-            // fastpath
-            movq rax, rdi;
-            subq rax, 1;
-            addq rax, rsi;
-            jo generic;
-        );
-        self.store_rax(ret);
-        self.side_generic_op(generic, ret, add_values as _, &ctx, pc);
-    }
-
-    fn gen_sub(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
-        monoasm!(self.jit,
-            // fastpath
-            movq rax, rdi;
-            subq rax, rsi;
-            jo generic;
-            addq rax, 1;
-        );
-        self.store_rax(ret);
-        self.side_generic_op(generic, ret, sub_values as _, &ctx, pc);
     }
 
     fn gen_bit_or(&mut self, generic: DestLabel, ret: SlotId, ctx: &BBContext, pc: BcPc) {
@@ -1888,17 +1959,17 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
-        let exit = self.jit.label();
+        let method_resolved = self.jit.label();
         let patch_meta = self.jit.label();
         let patch_adr = self.jit.label();
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
+        let raise = self.jit.label();
         let cached_class_version = self.jit.const_i32(-1);
         let cached_recv_class = self.jit.const_i32(0);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
-        let entry_return = self.vm_return;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         if !recv.is_zero() {
@@ -1915,7 +1986,7 @@ impl Codegen {
             movl rax, [rip + global_class_version];
             cmpl [rip + cached_class_version], rax;
             jne slow_path;
-        exit:
+        method_resolved:
         );
 
         // set self
@@ -1947,9 +2018,8 @@ impl Codegen {
         );
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
-            movq r13, (pc.0);
             testq rax, rax;
-            jeq entry_return;
+            jeq raise;
         );
         if !ret.is_zero() {
             self.store_rax(ret);
@@ -1964,9 +2034,8 @@ impl Codegen {
             movq r8, [rbp - (conv(recv))]; // receiver: Value
             call entry_find_method;
             // absolute address was returned to rax.
-            movq r13, (pc.0);
             testq rax, rax;
-            jeq entry_return;
+            jeq raise;
 
             lea rdi, [rip + patch_meta];
             subq rdi, 8;
@@ -1994,7 +2063,14 @@ impl Codegen {
             );
         }
         monoasm!(self.jit,
-            jmp exit;
+            jmp method_resolved;
+        );
+        let entry_return = self.vm_return;
+        // raise error.
+        monoasm!(self.jit,
+        raise:
+            movq r13, (pc.0);
+            jmp entry_return;
         );
         self.jit.select(0);
     }
