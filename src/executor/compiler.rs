@@ -410,6 +410,13 @@ impl Codegen {
         );
     }
 
+    fn store_rsi(&mut self, ret: SlotId) {
+        monoasm!(self.jit,
+            // store the result to return reg.
+            movq [rbp - (conv(ret))], rsi;
+        );
+    }
+
     fn xmm_mov(&mut self, src: u16, dst: u16) {
         if src != dst {
             monoasm!(self.jit,

@@ -49,6 +49,22 @@ impl BinOpK {
             _ => unreachable!(),
         }
     }
+
+    pub fn generic_func(
+        &self,
+    ) -> extern "C" fn(&mut Interp, &mut Globals, Value, Value) -> Option<Value> {
+        match self {
+            BinOpK::Add => add_values,
+            BinOpK::Sub => sub_values,
+            BinOpK::Mul => mul_values,
+            BinOpK::Div => div_values,
+            BinOpK::BitOr => bitor_values,
+            BinOpK::BitAnd => bitand_values,
+            BinOpK::BitXor => bitxor_values,
+            BinOpK::Shr => shr_values,
+            BinOpK::Shl => shl_values,
+        }
+    }
 }
 
 ///
