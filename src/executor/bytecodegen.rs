@@ -89,8 +89,8 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    pub(super) fn op1(&self) -> BcOp1 {
-        BcOp1::from_bc(&*self)
+    pub(super) fn op1(&self) -> BcOp {
+        BcOp::from_bc(&*self)
     }
 }
 
@@ -269,28 +269,15 @@ impl IrContext {
         self.push(BcIr::StoreConst(src, name), loc);
     }
 
-    fn gen_literal(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
-        dst: Option<BcLocal>,
-        v: Value,
-    ) {
+    fn gen_literal(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
         };
-        let id = ctx.new_literal(v);
-        self.push(BcIr::Literal(reg, id), Loc::default());
+        self.push(BcIr::Literal(reg, v), Loc::default());
     }
 
-    fn gen_integer(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
-        dst: Option<BcLocal>,
-        i: i64,
-    ) {
+    fn gen_integer(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local.into(),
@@ -298,18 +285,12 @@ impl IrContext {
             };
             self.push(BcIr::Integer(reg, i), Loc::default());
         } else {
-            self.gen_literal(ctx, info, dst, Value::new_integer(i));
+            self.gen_literal(info, dst, Value::new_integer(i));
         }
     }
 
-    fn gen_float(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
-        dst: Option<BcLocal>,
-        f: f64,
-    ) {
-        self.gen_literal(ctx, info, dst, Value::new_float(f));
+    fn gen_float(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, f: f64) {
+        self.gen_literal(info, dst, Value::new_float(f));
     }
 
     fn gen_symbol(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, sym: IdentId) {
@@ -320,14 +301,8 @@ impl IrContext {
         self.push(BcIr::Symbol(reg, sym), Loc::default());
     }
 
-    fn gen_string(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
-        dst: Option<BcLocal>,
-        b: Vec<u8>,
-    ) {
-        self.gen_literal(ctx, info, dst, Value::new_string(b));
+    fn gen_string(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, b: Vec<u8>) {
+        self.gen_literal(info, dst, Value::new_string(b));
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
@@ -354,14 +329,8 @@ impl IrContext {
         Ok(())
     }
 
-    fn gen_bigint(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
-        dst: Option<BcLocal>,
-        bigint: BigInt,
-    ) {
-        self.gen_literal(ctx, info, dst, Value::new_bigint(bigint));
+    fn gen_bigint(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, bigint: BigInt) {
+        self.gen_literal(info, dst, Value::new_bigint(bigint));
     }
 
     fn gen_nil(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>) {
@@ -548,18 +517,18 @@ impl IrContext {
         let loc = expr.loc;
         match expr.kind {
             NodeKind::Nil => self.gen_nil(info, None),
-            NodeKind::Bool(b) => self.gen_literal(ctx, info, None, Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_literal(info, None, Value::bool(b)),
             NodeKind::SelfValue => self.gen_temp_mov(info, BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(ctx, info, None, i);
+                self.gen_integer(info, None, i);
             }
             NodeKind::Symbol(sym) => {
                 let sym = id_store.get_ident_id_from_string(sym);
                 self.gen_symbol(info, None, sym);
             }
-            NodeKind::Bignum(bigint) => self.gen_bigint(ctx, info, None, bigint),
-            NodeKind::Float(f) => self.gen_float(ctx, info, None, f),
-            NodeKind::String(s) => self.gen_string(ctx, info, None, s.into_bytes()),
+            NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
+            NodeKind::Float(f) => self.gen_float(info, None, f),
+            NodeKind::String(s) => self.gen_string(info, None, s.into_bytes()),
             NodeKind::Array(nodes, _) => self.gen_array(ctx, info, id_store, None, nodes, loc)?,
             NodeKind::Index {
                 box base,
@@ -575,7 +544,7 @@ impl IrContext {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
                     //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
-                    NodeKind::Float(f) => self.gen_float(ctx, info, None, -f),
+                    NodeKind::Float(f) => self.gen_float(info, None, -f),
                     _ => {
                         self.push_expr(ctx, info, id_store, rhs)?;
                         self.gen_neg(info, None, loc);
@@ -852,24 +821,24 @@ impl IrContext {
         let loc = rhs.loc;
         match rhs.kind {
             NodeKind::Nil => self.gen_nil(info, Some(local)),
-            NodeKind::Bool(b) => self.gen_literal(ctx, info, Some(local), Value::bool(b)),
+            NodeKind::Bool(b) => self.gen_literal(info, Some(local), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(local.into(), BcReg::Self_),
-            NodeKind::Integer(i) => self.gen_integer(ctx, info, Some(local), i),
+            NodeKind::Integer(i) => self.gen_integer(info, Some(local), i),
             NodeKind::Symbol(sym) => {
                 let sym = id_store.get_ident_id_from_string(sym);
                 self.gen_symbol(info, Some(local), sym)
             }
-            NodeKind::Bignum(bigint) => self.gen_bigint(ctx, info, Some(local), bigint),
-            NodeKind::Float(f) => self.gen_float(ctx, info, Some(local), f),
-            NodeKind::String(s) => self.gen_string(ctx, info, Some(local), s.into_bytes()),
+            NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(local), bigint),
+            NodeKind::Float(f) => self.gen_float(info, Some(local), f),
+            NodeKind::String(s) => self.gen_string(info, Some(local), s.into_bytes()),
             NodeKind::Array(nodes, _) => {
                 self.gen_array(ctx, info, id_store, Some(local), nodes, loc)?
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(ctx, info, Some(local), -i),
-                    NodeKind::Float(f) => self.gen_float(ctx, info, Some(local), -f),
+                    NodeKind::Integer(i) => self.gen_integer(info, Some(local), -i),
+                    NodeKind::Float(f) => self.gen_float(info, Some(local), -f),
                     _ => {
                         self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                         self.gen_neg(info, Some(local), loc);
@@ -1444,9 +1413,9 @@ impl IrContext {
                     let op1 = info.get_index(reg);
                     Bc::from(enc_w(8, op1.0))
                 }
-                BcIr::Literal(reg, num) => {
+                BcIr::Literal(reg, val) => {
                     let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(7, op1.0, *num))
+                    Bc::from_with_value(enc_wl(7, op1.0, 0), *val)
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);
@@ -1547,8 +1516,7 @@ impl IrContext {
                 }
                 BcIr::InlineCache => Bc::from(0),
                 BcIr::MethodDef(name, func_id) => {
-                    let op1 = store.add_method_def(*name, *func_id);
-                    Bc::from(enc_l(2, op1.0))
+                    Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));

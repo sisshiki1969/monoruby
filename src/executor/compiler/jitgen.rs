@@ -19,8 +19,8 @@ enum TIr {
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
     Symbol(SlotId, IdentId),
-    /// literal(%ret, literal_id)
-    Literal(SlotId, u32),
+    /// literal(%ret, value)
+    Literal(SlotId, Value),
     /// array(%ret, %src, len)
     Array(SlotId, SlotId, u16),
     /// index(%ret, %base, %idx)
@@ -54,8 +54,8 @@ enum TIr {
     FMov(SlotId, u16),
     /// func call(%ret, name, %recv, %args, len)
     MethodCall(SlotId, IdentId, SlotId, SlotId, u16),
-    /// method definition(method_def_id)
-    MethodDef(MethodDefId),
+    /// method definition(method_name, func_id)
+    MethodDef(IdentId, FuncId),
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     /// float_binop(kind, Fret, Flhs, Frhs)
@@ -121,8 +121,8 @@ impl std::fmt::Debug for TIr {
             TIr::Symbol(reg, id) => {
                 writeln!(f, "%{} = {:?}", reg, id)
             }
-            TIr::Literal(reg, id) => {
-                writeln!(f, "%{} = literal[#{}]", reg, id)
+            TIr::Literal(reg, val) => {
+                writeln!(f, "%{} = literal[{:?}]", reg, val)
             }
             TIr::Array(ret, src, len) => {
                 writeln!(f, "%{} = [%{}; {}]", ret, src, len)
@@ -225,8 +225,8 @@ impl std::fmt::Debug for TIr {
                     len
                 )
             }
-            TIr::MethodDef(id) => {
-                writeln!(f, "define {:?}", id)
+            TIr::MethodDef(name, func_id) => {
+                writeln!(f, "define {:?} {:?}", name, func_id)
             }
             TIr::ConcatStr(ret, args, len) => {
                 writeln!(f, "{} = concat(%{}; {})", ret.ret_str(), args, len)
@@ -513,7 +513,7 @@ impl BBContext {
             Some(name) => name.to_string(),
             None => "<unnamed>".to_string(),
         };
-        if let BcOp1::LoopEnd = pc.op1() {
+        if let BcOp::LoopEnd = pc.op1() {
             eprintln!("<-- exited from JIT code in {} {:?}.", name, func_id);
         } else {
             eprintln!(
@@ -875,7 +875,6 @@ impl Codegen {
     pub(super) fn jit_compile_normal(
         &mut self,
         func: &NormalFuncInfo,
-        store: &FnStore,
         position: Option<usize>,
     ) -> DestLabel {
         let start_pos = position.unwrap_or_default();
@@ -926,10 +925,10 @@ impl Codegen {
 
             self.jit.bind_label(labels[idx]);
             match pc.op1() {
-                BcOp1::LoopStart(_) => {
+                BcOp::LoopStart(_) => {
                     loop_count += 1;
                 }
-                BcOp1::LoopEnd => {
+                BcOp::LoopEnd => {
                     assert_ne!(0, loop_count);
                     loop_count -= 1;
                     if position.is_some() && loop_count == 0 {
@@ -939,7 +938,7 @@ impl Codegen {
                         break;
                     }
                 }
-                BcOp1::Integer(ret, i) => {
+                BcOp::Integer(ret, i) => {
                     ctx.push(TIr::Integer(ret, i));
                     ctx.dealloc_xmm(ret);
                     let i = Value::int32(i).get();
@@ -947,7 +946,7 @@ impl Codegen {
                       movq [rbp - (conv(ret))], (i);
                     );
                 }
-                BcOp1::Symbol(ret, id) => {
+                BcOp::Symbol(ret, id) => {
                     ctx.push(TIr::Symbol(ret, id));
                     ctx.dealloc_xmm(ret);
                     let sym = Value::new_symbol(id).get();
@@ -956,10 +955,9 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
-                BcOp1::Literal(dst, id) => {
+                BcOp::Literal(dst, val) => {
                     ctx.dealloc_xmm(dst);
-                    let v = store.get_literal(id);
-                    if let RV::Float(f) = v.unpack() {
+                    if let RV::Float(f) = val.unpack() {
                         let fdst = ctx.xmm_write(dst);
                         ctx.push(TIr::FLiteral(fdst, f));
                         let imm = self.jit.const_f64(f);
@@ -967,16 +965,16 @@ impl Codegen {
                             movq xmm(fdst as u64 + 2), [rip + imm];
                         );
                     } else {
-                        ctx.push(TIr::Literal(dst, id));
-                        if v.is_packed_value() {
+                        ctx.push(TIr::Literal(dst, val));
+                        if val.is_packed_value() {
                             monoasm!(self.jit,
-                              movq rax, (v.get());
+                              movq rax, (val.get());
                             );
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
                             monoasm!(self.jit,
-                              movq rdi, (v.get());
+                              movq rdi, (val.get());
                               movq rax, (Value::dup);
                               call rax;
                             );
@@ -985,7 +983,7 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
-                BcOp1::Array(ret, src, len) => {
+                BcOp::Array(ret, src, len) => {
                     ctx.write_back_range(self, src, len);
                     ctx.dealloc_xmm(ret);
                     ctx.push(TIr::Array(ret, src, len));
@@ -997,7 +995,7 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
-                BcOp1::Index(ret, base, idx) => {
+                BcOp::Index(ret, base, idx) => {
                     ctx.read_slot(self, base);
                     ctx.read_slot(self, idx);
                     ctx.dealloc_xmm(ret);
@@ -1016,7 +1014,7 @@ impl Codegen {
                     };
                     self.store_rax(ret);
                 }
-                BcOp1::IndexAssign(src, base, idx) => {
+                BcOp::IndexAssign(src, base, idx) => {
                     ctx.read_slot(self, base);
                     ctx.read_slot(self, idx);
                     ctx.read_slot(self, src);
@@ -1035,7 +1033,7 @@ impl Codegen {
                         jeq  jit_return;
                     };
                 }
-                BcOp1::LoadConst(dst, id) => {
+                BcOp::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
                     //let jit_return = self.vm_return;
                     let cached_value = self.jit.const_i64(0);
@@ -1100,19 +1098,19 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
-                BcOp1::StoreConst(src, id) => {
+                BcOp::StoreConst(src, id) => {
                     ctx.push(TIr::StoreConst(src, id));
                     ctx.read_slot(self, src);
                     self.jit_store_constant(&ctx, id, src);
                 }
-                BcOp1::Nil(ret) => {
+                BcOp::Nil(ret) => {
                     ctx.push(TIr::Nil(ret));
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
                         movq [rbp - (conv(ret))], (NIL_VALUE);
                     );
                 }
-                BcOp1::Neg(dst, src) => {
+                BcOp::Neg(dst, src) => {
                     if pc.is_float1() {
                         let fsrc = ctx.xmm_read_assume_float(self, src, pc);
                         let fdst = ctx.xmm_write(dst);
@@ -1133,7 +1131,7 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
-                BcOp1::BinOp(kind, ret, lhs, rhs) => {
+                BcOp::BinOp(kind, ret, lhs, rhs) => {
                     if pc.is_binary_integer() {
                         ctx.read_slot(self, lhs);
                         ctx.read_slot(self, rhs);
@@ -1209,7 +1207,7 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::BinOpRi(kind, ret, lhs, rhs) => {
+                BcOp::BinOpRi(kind, ret, lhs, rhs) => {
                     if pc.is_integer1() {
                         ctx.read_slot(self, lhs);
                         ctx.dealloc_xmm(ret);
@@ -1257,7 +1255,7 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::BinOpIr(kind, ret, lhs, rhs) => {
+                BcOp::BinOpIr(kind, ret, lhs, rhs) => {
                     if pc.is_integer2() {
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
@@ -1332,7 +1330,7 @@ impl Codegen {
                     }
                 }
 
-                BcOp1::Cmp(kind, ret, lhs, rhs, optimizable) => {
+                BcOp::Cmp(kind, ret, lhs, rhs, optimizable) => {
                     if optimizable {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(pc);
@@ -1355,7 +1353,7 @@ impl Codegen {
                         }
                     }
                 }
-                BcOp1::Cmpri(kind, ret, lhs, rhs, optimizable) => {
+                BcOp::Cmpri(kind, ret, lhs, rhs, optimizable) => {
                     if optimizable {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(pc);
@@ -1379,10 +1377,10 @@ impl Codegen {
                         }
                     }
                 }
-                BcOp1::Mov(dst, src) => {
+                BcOp::Mov(dst, src) => {
                     ctx.copy_slot(self, src, dst);
                 }
-                BcOp1::Ret(lhs) => {
+                BcOp::Ret(lhs) => {
                     ctx.read_slot(self, lhs);
                     ctx.push(TIr::Ret(lhs));
                     monoasm!(self.jit,
@@ -1393,7 +1391,7 @@ impl Codegen {
                     ctx.clear_write_back(wb);
                     continue;
                 }
-                BcOp1::ConcatStr(ret, arg, len) => {
+                BcOp::ConcatStr(ret, arg, len) => {
                     ctx.push(TIr::ConcatStr(ret, arg, len));
                     ctx.write_back_range(self, arg, len);
                     ctx.dealloc_xmm(ret);
@@ -1411,16 +1409,16 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                BcOp1::MethodCall(..) => {
+                BcOp::MethodCall(..) => {
                     assert!(self.opt_buf.is_none());
                     self.opt_buf = Some(pc);
                 }
-                BcOp1::MethodArgs(recv, args, len) => {
+                BcOp::MethodArgs(recv, args, len) => {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);
 
                     match std::mem::take(&mut self.opt_buf).unwrap().op1() {
-                        BcOp1::MethodCall(ret, name) => {
+                        BcOp::MethodCall(ret, name) => {
                             ctx.push(TIr::MethodCall(ret, name, recv, args, len));
                             ctx.dealloc_xmm(ret);
                             self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
@@ -1429,9 +1427,8 @@ impl Codegen {
                     }
                     skip = true;
                 }
-                BcOp1::MethodDef(id) => {
-                    ctx.push(TIr::MethodDef(id));
-                    let MethodDefInfo { name, func } = store[id];
+                BcOp::MethodDef(name, func) => {
+                    ctx.push(TIr::MethodDef(name, func));
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         movq rdi, rbx; // &mut Interp
@@ -1443,7 +1440,7 @@ impl Codegen {
                         addl [rip + class_version], 1;
                     );
                 }
-                BcOp1::Br(disp) => {
+                BcOp::Br(disp) => {
                     let v = ctx.get_write_back();
                     ctx.push(TIr::Br(disp, v.clone()));
                     ctx.all_write_back(self);
@@ -1453,7 +1450,7 @@ impl Codegen {
                     );
                     continue;
                 }
-                BcOp1::CondBr(cond_, disp, false, kind) => {
+                BcOp::CondBr(cond_, disp, false, kind) => {
                     let wb = ctx.get_write_back();
                     ctx.push(TIr::CondBr(cond_, disp, false, wb.clone(), kind));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
@@ -1468,13 +1465,13 @@ impl Codegen {
                         BrKind::BrIfNot => monoasm!(self.jit, jeq branch_dest;),
                     }
                 }
-                BcOp1::CondBr(cond_, disp, true, brkind) => {
+                BcOp::CondBr(cond_, disp, true, brkind) => {
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
                     let pc = std::mem::take(&mut self.opt_buf).unwrap();
                     if pc.is_binary_float() {
                         let kind = match pc.op1() {
-                            BcOp1::Cmp(kind, ret, lhs, rhs, true) => {
+                            BcOp::Cmp(kind, ret, lhs, rhs, true) => {
                                 let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
                                 monoasm! { self.jit,
                                     ucomisd xmm(flhs as u64 + 2), xmm(frhs as u64 + 2);
@@ -1482,7 +1479,7 @@ impl Codegen {
                                 ctx.push(TIr::FCmp(kind, ret, flhs, frhs, true));
                                 kind
                             }
-                            BcOp1::Cmpri(kind, ret, lhs, rhs, true) => {
+                            BcOp::Cmpri(kind, ret, lhs, rhs, true) => {
                                 let rhs_label = self.jit.const_f64(rhs as f64);
                                 let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
                                 monoasm! { self.jit,
@@ -1505,12 +1502,12 @@ impl Codegen {
                         );
                     } else {
                         let kind = match pc.op1() {
-                            BcOp1::Cmp(kind, ret, lhs, rhs, true) => {
+                            BcOp::Cmp(kind, ret, lhs, rhs, true) => {
                                 self.gen_cmp_prep(&mut ctx, ret, lhs, rhs, generic);
                                 ctx.push(TIr::Cmp(kind, ret, lhs, rhs, true, pc.classid1()));
                                 kind
                             }
-                            BcOp1::Cmpri(kind, ret, lhs, rhs, true) => {
+                            BcOp::Cmpri(kind, ret, lhs, rhs, true) => {
                                 self.gen_cmpri_prep(&mut ctx, ret, lhs, rhs, generic);
                                 ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, true, pc.classid1()));
                                 kind

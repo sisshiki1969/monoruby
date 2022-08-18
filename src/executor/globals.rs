@@ -44,18 +44,6 @@ impl Globals {
         globals
     }
 
-    pub fn clone(&self) -> Self {
-        Self {
-            func: self.func.clone(),
-            id_store: self.id_store.clone(),
-            class: self.class.clone(),
-            error: None,
-            warning: self.warning,
-            no_jit: self.no_jit,
-            stdout: BufWriter::new(stdout()),
-        }
-    }
-
     pub fn flush_stdout(&mut self) {
         self.stdout.flush().unwrap();
     }

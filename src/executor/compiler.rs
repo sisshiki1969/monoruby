@@ -651,16 +651,16 @@ impl Codegen {
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
         if globals.func[func_id].data.codeptr.is_none() {
             let mut info = std::mem::take(&mut globals.func[func_id]);
-            self.jit_compile(&mut info, &globals.func);
+            self.jit_compile(&mut info);
             globals.func[func_id] = info;
         }
     }
 
-    fn jit_compile(&mut self, func: &mut FuncInfo, store: &FnStore) {
+    fn jit_compile(&mut self, func: &mut FuncInfo) {
         let label = match &func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
-                let jit_entry = self.jit_compile_normal(info, store, None);
+                let jit_entry = self.jit_compile_normal(info, None);
                 let codeptr = self.jit.get_current_address();
                 monoasm!(self.jit,
                     jmp jit_entry;
@@ -745,11 +745,9 @@ impl Codegen {
         func_id: FuncId,
     ) -> CodePtr {
         globals.func[func_id].data.meta.set_jit();
-        let label = interp.codegen.jit_compile_normal(
-            globals.func[func_id].as_normal(),
-            &globals.func,
-            None,
-        );
+        let label = interp
+            .codegen
+            .jit_compile_normal(globals.func[func_id].as_normal(), None);
         interp.codegen.jit.get_label_address(label)
     }
 
@@ -760,11 +758,9 @@ impl Codegen {
         pc: BcPc,
     ) -> CodePtr {
         let pc_index = pc - globals.func[func_id].data.pc;
-        let label = interp.codegen.jit_compile_normal(
-            globals.func[func_id].as_normal(),
-            &globals.func,
-            Some(pc_index),
-        );
+        let label = interp
+            .codegen
+            .jit_compile_normal(globals.func[func_id].as_normal(), Some(pc_index));
         interp.codegen.jit.get_label_address(label)
     }
 

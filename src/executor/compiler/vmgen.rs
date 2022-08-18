@@ -58,13 +58,13 @@ macro_rules! cmp_ops {
   };
 }
 
-extern "C" fn get_literal(_interp: &mut Interp, globals: &mut Globals, literal_id: u32) -> Value {
-    Value::dup(globals.func.get_literal(literal_id))
-}
-
-extern "C" fn vm_define_method(_interp: &mut Interp, globals: &mut Globals, def_id: MethodDefId) {
-    let MethodDefInfo { name, func } = globals.func[def_id];
-    globals.class.add_method(OBJECT_CLASS, name, func);
+extern "C" fn vm_define_method(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+    func_id: FuncId,
+) {
+    globals.class.add_method(OBJECT_CLASS, name, func_id);
 }
 
 impl Codegen {
@@ -761,11 +761,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rdx, rdi;  // literal_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq rax, (get_literal);
-            call rax;
+            movq rax, [r13 - 8];
         };
         self.vm_store_r15();
         self.fetch_and_dispatch();
@@ -1035,7 +1031,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let class_version = self.class_version;
         monoasm! { self.jit,
-            movq rdx, rdi;  // method_def_id
+            movl rdx, [r13 - 8];  // name
+            movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (vm_define_method);
