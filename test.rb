@@ -1,13 +1,8 @@
-def f
-  dump
-  4/0
+CONST = 5.7
+sum = 0
+for i in 0..19 do
+    sum += CONST
+    CONST = 1000 if i == 12
+    puts "#{i}, #{CONST}, #{sum}"
 end
-
-for i in 1..50
-  puts i
-  if i==30
-    [1,2,3]+5
-  else
-    [1,2,3][2]
-  end
-end
+puts sum

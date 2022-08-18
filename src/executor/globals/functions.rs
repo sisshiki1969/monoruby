@@ -652,7 +652,15 @@ impl NormalFuncInfo {
                 }
                 BcOp1::LoadConst(reg, id) => {
                     let name = globals.func[id].name;
-                    eprintln!("%{} = const[{}]", reg, globals.id_store.get_name(name))
+                    let op1 = format!("%{} = const[{}]", reg, globals.id_store.get_name(name));
+                    eprintln!(
+                        "{:36} [{}]",
+                        op1,
+                        match pc.value() {
+                            None => "<invalid>".to_string(),
+                            Some(val) => val.inspect(globals),
+                        }
+                    );
                 }
                 BcOp1::StoreConst(reg, id) => {
                     eprintln!("const[{}] = %{}", globals.id_store.get_name(id), reg)

@@ -121,6 +121,13 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
+    pub(crate) fn value(&self) -> Option<Value> {
+        match self.op2.0 {
+            0 => None,
+            v => Some(Value::from(v)),
+        }
+    }
+
     pub(crate) fn is_integer1(&self) -> bool {
         self.classid1() == INTEGER_CLASS
     }

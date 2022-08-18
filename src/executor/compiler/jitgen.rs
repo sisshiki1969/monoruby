@@ -30,6 +30,7 @@ enum TIr {
     /// float_literal(Fret, f64)
     FLiteral(u16, f64),
     LoadConst(SlotId, ConstSiteId),
+    FLoadConst(u16, SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
     /// nil(%reg)
     Nil(SlotId),
@@ -137,6 +138,9 @@ impl std::fmt::Debug for TIr {
             }
             TIr::LoadConst(reg, id) => {
                 writeln!(f, "%{} = const[{:?}]", reg, id)
+            }
+            TIr::FLoadConst(freg, reg, id) => {
+                writeln!(f, "F{} %{} = const[{:?}]", freg, reg, id)
             }
             TIr::StoreConst(reg, id) => {
                 writeln!(f, "const[{:?}] = %{}", id, reg)
@@ -470,7 +474,8 @@ impl BBContext {
     ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
-    fn get_deopt_dest(&mut self, codegen: &mut Codegen, pc: BcPc, wb: Vec<u16>) -> DestLabel {
+    fn get_deopt_dest(&mut self, codegen: &mut Codegen, pc: BcPc) -> DestLabel {
+        let wb = self.get_write_back();
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
@@ -524,8 +529,8 @@ impl BBContext {
     ///
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
-    fn deopt(&mut self, codegen: &mut Codegen, pc: BcPc, wb: Vec<u16>) {
-        let fallback = self.get_deopt_dest(codegen, pc, wb);
+    fn deopt(&mut self, codegen: &mut Codegen, pc: BcPc) {
+        let fallback = self.get_deopt_dest(codegen, pc);
         monoasm!(codegen.jit,
             jmp fallback;
         );
@@ -537,18 +542,6 @@ impl BBContext {
             .enumerate()
             .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i as u16) })
             .collect()
-        /*self.stack_slot
-        .0
-        .iter()
-        .enumerate()
-        .filter_map(|(reg, freg)| {
-            if let LinkMode::XmmRW(freg) = freg {
-                Some((*freg as u16, SlotId::new(reg as u16)))
-            } else {
-                None
-            }
-        })
-        .collect()*/
     }
 
     fn get_xmm_using(&self) -> Vec<usize> {
@@ -607,8 +600,7 @@ impl BBContext {
         match self.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
-                let wb = self.get_write_back();
-                let side_exit = self.get_deopt_dest(codegen, op, wb);
+                let side_exit = self.get_deopt_dest(codegen, op);
                 self.convf64_assume_float(codegen, reg, side_exit)
             }
         }
@@ -628,24 +620,21 @@ impl BBContext {
                     LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs),
                 ) => (lhs, rhs),
                 (LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs), LinkMode::None) => {
-                    let wb = self.get_write_back();
-                    let side_exit = self.get_deopt_dest(codegen, op, wb);
+                    let side_exit = self.get_deopt_dest(codegen, op);
                     (
                         lhs,
                         self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
                     )
                 }
                 (LinkMode::None, LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs)) => {
-                    let wb = self.get_write_back();
-                    let side_exit = self.get_deopt_dest(codegen, op, wb);
+                    let side_exit = self.get_deopt_dest(codegen, op);
                     (
                         self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
                         rhs,
                     )
                 }
                 (LinkMode::None, LinkMode::None) => {
-                    let wb = self.get_write_back();
-                    let side_exit = self.get_deopt_dest(codegen, op, wb);
+                    let side_exit = self.get_deopt_dest(codegen, op);
                     (
                         self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
                         self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
@@ -656,8 +645,7 @@ impl BBContext {
             match self.stack_slot[lhs] {
                 LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs) => (lhs, lhs),
                 LinkMode::None => {
-                    let wb = self.get_write_back();
-                    let side_exit = self.get_deopt_dest(codegen, op, wb);
+                    let side_exit = self.get_deopt_dest(codegen, op);
                     match op.classid1() {
                         FLOAT_CLASS => {
                             let lhs = self.convf64_assume_float(codegen, lhs, side_exit);
@@ -829,6 +817,23 @@ impl Codegen {
     cmp_opt_main!((eq, eq), (ne, ne), (a, gt), (b, lt), (ae, ge), (be, le));
     cmp_main!(eq, ne, lt, le, gt, ge);
 
+    fn jit_get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
+        let jit_return = self.vm_return;
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rdx, (id.get());  // name: ConstSiteId
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (get_constant);
+            call rax;
+            movq r13, ((pc + 1).0);
+            testq rax, rax; // Option<Value>
+            jeq  jit_return;
+        );
+        self.xmm_restore(&xmm_using);
+    }
+
     pub(super) fn jit_compile_normal(
         &mut self,
         func: &NormalFuncInfo,
@@ -891,9 +896,8 @@ impl Codegen {
                     loop_count -= 1;
                     if position.is_some() && loop_count == 0 {
                         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("    end:[{:05}]", start_pos + idx + 1);
-                        let wb = ctx.get_write_back();
-                        ctx.deopt(self, pc, wb);
+                        eprintln!("<-- compile finished. end:[{:05}]", start_pos + idx);
+                        ctx.deopt(self, pc);
                         break;
                     }
                 }
@@ -994,39 +998,69 @@ impl Codegen {
                     };
                 }
                 BcOp1::LoadConst(dst, id) => {
-                    ctx.push(TIr::LoadConst(dst, id));
                     ctx.dealloc_xmm(dst);
-                    let jit_return = self.vm_return;
-                    let cached_const_version = self.jit.const_i64(-1);
+                    //let jit_return = self.vm_return;
                     let cached_value = self.jit.const_i64(0);
+                    let cached_const_version = self.jit.const_i64(-1);
                     let global_const_version = self.const_version;
                     let slow_path = self.jit.label();
                     let exit = self.jit.label();
-                    monoasm!(self.jit,
-                        movq rax, [rip + global_const_version];
-                        cmpq rax, [rip + cached_const_version];
-                        jne  slow_path;
-                        movq rax, [rip + cached_value];
-                    exit:
-                    );
-                    self.store_rax(dst);
-                    self.jit.select(1);
-                    monoasm!(self.jit,
-                    slow_path:
-                        movq rdx, (id.get());  // name: ConstSiteId
-                        movq rdi, rbx;  // &mut Interp
-                        movq rsi, r12;  // &mut Globals
-                        movq rax, (get_constant);
-                        call rax;
-                        movq r13, ((pc + 1).0);
-                        testq rax, rax;
-                        jeq  jit_return;
-                        movq [rip + cached_value], rax;
-                        movq rdi, [rip + global_const_version];
-                        movq [rip + cached_const_version], rdi;
-                        jmp  exit;
-                    );
-                    self.jit.select(0);
+
+                    if pc.value().is_none() || pc.value().unwrap().class_id() != FLOAT_CLASS {
+                        ctx.push(TIr::LoadConst(dst, id));
+
+                        self.jit.select(1);
+                        self.jit.bind_label(slow_path);
+                        self.jit_get_constant(&ctx, id, pc);
+                        monoasm!(self.jit,
+                            movq [rip + cached_value], rax;
+                            movq rdi, [rip + global_const_version];
+                            movq [rip + cached_const_version], rdi;
+                            jmp  exit;
+                        );
+                        self.jit.select(0);
+
+                        monoasm!(self.jit,
+                            movq rax, [rip + global_const_version];
+                            cmpq rax, [rip + cached_const_version];
+                            jne  slow_path;
+                            movq rax, [rip + cached_value];
+                        exit:
+                        );
+                        self.store_rax(dst);
+                    } else {
+                        let cached_float = self.jit.const_f64(0.0);
+                        let side_exit = ctx.get_deopt_dest(self, pc);
+
+                        self.jit.select(1);
+                        self.jit.bind_label(slow_path);
+                        self.jit_get_constant(&ctx, id, pc);
+                        monoasm!(self.jit,
+                            movq [rip + cached_value], rax;
+                            movq rdi, rax;
+                        );
+                        self.assume_float_to_f64(0, side_exit);
+                        monoasm!(self.jit,
+                            movq [rip + cached_float], xmm0;
+                            movq rax, [rip + global_const_version];
+                            movq [rip + cached_const_version], rax;
+                            jmp  exit;
+                        );
+                        self.jit.select(0);
+
+                        let fdst = ctx.xmm_read(dst);
+                        ctx.push(TIr::FLoadConst(fdst, dst, id));
+
+                        monoasm!(self.jit,
+                            movq rax, [rip + global_const_version];
+                            cmpq rax, [rip + cached_const_version];
+                            jne  slow_path;
+                        exit:
+                            movq xmm(fdst as u64 + 2), [rip + cached_float];
+                            movq rax, [rip + cached_value];
+                        );
+                        self.store_rax(dst);
+                    }
                 }
                 BcOp1::StoreConst(src, id) => {
                     ctx.push(TIr::StoreConst(src, id));

@@ -819,6 +819,21 @@ mod test {
     }
 
     #[test]
+    fn test_const2() {
+        run_test2(
+            r#"
+            CONST = 5.7
+            sum = 0
+            for i in 0..19 do
+                sum += CONST
+                CONST = 1000 if i == 12
+            end
+            sum
+        "#,
+        );
+    }
+
+    #[test]
     fn test_string() {
         run_test(
             r##"

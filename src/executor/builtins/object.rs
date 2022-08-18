@@ -151,7 +151,7 @@ mod test {
         run_test("print '100'");
         run_test("nil.respond_to?(:foo)");
         run_test("nil.inspect");
-        run_test("puts Time.singleton_class");
+        run_test("Time.singleton_class.to_s");
         run_test(r#"File.write("/tmp/foo", "woo")"#);
     }
 }

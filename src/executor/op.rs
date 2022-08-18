@@ -351,6 +351,11 @@ pub extern "C" fn vm_get_constant(
     res
 }
 
+///
+/// Get Constant.
+///
+/// rax: Option<Value>
+///
 pub extern "C" fn get_constant(
     _interp: &mut Interp,
     globals: &mut Globals,

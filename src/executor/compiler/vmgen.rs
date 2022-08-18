@@ -843,6 +843,7 @@ impl Codegen {
             call rax;
             testq rax, rax;
             jeq  entry_return;
+            movq [r13 - 8], rax;
         };
         self.vm_store_r15();
         self.fetch_and_dispatch();

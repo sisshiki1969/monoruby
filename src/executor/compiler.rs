@@ -458,7 +458,7 @@ impl Codegen {
     ///
     /// ### registers destroyed
     ///
-    /// - rax
+    /// - rax, rdi
     ///
     fn assume_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
         let entry = self.jit.label();
