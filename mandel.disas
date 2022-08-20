@@ -131,7 +131,7 @@
 :00061 br =>:00064
  391:  movq   xmm0,xmm2
  395:  call   0xffffd392
- 39a:  mov    QWORD PTR [rbp-0xa0],rax  %18
+ 39a:  mov    QWORD PTR [rbp-0xa0],rax  ;%18
  3a1:  movq   xmm0,xmm7
  3a5:  call   0xffffd392
  3aa:  mov    QWORD PTR [rbp-0x78],rax  ;%13
