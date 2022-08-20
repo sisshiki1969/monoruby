@@ -384,14 +384,6 @@ impl BBContext {
         }
     }
 
-    fn clear_write_back(&mut self, wb: Vec<u16>) {
-        wb.iter().for_each(|freg| {
-            for reg in self.xmm[*freg as usize].clone() {
-                self.dealloc_xmm(reg);
-            }
-        });
-    }
-
     ///
     /// Write back a corresponding xmm register to the stack slot *reg*.
     ///
@@ -410,20 +402,23 @@ impl BBContext {
         }
     }
 
-    fn all_write_back(&mut self, codegen: &mut Codegen) {
-        let wb = self.get_write_back();
-        self.write_back_no_dealloc(codegen, wb);
-
+    fn clear_write_back(&mut self) {
         self.xmm.iter_mut().for_each(|info| info.clear());
         self.stack_slot.clear()
     }
 
+    fn all_write_back(&mut self, codegen: &mut Codegen) {
+        let wb = self.get_write_back();
+        self.gen_write_back(codegen, wb);
+        self.clear_write_back();
+    }
+
     ///
-    /// Write back all xmm registers to corresponding stack slots.
+    /// Generate a code which write back all xmm registers to corresponding stack slots.
     ///
     /// xmms are not deallocated.
     ///
-    fn write_back_no_dealloc(&mut self, codegen: &mut Codegen, wb: Vec<u16>) {
+    fn gen_write_back(&mut self, codegen: &mut Codegen, wb: Vec<u16>) {
         for freg in wb {
             let v: Vec<_> = self.xmm[freg as usize]
                 .iter()
@@ -463,7 +458,7 @@ impl BBContext {
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
-        self.write_back_no_dealloc(codegen, wb);
+        self.gen_write_back(codegen, wb);
         monoasm!(codegen.jit,
             jmp  dest;
         );
@@ -479,7 +474,7 @@ impl BBContext {
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
-        self.write_back_no_dealloc(codegen, wb);
+        self.gen_write_back(codegen, wb);
         let fetch = codegen.vm_fetch;
         monoasm!(codegen.jit,
             movq r13, (pc.0);
@@ -542,6 +537,19 @@ impl BBContext {
             .enumerate()
             .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i as u16) })
             .collect()
+    }
+
+    fn get_write_back_if_another_bb(
+        &self,
+        info: &Vec<Option<usize>>,
+        base: usize,
+        disp: i32,
+    ) -> Vec<u16> {
+        if info[((base + 1) as i64 + disp as i64) as usize].is_some() {
+            self.get_write_back()
+        } else {
+            vec![]
+        }
     }
 
     fn get_xmm_using(&self) -> Vec<usize> {
@@ -708,18 +716,16 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     (($op:ident, $sop:ident)) => {
         paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext, v:Vec<u16>) {
+            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, ctx: &mut BBContext) {
                 let cont = self.jit.label();
-                let branch_dest = ctx.get_branch_dest(self, dest, v);
-                if switch {
-                    monoasm! { self.jit,
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
                         [<j $sop>] branch_dest;
-                    };
-                } else {
-                    monoasm! { self.jit,
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
                         [<j $sop>] cont;
                         jmp branch_dest;
-                    };
+                    },
                 }
                 self.jit.bind_label(cont);
                 self.jit.select(1);
@@ -739,33 +745,29 @@ macro_rules! cmp_opt_main {
                     cmpq rax, (FALSE_VALUE);
                     // if true, Z=0(not set).
                 );
-                if switch {
-                    monoasm!(self.jit,
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
                         jz  cont;
                         jmp branch_dest;
-                    );
-                } else {
-                    monoasm!(self.jit,
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
                         jnz  cont;
                         jmp branch_dest;
-                    );
+                    },
                 }
                 self.jit.select(0);
             }
 
-            fn [<cmp_opt_float_ $sop>](&mut self, dest: DestLabel, generic:DestLabel, switch:bool, ctx: &mut BBContext, v:Vec<u16>) {
+            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, ctx: &mut BBContext) {
                 let cont = self.jit.label();
-                let branch_dest = ctx.get_branch_dest(self, dest, v);
-                if switch {
-                    monoasm! { self.jit,
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
                         [<j $op>] branch_dest;
-                    };
-
-                } else {
-                    monoasm! { self.jit,
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
                         [<j $op>] cont;
                         jmp branch_dest;
-                    };
+                    },
                 }
                 self.jit.bind_label(cont);
                 self.jit.select(1);
@@ -785,16 +787,15 @@ macro_rules! cmp_opt_main {
                     cmpq rax, (FALSE_VALUE);
                     // if true, Z=0(not set).
                 );
-                if switch {
-                    monoasm!(self.jit,
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
                         jz  cont;
                         jmp branch_dest;
-                    );
-                } else {
-                    monoasm!(self.jit,
-                        jnz  cont;
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
+                        jnz cont;
                         jmp branch_dest;
-                    );
+                    },
                 }
                 self.jit.select(0);
             }
@@ -874,7 +875,7 @@ impl Codegen {
 
     pub(super) fn jit_compile_normal(
         &mut self,
-        func: &NormalFuncInfo,
+        func: &mut NormalFuncInfo,
         position: Option<usize>,
     ) -> DestLabel {
         let start_pos = position.unwrap_or_default();
@@ -1387,8 +1388,7 @@ impl Codegen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
-                    let wb = ctx.get_write_back();
-                    ctx.clear_write_back(wb);
+                    ctx.clear_write_back();
                     continue;
                 }
                 BcOp::ConcatStr(ret, arg, len) => {
@@ -1441,9 +1441,10 @@ impl Codegen {
                     );
                 }
                 BcOp::Br(disp) => {
-                    let v = ctx.get_write_back();
-                    ctx.push(TIr::Br(disp, v.clone()));
-                    ctx.all_write_back(self);
+                    let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
+                    ctx.push(TIr::Br(disp, wb.clone()));
+                    ctx.gen_write_back(self, wb);
+                    ctx.clear_write_back();
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                         jmp dest;
@@ -1451,7 +1452,7 @@ impl Codegen {
                     continue;
                 }
                 BcOp::CondBr(cond_, disp, false, kind) => {
-                    let wb = ctx.get_write_back();
+                    let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
                     ctx.push(TIr::CondBr(cond_, disp, false, wb.clone(), kind));
                     let dest = labels[(idx as i32 + 1 + disp) as usize];
                     let branch_dest = ctx.get_branch_dest(self, dest, wb);
@@ -1490,16 +1491,10 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        let wb = ctx.get_write_back();
+                        let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
                         ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
-                        self.gen_cmp_float_opt(
-                            kind,
-                            dest,
-                            generic,
-                            brkind == BrKind::BrIf,
-                            &mut ctx,
-                            wb,
-                        );
+                        let branch_dest = ctx.get_branch_dest(self, dest, wb);
+                        self.gen_cmp_float_opt(kind, branch_dest, generic, brkind, &mut ctx);
                     } else {
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, ret, lhs, rhs, true) => {
@@ -1514,24 +1509,19 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        let wb = ctx.get_write_back();
+
+                        let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
                         ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
                         monoasm! { self.jit,
                             cmpq rdi, rsi;
                         };
-                        self.gen_cmp_int_opt(
-                            kind,
-                            dest,
-                            generic,
-                            brkind == BrKind::BrIf,
-                            &mut ctx,
-                            wb,
-                        );
+                        let branch_dest = ctx.get_branch_dest(self, dest, wb);
+                        self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, &mut ctx);
                     }
                 }
             }
 
-            if let Some(Some(_)) = info.get(start_pos + idx + 1) {
+            if let Some(_) = info[start_pos + idx + 1] {
                 ctx.all_write_back(self);
             }
         }
@@ -1837,19 +1827,18 @@ impl Codegen {
     fn gen_cmp_int_opt(
         &mut self,
         kind: CmpKind,
-        dest: DestLabel,
+        branch_dest: DestLabel,
         generic: DestLabel,
-        switch: bool,
+        brkind: BrKind,
         ctx: &mut BBContext,
-        v: Vec<u16>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_int_eq(dest, generic, switch, ctx, v),
-            CmpKind::Ne => self.cmp_opt_int_ne(dest, generic, switch, ctx, v),
-            CmpKind::Ge => self.cmp_opt_int_ge(dest, generic, switch, ctx, v),
-            CmpKind::Gt => self.cmp_opt_int_gt(dest, generic, switch, ctx, v),
-            CmpKind::Le => self.cmp_opt_int_le(dest, generic, switch, ctx, v),
-            CmpKind::Lt => self.cmp_opt_int_lt(dest, generic, switch, ctx, v),
+            CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, generic, brkind, ctx),
+            CmpKind::Ne => self.cmp_opt_int_ne(branch_dest, generic, brkind, ctx),
+            CmpKind::Ge => self.cmp_opt_int_ge(branch_dest, generic, brkind, ctx),
+            CmpKind::Gt => self.cmp_opt_int_gt(branch_dest, generic, brkind, ctx),
+            CmpKind::Le => self.cmp_opt_int_le(branch_dest, generic, brkind, ctx),
+            CmpKind::Lt => self.cmp_opt_int_lt(branch_dest, generic, brkind, ctx),
             _ => unimplemented!(),
         }
     }
@@ -1857,19 +1846,18 @@ impl Codegen {
     fn gen_cmp_float_opt(
         &mut self,
         kind: CmpKind,
-        dest: DestLabel,
+        branch_dest: DestLabel,
         generic: DestLabel,
-        switch: bool,
+        brkind: BrKind,
         ctx: &mut BBContext,
-        v: Vec<u16>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_float_eq(dest, generic, switch, ctx, v),
-            CmpKind::Ne => self.cmp_opt_float_ne(dest, generic, switch, ctx, v),
-            CmpKind::Ge => self.cmp_opt_float_ge(dest, generic, switch, ctx, v),
-            CmpKind::Gt => self.cmp_opt_float_gt(dest, generic, switch, ctx, v),
-            CmpKind::Le => self.cmp_opt_float_le(dest, generic, switch, ctx, v),
-            CmpKind::Lt => self.cmp_opt_float_lt(dest, generic, switch, ctx, v),
+            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, generic, brkind, ctx),
+            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, generic, brkind, ctx),
+            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, generic, brkind, ctx),
+            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, generic, brkind, ctx),
+            CmpKind::Le => self.cmp_opt_float_le(branch_dest, generic, brkind, ctx),
+            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, generic, brkind, ctx),
             _ => unimplemented!(),
         }
     }

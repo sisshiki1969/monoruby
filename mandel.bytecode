@@ -1,105 +1,32 @@
-:00000 %1 = 600: i32
-:00001 %15 = literal["P4\n"]
-:00002 %16 = %1
-:00003 %17 = literal["\ "]
-:00004 %18 = %1
-:00005 %15 = concat(%15; 4)
-:00006 _ = %0.call puts(%15; 1)             [NilClass]
-:00009 %15 = 49: i32
-:00010 const[ITER] = %15
-:00011 %15 = literal[4.0]
-:00012 const[LIMIT_SQUARED] = %15
-:00013 %2 = 0: i32
-:00014 %3 = 0: i32
-:00015 %4 = %1 - 1: i16                     [Integer][Integer]
-:00016 %5 = 0: i32
-:00017 %15 = %4
++:00041 loop_start counter=5 jit-addr=00007fb48d1e8133
+ :00042 _%18 = %12 > %17                     [Integer][Integer]
+ :00043 condbr _%18 =>:00066
+ :00044 %18 = %7 * %7                        [Float][Float]
+ :00045 %19 = %8 * %8                        [Float][Float]
+ :00046 %18 = %18 - %19                      [Float][Float]
+ :00047 %13 = %18 + %9                       [Float][Float]
+ :00048 %18 = 2: i16 * %7                    [Integer][Float]
+ :00049 %18 = %18 * %8                       [Float][Float]
+ :00050 %14 = %18 + %10                      [Float][Float]
+ :00051 %18 = %13
+ :00052 %19 = %14
+ :00053 %7 = %18
+ :00054 %8 = %19
+ :00055 %18 = %7 * %7                        [Float][Float]
+ :00056 %19 = %8 * %8                        [Float][Float]
+ :00057 %18 = %18 + %19                      [Float][Float]
+ :00058 %19 = const[LIMIT_SQUARED]           [4.0]
+ :00059 _%18 = %18 > %19                     [Float][Float]
+ :00060 condbr _%18 =>:00062
+ :00061 br =>:00064
++:00062 %11 = literal[true]
+ :00063 br =>:00066
++:00064 %12 = %12 + 1: i16                   [Integer][Integer]
+ :00065 br =>:00041
++:00066 loop_end
 
-:00018 loop_start counter=5 jit-addr=00007f1a73ef3d2e
-:00019 _%16 = %5 > %15                      [Integer][Integer]
-:00020 condbr _%16 =>:00106
-:00021 %6 = 0: i32
-:00022 %16 = %4
+# loop内でFloatとして使用され、再代入されないローカル変数はloopの頭で変換しておく
+# %9 %10
 
-:00023 loop_start counter=5 jit-addr=00007f1a73ef3418
-:00024 _%17 = %6 > %16                      [Integer][Integer]
-:00025 condbr _%17 =>:00103
-:00026 %7 = literal[0.0]
-:00027 %8 = literal[0.0]
-:00028 %17 = literal[2.0]
-:00029 %17 = %17 * %6                       [Float][Integer]
-:00030 %17 = %17 / %1                       [Float][Integer]
-:00031 %18 = literal[1.5]
-:00032 %9 = %17 - %18                       [Float][Float]
-:00033 %17 = literal[2.0]
-:00034 %17 = %17 * %5                       [Float][Integer]
-:00035 %17 = %17 / %1                       [Float][Integer]
-:00036 %18 = literal[1.0]
-:00037 %10 = %17 - %18                      [Float][Float]
-:00038 %11 = literal[false]
-:00039 %12 = 0: i32
-:00040 %17 = const[ITER]                    [49]
-
-:00041 loop_start counter=5 jit-addr=00007f1a73ef3133
-:00042 _%18 = %12 > %17                     [Integer][Integer]
-:00043 condbr _%18 =>:00066
-:00044 %18 = %7 * %7                        [Float][Float]
-:00045 %19 = %8 * %8                        [Float][Float]
-:00046 %18 = %18 - %19                      [Float][Float]
-:00047 %13 = %18 + %9                       [Float][Float]
-:00048 %18 = 2: i16 * %7                    [Integer][Float]
-:00049 %18 = %18 * %8                       [Float][Float]
-:00050 %14 = %18 + %10                      [Float][Float]
-:00051 %18 = %13
-:00052 %19 = %14
-:00053 %7 = %18
-:00054 %8 = %19
-:00055 %18 = %7 * %7                        [Float][Float]
-:00056 %19 = %8 * %8                        [Float][Float]
-:00057 %18 = %18 + %19                      [Float][Float]
-:00058 %19 = const[LIMIT_SQUARED]           [4.0]
-:00059 _%18 = %18 > %19                     [Float][Float]
-:00060 condbr _%18 =>:00062
-:00061 br =>:00064
-:00062 %11 = literal[true]
-:00063 br =>:00066
-:00064 %12 = %12 + 1: i16                   [Integer][Integer]
-:00065 br =>:00041
-:00066 loop_end
-
-:00067 %17 = 1: i32
-:00068 %17 = %2 << %17                      [Integer][Integer]
-:00069 condbr %11 =>:00072
-:00070 %18 = 1: i32
-:00071 br =>:00073
-:00072 %18 = 0: i32
-:00073 %2 = %17 | %18                       [Integer][Integer]
-:00074 %3 = %3 + 1: i16                     [Integer][Integer]
-:00075 _%17 = %3 == 8: i16                  [Integer][Integer]
-:00076 condbr _%17 =>:00092
-:00077 _%17 = %6 == %4                      [Integer][Integer]
-:00078 condbr _%17 =>:00080
-:00079 br =>:00091
-:00080 %17 = 8: i16 - %3                    [Integer][Integer]
-:00081 %2 = %2 << %17                       [Integer][Integer]
-:00082 %18 = %2
-:00083 %17 = %18.call chr(%19; 0)           [<INVALID>]
-:00086 _ = %0.call print(%17; 1)            [<INVALID>]
-:00089 %2 = 0: i32
-:00090 %3 = 0: i32
-:00091 br =>:00101
-:00092 %18 = %2
-:00093 %17 = %18.call chr(%19; 0)           [<INVALID>]
-:00096 _ = %0.call print(%17; 1)            [<INVALID>]
-:00099 %2 = 0: i32
-:00100 %3 = 0: i32
-:00101 %6 = %6 + 1: i16                     [Integer][Integer]
-:00102 br =>:00023
-:00103 loop_end
-
-:00104 %5 = %5 + 1: i16                     [Integer][Integer]
-:00105 br =>:00018
-:00106 %15 = nil
-:00107 loop_end
-
-:00108 ret %15
+# 再代入されるローカル変数は？
+# %7 %8 %13 %14

@@ -657,7 +657,7 @@ impl Codegen {
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo) {
-        let label = match &func.kind {
+        let label = match &mut func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
                 let jit_entry = self.jit_compile_normal(info, None);
@@ -747,7 +747,7 @@ impl Codegen {
         globals.func[func_id].data.meta.set_jit();
         let label = interp
             .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal(), None);
+            .jit_compile_normal(globals.func[func_id].as_normal_mut(), None);
         interp.codegen.jit.get_label_address(label)
     }
 
@@ -760,7 +760,7 @@ impl Codegen {
         let pc_index = pc - globals.func[func_id].data.pc;
         let label = interp
             .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal(), Some(pc_index));
+            .jit_compile_normal(globals.func[func_id].as_normal_mut(), Some(pc_index));
         interp.codegen.jit.get_label_address(label)
     }
 

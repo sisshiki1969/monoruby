@@ -140,6 +140,10 @@ impl FnStore {
         &self.functions.0
     }
 
+    pub fn functions_mut(&mut self) -> &mut Vec<FuncInfo> {
+        &mut self.functions.0
+    }
+
     fn len(&self) -> usize {
         self.functions.0.len()
     }
@@ -416,6 +420,7 @@ pub(crate) struct NormalFuncInfo {
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
+    bb_info: Option<Vec<Option<usize>>>,
 }
 
 impl NormalFuncInfo {
@@ -437,6 +442,7 @@ impl NormalFuncInfo {
             temp_num: 0,
             ast: Some(ast),
             sourceinfo,
+            bb_info: None,
         };
         args.into_iter().for_each(|name| {
             info.add_local(name);
@@ -520,8 +526,11 @@ impl NormalFuncInfo {
         }
     }
 
-    pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
-        let mut info = vec![None; self.bytecode().len()];
+    pub(crate) fn get_bb_info(&mut self) -> Vec<Option<usize>> {
+        if let Some(bb_info) = &self.bb_info {
+            return bb_info.clone();
+        }
+        let mut info = vec![0; self.bytecode().len() + 1];
         let mut skip = false;
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
@@ -534,21 +543,27 @@ impl NormalFuncInfo {
                     skip = true;
                 }
                 BcOp::Br(disp) | BcOp::CondBr(_, disp, _, _) => {
-                    info[((idx + 1) as i32 + disp) as usize] = Some(0);
+                    info[((idx + 1) as i32 + disp) as usize] += 1;
                 }
                 _ => {}
             }
         }
+        assert_eq!(0, info[self.bytecode().len()]);
         let mut bb_id = 0;
-        info.into_iter()
+        let bb_info: Vec<_> = info
+            .into_iter()
             .map(|e| {
-                e.map(|_| {
+                if e > 0 {
                     let id = bb_id;
                     bb_id += 1;
-                    id
-                })
+                    Some(id)
+                } else {
+                    None
+                }
             })
-            .collect()
+            .collect();
+        self.bb_info = Some(bb_info.clone());
+        bb_info
     }
 
     #[cfg(feature = "emit-bc")]
@@ -573,6 +588,7 @@ impl NormalFuncInfo {
         );
         let mut buf = None;
         let mut skip = false;
+        let bb_info = self.bb_info.clone().unwrap();
         for (i, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
@@ -582,7 +598,7 @@ impl NormalFuncInfo {
             let bcop1 = pc.op1();
             if let BcOp::MethodArgs(..) = bcop1 {
             } else {
-                eprint!(":{:05} ", i)
+                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i)
             };
             match bcop1 {
                 BcOp::Br(disp) => {
