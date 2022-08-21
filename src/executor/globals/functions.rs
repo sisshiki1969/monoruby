@@ -420,7 +420,6 @@ pub(crate) struct NormalFuncInfo {
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
-    bb_info: Option<Vec<Option<usize>>>,
 }
 
 impl NormalFuncInfo {
@@ -442,7 +441,6 @@ impl NormalFuncInfo {
             temp_num: 0,
             ast: Some(ast),
             sourceinfo,
-            bb_info: None,
         };
         args.into_iter().for_each(|name| {
             info.add_local(name);
@@ -466,7 +464,7 @@ impl NormalFuncInfo {
     }
 
     /// get name.
-    #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+    #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
     pub(crate) fn name(&self) -> &Option<String> {
         &self.name
     }
@@ -526,10 +524,7 @@ impl NormalFuncInfo {
         }
     }
 
-    pub(crate) fn get_bb_info(&mut self) -> Vec<Option<usize>> {
-        if let Some(bb_info) = &self.bb_info {
-            return bb_info.clone();
-        }
+    pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
         let mut info = vec![0; self.bytecode().len() + 1];
         let mut skip = false;
         for (idx, pc) in self.bytecode().iter().enumerate() {
@@ -562,7 +557,6 @@ impl NormalFuncInfo {
                 }
             })
             .collect();
-        self.bb_info = Some(bb_info.clone());
         bb_info
     }
 
@@ -588,7 +582,7 @@ impl NormalFuncInfo {
         );
         let mut buf = None;
         let mut skip = false;
-        let bb_info = self.bb_info.clone().unwrap();
+        let bb_info = self.get_bb_info();
         for (i, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
@@ -606,32 +600,32 @@ impl NormalFuncInfo {
                 }
                 BcOp::CondBr(reg, disp, opt, kind) => {
                     eprintln!(
-                        "cond{}br {}%{} =>:{:05}",
+                        "cond{}br {}{:?} =>:{:05}",
                         kind.to_s(),
                         optstr(opt),
                         reg,
                         i as i32 + 1 + disp
                     );
                 }
-                BcOp::Integer(reg, num) => eprintln!("%{} = {}: i32", reg, num),
+                BcOp::Integer(reg, num) => eprintln!("{:?} = {}: i32", reg, num),
                 BcOp::Symbol(reg, id) => {
-                    eprintln!("%{} = :{}", reg, globals.id_store.get_name(id))
+                    eprintln!("{:?} = :{}", reg, globals.id_store.get_name(id))
                 }
                 BcOp::Literal(reg, val) => {
-                    eprintln!("%{} = literal[{}]", reg, globals.val_inspect(val))
+                    eprintln!("{:?} = literal[{}]", reg, globals.val_inspect(val))
                 }
                 BcOp::Array(ret, src, len) => {
-                    eprintln!("%{} = array[%{}; {}]", ret, src, len)
+                    eprintln!("{:?} = array[{:?}; {}]", ret, src, len)
                 }
                 BcOp::Index(ret, base, idx) => {
-                    eprintln!("%{} = %{}.[%{}]", ret, base, idx)
+                    eprintln!("{:?} = {:?}.[{:?}]", ret, base, idx)
                 }
                 BcOp::IndexAssign(src, base, idx) => {
-                    eprintln!("%{}.[%{}] = %{}", base, idx, src)
+                    eprintln!("{:?}.[{:?}] = {:?}", base, idx, src)
                 }
                 BcOp::LoadConst(reg, id) => {
                     let name = globals.func[id].name;
-                    let op1 = format!("%{} = const[{}]", reg, globals.id_store.get_name(name));
+                    let op1 = format!("{:?} = const[{}]", reg, globals.id_store.get_name(name));
                     eprintln!(
                         "{:36} [{}]",
                         op1,
@@ -642,15 +636,15 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp::StoreConst(reg, id) => {
-                    eprintln!("const[{}] = %{}", globals.id_store.get_name(id), reg)
+                    eprintln!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
                 }
-                BcOp::Nil(reg) => eprintln!("%{} = nil", reg),
+                BcOp::Nil(reg) => eprintln!("{:?} = nil", reg),
                 BcOp::Neg(dst, src) => {
-                    let op1 = format!("%{} = neg %{}", dst, src);
+                    let op1 = format!("{:?} = neg {:?}", dst, src);
                     eprintln!("{:36} [{}]", op1, pc.classid1().get_name(globals),);
                 }
                 BcOp::BinOp(kind, dst, lhs, rhs) => {
-                    let op1 = format!("%{} = %{} {} %{}", dst, lhs, kind, rhs);
+                    let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
@@ -659,7 +653,7 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp::BinOpRi(kind, dst, lhs, rhs) => {
-                    let op1 = format!("%{} = %{} {} {}: i16", dst, lhs, kind, rhs,);
+                    let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
@@ -668,7 +662,7 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp::BinOpIr(kind, dst, lhs, rhs) => {
-                    let op1 = format!("%{} = {}: i16 {} %{}", dst, lhs, kind, rhs,);
+                    let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
@@ -677,7 +671,7 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
-                    let op1 = format!("{}%{} = %{} {:?} %{}", optstr(opt), dst, lhs, kind, rhs,);
+                    let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
@@ -686,8 +680,14 @@ impl NormalFuncInfo {
                     );
                 }
                 BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
-                    let op1 =
-                        format!("{}%{} = %{} {:?} {}: i16", optstr(opt), dst, lhs, kind, rhs,);
+                    let op1 = format!(
+                        "{}{:?} = {:?} {:?} {}: i16",
+                        optstr(opt),
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                    );
                     eprintln!(
                         "{:36} [{}][{}]",
                         op1,
@@ -696,8 +696,8 @@ impl NormalFuncInfo {
                     );
                 }
 
-                BcOp::Ret(reg) => eprintln!("ret %{}", reg),
-                BcOp::Mov(dst, src) => eprintln!("%{} = %{}", dst, src),
+                BcOp::Ret(reg) => eprintln!("ret {:?}", reg),
+                BcOp::Mov(dst, src) => eprintln!("{:?} = {:?}", dst, src),
                 BcOp::MethodCall(..) => {
                     assert!(buf.is_none());
                     buf = Some((bcop1.clone(), pc.classid1()));
@@ -709,7 +709,7 @@ impl NormalFuncInfo {
                     };
                     let name = globals.id_store.get_name(name);
                     let op1 = format!(
-                        "{} = %{}.call {}(%{}; {})",
+                        "{} = {:?}.call {}({:?}; {})",
                         ret.ret_str(),
                         recv,
                         name,
@@ -724,7 +724,7 @@ impl NormalFuncInfo {
                     eprintln!("define {:?}: {:?}", name, func_id)
                 }
                 BcOp::ConcatStr(ret, args, len) => {
-                    eprintln!("{} = concat(%{}; {})", ret.ret_str(), args, len)
+                    eprintln!("{} = concat({:?}; {})", ret.ret_str(), args, len)
                 }
                 BcOp::LoopStart(count) => eprintln!(
                     "loop_start counter={} jit-addr={:016x}",

@@ -18,7 +18,7 @@ use op::*;
 type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = extern "C" fn(&mut Interp, &mut Globals, Arg, usize) -> Option<Value>;
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) struct SlotId(u16);
 
 impl SlotId {
@@ -42,9 +42,9 @@ impl SlotId {
     }
 }
 
-impl std::fmt::Display for SlotId {
+impl std::fmt::Debug for SlotId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "%{}", self.0)
     }
 }
 

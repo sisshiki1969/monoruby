@@ -12,6 +12,7 @@ license = "MIT"
 [features]
 emit-asm = []
 emit-bc = []
+emit-tir = []
 log-jit = []
 
 [dependencies]

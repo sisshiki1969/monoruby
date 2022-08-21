@@ -11,10 +11,14 @@ use super::*;
 ///
 #[derive(PartialEq)]
 enum TIr {
+    /// label(index, pc)
+    Label(usize, BcPc),
+    LoopStart,
+    LoopEnd,
     /// branch(dest, write_back)
-    Br(i32, Vec<u16>),
+    Br(usize, WriteBack),
     /// conditional branch(%reg, dest, optimizable, write_back)  : branch when reg was true.
-    CondBr(SlotId, i32, bool, Vec<u16>, BrKind),
+    CondBr(SlotId, usize, Option<UsingXmm>, BrKind, WriteBack),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -85,83 +89,80 @@ impl std::fmt::Debug for TIr {
                 ""
             }
         }
-        fn disp_str(disp: &i32) -> String {
-            if *disp >= 0 {
-                format!("+{:05}", disp + 1)
-            } else {
-                format!("{:05}", disp + 1)
-            }
-        }
-        fn disp_write_back(v: &[u16]) -> String {
+        fn disp_write_back(v: &WriteBack) -> String {
             v.iter()
-                .map(|freg| format!("F{} ", freg))
+                .map(|(freg, v)| format!("F{}:{:?} ", freg, v))
                 .fold(String::new(), |acc, s| acc + &s)
         }
         match self {
+            TIr::LoopStart => {
+                writeln!(f, "loop_start")
+            }
+            TIr::LoopEnd => {
+                writeln!(f, "loop_end")
+            }
+            TIr::Label(index, pc) => {
+                writeln!(f, "label {:05}; {:?}", index, pc.0)
+            }
             TIr::Br(disp, write_back) => {
-                writeln!(
-                    f,
-                    "br => {}; {}",
-                    disp_str(disp),
-                    disp_write_back(write_back)
-                )
+                writeln!(f, "br => {:05}; {}", disp, disp_write_back(write_back))
             }
-            TIr::CondBr(reg, disp, opt, write_back, kind) => {
+            TIr::CondBr(reg, disp, opt, kind, write_back) => {
                 writeln!(
                     f,
-                    "cond{}br {}%{} => {}; {}",
+                    "cond{}br {}{:?} => {:05}; {}",
                     kind.to_s(),
-                    optstr(opt),
+                    optstr(&opt.is_some()),
                     reg,
-                    disp_str(disp),
+                    disp,
                     disp_write_back(write_back)
                 )
             }
-            TIr::Integer(reg, num) => writeln!(f, "%{} = {}: i32", reg, num),
+            TIr::Integer(reg, num) => writeln!(f, "{:?} = {}: i32", reg, num),
             TIr::Symbol(reg, id) => {
-                writeln!(f, "%{} = {:?}", reg, id)
+                writeln!(f, "{:?} = {:?}", reg, id)
             }
             TIr::Literal(reg, val) => {
-                writeln!(f, "%{} = literal[{:?}]", reg, val)
+                writeln!(f, "{:?} = literal[{:?}]", reg, val)
             }
             TIr::Array(ret, src, len) => {
-                writeln!(f, "%{} = [%{}; {}]", ret, src, len)
+                writeln!(f, "{:?} = [{:?}; {}]", ret, src, len)
             }
             TIr::Index(ret, base, idx) => {
-                writeln!(f, "%{} = %{}.[%{}]", ret, base, idx)
+                writeln!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
             }
             TIr::IndexAssign(src, base, idx) => {
-                writeln!(f, "%{}.[%{}] = %{}", base, idx, src)
+                writeln!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
             }
             TIr::FLiteral(freg, float) => {
                 writeln!(f, "F{} = {}: f64", freg, float)
             }
             TIr::LoadConst(reg, id) => {
-                writeln!(f, "%{} = const[{:?}]", reg, id)
+                writeln!(f, "{:?} = const[{:?}]", reg, id)
             }
             TIr::FLoadConst(freg, reg, id) => {
-                writeln!(f, "F{} %{} = const[{:?}]", freg, reg, id)
+                writeln!(f, "F{} {:?} = const[{:?}]", freg, reg, id)
             }
             TIr::StoreConst(reg, id) => {
-                writeln!(f, "const[{:?}] = %{}", id, reg)
+                writeln!(f, "const[{:?}] = {:?}", id, reg)
             }
             TIr::FLoad(src, fdst) => {
-                writeln!(f, "F{} = %{}", fdst, src)
+                writeln!(f, "F{} = {:?}", fdst, src)
             }
             TIr::FStore(fsrc, dst) => {
-                writeln!(f, "%{} = F{}", dst, fsrc)
+                writeln!(f, "{:?} = F{}", dst, fsrc)
             }
-            TIr::Nil(reg) => writeln!(f, "%{} = nil", reg),
-            TIr::Neg(dst, src) => writeln!(f, "%{} = neg %{}", dst, src),
+            TIr::Nil(reg) => writeln!(f, "{:?} = nil", reg),
+            TIr::Neg(dst, src) => writeln!(f, "{:?} = neg {:?}", dst, src),
             TIr::FNeg(dst, src) => writeln!(f, "F{} = neg F{}", dst, src),
             TIr::BinOp(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "%{} = %{}:{:?} {} %{}", dst, lhs, class, kind, rhs)
+                writeln!(f, "{:?} = {:?}:{:?} {} {:?}", dst, lhs, class, kind, rhs)
             }
             TIr::BinOpRi(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "%{} = %{}:{:?} {} {}: i16", dst, lhs, class, kind, rhs)
+                writeln!(f, "{:?} = {:?}:{:?} {} {}: i16", dst, lhs, class, kind, rhs)
             }
             TIr::BinOpIr(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "%{} = {}:i16 {} %{}: {:?}", dst, lhs, kind, rhs, class)
+                writeln!(f, "{:?} = {}:i16 {} {:?}: {:?}", dst, lhs, kind, rhs, class)
             }
             TIr::FBinOp(kind, dst, lhs, rhs) => {
                 writeln!(f, "F{} = F{} {} F{}", dst, lhs, kind, rhs)
@@ -175,7 +176,7 @@ impl std::fmt::Debug for TIr {
             TIr::Cmp(kind, dst, lhs, rhs, opt, class) => {
                 writeln!(
                     f,
-                    "{}%{} = %{}:{:?} {:?} %{}",
+                    "{}{:?} = {:?}:{:?} {:?} {:?}",
                     optstr(opt),
                     dst,
                     lhs,
@@ -187,7 +188,7 @@ impl std::fmt::Debug for TIr {
             TIr::Cmpri(kind, dst, lhs, rhs, opt, class) => {
                 writeln!(
                     f,
-                    "{}%{} = %{}:{:?} {:?} {}: i16",
+                    "{}{:?} = {:?}:{:?} {:?} {}: i16",
                     optstr(opt),
                     dst,
                     lhs,
@@ -197,12 +198,12 @@ impl std::fmt::Debug for TIr {
                 )
             }
             TIr::FCmp(kind, dst, lhs, rhs, opt) => {
-                writeln!(f, "{}%{} = F{} {:?} F{}", optstr(opt), dst, lhs, kind, rhs)
+                writeln!(f, "{}{:?} = F{} {:?} F{}", optstr(opt), dst, lhs, kind, rhs)
             }
             TIr::FCmpRf(kind, dst, lhs, rhs, opt) => {
                 writeln!(
                     f,
-                    "{}%{} = F{} {:?} {}: f64",
+                    "{}{:?} = F{} {:?} {}: f64",
                     optstr(opt),
                     dst,
                     lhs,
@@ -211,13 +212,13 @@ impl std::fmt::Debug for TIr {
                 )
             }
 
-            TIr::Ret(reg) => writeln!(f, "ret %{}", reg),
-            TIr::Mov(dst, src) => writeln!(f, "%{} = %{}", dst, src),
-            TIr::FMov(dst, src) => writeln!(f, "%{} = F{}", dst, src),
+            TIr::Ret(reg) => writeln!(f, "ret {:?}", reg),
+            TIr::Mov(dst, src) => writeln!(f, "{:?} = {:?}", dst, src),
+            TIr::FMov(dst, src) => writeln!(f, "{:?} = F{}", dst, src),
             TIr::MethodCall(ret, name, recv, args, len) => {
                 writeln!(
                     f,
-                    "{} = %{}.call {:?}(%{}; {})",
+                    "{} = {:?}.call {:?}({:?}; {})",
                     ret.ret_str(),
                     recv,
                     name,
@@ -229,7 +230,7 @@ impl std::fmt::Debug for TIr {
                 writeln!(f, "define {:?} {:?}", name, func_id)
             }
             TIr::ConcatStr(ret, args, len) => {
-                writeln!(f, "{} = concat(%{}; {})", ret.ret_str(), args, len)
+                writeln!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
         }
     }
@@ -265,8 +266,6 @@ pub(crate) struct BBContext {
     stack_slot: StackSlotInfo,
     /// information for xmm registers.
     xmm: [Vec<SlotId>; 14],
-    /// typed IR.
-    tir: Vec<TIr>,
 }
 
 #[derive(Debug)]
@@ -291,6 +290,9 @@ impl StackSlotInfo {
     }
 }
 
+type WriteBack = Vec<(u16, Vec<SlotId>)>;
+type UsingXmm = Vec<usize>;
+
 impl BBContext {
     fn new(reg_num: usize) -> Self {
         let xmm = (0..14)
@@ -301,12 +303,7 @@ impl BBContext {
         Self {
             stack_slot: StackSlotInfo(vec![LinkMode::None; reg_num]),
             xmm,
-            tir: vec![],
         }
-    }
-
-    fn push(&mut self, tir: TIr) {
-        self.tir.push(tir);
     }
 
     ///
@@ -366,16 +363,22 @@ impl BBContext {
     ///
     /// Copy *src* to *dst*.
     ///
-    fn copy_slot(&mut self, codegen: &mut Codegen, src: SlotId, dst: SlotId) {
+    fn copy_slot(
+        &mut self,
+        codegen: &mut Codegen,
+        cc: &mut CompileContext,
+        src: SlotId,
+        dst: SlotId,
+    ) {
         self.dealloc_xmm(dst);
         match self.stack_slot[src] {
             LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
                 self.stack_slot[dst] = LinkMode::XmmRW(freg);
                 self.xmm[freg as usize].push(dst);
-                self.push(TIr::FMov(dst, freg));
+                cc.push(TIr::FMov(dst, freg));
             }
             _ => {
-                self.push(TIr::Mov(dst, src));
+                cc.push(TIr::Mov(dst, src));
                 monoasm!(codegen.jit,
                   movq rax, [rbp - (conv(src))];
                   movq [rbp - (conv(dst))], rax;
@@ -389,9 +392,9 @@ impl BBContext {
     ///
     /// the xmm is deallocated.
     ///
-    fn read_slot(&mut self, codegen: &mut Codegen, reg: SlotId) {
+    fn read_slot(&mut self, codegen: &mut Codegen, cc: &mut CompileContext, reg: SlotId) {
         if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
-            self.push(TIr::FStore(freg, reg));
+            cc.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -409,61 +412,20 @@ impl BBContext {
 
     fn all_write_back(&mut self, codegen: &mut Codegen) {
         let wb = self.get_write_back();
-        self.gen_write_back(codegen, wb);
+        codegen.gen_write_back(wb);
         self.clear_write_back();
     }
 
-    ///
-    /// Generate a code which write back all xmm registers to corresponding stack slots.
-    ///
-    /// xmms are not deallocated.
-    ///
-    fn gen_write_back(&mut self, codegen: &mut Codegen, wb: Vec<u16>) {
-        for freg in wb {
-            let v: Vec<_> = self.xmm[freg as usize]
-                .iter()
-                .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
-                .cloned()
-                .collect();
-            if v.is_empty() {
-                continue;
-            }
-
-            let f64_to_val = codegen.f64_to_val;
-            monoasm!(codegen.jit,
-                movq xmm0, xmm(freg as u64 + 2);
-                call f64_to_val;
-            );
-            for reg in v {
-                codegen.store_rax(reg);
-            }
-        }
-    }
-
-    fn write_back_range(&mut self, codegen: &mut Codegen, arg: SlotId, len: u16) {
-        for reg in arg.0..arg.0 + len {
-            self.read_slot(codegen, SlotId::new(reg))
-        }
-    }
-
-    ///
-    /// Get *DestLabel* for a branch to *dest*.
-    ///
-    fn get_branch_dest(
+    fn write_back_range(
         &mut self,
         codegen: &mut Codegen,
-        dest: DestLabel,
-        wb: Vec<u16>,
-    ) -> DestLabel {
-        codegen.jit.select(1);
-        let entry = codegen.jit.label();
-        codegen.jit.bind_label(entry);
-        self.gen_write_back(codegen, wb);
-        monoasm!(codegen.jit,
-            jmp  dest;
-        );
-        codegen.jit.select(0);
-        entry
+        cc: &mut CompileContext,
+        arg: SlotId,
+        len: u16,
+    ) {
+        for reg in arg.0..arg.0 + len {
+            self.read_slot(codegen, cc, SlotId::new(reg))
+        }
     }
 
     ///
@@ -474,7 +436,7 @@ impl BBContext {
         codegen.jit.select(1);
         let entry = codegen.jit.label();
         codegen.jit.bind_label(entry);
-        self.gen_write_back(codegen, wb);
+        codegen.gen_write_back(wb);
         let fetch = codegen.vm_fetch;
         monoasm!(codegen.jit,
             movq r13, (pc.0);
@@ -531,21 +493,30 @@ impl BBContext {
         );
     }
 
-    fn get_write_back(&self) -> Vec<u16> {
+    fn get_write_back(&self) -> WriteBack {
         self.xmm
             .iter()
             .enumerate()
             .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i as u16) })
+            .map(|freg| {
+                let v: Vec<_> = self.xmm[freg as usize]
+                    .iter()
+                    .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
+                    .cloned()
+                    .collect();
+                (freg, v)
+            })
+            .filter(|(_, v)| !v.is_empty())
             .collect()
     }
 
     fn get_write_back_if_another_bb(
         &self,
-        info: &Vec<Option<usize>>,
-        base: usize,
+        cc: &CompileContext,
+        idx: usize,
         disp: i32,
-    ) -> Vec<u16> {
-        if info[((base + 1) as i64 + disp as i64) as usize].is_some() {
+    ) -> WriteBack {
+        if cc.info[((cc.start_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
             self.get_write_back()
         } else {
             vec![]
@@ -563,13 +534,14 @@ impl BBContext {
     fn convf64_assume(
         &mut self,
         codegen: &mut Codegen,
+        cc: &mut CompileContext,
         rhs: SlotId,
         class: ClassId,
         side_exit: DestLabel,
     ) -> u16 {
         match class {
-            INTEGER_CLASS => self.convf64_assume_integer(codegen, rhs, side_exit),
-            FLOAT_CLASS => self.convf64_assume_float(codegen, rhs, side_exit),
+            INTEGER_CLASS => self.convf64_assume_integer(codegen, cc, rhs, side_exit),
+            FLOAT_CLASS => self.convf64_assume_float(codegen, cc, rhs, side_exit),
             _ => unreachable!(),
         }
     }
@@ -577,11 +549,12 @@ impl BBContext {
     fn convf64_assume_integer(
         &mut self,
         codegen: &mut Codegen,
+        cc: &mut CompileContext,
         reg: SlotId,
         side_exit: DestLabel,
     ) -> u16 {
         let freg = self.xmm_read(reg);
-        self.push(TIr::FLoad(reg, freg as u16));
+        cc.push(TIr::FLoad(reg, freg as u16));
         monoasm!(codegen.jit,
             movq rdi, [rbp - (conv(reg))];
         );
@@ -592,11 +565,12 @@ impl BBContext {
     fn convf64_assume_float(
         &mut self,
         codegen: &mut Codegen,
+        cc: &mut CompileContext,
         reg: SlotId,
         side_exit: DestLabel,
     ) -> u16 {
         let freg = self.xmm_read(reg);
-        self.push(TIr::FLoad(reg, freg as u16));
+        cc.push(TIr::FLoad(reg, freg as u16));
         monoasm!(codegen.jit,
             movq rdi, [rbp - (conv(reg))];
         );
@@ -604,12 +578,18 @@ impl BBContext {
         freg
     }
 
-    fn xmm_read_assume_float(&mut self, codegen: &mut Codegen, reg: SlotId, op: BcPc) -> u16 {
+    fn xmm_read_assume_float(
+        &mut self,
+        codegen: &mut Codegen,
+        cc: &mut CompileContext,
+        reg: SlotId,
+        op: BcPc,
+    ) -> u16 {
         match self.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let side_exit = self.get_deopt_dest(codegen, op);
-                self.convf64_assume_float(codegen, reg, side_exit)
+                self.convf64_assume_float(codegen, cc, reg, side_exit)
             }
         }
     }
@@ -617,6 +597,7 @@ impl BBContext {
     fn xmm_read_binary(
         &mut self,
         codegen: &mut Codegen,
+        cc: &mut CompileContext,
         lhs: SlotId,
         rhs: SlotId,
         op: BcPc,
@@ -631,21 +612,21 @@ impl BBContext {
                     let side_exit = self.get_deopt_dest(codegen, op);
                     (
                         lhs,
-                        self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
+                        self.convf64_assume(codegen, cc, rhs, op.classid2(), side_exit),
                     )
                 }
                 (LinkMode::None, LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs)) => {
                     let side_exit = self.get_deopt_dest(codegen, op);
                     (
-                        self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
+                        self.convf64_assume(codegen, cc, lhs, op.classid1(), side_exit),
                         rhs,
                     )
                 }
                 (LinkMode::None, LinkMode::None) => {
                     let side_exit = self.get_deopt_dest(codegen, op);
                     (
-                        self.convf64_assume(codegen, lhs, op.classid1(), side_exit),
-                        self.convf64_assume(codegen, rhs, op.classid2(), side_exit),
+                        self.convf64_assume(codegen, cc, lhs, op.classid1(), side_exit),
+                        self.convf64_assume(codegen, cc, rhs, op.classid2(), side_exit),
                     )
                 }
             }
@@ -656,7 +637,7 @@ impl BBContext {
                     let side_exit = self.get_deopt_dest(codegen, op);
                     match op.classid1() {
                         FLOAT_CLASS => {
-                            let lhs = self.convf64_assume_float(codegen, lhs, side_exit);
+                            let lhs = self.convf64_assume_float(codegen, cc, lhs, side_exit);
                             (lhs, lhs)
                         }
                         _ => unreachable!(),
@@ -667,10 +648,38 @@ impl BBContext {
     }
 }
 
+struct CompileContext {
+    labels: Vec<DestLabel>,
+    info: Vec<Option<usize>>,
+    start_pos: usize,
+    is_loop: bool,
+    tir: Vec<TIr>,
+}
+
+impl CompileContext {
+    fn new(func: &NormalFuncInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
+        let mut labels = vec![];
+        for _ in &func.bytecode()[start_pos..] {
+            labels.push(codegen.jit.label());
+        }
+        Self {
+            labels,
+            info: func.get_bb_info(),
+            start_pos,
+            is_loop,
+            tir: vec![],
+        }
+    }
+
+    fn push(&mut self, tir: TIr) {
+        self.tir.push(tir)
+    }
+}
+
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, ctx: Option<&BBContext>) {
+            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, xmm_using: Vec<usize>) {
                 let exit = self.jit.label();
                 monoasm! { self.jit,
                     xorq rax, rax;
@@ -684,8 +693,7 @@ macro_rules! cmp_main {
                 monoasm!(self.jit,
                     generic:
                 );
-                if let Some(ctx) = ctx {
-                    let xmm_using = ctx.get_xmm_using();
+                //if let Some(ctx) = ctx {
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
                         // generic path
@@ -693,13 +701,13 @@ macro_rules! cmp_main {
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
-                } else {
+                /* } else {
                     monoasm!(self.jit,
                         // generic path
                         movq rax, ([<cmp_ $op _values>]);
                         call rax;
                     );
-                }
+                }*/
                 monoasm!(self.jit,
                     jmp  exit;
                 );
@@ -716,7 +724,7 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     (($op:ident, $sop:ident)) => {
         paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, ctx: &mut BBContext) {
+            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
                 let cont = self.jit.label();
                 match brkind {
                     BrKind::BrIf => monoasm! { self.jit,
@@ -732,7 +740,6 @@ macro_rules! cmp_opt_main {
                 monoasm!(self.jit,
                     generic:
                 );
-                let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
                     // generic path
@@ -758,7 +765,7 @@ macro_rules! cmp_opt_main {
                 self.jit.select(0);
             }
 
-            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, ctx: &mut BBContext) {
+            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
                 let cont = self.jit.label();
                 match brkind {
                     BrKind::BrIf => monoasm! { self.jit,
@@ -774,7 +781,6 @@ macro_rules! cmp_opt_main {
                 monoasm!(self.jit,
                     generic:
                 );
-                let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
                     // generic path
@@ -840,8 +846,16 @@ impl Codegen {
         self.guard_rsi_fixnum(deopt);
     }
 
-    fn jit_get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
+    fn handle_error(&mut self, pc: BcPc) {
         let jit_return = self.vm_return;
+        monoasm!(self.jit,
+            movq r13, ((pc + 1).0);
+            testq rax, rax; // Option<Value>
+            jeq  jit_return;
+        );
+    }
+
+    fn jit_get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -850,11 +864,9 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (get_constant);
             call rax;
-            movq r13, ((pc + 1).0);
-            testq rax, rax; // Option<Value>
-            jeq  jit_return;
         );
         self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
     }
 
     fn jit_store_constant(&mut self, ctx: &BBContext, id: IdentId, src: SlotId) {
@@ -873,14 +885,86 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
+    fn jit_get_index(&mut self, ctx: &BBContext, ret: SlotId, base: SlotId, idx: SlotId, pc: BcPc) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { self.jit,
+            movq rdx, [rbp - (conv(base))]; // base: Value
+            movq rcx, [rbp - (conv(idx))]; // idx: Value
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (get_index);
+            call rax;
+        };
+        self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+        self.store_rax(ret);
+    }
+
+    fn jit_index_assign(
+        &mut self,
+        ctx: &BBContext,
+        src: SlotId,
+        base: SlotId,
+        idx: SlotId,
+        pc: BcPc,
+    ) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { self.jit,
+            movq rdx, [rbp - (conv(base))]; // base: Value
+            movq rcx, [rbp - (conv(idx))]; // idx: Value
+            movq r8, [rbp - (conv(src))];  // src: Value
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (set_index);
+            call rax;
+        };
+        self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+    }
+
+    ///
+    /// Generate a code which write back all xmm registers to corresponding stack slots.
+    ///
+    /// xmms are not deallocated.
+    ///
+    fn gen_write_back(&mut self, wb: WriteBack) {
+        for (freg, v) in wb {
+            let f64_to_val = self.f64_to_val;
+            monoasm!(self.jit,
+                movq xmm0, xmm(freg as u64 + 2);
+                call f64_to_val;
+            );
+            for reg in v {
+                self.store_rax(reg);
+            }
+        }
+    }
+
+    ///
+    /// Get *DestLabel* for a branch to *dest*.
+    ///
+    fn get_branch_dest(&mut self, dest: DestLabel, wb: WriteBack) -> DestLabel {
+        self.jit.select(1);
+        let entry = self.jit.label();
+        self.jit.bind_label(entry);
+        self.gen_write_back(wb);
+        monoasm!(self.jit,
+            jmp  dest;
+        );
+        self.jit.select(0);
+        entry
+    }
+
     pub(super) fn jit_compile_normal(
         &mut self,
-        func: &mut NormalFuncInfo,
+        func: &NormalFuncInfo,
         position: Option<usize>,
     ) -> DestLabel {
         let start_pos = position.unwrap_or_default();
 
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
             eprintln!(
                 "--> start {} compile: {} {:?} start:[{:05}] bytecode:{:?}",
@@ -912,35 +996,70 @@ impl Codegen {
             self.prologue(func.total_reg_num());
         }
 
-        let info = func.get_bb_info();
+        let mut ctx = BBContext::new(func.total_reg_num());
+        let mut cc = CompileContext::new(func, self, start_pos, position.is_some());
+        self.compile_bb(func, &mut ctx, &mut cc);
+        self.jit.finalize();
 
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        let elapsed = now.elapsed();
+        #[cfg(feature = "emit-tir")]
+        eprintln!("{:?}", cc.tir);
+        #[cfg(any(feature = "emit-asm"))]
+        {
+            let (start, code_end, end) = self.jit.code_block.last().unwrap();
+            eprintln!(
+                "offset:{:?} code: {} bytes  data: {} bytes",
+                start,
+                *code_end - *start,
+                *end - *code_end
+            );
+            self.jit.select(0);
+            eprintln!("{}", self.jit.dump_code().unwrap());
+        }
+        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+        eprintln!("    finished compile. elapsed:{:?}", elapsed);
+        #[cfg(feature = "emit-tir")]
+        eprintln!("    finished compile.");
+
+        entry
+    }
+
+    fn compile_bb(&mut self, func: &NormalFuncInfo, ctx: &mut BBContext, cc: &mut CompileContext) {
         let mut skip = false;
         let mut loop_count = 0;
-        let mut ctx = BBContext::new(func.total_reg_num());
-        for (idx, pc) in func.bytecode()[start_pos..].iter().enumerate() {
+        for (idx, pc) in func.bytecode()[cc.start_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
                 skip = false;
                 continue;
             }
 
-            self.jit.bind_label(labels[idx]);
+            match pc.op1() {
+                BcOp::CondBr(_, _, true, _) => {}
+                _ => {
+                    cc.push(TIr::Label(cc.start_pos + idx, pc));
+                    self.jit.bind_label(cc.labels[idx]);
+                }
+            }
             match pc.op1() {
                 BcOp::LoopStart(_) => {
+                    cc.push(TIr::LoopStart);
                     loop_count += 1;
                 }
                 BcOp::LoopEnd => {
                     assert_ne!(0, loop_count);
+                    cc.push(TIr::LoopEnd);
                     loop_count -= 1;
-                    if position.is_some() && loop_count == 0 {
+                    if cc.is_loop && loop_count == 0 {
                         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("<-- compile finished. end:[{:05}]", start_pos + idx);
+                        eprintln!("<-- compile finished. end:[{:05}]", cc.start_pos + idx);
                         ctx.deopt(self, pc);
                         break;
                     }
                 }
                 BcOp::Integer(ret, i) => {
-                    ctx.push(TIr::Integer(ret, i));
+                    cc.push(TIr::Integer(ret, i));
                     ctx.dealloc_xmm(ret);
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
@@ -948,7 +1067,7 @@ impl Codegen {
                     );
                 }
                 BcOp::Symbol(ret, id) => {
-                    ctx.push(TIr::Symbol(ret, id));
+                    cc.push(TIr::Symbol(ret, id));
                     ctx.dealloc_xmm(ret);
                     let sym = Value::new_symbol(id).get();
                     monoasm!(self.jit,
@@ -960,13 +1079,13 @@ impl Codegen {
                     ctx.dealloc_xmm(dst);
                     if let RV::Float(f) = val.unpack() {
                         let fdst = ctx.xmm_write(dst);
-                        ctx.push(TIr::FLiteral(fdst, f));
+                        cc.push(TIr::FLiteral(fdst, f));
                         let imm = self.jit.const_f64(f);
                         monoasm!(self.jit,
                             movq xmm(fdst as u64 + 2), [rip + imm];
                         );
                     } else {
-                        ctx.push(TIr::Literal(dst, val));
+                        cc.push(TIr::Literal(dst, val));
                         if val.is_packed_value() {
                             monoasm!(self.jit,
                               movq rax, (val.get());
@@ -985,9 +1104,9 @@ impl Codegen {
                     }
                 }
                 BcOp::Array(ret, src, len) => {
-                    ctx.write_back_range(self, src, len);
+                    ctx.write_back_range(self, cc, src, len);
                     ctx.dealloc_xmm(ret);
-                    ctx.push(TIr::Array(ret, src, len));
+                    cc.push(TIr::Array(ret, src, len));
                     monoasm!(self.jit,
                         lea  rdi, [rbp - (conv(src))];
                         movq rsi, (len);
@@ -997,46 +1116,21 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp::Index(ret, base, idx) => {
-                    ctx.read_slot(self, base);
-                    ctx.read_slot(self, idx);
+                    ctx.read_slot(self, cc, base);
+                    ctx.read_slot(self, cc, idx);
                     ctx.dealloc_xmm(ret);
-                    ctx.push(TIr::Index(ret, base, idx));
-                    let jit_return = self.vm_return;
-                    monoasm! { self.jit,
-                        movq rdx, [rbp - (conv(base))]; // base: Value
-                        movq rcx, [rbp - (conv(idx))]; // idx: Value
-                        movq rdi, rbx; // &mut Interp
-                        movq rsi, r12; // &mut Globals
-                        movq rax, (get_index);
-                        call rax;
-                        movq r13, ((pc + 1).0);
-                        testq rax, rax;
-                        jeq  jit_return;
-                    };
-                    self.store_rax(ret);
+                    cc.push(TIr::Index(ret, base, idx));
+                    self.jit_get_index(&ctx, ret, base, idx, pc);
                 }
                 BcOp::IndexAssign(src, base, idx) => {
-                    ctx.read_slot(self, base);
-                    ctx.read_slot(self, idx);
-                    ctx.read_slot(self, src);
-                    ctx.push(TIr::IndexAssign(src, base, idx));
-                    let jit_return = self.vm_return;
-                    monoasm! { self.jit,
-                        movq rdx, [rbp - (conv(base))]; // base: Value
-                        movq rcx, [rbp - (conv(idx))]; // idx: Value
-                        movq r8, [rbp - (conv(src))];  // src: Value
-                        movq rdi, rbx; // &mut Interp
-                        movq rsi, r12; // &mut Globals
-                        movq rax, (set_index);
-                        call rax;
-                        movq r13, ((pc + 1).0);
-                        testq rax, rax;
-                        jeq  jit_return;
-                    };
+                    ctx.read_slot(self, cc, base);
+                    ctx.read_slot(self, cc, idx);
+                    ctx.read_slot(self, cc, src);
+                    cc.push(TIr::IndexAssign(src, base, idx));
+                    self.jit_index_assign(&ctx, src, base, idx, pc);
                 }
                 BcOp::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    //let jit_return = self.vm_return;
                     let cached_value = self.jit.const_i64(0);
                     let cached_const_version = self.jit.const_i64(-1);
                     let global_const_version = self.const_version;
@@ -1044,7 +1138,7 @@ impl Codegen {
                     let exit = self.jit.label();
 
                     if pc.value().is_none() || pc.value().unwrap().class_id() != FLOAT_CLASS {
-                        ctx.push(TIr::LoadConst(dst, id));
+                        cc.push(TIr::LoadConst(dst, id));
 
                         self.jit.select(1);
                         self.jit.bind_label(slow_path);
@@ -1086,7 +1180,7 @@ impl Codegen {
                         self.jit.select(0);
 
                         let fdst = ctx.xmm_read(dst);
-                        ctx.push(TIr::FLoadConst(fdst, dst, id));
+                        cc.push(TIr::FLoadConst(fdst, dst, id));
 
                         monoasm!(self.jit,
                             movq rax, [rip + global_const_version];
@@ -1100,12 +1194,12 @@ impl Codegen {
                     }
                 }
                 BcOp::StoreConst(src, id) => {
-                    ctx.push(TIr::StoreConst(src, id));
-                    ctx.read_slot(self, src);
+                    cc.push(TIr::StoreConst(src, id));
+                    ctx.read_slot(self, cc, src);
                     self.jit_store_constant(&ctx, id, src);
                 }
                 BcOp::Nil(ret) => {
-                    ctx.push(TIr::Nil(ret));
+                    cc.push(TIr::Nil(ret));
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
                         movq [rbp - (conv(ret))], (NIL_VALUE);
@@ -1113,18 +1207,18 @@ impl Codegen {
                 }
                 BcOp::Neg(dst, src) => {
                     if pc.is_float1() {
-                        let fsrc = ctx.xmm_read_assume_float(self, src, pc);
+                        let fsrc = ctx.xmm_read_assume_float(self, cc, src, pc);
                         let fdst = ctx.xmm_write(dst);
-                        ctx.push(TIr::FNeg(fdst, fsrc));
+                        cc.push(TIr::FNeg(fdst, fsrc));
                         let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         self.xmm_mov(fsrc, fdst);
                         monoasm!(self.jit,
                             xorps xmm(fdst as u64 + 2), [rip + imm];
                         );
                     } else {
-                        ctx.read_slot(self, src);
+                        ctx.read_slot(self, cc, src);
                         ctx.dealloc_xmm(dst);
-                        ctx.push(TIr::Neg(dst, src));
+                        cc.push(TIr::Neg(dst, src));
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(src))];
                         );
@@ -1134,15 +1228,15 @@ impl Codegen {
                 }
                 BcOp::BinOp(kind, ret, lhs, rhs) => {
                     if pc.is_binary_integer() {
-                        ctx.read_slot(self, lhs);
-                        ctx.read_slot(self, rhs);
+                        ctx.read_slot(self, cc, lhs);
+                        ctx.read_slot(self, cc, rhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOp(kind, ret, lhs, rhs, pc.classid1()));
-                        self.gen_binop_integer(&mut ctx, pc, kind, ret, BinOpMode::RR(lhs, rhs));
+                        cc.push(TIr::BinOp(kind, ret, lhs, rhs, pc.classid1()));
+                        self.gen_binop_integer(ctx, pc, kind, ret, BinOpMode::RR(lhs, rhs));
                     } else if pc.is_binary_float() {
-                        let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                        let (flhs, frhs) = ctx.xmm_read_binary(self, cc, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        ctx.push(TIr::FBinOp(kind, fret, flhs, frhs));
+                        cc.push(TIr::FBinOp(kind, fret, flhs, frhs));
 
                         if fret == frhs {
                             let lhs = flhs as u64 + 2;
@@ -1199,10 +1293,10 @@ impl Codegen {
                             }
                         }
                     } else {
-                        ctx.read_slot(self, lhs);
-                        ctx.read_slot(self, rhs);
+                        ctx.read_slot(self, cc, lhs);
+                        ctx.read_slot(self, cc, rhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOp(kind, ret, lhs, rhs, pc.classid1()));
+                        cc.push(TIr::BinOp(kind, ret, lhs, rhs, pc.classid1()));
                         self.load_binary_args(lhs, rhs);
                         self.gen_binop_kind(&ctx, pc, kind, ret);
                     }
@@ -1210,14 +1304,14 @@ impl Codegen {
 
                 BcOp::BinOpRi(kind, ret, lhs, rhs) => {
                     if pc.is_integer1() {
-                        ctx.read_slot(self, lhs);
+                        ctx.read_slot(self, cc, lhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOpRi(kind, ret, lhs, rhs, pc.classid1()));
-                        self.gen_binop_integer(&mut ctx, pc, kind, ret, BinOpMode::RI(lhs, rhs));
+                        cc.push(TIr::BinOpRi(kind, ret, lhs, rhs, pc.classid1()));
+                        self.gen_binop_integer(ctx, pc, kind, ret, BinOpMode::RI(lhs, rhs));
                     } else if pc.is_float1() {
-                        let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                        let flhs = ctx.xmm_read_assume_float(self, cc, lhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        ctx.push(TIr::FBinOpRf(kind, fret, flhs, rhs as f64));
+                        cc.push(TIr::FBinOpRf(kind, fret, flhs, rhs as f64));
                         let imm = self.jit.const_f64(rhs as f64);
                         self.xmm_mov(flhs, fret);
                         match kind {
@@ -1245,9 +1339,9 @@ impl Codegen {
                             _ => unimplemented!(),
                         }
                     } else {
-                        ctx.read_slot(self, lhs);
+                        ctx.read_slot(self, cc, lhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOpRi(kind, ret, lhs, rhs, pc.classid1()));
+                        cc.push(TIr::BinOpRi(kind, ret, lhs, rhs, pc.classid1()));
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(lhs))];
                             movq rsi, (Value::int32(rhs as i32).get());
@@ -1258,14 +1352,14 @@ impl Codegen {
 
                 BcOp::BinOpIr(kind, ret, lhs, rhs) => {
                     if pc.is_integer2() {
-                        ctx.read_slot(self, rhs);
+                        ctx.read_slot(self, cc, rhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOpIr(kind, ret, lhs, rhs, pc.classid1()));
-                        self.gen_binop_integer(&mut ctx, pc, kind, ret, BinOpMode::IR(lhs, rhs));
+                        cc.push(TIr::BinOpIr(kind, ret, lhs, rhs, pc.classid1()));
+                        self.gen_binop_integer(ctx, pc, kind, ret, BinOpMode::IR(lhs, rhs));
                     } else if pc.is_float2() {
-                        let frhs = ctx.xmm_read_assume_float(self, rhs, pc);
+                        let frhs = ctx.xmm_read_assume_float(self, cc, rhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        ctx.push(TIr::FBinOpFr(kind, fret as u16, lhs as f64, frhs as u16));
+                        cc.push(TIr::FBinOpFr(kind, fret as u16, lhs as f64, frhs as u16));
                         let imm0 = self.jit.const_f64(lhs as f64);
                         if fret != frhs {
                             monoasm!(self.jit,
@@ -1320,9 +1414,9 @@ impl Codegen {
                             }
                         }
                     } else {
-                        ctx.read_slot(self, rhs);
+                        ctx.read_slot(self, cc, rhs);
                         ctx.dealloc_xmm(ret);
-                        ctx.push(TIr::BinOpIr(kind, ret, lhs, rhs, pc.classid1()));
+                        cc.push(TIr::BinOpIr(kind, ret, lhs, rhs, pc.classid1()));
                         monoasm!(self.jit,
                             movq rdi, (Value::int32(lhs as i32).get());
                             movq rsi, [rbp - (conv(rhs))];
@@ -1337,7 +1431,7 @@ impl Codegen {
                         self.opt_buf = Some(pc);
                     } else {
                         if pc.is_binary_float() {
-                            let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                            let (flhs, frhs) = ctx.xmm_read_binary(self, cc, lhs, rhs, pc);
                             ctx.dealloc_xmm(ret);
                             monoasm! { self.jit,
                                 xorq rax, rax;
@@ -1345,12 +1439,15 @@ impl Codegen {
                             };
                             self.setflag_float(kind);
                             self.store_rax(ret);
-                            ctx.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, false));
+                            cc.push(TIr::FCmp(kind, ret, flhs as u16, frhs as u16, false));
                         } else {
                             let generic = self.jit.label();
-                            self.gen_cmp_prep(&mut ctx, ret, lhs, rhs, generic);
-                            self.gen_cmp_kind(kind, generic, ret, &ctx);
-                            ctx.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, pc.classid1()));
+                            ctx.read_slot(self, cc, lhs);
+                            ctx.read_slot(self, cc, rhs);
+                            ctx.dealloc_xmm(ret);
+                            self.gen_cmp_prep(lhs, rhs, generic);
+                            self.gen_cmp_kind(kind, generic, ret, ctx.get_xmm_using());
+                            cc.push(TIr::Cmp(kind, ret, lhs, rhs, optimizable, pc.classid1()));
                         }
                     }
                 }
@@ -1361,7 +1458,7 @@ impl Codegen {
                     } else {
                         if pc.is_float1() {
                             let rhs_label = self.jit.const_f64(rhs as f64);
-                            let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                            let flhs = ctx.xmm_read_assume_float(self, cc, lhs, pc);
                             ctx.dealloc_xmm(ret);
                             monoasm! { self.jit,
                                 xorq rax, rax;
@@ -1369,21 +1466,23 @@ impl Codegen {
                             };
                             self.setflag_float(kind);
                             self.store_rax(ret);
-                            ctx.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, false));
+                            cc.push(TIr::FCmpRf(kind, ret, flhs as u16, rhs as f64, false));
                         } else {
                             let generic = self.jit.label();
-                            self.gen_cmpri_prep(&mut ctx, ret, lhs, rhs, generic);
-                            self.gen_cmp_kind(kind, generic, ret, &ctx);
-                            ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, pc.classid1()));
+                            ctx.read_slot(self, cc, lhs);
+                            ctx.dealloc_xmm(ret);
+                            self.gen_cmpri_prep(lhs, rhs, generic);
+                            self.gen_cmp_kind(kind, generic, ret, ctx.get_xmm_using());
+                            cc.push(TIr::Cmpri(kind, ret, lhs, rhs, optimizable, pc.classid1()));
                         }
                     }
                 }
                 BcOp::Mov(dst, src) => {
-                    ctx.copy_slot(self, src, dst);
+                    ctx.copy_slot(self, cc, src, dst);
                 }
                 BcOp::Ret(lhs) => {
-                    ctx.read_slot(self, lhs);
-                    ctx.push(TIr::Ret(lhs));
+                    ctx.read_slot(self, cc, lhs);
+                    cc.push(TIr::Ret(lhs));
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(lhs))];
                     );
@@ -1392,8 +1491,8 @@ impl Codegen {
                     continue;
                 }
                 BcOp::ConcatStr(ret, arg, len) => {
-                    ctx.push(TIr::ConcatStr(ret, arg, len));
-                    ctx.write_back_range(self, arg, len);
+                    cc.push(TIr::ConcatStr(ret, arg, len));
+                    ctx.write_back_range(self, cc, arg, len);
                     ctx.dealloc_xmm(ret);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1414,12 +1513,12 @@ impl Codegen {
                     self.opt_buf = Some(pc);
                 }
                 BcOp::MethodArgs(recv, args, len) => {
-                    ctx.read_slot(self, recv);
-                    ctx.write_back_range(self, args, len);
+                    ctx.read_slot(self, cc, recv);
+                    ctx.write_back_range(self, cc, args, len);
 
                     match std::mem::take(&mut self.opt_buf).unwrap().op1() {
                         BcOp::MethodCall(ret, name) => {
-                            ctx.push(TIr::MethodCall(ret, name, recv, args, len));
+                            cc.push(TIr::MethodCall(ret, name, recv, args, len));
                             ctx.dealloc_xmm(ret);
                             self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
                         }
@@ -1428,7 +1527,7 @@ impl Codegen {
                     skip = true;
                 }
                 BcOp::MethodDef(name, func) => {
-                    ctx.push(TIr::MethodDef(name, func));
+                    cc.push(TIr::MethodDef(name, func));
                     let class_version = self.class_version;
                     monoasm!(self.jit,
                         movq rdi, rbx; // &mut Interp
@@ -1441,21 +1540,30 @@ impl Codegen {
                     );
                 }
                 BcOp::Br(disp) => {
-                    let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
-                    ctx.push(TIr::Br(disp, wb.clone()));
-                    ctx.gen_write_back(self, wb);
+                    let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                    cc.push(TIr::Br(
+                        ((cc.start_pos + idx + 1) as i32 + disp) as usize,
+                        wb.clone(),
+                    ));
+                    self.gen_write_back(wb);
                     ctx.clear_write_back();
-                    let dest = labels[(idx as i32 + 1 + disp) as usize];
+                    let dest = cc.labels[(idx as i32 + 1 + disp) as usize];
                     monoasm!(self.jit,
                         jmp dest;
                     );
                     continue;
                 }
                 BcOp::CondBr(cond_, disp, false, kind) => {
-                    let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
-                    ctx.push(TIr::CondBr(cond_, disp, false, wb.clone(), kind));
-                    let dest = labels[(idx as i32 + 1 + disp) as usize];
-                    let branch_dest = ctx.get_branch_dest(self, dest, wb);
+                    let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                    cc.push(TIr::CondBr(
+                        cond_,
+                        ((cc.start_pos + idx + 1) as i32 + disp) as usize,
+                        None,
+                        kind,
+                        wb.clone(),
+                    ));
+                    let dest = cc.labels[(idx as i32 + 1 + disp) as usize];
+                    let branch_dest = self.get_branch_dest(dest, wb);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
@@ -1467,86 +1575,85 @@ impl Codegen {
                     }
                 }
                 BcOp::CondBr(cond_, disp, true, brkind) => {
-                    let dest = labels[(idx as i32 + 1 + disp) as usize];
+                    let dest = cc.labels[(idx as i32 + 1 + disp) as usize];
                     let generic = self.jit.label();
                     let pc = std::mem::take(&mut self.opt_buf).unwrap();
                     if pc.is_binary_float() {
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, ret, lhs, rhs, true) => {
-                                let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                                let (flhs, frhs) = ctx.xmm_read_binary(self, cc, lhs, rhs, pc);
                                 monoasm! { self.jit,
                                     ucomisd xmm(flhs as u64 + 2), xmm(frhs as u64 + 2);
                                 };
-                                ctx.push(TIr::FCmp(kind, ret, flhs, frhs, true));
+                                cc.push(TIr::FCmp(kind, ret, flhs, frhs, true));
                                 kind
                             }
                             BcOp::Cmpri(kind, ret, lhs, rhs, true) => {
                                 let rhs_label = self.jit.const_f64(rhs as f64);
-                                let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                                let flhs = ctx.xmm_read_assume_float(self, cc, lhs, pc);
                                 monoasm! { self.jit,
                                     ucomisd xmm(flhs as u64 + 2), [rip + rhs_label];
                                 };
-                                ctx.push(TIr::FCmpRf(kind, ret, flhs, rhs as f64, true));
+                                cc.push(TIr::FCmpRf(kind, ret, flhs, rhs as f64, true));
                                 kind
                             }
                             _ => unreachable!(),
                         };
-                        let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
-                        ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
-                        let branch_dest = ctx.get_branch_dest(self, dest, wb);
-                        self.gen_cmp_float_opt(kind, branch_dest, generic, brkind, &mut ctx);
+                        let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                        let xmm_using = ctx.get_xmm_using();
+                        cc.push(TIr::CondBr(
+                            cond_,
+                            ((cc.start_pos + idx + 1) as i32 + disp) as usize,
+                            Some(xmm_using.clone()),
+                            brkind,
+                            wb.clone(),
+                        ));
+                        let branch_dest = self.get_branch_dest(dest, wb);
+                        self.gen_cmp_float_opt(kind, branch_dest, generic, brkind, xmm_using);
                     } else {
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, ret, lhs, rhs, true) => {
-                                self.gen_cmp_prep(&mut ctx, ret, lhs, rhs, generic);
-                                ctx.push(TIr::Cmp(kind, ret, lhs, rhs, true, pc.classid1()));
+                                ctx.read_slot(self, cc, lhs);
+                                ctx.read_slot(self, cc, rhs);
+                                ctx.dealloc_xmm(ret);
+                                self.gen_cmp_prep(lhs, rhs, generic);
+                                cc.push(TIr::Cmp(kind, ret, lhs, rhs, true, pc.classid1()));
                                 kind
                             }
                             BcOp::Cmpri(kind, ret, lhs, rhs, true) => {
-                                self.gen_cmpri_prep(&mut ctx, ret, lhs, rhs, generic);
-                                ctx.push(TIr::Cmpri(kind, ret, lhs, rhs, true, pc.classid1()));
+                                ctx.read_slot(self, cc, lhs);
+                                ctx.dealloc_xmm(ret);
+                                self.gen_cmpri_prep(lhs, rhs, generic);
+                                cc.push(TIr::Cmpri(kind, ret, lhs, rhs, true, pc.classid1()));
                                 kind
                             }
                             _ => unreachable!(),
                         };
 
-                        let wb = ctx.get_write_back_if_another_bb(&info, start_pos + idx, disp);
-                        ctx.push(TIr::CondBr(cond_, disp, true, wb.clone(), brkind));
+                        let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                        let xmm_using = ctx.get_xmm_using();
+                        cc.push(TIr::CondBr(
+                            cond_,
+                            ((cc.start_pos + idx + 1) as i32 + disp) as usize,
+                            Some(xmm_using.clone()),
+                            brkind,
+                            wb.clone(),
+                        ));
                         monoasm! { self.jit,
                             cmpq rdi, rsi;
                         };
-                        let branch_dest = ctx.get_branch_dest(self, dest, wb);
-                        self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, &mut ctx);
+                        let branch_dest = self.get_branch_dest(dest, wb);
+                        self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, xmm_using);
                     }
                 }
             }
 
-            if let Some(_) = info[start_pos + idx + 1] {
+            if let Some(_) = cc.info[cc.start_pos + idx + 1] {
+                let wb = ctx.get_write_back();
+                cc.push(TIr::Br(cc.start_pos + idx + 1, wb));
                 ctx.all_write_back(self);
             }
         }
-
-        self.jit.finalize();
-
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        let elapsed = now.elapsed();
-        #[cfg(any(feature = "emit-asm"))]
-        {
-            eprintln!("{:?}", ctx.tir);
-            let (start, code_end, end) = self.jit.code_block.last().unwrap();
-            eprintln!(
-                "offset:{:?} code: {} bytes  data: {} bytes",
-                start,
-                *code_end - *start,
-                *end - *code_end
-            );
-            self.jit.select(0);
-            eprintln!("{}", self.jit.dump_code().unwrap());
-        }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        eprintln!("    finished compile. elapsed:{:?}", elapsed);
-
-        entry
     }
 
     fn prologue(&mut self, regs: usize) {
@@ -1779,31 +1886,12 @@ impl Codegen {
         };
     }
 
-    fn gen_cmp_prep(
-        &mut self,
-        ctx: &mut BBContext,
-        ret: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
-        generic: DestLabel,
-    ) {
-        ctx.read_slot(self, lhs);
-        ctx.read_slot(self, rhs);
-        ctx.dealloc_xmm(ret);
+    fn gen_cmp_prep(&mut self, lhs: SlotId, rhs: SlotId, generic: DestLabel) {
         self.load_binary_args(lhs, rhs);
         self.guard_rdi_rsi_fixnum(generic);
     }
 
-    fn gen_cmpri_prep(
-        &mut self,
-        ctx: &mut BBContext,
-        ret: SlotId,
-        lhs: SlotId,
-        rhs: i16,
-        generic: DestLabel,
-    ) {
-        ctx.read_slot(self, lhs);
-        ctx.dealloc_xmm(ret);
+    fn gen_cmpri_prep(&mut self, lhs: SlotId, rhs: i16, generic: DestLabel) {
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(lhs))];
             movq rsi, (Value::new_integer(rhs as i64).get());
@@ -1811,14 +1899,20 @@ impl Codegen {
         self.guard_rdi_fixnum(generic);
     }
 
-    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+    fn gen_cmp_kind(
+        &mut self,
+        kind: CmpKind,
+        generic: DestLabel,
+        ret: SlotId,
+        xmm_using: Vec<usize>,
+    ) {
         match kind {
-            CmpKind::Eq => self.cmp_eq(generic, Some(ctx)),
-            CmpKind::Ne => self.cmp_ne(generic, Some(ctx)),
-            CmpKind::Ge => self.cmp_ge(generic, Some(ctx)),
-            CmpKind::Gt => self.cmp_gt(generic, Some(ctx)),
-            CmpKind::Le => self.cmp_le(generic, Some(ctx)),
-            CmpKind::Lt => self.cmp_lt(generic, Some(ctx)),
+            CmpKind::Eq => self.cmp_eq(generic, xmm_using),
+            CmpKind::Ne => self.cmp_ne(generic, xmm_using),
+            CmpKind::Ge => self.cmp_ge(generic, xmm_using),
+            CmpKind::Gt => self.cmp_gt(generic, xmm_using),
+            CmpKind::Le => self.cmp_le(generic, xmm_using),
+            CmpKind::Lt => self.cmp_lt(generic, xmm_using),
             _ => unimplemented!(),
         }
         self.store_rax(ret);
@@ -1830,15 +1924,15 @@ impl Codegen {
         branch_dest: DestLabel,
         generic: DestLabel,
         brkind: BrKind,
-        ctx: &mut BBContext,
+        xmm_using: Vec<usize>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, generic, brkind, ctx),
-            CmpKind::Ne => self.cmp_opt_int_ne(branch_dest, generic, brkind, ctx),
-            CmpKind::Ge => self.cmp_opt_int_ge(branch_dest, generic, brkind, ctx),
-            CmpKind::Gt => self.cmp_opt_int_gt(branch_dest, generic, brkind, ctx),
-            CmpKind::Le => self.cmp_opt_int_le(branch_dest, generic, brkind, ctx),
-            CmpKind::Lt => self.cmp_opt_int_lt(branch_dest, generic, brkind, ctx),
+            CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Ne => self.cmp_opt_int_ne(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Ge => self.cmp_opt_int_ge(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Gt => self.cmp_opt_int_gt(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Le => self.cmp_opt_int_le(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Lt => self.cmp_opt_int_lt(branch_dest, generic, brkind, xmm_using),
             _ => unimplemented!(),
         }
     }
@@ -1849,15 +1943,15 @@ impl Codegen {
         branch_dest: DestLabel,
         generic: DestLabel,
         brkind: BrKind,
-        ctx: &mut BBContext,
+        xmm_using: Vec<usize>,
     ) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, generic, brkind, ctx),
-            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, generic, brkind, ctx),
-            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, generic, brkind, ctx),
-            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, generic, brkind, ctx),
-            CmpKind::Le => self.cmp_opt_float_le(branch_dest, generic, brkind, ctx),
-            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, generic, brkind, ctx),
+            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Le => self.cmp_opt_float_le(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, generic, brkind, xmm_using),
             _ => unimplemented!(),
         }
     }

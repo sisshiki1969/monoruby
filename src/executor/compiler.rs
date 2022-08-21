@@ -657,7 +657,7 @@ impl Codegen {
     }
 
     fn jit_compile(&mut self, func: &mut FuncInfo) {
-        let label = match &mut func.kind {
+        let label = match &func.kind {
             FuncKind::Normal(info) => {
                 func.data.meta.set_jit();
                 let jit_entry = self.jit_compile_normal(info, None);
