@@ -544,8 +544,8 @@ impl NormalFuncInfo {
             }
         }
         assert_eq!(0, info[self.bytecode().len()]);
-        let mut bb_id = 0;
-        let bb_info: Vec<_> = info
+        let mut bb_id = 1;
+        let mut bb_info: Vec<_> = info
             .into_iter()
             .map(|e| {
                 if e > 0 {
@@ -557,6 +557,7 @@ impl NormalFuncInfo {
                 }
             })
             .collect();
+        bb_info[0] = Some(0);
         bb_info
     }
 

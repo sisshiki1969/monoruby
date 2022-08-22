@@ -34,7 +34,7 @@ enum LinkMode {
 ///
 /// Context of the current Basic block.
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct BBContext {
     /// information for stack slots.
     stack_slot: StackSlotInfo,
@@ -42,7 +42,7 @@ pub(crate) struct BBContext {
     xmm: [Vec<SlotId>; 14],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StackSlotInfo(Vec<LinkMode>);
 
 impl std::ops::Index<SlotId> for StackSlotInfo {
@@ -184,12 +184,6 @@ impl BBContext {
         self.stack_slot.clear()
     }
 
-    fn all_write_back(&mut self, codegen: &mut Codegen) {
-        let wb = self.get_write_back();
-        codegen.gen_write_back(wb);
-        self.clear_write_back();
-    }
-
     fn write_back_range(
         &mut self,
         codegen: &mut Codegen,
@@ -225,7 +219,7 @@ impl BBContext {
         idx: usize,
         disp: i32,
     ) -> WriteBack {
-        if cc.info[((cc.start_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
+        if cc.info[((cc.bb_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
             self.get_write_back()
         } else {
             vec![]
@@ -366,7 +360,10 @@ struct CompileContext {
     labels: Vec<DestLabel>,
     info: Vec<Option<usize>>,
     start_pos: usize,
+    bb_pos: usize,
+    loop_count: usize,
     is_loop: bool,
+    branch_map: HashMap<usize, Vec<(BBContext, DestLabel)>>,
     tir: Vec<TIr>,
 }
 
@@ -380,9 +377,24 @@ impl CompileContext {
             labels,
             info: func.get_bb_info(),
             start_pos,
+            bb_pos: start_pos,
+            loop_count: 0,
+            branch_map: HashMap::default(),
             is_loop,
             tir: vec![],
         }
+    }
+
+    fn label(&self, idx: usize, disp: i32) -> DestLabel {
+        self.labels[((self.bb_offset() + idx) as i32 + disp) as usize]
+    }
+
+    fn bb_offset(&self) -> usize {
+        self.bb_pos - self.start_pos
+    }
+
+    fn new_branch(&mut self, dest: usize, ctx: BBContext, label: DestLabel) {
+        self.branch_map.entry(dest).or_default().push((ctx, label))
     }
 
     fn push(&mut self, tir: TIr) {
@@ -750,21 +762,6 @@ impl Codegen {
     }
 
     ///
-    /// Get *DestLabel* for a branch to *dest*.
-    ///
-    fn get_branch_dest(&mut self, dest: DestLabel, wb: WriteBack) -> DestLabel {
-        self.jit.select(1);
-        let entry = self.jit.label();
-        self.jit.bind_label(entry);
-        self.gen_write_back(wb);
-        monoasm!(self.jit,
-            jmp  dest;
-        );
-        self.jit.select(0);
-        entry
-    }
-
-    ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
     fn gen_deopt_dest(&mut self, pc: BcPc, wb: WriteBack) -> DestLabel {
@@ -801,6 +798,22 @@ impl Codegen {
         monoasm!(self.jit,
             jmp fallback;
         );
+    }
+
+    fn gen_side_write_back(&mut self, cc: &mut CompileContext, pos: usize) {
+        if let Some(entries) = cc.branch_map.remove(&pos) {
+            let cur_label = cc.labels[pos - cc.start_pos];
+            for (ctx, dest) in entries {
+                let wb = ctx.get_write_back();
+                self.jit.select(1);
+                self.jit.bind_label(dest);
+                self.gen_write_back(wb);
+                monoasm!(self.jit,
+                    jmp cur_label;
+                );
+                self.jit.select(0);
+            }
+        }
     }
 
     pub(super) fn jit_compile_normal(
@@ -844,7 +857,18 @@ impl Codegen {
 
         let mut ctx = BBContext::new(func.total_reg_num());
         let mut cc = CompileContext::new(func, self, start_pos, position.is_some());
-        self.compile_bb(func, &mut ctx, &mut cc);
+        loop {
+            cc.bb_pos = match self.compile_bb(func, &mut ctx, &mut cc) {
+                None => break,
+                Some(i) => i,
+            };
+        }
+
+        let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
+        for pos in keys.into_iter() {
+            self.gen_side_write_back(&mut cc, pos);
+        }
+
         self.jit.finalize();
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
