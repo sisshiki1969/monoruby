@@ -685,27 +685,27 @@ impl IrContext {
                 box then_,
                 box else_,
             } => {
-                let then_pos = self.new_label();
+                let else_pos = self.new_label();
                 let succ_pos = self.new_label();
                 if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
                     let loc = cond.loc;
                     let cond = info.next_reg().into();
                     self.gen_cmp(ctx, info, id_store, None, kind, lhs, rhs, true, loc)?;
                     info.pop();
-                    self.gen_condbr(cond, then_pos, true);
+                    self.gen_condnotbr(cond, else_pos, true);
                 } else {
                     let cond = self.gen_temp_expr(ctx, info, id_store, cond)?;
-                    self.gen_condbr(cond, then_pos, false);
+                    self.gen_condnotbr(cond, else_pos, false);
                 }
-                self.gen_expr(ctx, info, id_store, else_, use_value, is_ret)?;
+                self.gen_expr(ctx, info, id_store, then_, use_value, is_ret)?;
                 if !is_ret {
                     self.gen_br(succ_pos);
                     if use_value {
                         info.pop();
                     }
                 }
-                self.apply_label(then_pos);
-                self.gen_expr(ctx, info, id_store, then_, use_value, is_ret)?;
+                self.apply_label(else_pos);
+                self.gen_expr(ctx, info, id_store, else_, use_value, is_ret)?;
                 self.apply_label(succ_pos);
                 return Ok(());
             }
