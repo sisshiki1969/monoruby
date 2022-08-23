@@ -524,8 +524,8 @@ impl NormalFuncInfo {
         }
     }
 
-    pub(crate) fn get_bb_info(&self) -> Vec<Option<usize>> {
-        let mut info = vec![0; self.bytecode().len() + 1];
+    pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
+        let mut info = vec![vec![]; self.bytecode().len() + 1];
         let mut skip = false;
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
@@ -538,26 +538,59 @@ impl NormalFuncInfo {
                     skip = true;
                 }
                 BcOp::Br(disp) | BcOp::CondBr(_, disp, _, _) => {
-                    info[((idx + 1) as i32 + disp) as usize] += 1;
+                    info[((idx + 1) as i32 + disp) as usize].push(idx);
                 }
                 _ => {}
             }
         }
-        assert_eq!(0, info[self.bytecode().len()]);
+        assert_eq!(0, info[self.bytecode().len()].len());
         let mut bb_id = 1;
         let mut bb_info: Vec<_> = info
             .into_iter()
             .map(|e| {
-                if e > 0 {
+                if e.len() > 0 {
                     let id = bb_id;
                     bb_id += 1;
-                    Some(id)
+                    Some((id, e))
                 } else {
                     None
                 }
             })
             .collect();
-        bb_info[0] = Some(0);
+        for (idx, pc) in self.bytecode().iter().enumerate() {
+            let pc = BcPc::from(pc);
+            if skip {
+                skip = false;
+                continue;
+            }
+            match pc.op1() {
+                BcOp::MethodArgs(..) => {
+                    skip = true;
+                    match bb_info[idx + 2] {
+                        Some(ref mut elem) => {
+                            elem.1.push(idx);
+                        }
+                        None => {}
+                    }
+                }
+                BcOp::Br(_) | BcOp::Ret(_) => {}
+                _ => match bb_info[idx + 1] {
+                    Some(ref mut elem) => {
+                        elem.1.push(idx);
+                    }
+                    None => {}
+                },
+            }
+        }
+        if bb_info[0].is_none() {
+            bb_info[0] = Some((0, vec![]));
+        }
+        /*for (id, i, v) in bb_info.iter().enumerate().filter_map(|(i, e)| match e {
+            None => None,
+            Some((id, v)) => Some((id, i, v)),
+        }) {
+            eprintln!("{} {} {:?}", id, i, v);
+        }*/
         bb_info
     }
 

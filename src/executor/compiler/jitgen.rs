@@ -358,7 +358,7 @@ impl BBContext {
 
 struct CompileContext {
     labels: Vec<DestLabel>,
-    info: Vec<Option<usize>>,
+    info: Vec<Option<(usize, Vec<usize>)>>,
     start_pos: usize,
     bb_pos: usize,
     loop_count: usize,
