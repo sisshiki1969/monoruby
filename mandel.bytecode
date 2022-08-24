@@ -1,16 +1,12 @@
-+:00041 loop_start counter=5 jit-addr=00007fb48d1e8133
++:00041 loop_start counter=5 jit-addr=00007fec70ccd133
  :00042 _%18 = %12 > %17                     [Integer][Integer]
  :00043 condbr _%18 =>:00066
- xmm2 <- %7
  :00044 %18 = %7 * %7                        [Float][Float]
- xmm4 <- %8
  :00045 %19 = %8 * %8                        [Float][Float]
  :00046 %18 = %18 - %19                      [Float][Float]
- xmm6 <- %9
  :00047 %13 = %18 + %9                       [Float][Float]
  :00048 %18 = 2: i16 * %7                    [Integer][Float]
  :00049 %18 = %18 * %8                       [Float][Float]
- xmm8 <- %10
  :00050 %14 = %18 + %10                      [Float][Float]
  :00051 %18 = %13
  :00052 %19 = %14
@@ -21,16 +17,10 @@
  :00057 %18 = %18 + %19                      [Float][Float]
  :00058 %19 = const[LIMIT_SQUARED]           [4.0]
  :00059 _%18 = %18 > %19                     [Float][Float]
- :00060 condbr _%18 =>:00062 (wb: F0:[%18] F5:[%13, %7] F7:[%14, %8])
- :00061 br =>:00064 (wb: F0:[%18] F5:[%13, %7] F7:[%14, %8])
-+:00062 %11 = literal[true]
- :00063 br =>:00066
+ :00060 condnotbr _%18 =>:00064
+ :00061 %11 = literal[true]
+ :00062 br =>:00066
+ :00063 br =>:00064
 +:00064 %12 = %12 + 1: i16                   [Integer][Integer]
  :00065 br =>:00041
 +:00066 loop_end
-
-# loop内でFloatとして使用され、再代入されないローカル変数はloopの頭で変換しておく
-# %9 %10
-
-# 再代入されるローカル変数は？
-# %7 %8 %13 %14
