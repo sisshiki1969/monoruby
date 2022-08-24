@@ -58,12 +58,6 @@ impl std::ops::IndexMut<SlotId> for StackSlotInfo {
     }
 }
 
-impl StackSlotInfo {
-    fn clear(&mut self) {
-        self.0.iter_mut().for_each(|info| *info = LinkMode::None);
-    }
-}
-
 type WriteBack = Vec<(u16, Vec<SlotId>)>;
 type UsingXmm = Vec<usize>;
 
@@ -179,11 +173,6 @@ impl BBContext {
         }
     }
 
-    fn clear_write_back(&mut self) {
-        self.xmm.iter_mut().for_each(|info| info.clear());
-        self.stack_slot.clear()
-    }
-
     fn write_back_range(
         &mut self,
         codegen: &mut Codegen,
@@ -219,7 +208,7 @@ impl BBContext {
         idx: usize,
         disp: i32,
     ) -> WriteBack {
-        if cc.info[((cc.bb_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
+        if cc.bb_info[((cc.bb_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
             self.get_write_back()
         } else {
             vec![]
@@ -358,12 +347,14 @@ impl BBContext {
 
 struct CompileContext {
     labels: Vec<DestLabel>,
-    info: Vec<Option<(usize, Vec<usize>)>>,
+    /// (bb_id, Vec<src_idx>)
+    bb_info: Vec<Option<(usize, Vec<usize>)>>,
     start_pos: usize,
     bb_pos: usize,
     loop_count: usize,
     is_loop: bool,
-    branch_map: HashMap<usize, Vec<(BBContext, DestLabel)>>,
+    /// key: dest_idx, value: (src_idx, bbctx, dest)
+    branch_map: HashMap<usize, Vec<(usize, BBContext, DestLabel)>>,
     tir: Vec<TIr>,
 }
 
@@ -375,7 +366,7 @@ impl CompileContext {
         }
         Self {
             labels,
-            info: func.get_bb_info(),
+            bb_info: func.get_bb_info(),
             start_pos,
             bb_pos: start_pos,
             loop_count: 0,
@@ -393,10 +384,12 @@ impl CompileContext {
         self.bb_pos - self.start_pos
     }
 
-    fn new_branch(&mut self, dest: usize, ctx: BBContext, label: DestLabel) {
-        self.branch_map.entry(dest).or_default().push((ctx, label))
+    fn new_branch(&mut self, src: usize, dest: usize, ctx: BBContext, label: DestLabel) {
+        self.branch_map
+            .entry(dest)
+            .or_default()
+            .push((src, ctx, label))
     }
-
     fn push(&mut self, tir: TIr) {
         self.tir.push(tir)
     }
@@ -803,8 +796,9 @@ impl Codegen {
     fn gen_side_write_back(&mut self, cc: &mut CompileContext, pos: usize) {
         if let Some(entries) = cc.branch_map.remove(&pos) {
             let cur_label = cc.labels[pos - cc.start_pos];
-            for (ctx, dest) in entries {
+            for (src, ctx, dest) in entries {
                 let wb = ctx.get_write_back();
+                //eprint!("{}:{:?}", src, wb);
                 self.jit.select(1);
                 self.jit.bind_label(dest);
                 self.gen_write_back(wb);
@@ -813,6 +807,7 @@ impl Codegen {
                 );
                 self.jit.select(0);
             }
+            //eprintln!("");
         }
     }
 
@@ -855,12 +850,27 @@ impl Codegen {
             self.prologue(func.total_reg_num());
         }
 
-        let mut ctx = BBContext::new(func.total_reg_num());
         let mut cc = CompileContext::new(func, self, start_pos, position.is_some());
-        loop {
-            cc.bb_pos = match self.compile_bb(func, &mut ctx, &mut cc) {
+        let bb_start_pos: Vec<_> = cc
+            .bb_info
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, v)| match v {
+                Some(_) => {
+                    if idx >= start_pos {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            })
+            .collect();
+        for i in bb_start_pos.clone() {
+            cc.bb_pos = i;
+            match self.compile_bb(func, &mut cc) {
                 None => break,
-                Some(i) => i,
+                _ => {}
             };
         }
 

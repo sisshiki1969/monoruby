@@ -4,12 +4,12 @@ impl Codegen {
     pub(super) fn compile_bb(
         &mut self,
         func: &NormalFuncInfo,
-        ctx: &mut BBContext,
         cc: &mut CompileContext,
     ) -> Option<usize> {
         let mut skip = false;
         self.gen_side_write_back(cc, cc.bb_pos);
-        for (idx, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
+        let mut ctx = BBContext::new(func.total_reg_num());
+        for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
                 skip = false;
@@ -19,8 +19,8 @@ impl Codegen {
             match pc.op1() {
                 BcOp::CondBr(_, _, true, _) => {}
                 _ => {
-                    cc.push(TIr::Label(cc.bb_pos + idx, pc));
-                    self.jit.bind_label(cc.label(idx, 0));
+                    cc.push(TIr::Label(cc.bb_pos + ofs, pc));
+                    self.jit.bind_label(cc.label(ofs, 0));
                 }
             }
             match pc.op1() {
@@ -34,7 +34,7 @@ impl Codegen {
                     cc.loop_count -= 1;
                     if cc.is_loop && cc.loop_count == 0 {
                         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("<-- compile finished. end:[{:05}]", cc.bb_pos + idx);
+                        eprintln!("<-- compile finished. end:[{:05}]", cc.bb_pos + ofs);
                         let wb = ctx.get_write_back();
                         cc.push(TIr::Deopt(pc, wb.clone()));
                         self.deopt(pc, wb);
@@ -376,19 +376,17 @@ impl Codegen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
-                    ctx.clear_write_back();
-                    let next_idx = cc.bb_pos + idx + 1;
+                    let next_idx = cc.bb_pos + ofs + 1;
                     return Some(next_idx);
                 }
                 BcOp::Br(disp) => {
-                    let next_idx = cc.bb_pos + idx + 1;
+                    let next_idx = cc.bb_pos + ofs + 1;
                     let dest_idx = (next_idx as i64 + disp as i64) as usize;
                     let wb = ctx.get_write_back();
                     cc.push(TIr::Br(dest_idx, wb.clone()));
 
                     let branch_dest = self.jit.label();
-                    cc.new_branch(dest_idx, ctx.clone(), branch_dest);
-                    ctx.clear_write_back();
+                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx, branch_dest);
                     monoasm!(self.jit,
                         jmp branch_dest;
                     );
@@ -396,10 +394,10 @@ impl Codegen {
                 }
                 BcOp::CondBr(cond_, disp, false, kind) => {
                     let wb = ctx.get_write_back();
-                    let dest_idx = ((cc.bb_pos + idx + 1) as i32 + disp) as usize;
+                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     cc.push(TIr::CondBr(cond_, dest_idx, kind, wb.clone()));
                     let branch_dest = self.jit.label();
-                    cc.new_branch(dest_idx, ctx.clone(), branch_dest);
+                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
@@ -411,7 +409,7 @@ impl Codegen {
                     }
                 }
                 BcOp::CondBr(_, disp, true, brkind) => {
-                    let dest_idx = ((cc.bb_pos + idx + 1) as i32 + disp) as usize;
+                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let generic = self.jit.label();
                     let pc = std::mem::take(&mut self.opt_buf).unwrap();
                     if pc.is_binary_float() {
@@ -435,17 +433,17 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                        let wb = ctx.get_write_back_if_another_bb(cc, ofs, disp);
                         let xmm_using = ctx.get_xmm_using();
                         cc.push(TIr::CondBrOpt(
-                            ((cc.bb_pos + idx + 1) as i32 + disp) as usize,
+                            ((cc.bb_pos + ofs + 1) as i32 + disp) as usize,
                             kind,
                             brkind,
                             wb.clone(),
                             xmm_using.clone(),
                         ));
                         let branch_dest = self.jit.label();
-                        cc.new_branch(dest_idx, ctx.clone(), branch_dest);
+                        cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                         self.gen_cmp_float_opt(kind, branch_dest, generic, brkind, xmm_using);
                     } else {
                         let kind = match pc.op1() {
@@ -467,10 +465,10 @@ impl Codegen {
                             _ => unreachable!(),
                         };
 
-                        let wb = ctx.get_write_back_if_another_bb(cc, idx, disp);
+                        let wb = ctx.get_write_back_if_another_bb(cc, ofs, disp);
                         let xmm_using = ctx.get_xmm_using();
                         cc.push(TIr::CondBrOpt(
-                            ((cc.bb_pos + idx + 1) as i32 + disp) as usize,
+                            ((cc.bb_pos + ofs + 1) as i32 + disp) as usize,
                             kind,
                             brkind,
                             wb.clone(),
@@ -480,19 +478,18 @@ impl Codegen {
                             cmpq rdi, rsi;
                         };
                         let branch_dest = self.jit.label();
-                        cc.new_branch(dest_idx, ctx.clone(), branch_dest);
+                        cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                         self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, xmm_using);
                     }
                 }
             }
 
-            let next_idx = cc.bb_pos + idx + 1;
-            if let Some(_) = cc.info[next_idx] {
+            let next_idx = cc.bb_pos + ofs + 1;
+            if let Some(_) = cc.bb_info[next_idx] {
                 let wb = ctx.get_write_back();
-                cc.push(TIr::Br(cc.bb_pos + idx + 1, wb));
+                cc.push(TIr::Br(cc.bb_pos + ofs + 1, wb));
                 let branch_dest = self.jit.label();
-                cc.new_branch(next_idx, ctx.clone(), branch_dest);
-                ctx.clear_write_back();
+                cc.new_branch(cc.bb_pos + ofs, next_idx, ctx.clone(), branch_dest);
                 monoasm!(self.jit,
                     jmp branch_dest;
                 );
