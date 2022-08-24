@@ -25,6 +25,7 @@ impl Codegen {
             }
             match pc.op1() {
                 BcOp::LoopStart(_) => {
+                    ScanContext::scan_loop(func, cc.bb_pos + idx);
                     cc.push(TIr::LoopStart);
                     cc.loop_count += 1;
                 }
@@ -497,5 +498,215 @@ impl Codegen {
             }
         }
         None
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RegInfo(Vec<bool>);
+
+impl RegInfo {
+    fn new(reg_num: usize) -> Self {
+        Self(vec![false; reg_num])
+    }
+
+    fn merge(&mut self, other: &Self) {
+        for (i, elem) in &mut self.0.iter_mut().enumerate() {
+            *elem = *elem | other[SlotId(i as u16)];
+        }
+    }
+}
+
+impl std::ops::Index<SlotId> for RegInfo {
+    type Output = bool;
+    fn index(&self, i: SlotId) -> &Self::Output {
+        &self.0[i.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<SlotId> for RegInfo {
+    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
+        &mut self.0[i.0 as usize]
+    }
+}
+
+struct ScanContext {
+    /// key: dest_idx, value Vec<(src_idx, reginfo)>
+    branch_map: HashMap<usize, Vec<(usize, RegInfo)>>,
+    bb_info: Vec<Option<(usize, Vec<usize>)>>,
+    back_info: RegInfo,
+}
+
+impl ScanContext {
+    fn new(func: &NormalFuncInfo) -> Self {
+        Self {
+            branch_map: HashMap::default(),
+            bb_info: func.get_bb_info(),
+            back_info: RegInfo::new(func.total_reg_num()),
+        }
+    }
+
+    fn add_branch(&mut self, src_idx: usize, reg_info: RegInfo, dest_idx: usize) {
+        match self.branch_map.get_mut(&dest_idx) {
+            Some(entry) => {
+                entry.push((src_idx, reg_info));
+            }
+            None => {
+                self.branch_map.insert(dest_idx, vec![(src_idx, reg_info)]);
+            }
+        }
+    }
+
+    fn get_branches(&self, dest_idx: usize) -> Vec<(usize, RegInfo)> {
+        match self.branch_map.get(&dest_idx) {
+            Some(v) => v.clone(),
+            None => vec![],
+        }
+    }
+}
+
+impl ScanContext {
+    fn scan_loop(func: &NormalFuncInfo, bb_pos: usize) {
+        let mut ctx = ScanContext::new(func);
+        let regnum = func.total_reg_num();
+        ctx.add_branch(0, RegInfo::new(regnum), bb_pos);
+        let bb_start_vec: Vec<usize> = ctx
+            .bb_info
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, info)| match info {
+                Some(_) => {
+                    if idx >= bb_pos {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            })
+            .collect();
+        for bb_pos in bb_start_vec {
+            let branches = ctx.get_branches(bb_pos);
+            let reg_info = branches
+                .into_iter()
+                .fold(RegInfo::new(regnum), |mut acc, (_, info)| {
+                    acc.merge(&info);
+                    acc
+                });
+            if ctx.scan_bb(func, reg_info, bb_pos) {
+                break;
+            };
+        }
+        ctx.back_info.0.truncate(func.total_local_num());
+        dbg!(ctx.back_info);
+    }
+
+    fn scan_bb(&mut self, func: &NormalFuncInfo, mut reg_info: RegInfo, bb_pos: usize) -> bool {
+        let mut skip = false;
+        let mut method_buf = None;
+        for (ofs, pc) in func.bytecode()[dbg!(bb_pos)..].iter().enumerate() {
+            if skip {
+                skip = false;
+                continue;
+            }
+
+            match BcOp::from_bc(pc) {
+                BcOp::LoopStart(_) => {}
+                BcOp::LoopEnd => return true,
+                BcOp::Integer(ret, _)
+                | BcOp::Symbol(ret, _)
+                | BcOp::Array(ret, _, _)
+                | BcOp::Index(ret, _, _)
+                | BcOp::Nil(ret) => {
+                    reg_info[ret] = false;
+                }
+                BcOp::Literal(dst, val) => {
+                    reg_info[dst] = matches!(val.unpack(), RV::Float(_));
+                }
+                BcOp::IndexAssign(..) => {}
+                BcOp::LoadConst(dst, _) => {
+                    reg_info[dst] =
+                        pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
+                }
+                BcOp::StoreConst(_, _) => {}
+                BcOp::Neg(dst, src) => {
+                    reg_info[dst] = pc.is_float1();
+                    reg_info[src] = pc.is_float1();
+                }
+                BcOp::BinOp(_, ret, lhs, rhs) => {
+                    reg_info[ret] = pc.is_binary_float();
+                    reg_info[lhs] = pc.is_float1();
+                    reg_info[rhs] = pc.is_float2();
+                }
+                BcOp::BinOpRi(_, ret, lhs, _rhs) => {
+                    reg_info[ret] = pc.is_float1();
+                    reg_info[lhs] = pc.is_float1();
+                }
+                BcOp::BinOpIr(_, ret, _lhs, rhs) => {
+                    reg_info[ret] = pc.is_float2();
+                    reg_info[rhs] = pc.is_float2();
+                }
+                BcOp::Cmp(_, ret, lhs, rhs, ..) => {
+                    reg_info[ret] = false;
+                    reg_info[lhs] = pc.is_float1();
+                    reg_info[rhs] = pc.is_float2();
+                }
+                BcOp::Cmpri(_, ret, lhs, ..) => {
+                    reg_info[ret] = false;
+                    reg_info[lhs] = pc.is_float1();
+                }
+                BcOp::Mov(dst, src) => {
+                    reg_info[dst] = reg_info[src];
+                }
+                BcOp::ConcatStr(ret, arg, len) => {
+                    reg_info[ret] = false;
+                    for r in arg.0..arg.0 + len {
+                        reg_info[SlotId(r)] = false;
+                    }
+                }
+                BcOp::MethodCall(ret, ..) => {
+                    assert!(method_buf.is_none());
+                    method_buf = Some((ret, pc.classid1()));
+                }
+                BcOp::MethodArgs(recv, _args, _len) => {
+                    match std::mem::take(&mut method_buf) {
+                        Some((ret, class)) => {
+                            reg_info[ret] = false;
+                            reg_info[recv] = class == FLOAT_CLASS;
+                        }
+                        None => unreachable!(),
+                    }
+                    skip = true;
+                }
+                BcOp::MethodDef(..) => {}
+                BcOp::Ret(_) => return false,
+                BcOp::Br(disp) => {
+                    if disp >= 0 {
+                        let src_idx = bb_pos + ofs;
+                        let dest_idx = ((src_idx + 1) as i32 + disp) as usize;
+                        self.add_branch(src_idx, reg_info, dest_idx);
+                    } else {
+                        self.back_info.merge(&reg_info);
+                    }
+                    return false;
+                }
+                BcOp::CondBr(cond_, disp, _, _) => {
+                    reg_info[cond_] = false;
+                    if disp >= 0 {
+                        let src_idx = bb_pos + ofs;
+                        let dest_idx = ((src_idx + 1) as i32 + disp) as usize;
+                        self.add_branch(src_idx, reg_info.clone(), dest_idx);
+                    } else {
+                        self.back_info.merge(&reg_info);
+                    }
+                }
+            }
+
+            let next_idx = bb_pos + ofs + 1;
+            if self.bb_info[next_idx].is_some() {
+                self.add_branch(bb_pos + ofs, reg_info, next_idx);
+                return false;
+            }
+        }
+        false
     }
 }
