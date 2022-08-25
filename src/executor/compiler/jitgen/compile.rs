@@ -1,14 +1,9 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn compile_bb(
-        &mut self,
-        func: &NormalFuncInfo,
-        cc: &mut CompileContext,
-    ) -> Option<usize> {
+    pub(super) fn compile_bb(&mut self, func: &NormalFuncInfo, cc: &mut CompileContext) -> bool {
         let mut skip = false;
-        self.gen_side_write_back(cc, cc.bb_pos);
-        let mut ctx = BBContext::new(func.total_reg_num());
+        let mut ctx = self.gen_side_write_back(func, cc, cc.bb_pos);
         for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
@@ -333,8 +328,7 @@ impl Codegen {
                         movq rax, [rbp - (conv(lhs))];
                     );
                     self.epilogue();
-                    let next_idx = cc.bb_pos + ofs + 1;
-                    return Some(next_idx);
+                    return false;
                 }
                 BcOp::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;
@@ -344,7 +338,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         jmp branch_dest;
                     );
-                    return Some(next_idx);
+                    return false;
                 }
                 BcOp::CondBr(cond_, disp, false, kind) => {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
@@ -423,10 +417,10 @@ impl Codegen {
                 monoasm!(self.jit,
                     jmp branch_dest;
                 );
-                return Some(next_idx);
+                return false;
             }
         }
-        None
+        true
     }
 }
 
@@ -480,6 +474,10 @@ impl RegDetail {
             is_float: IsFloat::ND,
             is_used: IsUsed::ND,
         }
+    }
+
+    fn is_float(&self) -> bool {
+        self.is_float == IsFloat::Float
     }
 }
 
@@ -582,7 +580,8 @@ struct ScanContext {
     bb_info: Vec<Option<(usize, Vec<usize>)>>,
     loop_level: usize,
     back_info: RegInfo,
-    //tirs: Vec<TIr>,
+    pc: BcPc,
+    tirs: Vec<TIr>,
 }
 
 impl ScanContext {
@@ -592,7 +591,8 @@ impl ScanContext {
             bb_info: func.get_bb_info(),
             loop_level: 0,
             back_info: RegInfo::new(func.total_reg_num()),
-            //tirs: vec![],
+            pc: BcPc::default(),
+            tirs: vec![],
         }
     }
 
@@ -647,6 +647,8 @@ impl ScanContext {
                 break;
             };
         }
+        #[cfg(feature = "emit-tir")]
+        dbg!(ctx.tirs);
         //ctx.back_info.info.truncate(func.total_local_num());
         ctx.back_info.get_used_float()
     }
@@ -654,7 +656,9 @@ impl ScanContext {
     fn scan_bb(&mut self, func: &NormalFuncInfo, mut reg_info: RegInfo, bb_pos: usize) -> bool {
         let mut skip = false;
         let mut method_buf = None;
+        self.tirs.push(TIr::BBLabel(bb_pos));
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
+            self.pc = BcPc::from(pc);
             let idx = bb_pos + ofs;
             if skip {
                 skip = false;
@@ -664,98 +668,183 @@ impl ScanContext {
             match BcOp::from_bc(pc) {
                 BcOp::LoopStart(_) => {
                     self.loop_level += 1;
+                    self.tirs.push(TIr::LoopStart);
                 }
                 BcOp::LoopEnd => {
                     self.loop_level -= 1;
+                    self.tirs.push(TIr::LoopEnd);
                     if self.loop_level == 0 {
+                        self.tirs.push(TIr::Deopt);
                         return true;
                     }
                 }
-                BcOp::Integer(ret, _)
-                | BcOp::Symbol(ret, _)
-                | BcOp::Array(ret, _, _)
-                | BcOp::Index(ret, _, _)
-                | BcOp::Nil(ret) => {
+                BcOp::Integer(ret, val) => {
+                    self.tirs.push(TIr::Integer(ret, val));
+                    reg_info.def_as(ret, false);
+                }
+                BcOp::Symbol(ret, id) => {
+                    self.tirs.push(TIr::Symbol(ret, id));
+                    reg_info.def_as(ret, false);
+                }
+                BcOp::Array(ret, src, len) => {
+                    self.tirs.push(TIr::Array(ret, src, len));
+                    reg_info.def_as(ret, false);
+                }
+                BcOp::Index(ret, base, idx) => {
+                    self.tirs.push(TIr::Index(ret, base, idx));
+                    reg_info.def_as(ret, false);
+                }
+                BcOp::Nil(ret) => {
+                    self.tirs.push(TIr::Nil(ret));
                     reg_info.def_as(ret, false);
                 }
                 BcOp::Literal(dst, val) => {
                     reg_info.def_as(dst, val.class_id() == FLOAT_CLASS);
+                    if let RV::Float(f) = val.unpack() {
+                        self.tirs.push(TIr::FLiteral(dst, f));
+                    } else if val.is_packed_value() {
+                        self.tirs.push(TIr::LiteralPacked(dst, val));
+                    } else {
+                        self.tirs.push(TIr::Literal(dst, val));
+                    }
                 }
-                BcOp::IndexAssign(..) => {}
-                BcOp::LoadConst(dst, _) => {
-                    reg_info.def_as(
-                        dst,
-                        pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS,
-                    );
+                BcOp::IndexAssign(src, base, idx) => {
+                    self.tirs.push(TIr::IndexAssign(src, base, idx));
                 }
-                BcOp::StoreConst(_, _) => {}
+                BcOp::LoadConst(dst, const_id) => {
+                    let is_float =
+                        pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
+                    reg_info.def_as(dst, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FLoadConst(dst, const_id)
+                    } else {
+                        TIr::LoadConst(dst, const_id)
+                    });
+                }
+                BcOp::StoreConst(dst, id) => {
+                    self.tirs.push(TIr::StoreConst(id, dst));
+                }
                 BcOp::Neg(dst, src) => {
-                    reg_info.def_as(dst, pc.is_float1());
-                    reg_info.use_as(src, pc.is_float1());
+                    let is_float = pc.is_float1();
+                    reg_info.def_as(dst, is_float);
+                    reg_info.use_as(src, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FNeg(dst, src)
+                    } else {
+                        TIr::Neg(dst, src)
+                    });
                 }
-                BcOp::BinOp(_, ret, lhs, rhs) => {
-                    reg_info.def_as(ret, pc.is_binary_float());
-                    reg_info.use_as(lhs, pc.is_float1());
-                    reg_info.use_as(rhs, pc.is_float2());
+                BcOp::BinOp(kind, dst, lhs, rhs) => {
+                    let is_float = pc.is_binary_float();
+                    reg_info.def_as(dst, is_float);
+                    reg_info.use_as(lhs, is_float);
+                    reg_info.use_as(rhs, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FBinOp(kind, dst, lhs, rhs, pc.classid1(), pc.classid2())
+                    } else {
+                        TIr::BinOp(kind, dst, lhs, rhs, pc.classid1(), pc.classid2())
+                    });
                 }
-                BcOp::BinOpRi(_, ret, lhs, _rhs) => {
-                    reg_info.def_as(ret, pc.is_float1());
-                    reg_info.use_as(lhs, pc.is_float1());
+                BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+                    let is_float = pc.is_float1();
+                    reg_info.def_as(dst, is_float);
+                    reg_info.use_as(lhs, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FBinOpRf(kind, dst, lhs, rhs as f64)
+                    } else {
+                        TIr::BinOpRi(kind, dst, lhs, rhs, pc.classid1())
+                    });
                 }
-                BcOp::BinOpIr(_, ret, _lhs, rhs) => {
-                    reg_info.def_as(ret, pc.is_float2());
-                    reg_info.use_as(rhs, pc.is_float2());
+                BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+                    let is_float = pc.is_float2();
+                    reg_info.def_as(dst, is_float);
+                    reg_info.use_as(rhs, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FBinOpFr(kind, dst, lhs as f64, rhs)
+                    } else {
+                        TIr::BinOpIr(kind, dst, lhs, rhs, pc.classid2())
+                    });
                 }
-                BcOp::Cmp(_, ret, lhs, rhs, ..) => {
-                    reg_info.def_as(ret, false);
-                    reg_info.use_as(lhs, pc.is_float1());
-                    reg_info.use_as(rhs, pc.is_float2());
+                BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+                    let is_float = pc.is_binary_float();
+                    reg_info.def_as(dst, false);
+                    reg_info.use_as(lhs, is_float);
+                    reg_info.use_as(rhs, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FCmp(kind, dst, lhs, rhs)
+                    } else {
+                        TIr::Cmp(kind, dst, lhs, rhs, opt, pc.classid1())
+                    });
                 }
-                BcOp::Cmpri(_, ret, lhs, ..) => {
-                    reg_info.def_as(ret, false);
-                    reg_info.use_as(lhs, pc.is_float1());
+                BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+                    let is_float = pc.is_float1();
+                    reg_info.def_as(dst, false);
+                    reg_info.use_as(lhs, is_float);
+                    self.tirs.push(if is_float {
+                        TIr::FCmpRf(kind, dst, lhs, rhs as f64)
+                    } else {
+                        TIr::Cmpri(kind, dst, lhs, rhs, opt, pc.classid1())
+                    });
                 }
                 BcOp::Mov(dst, src) => {
                     reg_info.copy(dst, src);
+                    if reg_info[src].is_float() {
+                        self.tirs.push(TIr::FMov(dst, src));
+                    } else {
+                        self.tirs.push(TIr::Mov(dst, src));
+                    }
                 }
-                BcOp::ConcatStr(ret, arg, len) => {
-                    reg_info.def_as(ret, false);
+                BcOp::ConcatStr(dst, arg, len) => {
+                    reg_info.def_as(dst, false);
                     for r in arg.0..arg.0 + len {
                         reg_info.use_as(SlotId(r), false);
                     }
+                    self.tirs.push(TIr::ConcatStr(dst, arg, len));
                 }
-                BcOp::MethodCall(ret, ..) => {
+                BcOp::MethodCall(ret, id) => {
                     assert!(method_buf.is_none());
-                    method_buf = Some((ret, pc.classid1()));
+                    method_buf = Some((ret, pc.classid1(), id));
                 }
-                BcOp::MethodArgs(recv, _args, _len) => {
+                BcOp::MethodArgs(recv, args, len) => {
                     match std::mem::take(&mut method_buf) {
-                        Some((ret, class)) => {
+                        Some((ret, class, id)) => {
                             reg_info.def_as(ret, false);
                             reg_info.use_as(recv, class == FLOAT_CLASS);
+                            self.tirs.push(TIr::MethodCall(ret, id, recv, args, len));
                         }
                         None => unreachable!(),
                     }
                     skip = true;
                 }
-                BcOp::MethodDef(..) => {}
-                BcOp::Ret(_) => return false,
+                BcOp::MethodDef(id, func_id) => {
+                    self.tirs.push(TIr::MethodDef(id, func_id));
+                }
+                BcOp::Ret(ret) => {
+                    self.tirs.push(TIr::Ret(ret));
+                    return false;
+                }
                 BcOp::Br(disp) => {
+                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
-                        let dest_idx = ((idx + 1) as i32 + disp) as usize;
                         self.add_branch(idx, reg_info, dest_idx);
                     } else {
                         self.back_info.merge(&reg_info);
                     }
+                    self.tirs.push(TIr::Br(dest_idx));
                     return false;
                 }
-                BcOp::CondBr(cond_, disp, _, _) => {
+                BcOp::CondBr(cond_, disp, opt, brkind) => {
                     reg_info.use_as(cond_, false);
+                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
-                        let dest_idx = ((idx + 1) as i32 + disp) as usize;
                         self.add_branch(idx, reg_info.clone(), dest_idx);
                     } else {
                         self.back_info.merge(&reg_info);
+                    }
+                    if opt {
+                        self.tirs.push(TIr::CondBrOpt(dest_idx, brkind));
+                    } else {
+                        self.tirs.push(TIr::CondBr(cond_, dest_idx, brkind));
                     }
                 }
             }

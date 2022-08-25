@@ -209,7 +209,7 @@ impl std::fmt::Debug for Bc {
         }
         match BcOp::from_bc(self) {
             BcOp::Br(disp) => {
-                writeln!(f, "br => {}", disp_str(disp))
+                write!(f, "br => {}", disp_str(disp))
             }
             BcOp::CondBr(reg, disp, opt, kind) => {
                 writeln!(
@@ -221,53 +221,53 @@ impl std::fmt::Debug for Bc {
                     disp_str(disp)
                 )
             }
-            BcOp::Integer(reg, num) => writeln!(f, "{:?} = {}: i32", reg, num),
+            BcOp::Integer(reg, num) => write!(f, "{:?} = {}: i32", reg, num),
             BcOp::Symbol(reg, id) => {
-                writeln!(f, "{:?} = {:?}", reg, id)
+                write!(f, "{:?} = {:?}", reg, id)
             }
             BcOp::Literal(reg, id) => {
-                writeln!(f, "{:?} = literal[#{:?}]", reg, id)
+                write!(f, "{:?} = literal[#{:?}]", reg, id)
             }
             BcOp::Array(ret, src, len) => {
-                writeln!(f, "{:?} = array[{:?}; {}]", ret, src, len)
+                write!(f, "{:?} = array[{:?}; {}]", ret, src, len)
             }
             BcOp::Index(ret, base, idx) => {
-                writeln!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
+                write!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
             }
             BcOp::IndexAssign(src, base, idx) => {
-                writeln!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
+                write!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
             }
             BcOp::LoadConst(reg, id) => {
-                writeln!(f, "{:?} = const[{:?}]", reg, id)
+                write!(f, "{:?} = const[{:?}]", reg, id)
             }
             BcOp::StoreConst(reg, id) => {
-                writeln!(f, "const[{:?}] = {:?}", id, reg)
+                write!(f, "const[{:?}] = {:?}", id, reg)
             }
-            BcOp::Nil(reg) => writeln!(f, "{:?} = nil", reg),
-            BcOp::Neg(dst, src) => writeln!(f, "{:?} = neg {:?}", dst, src),
+            BcOp::Nil(reg) => write!(f, "{:?} = nil", reg),
+            BcOp::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
             BcOp::BinOp(kind, dst, lhs, rhs) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
-                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
+                write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp::BinOpRi(kind, dst, lhs, rhs) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs);
-                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
+                write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp::BinOpIr(kind, dst, lhs, rhs) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs);
-                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
+                write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
-                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
+                write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid1();
@@ -280,24 +280,24 @@ impl std::fmt::Debug for Bc {
                     kind,
                     rhs,
                 );
-                writeln!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
+                write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
 
-            BcOp::Ret(reg) => writeln!(f, "ret {:?}", reg),
-            BcOp::Mov(dst, src) => writeln!(f, "{:?} = {:?}", dst, src),
+            BcOp::Ret(reg) => write!(f, "ret {:?}", reg),
+            BcOp::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
             BcOp::MethodCall(ret, name) => {
                 let class_id = self.classid1();
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                writeln!(f, "{:28} {:?}", op1, class_id)
+                write!(f, "{:28} {:?}", op1, class_id)
             }
             BcOp::MethodArgs(recv, args, len) => {
-                writeln!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
+                write!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
             }
             BcOp::MethodDef(name, _) => {
-                writeln!(f, "define {:?}", name)
+                write!(f, "define {:?}", name)
             }
             BcOp::ConcatStr(ret, args, len) => {
-                writeln!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
+                write!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
             BcOp::LoopStart(count) => writeln!(
                 f,
@@ -305,7 +305,7 @@ impl std::fmt::Debug for Bc {
                 count,
                 self.from_jit_addr()
             ),
-            BcOp::LoopEnd => writeln!(f, "loop_end"),
+            BcOp::LoopEnd => write!(f, "loop_end"),
         }
     }
 }

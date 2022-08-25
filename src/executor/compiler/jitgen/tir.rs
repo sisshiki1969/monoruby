@@ -5,8 +5,7 @@ use super::*;
 ///
 #[derive(PartialEq)]
 pub(super) enum TIr {
-    /// label(idx)
-    Label(usize),
+    BBLabel(usize),
     LoopStart,
     LoopEnd,
     Deopt,
@@ -14,7 +13,7 @@ pub(super) enum TIr {
     Br(usize),
     /// conditional branch(%reg, dest_idx, brkind)  : branch when reg was true.
     CondBr(SlotId, usize, BrKind),
-    CondBrOpt(CmpKind, SlotId, SlotId, usize, BrKind),
+    CondBrOpt(usize, BrKind),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -38,7 +37,7 @@ pub(super) enum TIr {
     /// negate(%ret, %src)
     Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
-    BinOp(BinOpK, SlotId, SlotId, SlotId, ClassId),
+    BinOp(BinOpK, SlotId, SlotId, SlotId, ClassId, ClassId),
     /// binop with small integer(kind, %ret, %lhs, rhs)
     BinOpRi(BinOpK, SlotId, SlotId, i16, ClassId),
     /// binop with small integer(kind, %ret, lhs, %rhs)
@@ -58,9 +57,9 @@ pub(super) enum TIr {
     /// method definition(method_name, func_id)
     MethodDef(IdentId, FuncId),
     /// concatenate strings(ret, args, args_len)
-    ConcatStr(SlotId, SlotId, u16, UsingXmm),
+    ConcatStr(SlotId, SlotId, u16),
     /// float_binop(kind, Fret, Flhs, Frhs)
-    FBinOp(BinOpK, SlotId, SlotId, SlotId),
+    FBinOp(BinOpK, SlotId, SlotId, SlotId, ClassId, ClassId),
     /// float_binop(kind, Fret, Flhs, f64)
     FBinOpRf(BinOpK, SlotId, SlotId, f64),
     /// float_binop(kind, Fret, f64, Frhs)
@@ -71,11 +70,6 @@ pub(super) enum TIr {
     FCmpRf(CmpKind, SlotId, SlotId, f64),
     /// negate(Fret, Fsrc)
     FNeg(SlotId, SlotId),
-    /// load float from register(%src, Fdst)
-    FLoadInteger(SlotId, SlotId),
-    FLoadFloat(SlotId, SlotId),
-    /// store float to register(Fsrc, %dst)
-    FStore(SlotId, SlotId),
 }
 
 impl std::fmt::Debug for TIr {
@@ -88,93 +82,99 @@ impl std::fmt::Debug for TIr {
             }
         }
         match self {
+            TIr::BBLabel(pc) => {
+                write!(f, ":{:05}", pc)
+            }
             TIr::LoopStart => {
-                writeln!(f, "loop_start")
+                write!(f, "loop_start")
             }
             TIr::LoopEnd => {
-                writeln!(f, "loop_end")
+                write!(f, "loop_end")
             }
             TIr::Deopt => {
-                writeln!(f, "deopt")
-            }
-            TIr::Label(index) => {
-                writeln!(f, "label {:05}", index)
+                write!(f, "deopt")
             }
             TIr::Br(dest_idx) => {
-                writeln!(f, "br => {:05}", dest_idx)
+                write!(f, "br => {:05}", dest_idx)
             }
             TIr::CondBr(reg, dest_idx, brkind) => {
-                writeln!(f, "cond{}br {:?} => {:05}", brkind.to_s(), reg, dest_idx,)
+                write!(f, "cond{}br {:?} => {:05}", brkind.to_s(), reg, dest_idx,)
             }
-            TIr::CondBrOpt(cmpkind, lhs, rhs, dest_idx, brkind) => {
-                writeln!(f, "_ = {:?} {:?} {:?}", lhs, cmpkind, rhs)?;
-                writeln!(f, "cond{}br _ => {:05}", brkind.to_s(), dest_idx)
+            TIr::CondBrOpt(dest_idx, brkind) => {
+                write!(f, "cond{}br _ => {:05}", brkind.to_s(), dest_idx)
             }
-            TIr::Integer(reg, num) => writeln!(f, "{:?} = {}: i32", reg, num),
+            TIr::Integer(reg, num) => write!(f, "{:?} = {}: i32", reg, num),
             TIr::Symbol(reg, id) => {
-                writeln!(f, "{:?} = {:?}", reg, id)
+                write!(f, "{:?} = {:?}", reg, id)
             }
             TIr::LiteralPacked(reg, val) => {
-                writeln!(f, "{:?} = literal[{:?}]", reg, val)
+                write!(f, "{:?} = literal[{:?}]", reg, val)
             }
             TIr::Literal(reg, val) => {
-                writeln!(f, "{:?} = literal[{:?}]", reg, val)
+                write!(f, "{:?} = literal[{:?}]", reg, val)
             }
             TIr::Array(ret, src, len) => {
-                writeln!(f, "{:?} = [{:?}; {}]", ret, src, len)
+                write!(f, "{:?} = [{:?}; {}]", ret, src, len)
             }
             TIr::Index(ret, base, idx) => {
-                writeln!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
+                write!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
             }
             TIr::IndexAssign(src, base, idx) => {
-                writeln!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
+                write!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
             }
             TIr::FLiteral(reg, float) => {
-                writeln!(f, "{:?} = {}: f64", reg, float)
+                write!(f, "{:?}F = {}: f64", reg, float)
             }
             TIr::LoadConst(reg, id) => {
-                writeln!(f, "{:?} = const[{:?}]", reg, id)
+                write!(f, "{:?} = const[{:?}]", reg, id)
             }
             TIr::FLoadConst(reg, id) => {
-                writeln!(f, "{:?} = const[{:?}]", reg, id,)
+                write!(f, "{:?}F = const[{:?}]", reg, id,)
             }
             TIr::StoreConst(id, reg) => {
-                writeln!(f, "const[{:?}] = {:?}", id, reg)
+                write!(f, "const[{:?}] = {:?}", id, reg)
             }
-            TIr::FLoadInteger(src, dst) => {
-                writeln!(f, "{:?} = {:?}: i64", dst, src)
-            }
-            TIr::FLoadFloat(src, dst) => {
-                writeln!(f, "{:?} = {:?}: f64", dst, src)
-            }
-            TIr::FStore(src, dst) => {
-                writeln!(f, "{:?} = {:?}", dst, src)
-            }
-            TIr::Nil(reg) => writeln!(f, "{:?} = nil", reg),
-            TIr::Neg(dst, src) => writeln!(f, "{:?} = neg {:?}", dst, src),
-            TIr::FNeg(dst, src) => writeln!(f, "{:?} = neg {:?}", dst, src),
-            TIr::BinOp(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "{:?} = {:?}:{:?} {} {:?}", dst, lhs, class, kind, rhs)
+            TIr::Nil(reg) => write!(f, "{:?} = nil", reg),
+            TIr::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
+            TIr::FNeg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
+            TIr::BinOp(kind, dst, lhs, rhs, class1, class2) => {
+                write!(
+                    f,
+                    "{:?} = {:?}:[{:?}] {} {:?}:[{:?}]",
+                    dst, lhs, class1, kind, rhs, class2
+                )
             }
             TIr::BinOpRi(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "{:?} = {:?}:{:?} {} {}: i16", dst, lhs, class, kind, rhs)
+                write!(
+                    f,
+                    "{:?} = {:?}:[{:?}] {} {}: i16",
+                    dst, lhs, class, kind, rhs
+                )
             }
             TIr::BinOpIr(kind, dst, lhs, rhs, class) => {
-                writeln!(f, "{:?} = {}:i16 {} {:?}: {:?}", dst, lhs, kind, rhs, class)
+                write!(
+                    f,
+                    "{:?} = {}:i16 {} {:?}:[{:?}]",
+                    dst, lhs, kind, rhs, class
+                )
             }
-            TIr::FBinOp(kind, dst, lhs, rhs) => {
-                writeln!(f, "{:?} = {:?} {} {:?}", dst, lhs, kind, rhs)
+            TIr::FBinOp(kind, dst, lhs, rhs, class1, class2) => {
+                write!(
+                    f,
+                    "{:?}F = {:?}F:[{:?}] {} {:?}F:[{:?}]",
+                    dst, lhs, class1, kind, rhs, class2
+                )
             }
             TIr::FBinOpRf(kind, dst, lhs, rhs) => {
-                writeln!(f, "{:?} = {:?} {} {}: f64", dst, lhs, kind, rhs)
+                write!(f, "{:?}F = {:?}F {} {}: f64", dst, lhs, kind, rhs)
             }
             TIr::FBinOpFr(kind, dst, lhs, rhs) => {
-                writeln!(f, "{:?} = {}: f64 {} {:?}", dst, lhs, kind, rhs)
+                write!(f, "{:?}F = {}: f64 {} {:?}F", dst, lhs, kind, rhs)
             }
             TIr::Cmp(kind, dst, lhs, rhs, opt, class) => {
-                writeln!(
+                write!(
                     f,
-                    "{}{:?} = {:?}:{:?} {:?} {:?}",
+                    "{}{:?} = {:?}:[{:?}] {:?} {:?}",
                     optstr(opt),
                     dst,
                     lhs,
@@ -184,9 +184,9 @@ impl std::fmt::Debug for TIr {
                 )
             }
             TIr::Cmpri(kind, dst, lhs, rhs, opt, class) => {
-                writeln!(
+                write!(
                     f,
-                    "{}{:?} = {:?}:{:?} {:?} {}: i16",
+                    "{}{:?} = {:?}:[{:?}] {:?} {}: i16",
                     optstr(opt),
                     dst,
                     lhs,
@@ -196,17 +196,17 @@ impl std::fmt::Debug for TIr {
                 )
             }
             TIr::FCmp(kind, dst, lhs, rhs) => {
-                writeln!(f, "{:?} = {:?} {:?} {:?}", dst, lhs, kind, rhs)
+                write!(f, "{:?} = {:?}F {:?} {:?}F", dst, lhs, kind, rhs)
             }
             TIr::FCmpRf(kind, dst, lhs, rhs) => {
-                writeln!(f, "{:?} = {:?} {:?} {}: f64", dst, lhs, kind, rhs)
+                write!(f, "{:?} = {:?}F {:?} {}: f64", dst, lhs, kind, rhs)
             }
 
-            TIr::Ret(reg) => writeln!(f, "ret {:?}", reg),
-            TIr::Mov(dst, src) => writeln!(f, "{:?} = {:?}", dst, src),
-            TIr::FMov(dst, src) => writeln!(f, "{:?} = {:?}", dst, src),
+            TIr::Ret(reg) => write!(f, "ret {:?}", reg),
+            TIr::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
+            TIr::FMov(dst, src) => write!(f, "{:?}F = {:?}F", dst, src),
             TIr::MethodCall(ret, name, recv, args, len) => {
-                writeln!(
+                write!(
                     f,
                     "{} = {:?}.call {:?}({:?}; {})",
                     ret.ret_str(),
@@ -217,10 +217,10 @@ impl std::fmt::Debug for TIr {
                 )
             }
             TIr::MethodDef(name, func_id) => {
-                writeln!(f, "define {:?} {:?}", name, func_id)
+                write!(f, "define {:?} {:?}", name, func_id)
             }
-            TIr::ConcatStr(ret, args, len, _) => {
-                writeln!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
+            TIr::ConcatStr(ret, args, len) => {
+                write!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
         }
     }
