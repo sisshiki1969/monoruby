@@ -24,8 +24,6 @@ use executor::*;
 use rvalue::*;
 use value::*;
 
-use clap;
-
 #[derive(clap::Parser, Debug)]
 #[clap(author, version, about, long_about = None, trailing_var_arg = true)]
 struct CommandLineArgs {

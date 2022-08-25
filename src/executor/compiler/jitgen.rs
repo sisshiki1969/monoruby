@@ -98,9 +98,8 @@ impl BBContext {
     ///
     /// Allocate new xmm register to the given stack slot for read f64.
     ///
-    fn xmm_read(&mut self, reg: SlotId) -> u16 {
+    fn alloc_xmm_read(&mut self, reg: SlotId) -> u16 {
         match self.stack_slot[reg] {
-            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => return freg,
             LinkMode::None => {
                 for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
                     if xmm.is_empty() {
@@ -109,9 +108,10 @@ impl BBContext {
                         return flhs as u16;
                     }
                 }
+                unreachable!()
             }
+            _ => unreachable!(),
         };
-        unreachable!()
     }
 
     ///
@@ -131,22 +131,14 @@ impl BBContext {
     ///
     /// Copy *src* to *dst*.
     ///
-    fn copy_slot(
-        &mut self,
-        codegen: &mut Codegen,
-        cc: &mut CompileContext,
-        src: SlotId,
-        dst: SlotId,
-    ) {
+    fn copy_slot(&mut self, codegen: &mut Codegen, src: SlotId, dst: SlotId) {
         self.dealloc_xmm(dst);
         match self.stack_slot[src] {
             LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
                 self.stack_slot[dst] = LinkMode::XmmRW(freg);
                 self.xmm[freg as usize].push(dst);
-                cc.push(TIr::FMov(dst, freg));
             }
             _ => {
-                cc.push(TIr::Mov(dst, src));
                 monoasm!(codegen.jit,
                   movq rax, [rbp - (conv(src))];
                   movq [rbp - (conv(dst))], rax;
@@ -158,11 +150,10 @@ impl BBContext {
     ///
     /// Write back a corresponding xmm register to the stack slot *reg*.
     ///
-    /// the xmm is deallocated.
+    /// the xmm will be deallocated.
     ///
-    fn read_slot(&mut self, codegen: &mut Codegen, cc: &mut CompileContext, reg: SlotId) {
+    fn read_slot(&mut self, codegen: &mut Codegen, reg: SlotId) {
         if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
-            cc.push(TIr::FStore(freg, reg));
             let f64_to_val = codegen.f64_to_val;
             monoasm!(codegen.jit,
                 movq xmm0, xmm(freg as u64 + 2);
@@ -173,15 +164,9 @@ impl BBContext {
         }
     }
 
-    fn write_back_range(
-        &mut self,
-        codegen: &mut Codegen,
-        cc: &mut CompileContext,
-        arg: SlotId,
-        len: u16,
-    ) {
+    fn write_back_range(&mut self, codegen: &mut Codegen, arg: SlotId, len: u16) {
         for reg in arg.0..arg.0 + len {
-            self.read_slot(codegen, cc, SlotId::new(reg))
+            self.read_slot(codegen, SlotId::new(reg))
         }
     }
 
@@ -202,19 +187,6 @@ impl BBContext {
             .collect()
     }
 
-    fn get_write_back_if_another_bb(
-        &self,
-        cc: &CompileContext,
-        idx: usize,
-        disp: i32,
-    ) -> WriteBack {
-        if cc.bb_info[((cc.bb_pos + idx + 1) as i64 + disp as i64) as usize].is_some() {
-            self.get_write_back()
-        } else {
-            vec![]
-        }
-    }
-
     fn get_xmm_using(&self) -> Vec<usize> {
         self.xmm
             .iter()
@@ -223,70 +195,64 @@ impl BBContext {
             .collect()
     }
 
-    fn convf64_assume(
+    fn xmm_read_assume(
         &mut self,
         codegen: &mut Codegen,
-        cc: &mut CompileContext,
         rhs: SlotId,
         class: ClassId,
         pc: BcPc,
-        wb: WriteBack,
     ) -> u16 {
         match class {
-            INTEGER_CLASS => self.convf64_assume_integer(codegen, cc, rhs, pc, wb),
-            FLOAT_CLASS => self.convf64_assume_float(codegen, cc, rhs, pc, wb),
+            INTEGER_CLASS => self.xmm_read_assume_integer(codegen, rhs, pc),
+            FLOAT_CLASS => self.xmm_read_assume_float(codegen, rhs, pc),
             _ => unreachable!(),
         }
     }
 
-    fn convf64_assume_integer(
-        &mut self,
-        codegen: &mut Codegen,
-        cc: &mut CompileContext,
-        reg: SlotId,
-        pc: BcPc,
-        wb: WriteBack,
-    ) -> u16 {
-        let freg = self.xmm_read(reg);
-        cc.push(TIr::FLoadInteger(reg, freg as u16, pc, wb.clone()));
-        let side_exit = codegen.gen_deopt_dest(pc, wb);
-        monoasm!(codegen.jit,
-            movq rdi, [rbp - (conv(reg))];
-        );
-        codegen.assume_int_to_f64(freg as u64 + 2, side_exit);
-        freg
+    fn xmm_read_without_assumption(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
+        match self.stack_slot[reg] {
+            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => freg,
+            LinkMode::None => {
+                let freg = self.alloc_xmm_read(reg);
+                let wb = self.get_write_back();
+                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                monoasm!(codegen.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                );
+                codegen.to_f64(freg as u64 + 2, side_exit);
+                freg
+            }
+        }
     }
 
-    fn convf64_assume_float(
-        &mut self,
-        codegen: &mut Codegen,
-        cc: &mut CompileContext,
-        reg: SlotId,
-        pc: BcPc,
-        wb: WriteBack,
-    ) -> u16 {
-        let freg = self.xmm_read(reg);
-        cc.push(TIr::FLoadFloat(reg, freg as u16, pc, wb.clone()));
-        let side_exit = codegen.gen_deopt_dest(pc, wb);
-        monoasm!(codegen.jit,
-            movq rdi, [rbp - (conv(reg))];
-        );
-        codegen.assume_float_to_f64(freg as u64 + 2, side_exit);
-        freg
-    }
-
-    fn xmm_read_assume_float(
-        &mut self,
-        codegen: &mut Codegen,
-        cc: &mut CompileContext,
-        reg: SlotId,
-        op: BcPc,
-    ) -> u16 {
+    fn xmm_read_assume_float(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
         match self.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
+                let freg = self.alloc_xmm_read(reg);
                 let wb = self.get_write_back();
-                self.convf64_assume_float(codegen, cc, reg, op, wb)
+                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                monoasm!(codegen.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                );
+                codegen.gen_val_to_f64_assume_float(freg as u64 + 2, side_exit);
+                freg
+            }
+        }
+    }
+
+    fn xmm_read_assume_integer(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
+        match self.stack_slot[reg] {
+            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
+            _ => {
+                let freg = self.alloc_xmm_read(reg);
+                let wb = self.get_write_back();
+                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                monoasm!(codegen.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                );
+                codegen.gen_val_to_f64_assume_integer(freg as u64 + 2, side_exit);
+                freg
             }
         }
     }
@@ -294,53 +260,18 @@ impl BBContext {
     fn xmm_read_binary(
         &mut self,
         codegen: &mut Codegen,
-        cc: &mut CompileContext,
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
     ) -> (u16, u16) {
         if lhs != rhs {
-            match (self.stack_slot[lhs], self.stack_slot[rhs]) {
-                (
-                    LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs),
-                    LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs),
-                ) => (lhs, rhs),
-                (LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs), LinkMode::None) => {
-                    let wb = self.get_write_back();
-                    (
-                        lhs,
-                        self.convf64_assume(codegen, cc, rhs, pc.classid2(), pc, wb),
-                    )
-                }
-                (LinkMode::None, LinkMode::XmmR(rhs) | LinkMode::XmmRW(rhs)) => {
-                    let wb = self.get_write_back();
-                    (
-                        self.convf64_assume(codegen, cc, lhs, pc.classid1(), pc, wb),
-                        rhs,
-                    )
-                }
-                (LinkMode::None, LinkMode::None) => {
-                    let wb = self.get_write_back();
-                    (
-                        self.convf64_assume(codegen, cc, lhs, pc.classid1(), pc, wb.clone()),
-                        self.convf64_assume(codegen, cc, rhs, pc.classid2(), pc, wb),
-                    )
-                }
-            }
+            (
+                self.xmm_read_assume(codegen, lhs, pc.classid1(), pc),
+                self.xmm_read_assume(codegen, rhs, pc.classid2(), pc),
+            )
         } else {
-            match self.stack_slot[lhs] {
-                LinkMode::XmmR(lhs) | LinkMode::XmmRW(lhs) => (lhs, lhs),
-                LinkMode::None => {
-                    let wb = self.get_write_back();
-                    match pc.classid1() {
-                        FLOAT_CLASS => {
-                            let lhs = self.convf64_assume_float(codegen, cc, lhs, pc, wb);
-                            (lhs, lhs)
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
+            let lhs = self.xmm_read_assume(codegen, lhs, pc.classid1(), pc);
+            (lhs, lhs)
         }
     }
 }
@@ -355,7 +286,6 @@ struct CompileContext {
     is_loop: bool,
     /// key: dest_idx, value: (src_idx, bbctx, dest)
     branch_map: HashMap<usize, Vec<(usize, BBContext, DestLabel)>>,
-    tir: Vec<TIr>,
 }
 
 impl CompileContext {
@@ -372,7 +302,6 @@ impl CompileContext {
             loop_count: 0,
             branch_map: HashMap::default(),
             is_loop,
-            tir: vec![],
         }
     }
 
@@ -389,9 +318,6 @@ impl CompileContext {
             .entry(dest)
             .or_default()
             .push((src, ctx, label))
-    }
-    fn push(&mut self, tir: TIr) {
-        self.tir.push(tir)
     }
 }
 
@@ -644,7 +570,7 @@ impl Codegen {
             movq [rip + cached_value], rax;
             movq rdi, rax;
         );
-        self.assume_float_to_f64(0, side_exit);
+        self.gen_val_to_f64_assume_float(0, side_exit);
         monoasm!(self.jit,
             movq [rip + cached_float], xmm0;
             movq rax, [rip + global_const_version];
@@ -883,8 +809,8 @@ impl Codegen {
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let elapsed = now.elapsed();
-        #[cfg(feature = "emit-tir")]
-        eprintln!("{:?}", cc.tir);
+        //#[cfg(feature = "emit-tir")]
+        //eprintln!("{:?}", cc.tir);
         #[cfg(any(feature = "emit-asm"))]
         {
             let (start, code_end, end) = self.jit.code_block.last().unwrap();

@@ -23,15 +23,12 @@ pub enum MonorubyErrKind {
 
 impl MonorubyErr {
     fn new(kind: MonorubyErrKind) -> Self {
-        MonorubyErr {
-            kind: kind,
-            loc: vec![],
-        }
+        MonorubyErr { kind, loc: vec![] }
     }
 
     fn new_with_loc(kind: MonorubyErrKind, loc: Loc, sourceinfo: SourceInfoRef) -> Self {
         MonorubyErr {
-            kind: kind,
+            kind,
             loc: vec![(loc, sourceinfo)],
         }
     }

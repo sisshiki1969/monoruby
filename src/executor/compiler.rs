@@ -438,7 +438,7 @@ impl Codegen {
     ///
     /// - xmm0: f64
     ///
-    fn assume_int_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+    fn gen_val_to_f64_assume_integer(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
         let entry = self.jit.label();
         monoasm!(&mut self.jit,
         entry:
@@ -467,7 +467,7 @@ impl Codegen {
     ///
     /// - rax, rdi
     ///
-    fn assume_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+    fn gen_val_to_f64_assume_float(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
         let entry = self.jit.label();
         let exit = self.jit.label();
         monoasm!(&mut self.jit,
@@ -487,6 +487,53 @@ impl Codegen {
             orq rdi, rax;
             rolq rdi, 61;
             movq xmm(xmm), rdi;
+        exit:
+        );
+        entry
+    }
+
+    ///
+    /// Convert the Value to f64.
+    ///
+    /// side-exit if neither Float nor Integer.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm(*xmm*): f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax, rdi
+    ///
+    fn to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+        let entry = self.jit.label();
+        let integer = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+        entry:
+            testq rdi, 0b01;
+            jnz integer;
+            testq rdi, 0b10;
+            jz side_exit;
+            xorps xmm(xmm), xmm(xmm);
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            je exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm(xmm), rdi;
+            jmp exit;
+        integer:
+            sarq rdi, 1;
+            cvtsi2sdq xmm(xmm), rdi;
         exit:
         );
         entry
@@ -841,7 +888,7 @@ fn float_test() {
     assume_float_to_f64:
         pushq rbp;
     );
-    gen.assume_float_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_float(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -883,7 +930,7 @@ fn float_test2() {
     assume_float_to_f64:
         pushq rbp;
     );
-    gen.assume_float_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_float(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -893,7 +940,7 @@ fn float_test2() {
     assume_int_to_f64:
         pushq rbp;
     );
-    gen.assume_int_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_integer(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -910,4 +957,30 @@ fn float_test2() {
     assert_eq!(143.0, int_to_f64(Value::new_integer(143)));
     assert_eq!(14354813558.0, int_to_f64(Value::new_integer(14354813558)));
     assert_eq!(-143.0, int_to_f64(Value::new_integer(-143)));
+}
+
+#[test]
+fn float_test3() {
+    let mut gen = Codegen::new(false);
+
+    let panic = gen.entry_panic;
+    let to_f64 = gen.jit.label();
+    monoasm!(&mut gen.jit,
+    to_f64:
+        pushq rbp;
+    );
+    gen.to_f64(0, panic);
+    monoasm!(&mut gen.jit,
+        popq rbp;
+        ret;
+    );
+    gen.jit.finalize();
+    let to_f64_entry = gen.jit.get_label_address(to_f64);
+
+    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+    assert_eq!(3.574, to_f64(Value::new_float(3.574)));
+    assert_eq!(0.0, to_f64(Value::new_float(0.0)));
+    assert_eq!(143.0, to_f64(Value::new_integer(143)));
+    assert_eq!(14354813558.0, to_f64(Value::new_integer(14354813558)));
+    assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
 }
