@@ -3,8 +3,6 @@ use monoasm_macro::monoasm;
 use super::*;
 
 mod compile;
-mod tir;
-use tir::*;
 
 //
 // Just-in-time compiler module.

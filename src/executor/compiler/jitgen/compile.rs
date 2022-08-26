@@ -6,41 +6,70 @@ impl Codegen {
         func: &NormalFuncInfo,
         cc: &mut CompileContext,
         pos: usize,
+        is_loop: bool,
     ) -> BBContext {
-        if let Some(entries) = cc.branch_map.remove(&pos) {
-            let cur_label = cc.labels[pos - cc.start_pos];
-            /*if entries.len() == 1 {
-                let BranchEntry {
+        if let Some(mut entries) = cc.branch_map.remove(&pos) {
+            let regnum = func.total_reg_num();
+            if is_loop {
+                #[cfg(feature = "log-jit")]
+                eprintln!("bb(loop): {pos}");
+                let cur_label = cc.labels[pos - cc.start_pos];
+                for BranchEntry {
                     src_idx,
                     bbctx,
                     dest_label,
-                } = entries.remove(0);
+                } in entries
+                {
+                    #[cfg(feature = "log-jit")]
+                    eprintln!(
+                        "write_back_all from:{src_idx} to:{pos} {:?}",
+                        bbctx.stack_slot
+                    );
+                    let wb = bbctx.get_write_back();
+                    self.jit.select(1);
+                    self.jit.bind_label(dest_label);
+                    self.gen_write_back(wb);
+                    monoasm!(self.jit,
+                        jmp cur_label;
+                    );
+                    self.jit.select(0);
+                }
+                BBContext::new(func.total_reg_num())
+            } else {
                 #[cfg(feature = "log-jit")]
-                eprintln!("through from:{src_idx} to:{pos} {:?}", bbctx.stack_slot);
-                self.jit.bind_label(dest_label);
-                return bbctx;
-            }*/
-            for BranchEntry {
-                src_idx,
-                bbctx,
-                dest_label,
-            } in entries
-            {
-                #[cfg(feature = "log-jit")]
-                eprintln!(
-                    "write_back_all from:{src_idx} to:{pos} {:?}",
-                    bbctx.stack_slot
-                );
-                let wb = bbctx.get_write_back();
-                self.jit.select(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back(wb);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select(0);
+                {
+                    eprintln!("bb: {pos}");
+                    eprintln!("scan: {:?}", ScanContext::scan_non_loop(func, pos));
+                }
+                if entries.len() == 1 {
+                    let entry = entries.remove(0);
+                    self.jit.bind_label(entry.dest_label);
+                    return entry.bbctx;
+                }
+
+                let cur_label = cc.labels[pos - cc.start_pos];
+                for BranchEntry {
+                    src_idx,
+                    bbctx,
+                    dest_label,
+                } in entries
+                {
+                    #[cfg(feature = "log-jit")]
+                    eprintln!(
+                        "write_back_all from:{src_idx} to:{pos} {:?}",
+                        bbctx.stack_slot
+                    );
+                    let wb = bbctx.get_write_back();
+                    self.jit.select(1);
+                    self.jit.bind_label(dest_label);
+                    self.gen_write_back(wb);
+                    monoasm!(self.jit,
+                        jmp cur_label;
+                    );
+                    self.jit.select(0);
+                }
+                BBContext::new(func.total_reg_num())
             }
-            BBContext::new(func.total_reg_num())
         } else {
             #[cfg(feature = "log-jit")]
             eprintln!("orphan bb: {pos}");
@@ -76,7 +105,11 @@ impl Codegen {
 
     pub(super) fn compile_bb(&mut self, func: &NormalFuncInfo, cc: &mut CompileContext) -> bool {
         let mut skip = false;
-        let mut ctx = self.gen_merging_branches(func, cc, cc.bb_pos);
+        let is_loop = matches!(
+            BcOp::from_bc(&func.bytecode()[cc.bb_pos]),
+            BcOp::LoopStart(_)
+        );
+        let mut ctx = self.gen_merging_branches(func, cc, cc.bb_pos, is_loop);
         for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
@@ -92,12 +125,14 @@ impl Codegen {
             }
             match pc.op1() {
                 BcOp::LoopStart(_) => {
-                    for (reg, class) in ScanContext::scan_loop(func, cc.bb_pos + ofs) {
+                    let use_set = ScanContext::scan_loop(func, cc.bb_pos + ofs);
+                    //eprintln!("{:?}", use_set);
+                    for (reg, class) in use_set {
                         match class {
-                            RegClass::Class(FLOAT_CLASS) => {
+                            FLOAT_CLASS => {
                                 ctx.xmm_read_assume_float(self, reg, pc);
                             }
-                            RegClass::Class(INTEGER_CLASS) => {
+                            INTEGER_CLASS => {
                                 ctx.xmm_read_assume_integer(self, reg, pc);
                             }
                             _ => {
@@ -529,15 +564,15 @@ impl XmmLink {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum IsUsed {
     ND,
-    Used,
+    Used(bool, ClassId),
     NotUsed,
 }
 
 impl IsUsed {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, *other) {
-            (IsUsed::Used, _) => IsUsed::Used,
-            (_, IsUsed::Used) => IsUsed::Used,
+            (IsUsed::Used(..), _) => *self,
+            (_, IsUsed::Used(..)) => *other,
             (IsUsed::ND, r) => r,
             (l, IsUsed::ND) => l,
             (IsUsed::NotUsed, IsUsed::NotUsed) => IsUsed::NotUsed,
@@ -597,16 +632,24 @@ struct RegInfo {
 }
 
 impl RegInfo {
-    fn get_used_float(&self) -> Vec<(SlotId, RegClass)> {
+    fn get_loop_used_as_float(&self) -> Vec<(SlotId, ClassId)> {
         self.info
             .iter()
             .enumerate()
-            .flat_map(|(i, b)| {
-                if b.xmm_link == XmmLink::Linked && b.is_used != IsUsed::NotUsed {
-                    Some((SlotId(i as u16), b.class))
-                } else {
-                    None
-                }
+            .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
+                (XmmLink::Linked, IsUsed::Used(true, class)) => Some((SlotId(i as u16), class)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn get_used_as_float(&self) -> Vec<(SlotId, ClassId)> {
+        self.info
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match b.is_used {
+                IsUsed::Used(true, class) => Some((SlotId(i as u16), class)),
+                _ => None,
             })
             .collect()
     }
@@ -635,7 +678,7 @@ impl RegInfo {
         };
         self[slot].class = RegClass::Class(class);
         if self[slot].is_used == IsUsed::ND {
-            self[slot].is_used = IsUsed::Used;
+            self[slot].is_used = IsUsed::Used(is_float, class);
         }
     }
 
@@ -700,7 +743,6 @@ struct ScanContext {
     loop_level: usize,
     back_info: RegInfo,
     pc: BcPc,
-    tirs: Vec<TIr>,
 }
 
 impl ScanContext {
@@ -711,7 +753,6 @@ impl ScanContext {
             loop_level: 0,
             back_info: RegInfo::new(func.total_reg_num()),
             pc: BcPc::default(),
-            tirs: vec![],
         }
     }
 
@@ -735,7 +776,7 @@ impl ScanContext {
 }
 
 impl ScanContext {
-    fn scan_loop(func: &NormalFuncInfo, bb_pos: usize) -> Vec<(SlotId, RegClass)> {
+    fn scan_loop(func: &NormalFuncInfo, bb_pos: usize) -> Vec<(SlotId, ClassId)> {
         let mut ctx = ScanContext::new(func);
         let regnum = func.total_reg_num();
         ctx.add_branch(0, RegInfo::new(regnum), bb_pos);
@@ -761,20 +802,58 @@ impl ScanContext {
                 acc.merge(&info);
                 acc
             });
-            if ctx.scan_bb(func, reg_info, bb_pos) {
+            if ctx.scan_bb(func, reg_info, bb_pos, true) {
                 break;
             };
         }
-        #[cfg(feature = "emit-tir")]
-        dbg!(ctx.tirs);
         //ctx.back_info.info.truncate(func.total_local_num());
-        ctx.back_info.get_used_float()
+        ctx.back_info.get_loop_used_as_float()
     }
 
-    fn scan_bb(&mut self, func: &NormalFuncInfo, mut reg_info: RegInfo, bb_pos: usize) -> bool {
+    fn scan_non_loop(func: &NormalFuncInfo, bb_pos: usize) -> Vec<(SlotId, ClassId)> {
+        let mut ctx = ScanContext::new(func);
+        let regnum = func.total_reg_num();
+        ctx.add_branch(0, RegInfo::new(regnum), bb_pos);
+        let bb_start_vec: Vec<usize> = ctx
+            .bb_info
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, info)| match info {
+                Some(_) => {
+                    if idx >= bb_pos {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            })
+            .collect();
+        for bb_pos in bb_start_vec {
+            let branches = ctx.get_branches(bb_pos);
+            let reg_info0 = RegInfo::new(regnum);
+            let reg_info = branches.into_iter().fold(reg_info0, |mut acc, (_, info)| {
+                acc.merge(&info);
+                acc
+            });
+            //eprintln!("{} {:?}", bb_pos, reg_info.get_used_as_float());
+            if ctx.scan_bb(func, reg_info, bb_pos, false) {
+                break;
+            };
+        }
+        let used = ctx.back_info.get_used_as_float();
+        used
+    }
+
+    fn scan_bb(
+        &mut self,
+        func: &NormalFuncInfo,
+        mut reg_info: RegInfo,
+        bb_pos: usize,
+        loop_mode: bool,
+    ) -> bool {
         let mut skip = false;
         let mut method_buf = None;
-        self.tirs.push(TIr::BBLabel(bb_pos));
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
             self.pc = BcPc::from(pc);
             let idx = bb_pos + ofs;
@@ -786,183 +865,118 @@ impl ScanContext {
             match BcOp::from_bc(pc) {
                 BcOp::LoopStart(_) => {
                     self.loop_level += 1;
-                    self.tirs.push(TIr::LoopStart);
                 }
                 BcOp::LoopEnd => {
                     self.loop_level -= 1;
-                    self.tirs.push(TIr::LoopEnd);
-                    if self.loop_level == 0 {
-                        self.tirs.push(TIr::Deopt);
+                    if loop_mode && self.loop_level == 0 {
                         return true;
                     }
                 }
-                BcOp::Integer(ret, val) => {
-                    self.tirs.push(TIr::Integer(ret, val));
+                BcOp::Integer(ret, _val) => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::Symbol(ret, id) => {
-                    self.tirs.push(TIr::Symbol(ret, id));
+                BcOp::Symbol(ret, _id) => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::Array(ret, src, len) => {
-                    self.tirs.push(TIr::Array(ret, src, len));
+                BcOp::Array(ret, _src, _len) => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::Index(ret, base, idx) => {
-                    self.tirs.push(TIr::Index(ret, base, idx));
+                BcOp::Index(ret, _base, _idx) => {
                     reg_info.def_as(ret, false);
                 }
                 BcOp::Nil(ret) => {
-                    self.tirs.push(TIr::Nil(ret));
                     reg_info.def_as(ret, false);
                 }
                 BcOp::Literal(dst, val) => {
                     reg_info.def_as(dst, val.class_id() == FLOAT_CLASS);
-                    if let RV::Float(f) = val.unpack() {
-                        self.tirs.push(TIr::FLiteral(dst, f));
-                    } else if val.is_packed_value() {
-                        self.tirs.push(TIr::LiteralPacked(dst, val));
-                    } else {
-                        self.tirs.push(TIr::Literal(dst, val));
-                    }
                 }
-                BcOp::IndexAssign(src, base, idx) => {
-                    self.tirs.push(TIr::IndexAssign(src, base, idx));
-                }
-                BcOp::LoadConst(dst, const_id) => {
+                BcOp::IndexAssign(_src, _base, _idx) => {}
+                BcOp::LoadConst(dst, _const_id) => {
                     let is_float =
                         pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
                     reg_info.def_as(dst, is_float);
-                    self.tirs.push(if is_float {
-                        TIr::FLoadConst(dst, const_id)
-                    } else {
-                        TIr::LoadConst(dst, const_id)
-                    });
                 }
-                BcOp::StoreConst(dst, id) => {
-                    self.tirs.push(TIr::StoreConst(id, dst));
-                }
+                BcOp::StoreConst(_dst, _id) => {}
                 BcOp::Neg(dst, src) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, is_float);
                     reg_info.use_as(src, is_float, pc.classid1());
-                    self.tirs.push(if is_float {
-                        TIr::FNeg(dst, src)
-                    } else {
-                        TIr::Neg(dst, src)
-                    });
                 }
-                BcOp::BinOp(kind, dst, lhs, rhs) => {
+                BcOp::BinOp(_kind, dst, lhs, rhs) => {
                     let is_float = pc.is_binary_float();
                     reg_info.def_as(dst, is_float);
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
-                    self.tirs.push(if is_float {
-                        TIr::FBinOp(kind, dst, lhs, rhs, pc.classid1(), pc.classid2())
-                    } else {
-                        TIr::BinOp(kind, dst, lhs, rhs, pc.classid1(), pc.classid2())
-                    });
                 }
-                BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+                BcOp::BinOpRi(_kind, dst, lhs, _rhs) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, is_float);
                     reg_info.use_as(lhs, is_float, pc.classid1());
-                    self.tirs.push(if is_float {
-                        TIr::FBinOpRf(kind, dst, lhs, rhs as f64)
-                    } else {
-                        TIr::BinOpRi(kind, dst, lhs, rhs, pc.classid1())
-                    });
                 }
-                BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+                BcOp::BinOpIr(_kind, dst, _lhs, rhs) => {
                     let is_float = pc.is_float2();
                     reg_info.def_as(dst, is_float);
                     reg_info.use_as(rhs, is_float, pc.classid2());
-                    self.tirs.push(if is_float {
-                        TIr::FBinOpFr(kind, dst, lhs as f64, rhs)
-                    } else {
-                        TIr::BinOpIr(kind, dst, lhs, rhs, pc.classid2())
-                    });
                 }
-                BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+                BcOp::Cmp(_kind, dst, lhs, rhs, _opt) => {
                     let is_float = pc.is_binary_float();
                     reg_info.def_as(dst, false);
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
-                    self.tirs.push(if is_float {
-                        TIr::FCmp(kind, dst, lhs, rhs)
-                    } else {
-                        TIr::Cmp(kind, dst, lhs, rhs, opt, pc.classid1())
-                    });
                 }
-                BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+                BcOp::Cmpri(_kind, dst, lhs, _rhs, _opt) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, false);
                     reg_info.use_as(lhs, is_float, pc.classid1());
-                    self.tirs.push(if is_float {
-                        TIr::FCmpRf(kind, dst, lhs, rhs as f64)
-                    } else {
-                        TIr::Cmpri(kind, dst, lhs, rhs, opt, pc.classid1())
-                    });
                 }
                 BcOp::Mov(dst, src) => {
                     reg_info.copy(dst, src);
-                    if reg_info[src].is_float() {
-                        self.tirs.push(TIr::FMov(dst, src));
-                    } else {
-                        self.tirs.push(TIr::Mov(dst, src));
-                    }
                 }
                 BcOp::ConcatStr(dst, arg, len) => {
                     reg_info.def_as(dst, false);
                     for r in arg.0..arg.0 + len {
                         reg_info.use_as(SlotId(r), false, STRING_CLASS);
                     }
-                    self.tirs.push(TIr::ConcatStr(dst, arg, len));
                 }
                 BcOp::MethodCall(ret, id) => {
                     assert!(method_buf.is_none());
                     method_buf = Some((ret, pc.classid1(), id));
                 }
-                BcOp::MethodArgs(recv, args, len) => {
+                BcOp::MethodArgs(recv, _args, _len) => {
                     match std::mem::take(&mut method_buf) {
-                        Some((ret, class, id)) => {
+                        Some((ret, class, _id)) => {
                             reg_info.def_as(ret, false);
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
-                            self.tirs.push(TIr::MethodCall(ret, id, recv, args, len));
                         }
                         None => unreachable!(),
                     }
                     skip = true;
                 }
-                BcOp::MethodDef(id, func_id) => {
-                    self.tirs.push(TIr::MethodDef(id, func_id));
-                }
-                BcOp::Ret(ret) => {
-                    self.tirs.push(TIr::Ret(ret));
+                BcOp::MethodDef(_id, _func_id) => {}
+                BcOp::Ret(_ret) => {
+                    if !loop_mode {
+                        self.back_info.merge(&reg_info);
+                    }
                     return false;
                 }
                 BcOp::Br(disp) => {
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
+                        //eprintln!("{}->{} {:?}", idx, dest_idx, reg_info.get_used_as_float());
                         self.add_branch(idx, reg_info, dest_idx);
                     } else {
                         self.back_info.merge(&reg_info);
                     }
-                    self.tirs.push(TIr::Br(dest_idx));
                     return false;
                 }
-                BcOp::CondBr(cond_, disp, opt, brkind) => {
+                BcOp::CondBr(cond_, disp, _opt, _brkind) => {
                     reg_info.use_as(cond_, false, TRUE_CLASS);
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
+                        //eprintln!("{}->{} {:?}", idx, dest_idx, reg_info.get_used_as_float());
                         self.add_branch(idx, reg_info.clone(), dest_idx);
                     } else {
                         self.back_info.merge(&reg_info);
-                    }
-                    if opt {
-                        self.tirs.push(TIr::CondBrOpt(dest_idx, brkind));
-                    } else {
-                        self.tirs.push(TIr::CondBr(cond_, dest_idx, brkind));
                     }
                 }
             }
@@ -973,6 +987,9 @@ impl ScanContext {
                 return false;
             }
         }
-        false
+        if !loop_mode {
+            self.back_info.merge(&reg_info);
+        }
+        true
     }
 }
