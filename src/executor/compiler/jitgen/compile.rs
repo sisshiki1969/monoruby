@@ -1,9 +1,82 @@
 use super::*;
 
 impl Codegen {
+    fn gen_merging_branches(
+        &mut self,
+        func: &NormalFuncInfo,
+        cc: &mut CompileContext,
+        pos: usize,
+    ) -> BBContext {
+        if let Some(entries) = cc.branch_map.remove(&pos) {
+            let cur_label = cc.labels[pos - cc.start_pos];
+            /*if entries.len() == 1 {
+                let BranchEntry {
+                    src_idx,
+                    bbctx,
+                    dest_label,
+                } = entries.remove(0);
+                #[cfg(feature = "log-jit")]
+                eprintln!("through from:{src_idx} to:{pos} {:?}", bbctx.stack_slot);
+                self.jit.bind_label(dest_label);
+                return bbctx;
+            }*/
+            for BranchEntry {
+                src_idx,
+                bbctx,
+                dest_label,
+            } in entries
+            {
+                #[cfg(feature = "log-jit")]
+                eprintln!(
+                    "write_back_all from:{src_idx} to:{pos} {:?}",
+                    bbctx.stack_slot
+                );
+                let wb = bbctx.get_write_back();
+                self.jit.select(1);
+                self.jit.bind_label(dest_label);
+                self.gen_write_back(wb);
+                monoasm!(self.jit,
+                    jmp cur_label;
+                );
+                self.jit.select(0);
+            }
+            BBContext::new(func.total_reg_num())
+        } else {
+            #[cfg(feature = "log-jit")]
+            eprintln!("orphan bb: {pos}");
+            BBContext::new(func.total_reg_num())
+        }
+    }
+
+    pub(super) fn gen_backedge_branch(&mut self, cc: &mut CompileContext, pos: usize) {
+        if let Some(entries) = cc.branch_map.remove(&pos) {
+            let cur_label = cc.labels[pos - cc.start_pos];
+            for BranchEntry {
+                src_idx,
+                bbctx,
+                dest_label,
+            } in entries
+            {
+                #[cfg(feature = "log-jit")]
+                eprintln!(
+                    "backedge_write_back_all from:{src_idx} to:{pos} {:?}",
+                    bbctx.stack_slot
+                );
+                let wb = bbctx.get_write_back();
+                self.jit.select(1);
+                self.jit.bind_label(dest_label);
+                self.gen_write_back(wb);
+                monoasm!(self.jit,
+                    jmp cur_label;
+                );
+                self.jit.select(0);
+            }
+        }
+    }
+
     pub(super) fn compile_bb(&mut self, func: &NormalFuncInfo, cc: &mut CompileContext) -> bool {
         let mut skip = false;
-        let mut ctx = self.gen_side_write_back(func, cc, cc.bb_pos);
+        let mut ctx = self.gen_merging_branches(func, cc, cc.bb_pos);
         for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
             if skip {
@@ -19,8 +92,18 @@ impl Codegen {
             }
             match pc.op1() {
                 BcOp::LoopStart(_) => {
-                    for reg in ScanContext::scan_loop(func, cc.bb_pos + ofs) {
-                        ctx.xmm_read_without_assumption(self, reg, pc);
+                    for (reg, class) in ScanContext::scan_loop(func, cc.bb_pos + ofs) {
+                        match class {
+                            RegClass::Class(FLOAT_CLASS) => {
+                                ctx.xmm_read_assume_float(self, reg, pc);
+                            }
+                            RegClass::Class(INTEGER_CLASS) => {
+                                ctx.xmm_read_assume_integer(self, reg, pc);
+                            }
+                            _ => {
+                                ctx.xmm_read_without_assumption(self, reg, pc);
+                            }
+                        }
                     }
                     cc.loop_count += 1;
                 }
@@ -425,20 +508,20 @@ impl Codegen {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum IsFloat {
+enum XmmLink {
     ND,
-    Float,
-    NotFloat,
+    Linked,
+    NotLinked,
 }
 
-impl IsFloat {
+impl XmmLink {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, *other) {
-            (IsFloat::Float, IsFloat::Float) => IsFloat::Float,
-            (IsFloat::NotFloat, _) => IsFloat::NotFloat,
-            (_, IsFloat::NotFloat) => IsFloat::NotFloat,
-            (IsFloat::ND, r) => r,
-            (l, IsFloat::ND) => l,
+            (XmmLink::Linked, XmmLink::Linked) => XmmLink::Linked,
+            (XmmLink::NotLinked, _) => XmmLink::NotLinked,
+            (_, XmmLink::NotLinked) => XmmLink::NotLinked,
+            (XmmLink::ND, r) => r,
+            (l, XmmLink::ND) => l,
         };
     }
 }
@@ -462,22 +545,49 @@ impl IsUsed {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RegClass {
+    ND,
+    Any,
+    Class(ClassId),
+}
+
+impl RegClass {
+    fn merge(&mut self, other: &Self) {
+        *self = match (*self, *other) {
+            (RegClass::ND, r) => r,
+            (l, RegClass::ND) => l,
+            (RegClass::Any, _) => RegClass::Any,
+            (_, RegClass::Any) => RegClass::Any,
+            (RegClass::Class(l), RegClass::Class(r)) => {
+                if l == r {
+                    RegClass::Class(l)
+                } else {
+                    RegClass::Any
+                }
+            }
+        };
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RegDetail {
-    is_float: IsFloat,
+    xmm_link: XmmLink,
     is_used: IsUsed,
+    class: RegClass,
 }
 
 impl RegDetail {
     fn new() -> Self {
         Self {
-            is_float: IsFloat::ND,
+            xmm_link: XmmLink::ND,
             is_used: IsUsed::ND,
+            class: RegClass::ND,
         }
     }
 
     fn is_float(&self) -> bool {
-        self.is_float == IsFloat::Float
+        self.xmm_link == XmmLink::Linked
     }
 }
 
@@ -487,13 +597,13 @@ struct RegInfo {
 }
 
 impl RegInfo {
-    fn get_used_float(&self) -> Vec<SlotId> {
+    fn get_used_float(&self) -> Vec<(SlotId, RegClass)> {
         self.info
             .iter()
             .enumerate()
             .flat_map(|(i, b)| {
-                if b.is_float == IsFloat::Float && b.is_used != IsUsed::NotUsed {
-                    Some(SlotId(i as u16))
+                if b.xmm_link == XmmLink::Linked && b.is_used != IsUsed::NotUsed {
+                    Some((SlotId(i as u16), b.class))
                 } else {
                     None
                 }
@@ -511,27 +621,34 @@ impl RegInfo {
 
     fn merge(&mut self, other: &Self) {
         for (i, detail) in &mut self.info.iter_mut().enumerate() {
-            detail.is_float.merge(&other[i].is_float);
+            detail.xmm_link.merge(&other[i].xmm_link);
             detail.is_used.merge(&other[i].is_used);
+            detail.class.merge(&other[i].class);
         }
     }
 
-    fn use_as(&mut self, slot: SlotId, is_float: bool) {
-        self[slot].is_float = if is_float {
-            IsFloat::Float
+    fn use_as(&mut self, slot: SlotId, is_float: bool, class: ClassId) {
+        self[slot].xmm_link = if is_float {
+            XmmLink::Linked
         } else {
-            IsFloat::NotFloat
+            XmmLink::NotLinked
         };
+        self[slot].class = RegClass::Class(class);
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::Used;
         }
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {
-        self[slot].is_float = if is_float {
-            IsFloat::Float
+        self[slot].xmm_link = if is_float {
+            XmmLink::Linked
         } else {
-            IsFloat::NotFloat
+            XmmLink::NotLinked
+        };
+        self[slot].class = if is_float {
+            RegClass::Class(FLOAT_CLASS)
+        } else {
+            RegClass::Any
         };
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
@@ -540,10 +657,12 @@ impl RegInfo {
 
     fn copy(&mut self, dst: SlotId, src: SlotId) {
         let mut is_used = self[dst].is_used;
+        let class = self[src].class;
         is_used.merge(&self[src].is_used);
         self[dst] = RegDetail {
-            is_float: self[src].is_float.clone(),
+            xmm_link: self[src].xmm_link,
             is_used,
+            class,
         };
     }
 }
@@ -616,7 +735,7 @@ impl ScanContext {
 }
 
 impl ScanContext {
-    fn scan_loop(func: &NormalFuncInfo, bb_pos: usize) -> Vec<SlotId> {
+    fn scan_loop(func: &NormalFuncInfo, bb_pos: usize) -> Vec<(SlotId, RegClass)> {
         let mut ctx = ScanContext::new(func);
         let regnum = func.total_reg_num();
         ctx.add_branch(0, RegInfo::new(regnum), bb_pos);
@@ -637,12 +756,11 @@ impl ScanContext {
             .collect();
         for bb_pos in bb_start_vec {
             let branches = ctx.get_branches(bb_pos);
-            let reg_info = branches
-                .into_iter()
-                .fold(RegInfo::new(regnum), |mut acc, (_, info)| {
-                    acc.merge(&info);
-                    acc
-                });
+            let reg_info0 = RegInfo::new(regnum);
+            let reg_info = branches.into_iter().fold(reg_info0, |mut acc, (_, info)| {
+                acc.merge(&info);
+                acc
+            });
             if ctx.scan_bb(func, reg_info, bb_pos) {
                 break;
             };
@@ -727,7 +845,7 @@ impl ScanContext {
                 BcOp::Neg(dst, src) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, is_float);
-                    reg_info.use_as(src, is_float);
+                    reg_info.use_as(src, is_float, pc.classid1());
                     self.tirs.push(if is_float {
                         TIr::FNeg(dst, src)
                     } else {
@@ -737,8 +855,8 @@ impl ScanContext {
                 BcOp::BinOp(kind, dst, lhs, rhs) => {
                     let is_float = pc.is_binary_float();
                     reg_info.def_as(dst, is_float);
-                    reg_info.use_as(lhs, is_float);
-                    reg_info.use_as(rhs, is_float);
+                    reg_info.use_as(lhs, is_float, pc.classid1());
+                    reg_info.use_as(rhs, is_float, pc.classid2());
                     self.tirs.push(if is_float {
                         TIr::FBinOp(kind, dst, lhs, rhs, pc.classid1(), pc.classid2())
                     } else {
@@ -748,7 +866,7 @@ impl ScanContext {
                 BcOp::BinOpRi(kind, dst, lhs, rhs) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, is_float);
-                    reg_info.use_as(lhs, is_float);
+                    reg_info.use_as(lhs, is_float, pc.classid1());
                     self.tirs.push(if is_float {
                         TIr::FBinOpRf(kind, dst, lhs, rhs as f64)
                     } else {
@@ -758,7 +876,7 @@ impl ScanContext {
                 BcOp::BinOpIr(kind, dst, lhs, rhs) => {
                     let is_float = pc.is_float2();
                     reg_info.def_as(dst, is_float);
-                    reg_info.use_as(rhs, is_float);
+                    reg_info.use_as(rhs, is_float, pc.classid2());
                     self.tirs.push(if is_float {
                         TIr::FBinOpFr(kind, dst, lhs as f64, rhs)
                     } else {
@@ -768,8 +886,8 @@ impl ScanContext {
                 BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
                     let is_float = pc.is_binary_float();
                     reg_info.def_as(dst, false);
-                    reg_info.use_as(lhs, is_float);
-                    reg_info.use_as(rhs, is_float);
+                    reg_info.use_as(lhs, is_float, pc.classid1());
+                    reg_info.use_as(rhs, is_float, pc.classid2());
                     self.tirs.push(if is_float {
                         TIr::FCmp(kind, dst, lhs, rhs)
                     } else {
@@ -779,7 +897,7 @@ impl ScanContext {
                 BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
                     let is_float = pc.is_float1();
                     reg_info.def_as(dst, false);
-                    reg_info.use_as(lhs, is_float);
+                    reg_info.use_as(lhs, is_float, pc.classid1());
                     self.tirs.push(if is_float {
                         TIr::FCmpRf(kind, dst, lhs, rhs as f64)
                     } else {
@@ -797,7 +915,7 @@ impl ScanContext {
                 BcOp::ConcatStr(dst, arg, len) => {
                     reg_info.def_as(dst, false);
                     for r in arg.0..arg.0 + len {
-                        reg_info.use_as(SlotId(r), false);
+                        reg_info.use_as(SlotId(r), false, STRING_CLASS);
                     }
                     self.tirs.push(TIr::ConcatStr(dst, arg, len));
                 }
@@ -809,7 +927,7 @@ impl ScanContext {
                     match std::mem::take(&mut method_buf) {
                         Some((ret, class, id)) => {
                             reg_info.def_as(ret, false);
-                            reg_info.use_as(recv, class == FLOAT_CLASS);
+                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             self.tirs.push(TIr::MethodCall(ret, id, recv, args, len));
                         }
                         None => unreachable!(),
@@ -834,7 +952,7 @@ impl ScanContext {
                     return false;
                 }
                 BcOp::CondBr(cond_, disp, opt, brkind) => {
-                    reg_info.use_as(cond_, false);
+                    reg_info.use_as(cond_, false, TRUE_CLASS);
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info.clone(), dest_idx);

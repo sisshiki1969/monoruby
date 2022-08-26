@@ -725,84 +725,6 @@ impl Codegen {
         );
     }
 
-    fn gen_side_write_back(
-        &mut self,
-        func: &NormalFuncInfo,
-        cc: &mut CompileContext,
-        pos: usize,
-    ) -> BBContext {
-        if let Some(mut entries) = cc.branch_map.remove(&pos) {
-            let cur_label = cc.labels[pos - cc.start_pos];
-            if cc.bb_info[pos].as_ref().unwrap().1.len() == 1 {
-                let BranchEntry {
-                    src_idx,
-                    bbctx,
-                    dest_label,
-                } = entries.remove(0);
-                #[cfg(feature = "log-jit")]
-                eprintln!("through from:{src_idx} to:{pos} {:?}", bbctx.stack_slot);
-                self.jit.select(1);
-                self.jit.bind_label(dest_label);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select(0);
-                return bbctx;
-            }
-            for BranchEntry {
-                src_idx,
-                bbctx,
-                dest_label,
-            } in entries
-            {
-                #[cfg(feature = "log-jit")]
-                eprintln!(
-                    "write_back_all from:{src_idx} to:{pos} {:?}",
-                    bbctx.stack_slot
-                );
-                let wb = bbctx.get_write_back();
-                self.jit.select(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back(wb);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select(0);
-            }
-            BBContext::new(func.total_reg_num())
-        } else {
-            #[cfg(feature = "log-jit")]
-            eprintln!("orphan bb: {pos}");
-            BBContext::new(func.total_reg_num())
-        }
-    }
-
-    fn gen_backedge_write_back(&mut self, cc: &mut CompileContext, pos: usize) {
-        if let Some(entries) = cc.branch_map.remove(&pos) {
-            let cur_label = cc.labels[pos - cc.start_pos];
-            for BranchEntry {
-                src_idx,
-                bbctx,
-                dest_label,
-            } in entries
-            {
-                #[cfg(feature = "log-jit")]
-                eprintln!(
-                    "backedge_write_back_all from:{src_idx} to:{pos} {:?}",
-                    bbctx.stack_slot
-                );
-                let wb = bbctx.get_write_back();
-                self.jit.select(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back(wb);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select(0);
-            }
-        }
-    }
-
     pub(super) fn jit_compile_normal(
         &mut self,
         func: &NormalFuncInfo,
@@ -863,7 +785,7 @@ impl Codegen {
 
         let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
         for pos in keys.into_iter() {
-            self.gen_backedge_write_back(&mut cc, pos);
+            self.gen_backedge_branch(&mut cc, pos);
         }
 
         self.jit.finalize();
