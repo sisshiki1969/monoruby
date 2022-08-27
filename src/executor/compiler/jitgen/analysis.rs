@@ -192,7 +192,7 @@ impl ScanContext {
 }
 
 impl ScanContext {
-    pub(super) fn def_use_analysis_loop(func: &NormalFuncInfo, bb_pos: usize) -> RegInfo {
+    pub(super) fn loop_analysis(func: &NormalFuncInfo, bb_pos: usize) -> RegInfo {
         let mut ctx = ScanContext::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx
@@ -221,19 +221,14 @@ impl ScanContext {
                 acc.merge(&info);
                 acc
             });
-            if ctx.scan_bb_for_loop_analysis(func, reg_info, bb_pos) {
+            if ctx.scan_bb(func, reg_info, bb_pos) {
                 break;
             };
         }
         ctx.back_info
     }
 
-    fn scan_bb_for_loop_analysis(
-        &mut self,
-        func: &NormalFuncInfo,
-        mut reg_info: RegInfo,
-        bb_pos: usize,
-    ) -> bool {
+    fn scan_bb(&mut self, func: &NormalFuncInfo, mut reg_info: RegInfo, bb_pos: usize) -> bool {
         let mut skip = false;
         let mut method_buf = None;
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {

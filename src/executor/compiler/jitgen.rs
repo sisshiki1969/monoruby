@@ -73,6 +73,25 @@ impl BBContext {
         }
     }
 
+    fn from(slot_info: &StackSlotInfo) -> Self {
+        let mut ctx = Self::new(slot_info.0.len());
+        for (i, mode) in slot_info.0.iter().enumerate() {
+            let reg = SlotId(i as u16);
+            match mode {
+                LinkMode::None => {}
+                LinkMode::XmmR(x) => {
+                    ctx.stack_slot[reg] = LinkMode::XmmR(*x);
+                    ctx.xmm[*x as usize].push(reg);
+                }
+                LinkMode::XmmRW(x) => {
+                    ctx.stack_slot[reg] = LinkMode::XmmRW(*x);
+                    ctx.xmm[*x as usize].push(reg);
+                }
+            }
+        }
+        ctx
+    }
+
     ///
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
@@ -282,10 +301,9 @@ struct BranchEntry {
 }
 
 struct CompileContext {
-    labels: Vec<DestLabel>,
+    labels: HashMap<usize, DestLabel>,
     /// (bb_id, Vec<src_idx>)
     bb_info: Vec<Option<(usize, Vec<usize>)>>,
-    start_pos: usize,
     bb_pos: usize,
     loop_count: usize,
     is_loop: bool,
@@ -294,27 +312,21 @@ struct CompileContext {
 
 impl CompileContext {
     fn new(func: &NormalFuncInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
-        let mut labels = vec![];
-        for _ in &func.bytecode()[start_pos..] {
-            labels.push(codegen.jit.label());
-        }
+        let bb_info = func.get_bb_info();
+        let mut labels = HashMap::default();
+        bb_info.into_iter().enumerate().for_each(|(idx, elem)| {
+            if elem.is_some() {
+                labels.insert(idx, codegen.jit.label());
+            }
+        });
         Self {
             labels,
             bb_info: func.get_bb_info(),
-            start_pos,
             bb_pos: start_pos,
             loop_count: 0,
             branch_map: HashMap::default(),
             is_loop,
         }
-    }
-
-    fn label(&self, idx: usize, disp: i32) -> DestLabel {
-        self.labels[((self.bb_offset() + idx) as i32 + disp) as usize]
-    }
-
-    fn bb_offset(&self) -> usize {
-        self.bb_pos - self.start_pos
     }
 
     fn new_branch(&mut self, src_idx: usize, dest: usize, bbctx: BBContext, dest_label: DestLabel) {
@@ -717,7 +729,8 @@ impl Codegen {
     ///
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
-    fn deopt(&mut self, pc: BcPc, wb: WriteBack) {
+    fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
+        let wb = ctx.get_write_back();
         let fallback = self.gen_deopt_dest(pc, wb);
         monoasm!(self.jit,
             jmp fallback;

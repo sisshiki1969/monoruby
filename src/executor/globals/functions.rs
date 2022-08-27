@@ -474,6 +474,15 @@ impl NormalFuncInfo {
         &self.bytecode.as_ref().unwrap()
     }
 
+    pub(crate) fn get_pc(&self, idx: usize) -> BcPc {
+        BcPc::from(&self.bytecode()[idx])
+    }
+
+    /// get bytecode length.
+    pub(crate) fn bytecode_len(&self) -> usize {
+        self.bytecode().len()
+    }
+
     /// get bytecode address.
     pub(crate) fn bytecode_top(&self) -> *const Bc {
         self.bytecode().as_ptr()
@@ -525,7 +534,7 @@ impl NormalFuncInfo {
     }
 
     pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
-        let mut info = vec![vec![]; self.bytecode().len() + 1];
+        let mut info = vec![vec![]; self.bytecode_len() + 1];
         let mut skip = false;
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
@@ -543,7 +552,7 @@ impl NormalFuncInfo {
                 _ => {}
             }
         }
-        assert_eq!(0, info[self.bytecode().len()].len());
+        assert_eq!(0, info[self.bytecode_len()].len());
         let mut bb_id = 1;
         let mut bb_info: Vec<_> = info
             .into_iter()
