@@ -142,7 +142,7 @@ impl IsUsed {
     fn merge(&mut self, other: &Self) {
         *self = match (&self, other) {
             (IsUsed::ND, r) => r.clone(),
-            (l, &IsUsed::ND) => **l,
+            (l, IsUsed::ND) => **l,
             (IsUsed::Used(b1, c1), IsUsed::Used(b2, c2)) => {
                 IsUsed::Used(*b1 | *b2, if c1 == c2 { *c1 } else { None })
             }
