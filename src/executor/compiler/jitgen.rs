@@ -2,6 +2,7 @@ use monoasm_macro::monoasm;
 
 use super::*;
 
+mod analysis;
 mod compile;
 
 //
