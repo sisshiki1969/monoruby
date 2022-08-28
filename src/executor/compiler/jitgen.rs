@@ -213,6 +213,22 @@ impl BBContext {
             .collect()
     }
 
+    fn xmm_decouple(&mut self, reg: SlotId) {
+        match self.stack_slot[reg] {
+            LinkMode::XmmR(x) => self.stack_slot[reg] = LinkMode::XmmRW(x),
+            _ => unreachable!(),
+        };
+    }
+
+    fn xmm_conv_to_f64(&self, codegen: &mut Codegen, reg: SlotId, freg: u16, pc: BcPc) {
+        let wb = self.get_write_back();
+        let side_exit = codegen.gen_deopt_dest(pc, wb);
+        monoasm!(codegen.jit,
+            movq rdi, [rbp - (conv(reg))];
+        );
+        codegen.to_f64(freg as u64 + 2, side_exit);
+    }
+
     fn xmm_read_assume(
         &mut self,
         codegen: &mut Codegen,
@@ -308,6 +324,7 @@ struct CompileContext {
     loop_count: usize,
     is_loop: bool,
     branch_map: HashMap<usize, Vec<BranchEntry>>,
+    backedge_map: HashMap<usize, (DestLabel, StackSlotInfo)>,
 }
 
 impl CompileContext {
@@ -324,8 +341,9 @@ impl CompileContext {
             bb_info: func.get_bb_info(),
             bb_pos: start_pos,
             loop_count: 0,
-            branch_map: HashMap::default(),
             is_loop,
+            branch_map: HashMap::default(),
+            backedge_map: HashMap::default(),
         }
     }
 
@@ -335,6 +353,14 @@ impl CompileContext {
             bbctx,
             dest_label,
         })
+    }
+
+    fn new_backedge(&mut self, bb_pos: usize, dest_label: DestLabel, slot_info: StackSlotInfo) {
+        self.backedge_map.insert(bb_pos, (dest_label, slot_info));
+    }
+
+    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, StackSlotInfo) {
+        self.backedge_map.remove_entry(&bb_pos).unwrap().1
     }
 }
 
@@ -686,14 +712,57 @@ impl Codegen {
     ///
     fn gen_write_back(&mut self, wb: WriteBack) {
         for (freg, v) in wb {
-            let f64_to_val = self.f64_to_val;
-            monoasm!(self.jit,
-                movq xmm0, xmm(freg as u64 + 2);
-                call f64_to_val;
-            );
-            for reg in v {
-                self.store_rax(reg);
+            self.gen_write_back_single(freg, v);
+        }
+    }
+
+    fn gen_write_back_with(&mut self, src_ctx: &BBContext, target_ctx: &BBContext, pc: BcPc) {
+        eprintln!("********");
+        eprintln!("src:    {:?}", src_ctx.stack_slot);
+        eprintln!("target: {:?}", target_ctx.stack_slot);
+        let len = src_ctx.stack_slot.0.len();
+        let mut wb = vec![vec![]; 14];
+        let mut conv = vec![];
+        for i in 0..len {
+            let reg = SlotId(i as u16);
+            match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
+                (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) if l == r => {}
+                (LinkMode::XmmR(l), LinkMode::XmmR(r) | LinkMode::XmmRW(r)) if l == r => {}
+                (LinkMode::None | LinkMode::XmmR(_), LinkMode::None) => {}
+                (LinkMode::XmmR(_), LinkMode::XmmR(r) | LinkMode::XmmRW(r)) => {
+                    conv.push((reg, r));
+                }
+                (LinkMode::None, LinkMode::XmmR(r) | LinkMode::XmmRW(r)) => {
+                    conv.push((reg, r));
+                }
+                (LinkMode::XmmRW(l), LinkMode::XmmRW(r) | LinkMode::XmmR(r)) => {
+                    wb[l as usize].push(reg);
+                    conv.push((reg, r));
+                }
+                (LinkMode::XmmRW(l), LinkMode::None) => {
+                    wb[l as usize].push(reg);
+                }
             }
+        }
+        eprintln!("wb: {:?}", wb);
+        for (i, v) in wb.into_iter().enumerate() {
+            self.gen_write_back_single(i as u16, v);
+        }
+        eprintln!("conv: {:?}", conv);
+        for (reg, freg) in conv {
+            src_ctx.xmm_conv_to_f64(self, reg, freg, pc);
+        }
+        eprintln!("********");
+    }
+
+    fn gen_write_back_single(&mut self, freg: u16, v: Vec<SlotId>) {
+        let f64_to_val = self.f64_to_val;
+        monoasm!(self.jit,
+            movq xmm0, xmm(freg as u64 + 2);
+            call f64_to_val;
+        );
+        for reg in v {
+            self.store_rax(reg);
         }
     }
 
@@ -788,6 +857,15 @@ impl Codegen {
                 None => None,
             })
             .collect();
+        let reg_num = func.total_reg_num();
+        cc.branch_map.insert(
+            start_pos,
+            vec![BranchEntry {
+                src_idx: 0,
+                bbctx: BBContext::new(reg_num),
+                dest_label: self.jit.label(),
+            }],
+        );
         for i in bb_start_pos {
             cc.bb_pos = i;
             if self.compile_bb(func, &mut cc) {
@@ -797,7 +875,7 @@ impl Codegen {
 
         let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
         for pos in keys.into_iter() {
-            self.gen_backedge_branch(&mut cc, pos);
+            self.gen_backedge_branch(&mut cc, func, pos);
         }
 
         self.jit.finalize();

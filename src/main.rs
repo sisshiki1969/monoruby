@@ -778,7 +778,7 @@ mod test {
 
     #[test]
     fn test9() {
-        run_test(
+        run_test2(
             r#"
             puts 100
         "#,
