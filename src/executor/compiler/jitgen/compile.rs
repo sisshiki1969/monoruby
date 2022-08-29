@@ -36,7 +36,7 @@ impl Codegen {
                 let mut ctx = BBContext::new(func.total_reg_num());
                 let pc = func.get_pc(cc.bb_pos);
                 let backedge_label = self.jit.label();
-                for (reg, class) in use_set {
+                /*for (reg, class) in use_set {
                     match class {
                         Some(FLOAT_CLASS) => {
                             ctx.xmm_read_assume_float(self, reg, pc + 1);
@@ -48,7 +48,7 @@ impl Codegen {
                             ctx.xmm_read_without_assumption(self, reg, pc + 1);
                         }
                     }
-                }
+                }*/
                 self.jit.bind_label(backedge_label);
                 cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone());
                 ctx

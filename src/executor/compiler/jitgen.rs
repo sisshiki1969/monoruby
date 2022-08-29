@@ -229,20 +229,13 @@ impl BBContext {
             .collect()
     }
 
-    fn xmm_decouple(&mut self, reg: SlotId) {
-        match self.stack_slot[reg] {
-            LinkMode::XmmR(x) => self.stack_slot[reg] = LinkMode::XmmRW(x),
-            _ => unreachable!(),
-        };
-    }
-
     fn xmm_conv_to_f64(&self, codegen: &mut Codegen, reg: SlotId, freg: u16, pc: BcPc) {
         let wb = self.get_write_back();
         let side_exit = codegen.gen_deopt_dest(pc, wb);
         monoasm!(codegen.jit,
             movq rdi, [rbp - (conv(reg))];
         );
-        codegen.to_f64(freg as u64 + 2, side_exit);
+        codegen.gen_val_to_f64(freg as u64 + 2, side_exit);
     }
 
     fn xmm_read_assume(
@@ -269,7 +262,7 @@ impl BBContext {
                 monoasm!(codegen.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
-                codegen.to_f64(freg as u64 + 2, side_exit);
+                codegen.gen_val_to_f64(freg as u64 + 2, side_exit);
                 freg
             }
         }
