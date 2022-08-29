@@ -567,7 +567,9 @@ impl Codegen {
             movq rax, (Value::new_float(0.0).get());
             ret;
         heap_alloc:
+        // we must save rdi for log_optimize.
             subq rsp, 120;
+            movq [rsp + 112], rdi;
             movq [rsp + 104], xmm15;
             movq [rsp + 96], xmm14;
             movq [rsp + 88], xmm13;
@@ -598,6 +600,7 @@ impl Codegen {
             movq xmm13, [rsp + 88];
             movq xmm14, [rsp + 96];
             movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
             addq rsp, 120;
             ret;
         normal:

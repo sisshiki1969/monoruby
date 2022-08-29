@@ -41,8 +41,24 @@ pub(crate) struct BBContext {
     xmm: [Vec<SlotId>; 14],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct StackSlotInfo(Vec<LinkMode>);
+
+impl std::fmt::Debug for StackSlotInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s: String = self
+            .0
+            .iter()
+            .enumerate()
+            .flat_map(|(i, mode)| match mode {
+                LinkMode::None => None,
+                LinkMode::XmmR(x) => Some(format!("%{i}:R({}) ", x)),
+                LinkMode::XmmRW(x) => Some(format!("%{i}:RW({}) ", x)),
+            })
+            .collect();
+        write!(f, "[{s}]")
+    }
+}
 
 impl std::ops::Index<SlotId> for StackSlotInfo {
     type Output = LinkMode;
@@ -310,6 +326,7 @@ impl BBContext {
     }
 }
 
+#[derive(Debug)]
 struct BranchEntry {
     src_idx: usize,
     bbctx: BBContext,
@@ -716,43 +733,78 @@ impl Codegen {
         }
     }
 
-    fn gen_write_back_with(&mut self, src_ctx: &BBContext, target_ctx: &BBContext, pc: BcPc) {
-        eprintln!("********");
-        eprintln!("src:    {:?}", src_ctx.stack_slot);
-        eprintln!("target: {:?}", target_ctx.stack_slot);
+    fn gen_write_back_with(&mut self, src_ctx: &BBContext, target_ctx: &BBContext) {
+        #[cfg(feature = "emit-tir")]
+        {
+            eprintln!("      src:    {:?}", src_ctx.stack_slot);
+            eprintln!("      target: {:?}", target_ctx.stack_slot);
+        }
         let len = src_ctx.stack_slot.0.len();
         let mut wb = vec![vec![]; 14];
-        let mut conv = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
                 (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) if l == r => {}
-                (LinkMode::XmmR(l), LinkMode::XmmR(r) | LinkMode::XmmRW(r)) if l == r => {}
+                (_, LinkMode::XmmRW(_)) => unreachable!(),
+                (LinkMode::XmmR(l), LinkMode::XmmR(r)) if l == r => {}
+                (_, LinkMode::XmmR(_)) => unreachable!(),
                 (LinkMode::None | LinkMode::XmmR(_), LinkMode::None) => {}
-                (LinkMode::XmmR(_), LinkMode::XmmR(r) | LinkMode::XmmRW(r)) => {
-                    conv.push((reg, r));
-                }
-                (LinkMode::None, LinkMode::XmmR(r) | LinkMode::XmmRW(r)) => {
-                    conv.push((reg, r));
-                }
-                (LinkMode::XmmRW(l), LinkMode::XmmRW(r) | LinkMode::XmmR(r)) => {
-                    wb[l as usize].push(reg);
-                    conv.push((reg, r));
-                }
                 (LinkMode::XmmRW(l), LinkMode::None) => {
                     wb[l as usize].push(reg);
                 }
             }
         }
-        eprintln!("wb: {:?}", wb);
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      wb: {:?}", wb);
         for (i, v) in wb.into_iter().enumerate() {
             self.gen_write_back_single(i as u16, v);
         }
-        eprintln!("conv: {:?}", conv);
-        for (reg, freg) in conv {
-            src_ctx.xmm_conv_to_f64(self, reg, freg, pc);
+    }
+
+    fn gen_write_back_backedge(
+        &mut self,
+        mut src_ctx: BBContext,
+        target_ctx: &BBContext,
+        pc: BcPc,
+    ) {
+        #[cfg(feature = "emit-tir")]
+        {
+            eprintln!("      src:    {:?}", src_ctx.stack_slot);
+            eprintln!("      target: {:?}", target_ctx.stack_slot);
         }
-        eprintln!("********");
+        let wb = src_ctx.get_write_back();
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      wb: {:?}", wb);
+        self.gen_write_back(wb);
+        for info in src_ctx.stack_slot.0.iter_mut() {
+            if let LinkMode::XmmRW(_) = info {
+                *info = LinkMode::None;
+            }
+        }
+        let len = src_ctx.stack_slot.0.len();
+        let mut conv = vec![];
+        for i in 0..len {
+            let reg = SlotId(i as u16);
+            match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
+                (_, LinkMode::XmmRW(_)) => unreachable!(),
+                (LinkMode::XmmRW(_), _) => unreachable!(),
+                (LinkMode::None, LinkMode::None) => {}
+                (LinkMode::XmmR(_), LinkMode::None) => {}
+                (LinkMode::XmmR(l), LinkMode::XmmR(r)) => {
+                    if l != r {
+                        conv.push((reg, r));
+                    }
+                }
+                (LinkMode::None, LinkMode::XmmR(r)) => {
+                    conv.push((reg, r));
+                }
+            }
+        }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      conv: {:?}", conv);
+        for (reg, freg) in conv {
+            src_ctx.xmm_conv_to_f64(self, reg, freg, pc + 1);
+        }
     }
 
     fn gen_write_back_single(&mut self, freg: u16, v: Vec<SlotId>) {

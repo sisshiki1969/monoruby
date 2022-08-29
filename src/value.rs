@@ -250,7 +250,7 @@ impl Value {
                 NIL_VALUE => RV::Nil,
                 TRUE_VALUE => RV::Bool(true),
                 FALSE_VALUE => RV::Bool(false),
-                _ => unreachable!("Illegal packed value. {:x}", self.0),
+                _ => unreachable!("Illegal packed value. 0x{:016x}", self.0),
             }
         }
     }

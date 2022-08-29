@@ -12,11 +12,9 @@ impl Codegen {
         if let Some(mut entries) = cc.branch_map.remove(&pos) {
             //let regnum = func.total_reg_num();
             if is_loop {
-                let use_set = ScanContext::loop_analysis(func, cc.bb_pos).get_loop_used_as_float();
-                #[cfg(feature = "log-jit")]
-                eprintln!("  use_set for this loop:{:?}", use_set);
-                #[cfg(feature = "log-jit")]
+                #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb(loop): {pos}");
+                let use_set = LoopAnalysis::analyse(func, cc.bb_pos).get_loop_used_as_float();
                 let cur_label = cc.labels[&pos];
                 for BranchEntry {
                     src_idx,
@@ -24,7 +22,7 @@ impl Codegen {
                     dest_label,
                 } in entries
                 {
-                    #[cfg(feature = "log-jit")]
+                    #[cfg(feature = "emit-tir")]
                     eprintln!("  write_back_all {src_idx}->{pos} {:?}", bbctx.stack_slot);
                     let wb = bbctx.get_write_back();
                     self.jit.select(1);
@@ -38,43 +36,46 @@ impl Codegen {
                 let mut ctx = BBContext::new(func.total_reg_num());
                 let pc = func.get_pc(cc.bb_pos);
                 let backedge_label = self.jit.label();
-                self.jit.bind_label(backedge_label);
                 for (reg, class) in use_set {
                     match class {
                         Some(FLOAT_CLASS) => {
-                            ctx.xmm_read_assume_float(self, reg, pc);
-                            //ctx.xmm_decouple(reg);
+                            ctx.xmm_read_assume_float(self, reg, pc + 1);
                         }
                         Some(INTEGER_CLASS) => {
-                            ctx.xmm_read_assume_integer(self, reg, pc);
+                            ctx.xmm_read_assume_integer(self, reg, pc + 1);
                         }
                         _ => {
-                            ctx.xmm_read_without_assumption(self, reg, pc);
+                            ctx.xmm_read_without_assumption(self, reg, pc + 1);
                         }
                     }
                 }
+                self.jit.bind_label(backedge_label);
                 cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone());
                 ctx
             } else {
                 if entries.len() == 1 {
                     let entry = entries.remove(0);
-                    #[cfg(feature = "log-jit")]
+                    #[cfg(feature = "emit-tir")]
                     eprintln!("gen_merge bb: {pos}<-{}", entry.src_idx);
                     self.jit.bind_label(entry.dest_label);
                     return entry.bbctx;
                 }
 
-                #[cfg(feature = "log-jit")]
+                #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb: {pos}");
 
                 let mut target_slot_info = entries[0].bbctx.stack_slot.clone();
+                #[cfg(feature = "emit-tir")]
+                eprintln!("  {}->{pos}: {:?}", entries[0].src_idx, target_slot_info);
                 for BranchEntry {
-                    src_idx: _,
+                    src_idx,
                     bbctx,
                     dest_label: _,
                 } in entries.iter().skip(1)
                 {
                     let reg_info = &bbctx.stack_slot;
+                    #[cfg(feature = "emit-tir")]
+                    eprintln!("  {src_idx}->{pos}: {:?}", reg_info);
                     target_slot_info
                         .0
                         .iter_mut()
@@ -84,15 +85,14 @@ impl Codegen {
                                 (LinkMode::XmmR(l), LinkMode::XmmR(r)) if l == r => {
                                     LinkMode::XmmR(*l)
                                 }
-                                (
-                                    LinkMode::XmmRW(l) | LinkMode::XmmR(l),
-                                    LinkMode::XmmRW(r) | LinkMode::XmmR(r),
-                                ) if l == r => LinkMode::XmmRW(*l),
+                                (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) if l == r => {
+                                    LinkMode::XmmRW(*l)
+                                }
                                 _ => LinkMode::None,
                             }
                         });
                 }
-                #[cfg(feature = "log-jit")]
+                #[cfg(feature = "emit-tir")]
                 eprintln!("  intersect: {:?}", target_slot_info);
 
                 let cur_label = cc.labels[&pos];
@@ -103,12 +103,12 @@ impl Codegen {
                     dest_label,
                 } in entries
                 {
-                    #[cfg(feature = "log-jit")]
-                    eprintln!("  write_back {src_idx}->{pos} {:?}", bbctx.stack_slot);
-                    let pc = func.get_pc(pos);
+                    #[cfg(feature = "emit-tir")]
+                    eprintln!("  write_back {src_idx}->{pos}",);
+                    //let pc = func.get_pc(pos);
                     self.jit.select(1);
                     self.jit.bind_label(dest_label);
-                    self.gen_write_back_with(&mut bbctx, &target_ctx, pc);
+                    self.gen_write_back_with(&mut bbctx, &target_ctx);
                     monoasm!(self.jit,
                         jmp cur_label;
                     );
@@ -132,22 +132,17 @@ impl Codegen {
             let target_ctx = BBContext::from(&target_slot_info);
             for BranchEntry {
                 src_idx,
-                mut bbctx,
+                bbctx,
                 dest_label,
             } in entries
             {
-                #[cfg(feature = "log-jit")]
-                {
-                    eprintln!(
-                        "  backedge_write_back {src_idx}->{bb_pos} {:?}",
-                        bbctx.stack_slot
-                    );
-                    eprintln!("  {:?}", target_slot_info);
-                }
+                #[cfg(feature = "emit-tir")]
+                eprintln!("  backedge_write_back {src_idx}->{bb_pos}");
+
                 let pc = func.get_pc(bb_pos);
                 self.jit.select(1);
                 self.jit.bind_label(dest_label);
-                self.gen_write_back_with(&mut bbctx, &target_ctx, pc);
+                self.gen_write_back_backedge(bbctx, &target_ctx, pc);
                 monoasm!(self.jit,
                     jmp target_label;
                 );
