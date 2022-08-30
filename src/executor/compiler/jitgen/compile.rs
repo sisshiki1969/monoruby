@@ -23,10 +23,11 @@ impl Codegen {
 
                 for BranchEntry {
                     src_idx,
-                    bbctx,
+                    mut bbctx,
                     dest_label,
                 } in entries
                 {
+                    bbctx.remove_unused(&unused);
                     #[cfg(feature = "emit-tir")]
                     eprintln!("  write_back_all {src_idx}->{pos} {:?}", bbctx.stack_slot);
                     let wb = bbctx.get_write_back();
@@ -55,7 +56,7 @@ impl Codegen {
                     }
                 }
                 self.jit.bind_label(backedge_label);
-                cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone());
+                cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone(), unused);
                 ctx
             } else {
                 if entries.len() == 1 {
@@ -133,17 +134,17 @@ impl Codegen {
         bb_pos: usize,
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
-            let (target_label, target_slot_info) = cc.get_backedge(bb_pos);
+            let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
             let target_ctx = BBContext::from(&target_slot_info);
             for BranchEntry {
                 src_idx,
-                bbctx,
+                mut bbctx,
                 dest_label,
             } in entries
             {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  backedge_write_back {src_idx}->{bb_pos}");
-
+                bbctx.remove_unused(&unused);
                 let pc = func.get_pc(bb_pos);
                 self.jit.select_page(1);
                 self.jit.bind_label(dest_label);

@@ -21,13 +21,13 @@ impl RegInfo {
             .collect()
     }
 
-    pub(super) fn get_unused(&self) -> Vec<usize> {
+    pub(super) fn get_unused(&self) -> Vec<SlotId> {
         self.info
             .iter()
             .enumerate()
             .flat_map(|(i, state)| {
                 if state.is_used == IsUsed::NotUsed {
-                    Some(i)
+                    Some(SlotId(i as u16))
                 } else {
                     None
                 }
@@ -243,7 +243,7 @@ impl LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    pub(super) fn analyse(func: &NormalFuncInfo, bb_pos: usize) -> (RegInfo, Vec<usize>) {
+    pub(super) fn analyse(func: &NormalFuncInfo, bb_pos: usize) -> (RegInfo, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx

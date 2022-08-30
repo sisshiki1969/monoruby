@@ -108,6 +108,10 @@ impl BBContext {
         ctx
     }
 
+    fn remove_unused(&mut self, unused: &Vec<SlotId>) {
+        unused.iter().for_each(|reg| self.dealloc_xmm(*reg));
+    }
+
     ///
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
@@ -325,7 +329,7 @@ struct CompileContext {
     loop_count: usize,
     is_loop: bool,
     branch_map: HashMap<usize, Vec<BranchEntry>>,
-    backedge_map: HashMap<usize, (DestLabel, StackSlotInfo)>,
+    backedge_map: HashMap<usize, (DestLabel, StackSlotInfo, Vec<SlotId>)>,
 }
 
 impl CompileContext {
@@ -356,11 +360,18 @@ impl CompileContext {
         })
     }
 
-    fn new_backedge(&mut self, bb_pos: usize, dest_label: DestLabel, slot_info: StackSlotInfo) {
-        self.backedge_map.insert(bb_pos, (dest_label, slot_info));
+    fn new_backedge(
+        &mut self,
+        bb_pos: usize,
+        dest_label: DestLabel,
+        slot_info: StackSlotInfo,
+        unused: Vec<SlotId>,
+    ) {
+        self.backedge_map
+            .insert(bb_pos, (dest_label, slot_info, unused));
     }
 
-    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, StackSlotInfo) {
+    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, StackSlotInfo, Vec<SlotId>) {
         self.backedge_map.remove_entry(&bb_pos).unwrap().1
     }
 }
