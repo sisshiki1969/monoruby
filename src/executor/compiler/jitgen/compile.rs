@@ -14,8 +14,13 @@ impl Codegen {
             if is_loop {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb(loop): {pos}");
-                let use_set = LoopAnalysis::analyse(func, cc.bb_pos).get_loop_used_as_float();
+                let (backedge_info, unused) = LoopAnalysis::analyse(func, cc.bb_pos);
+                let use_set = backedge_info.get_loop_used_as_float();
                 let cur_label = cc.labels[&pos];
+
+                #[cfg(feature = "emit-tir")]
+                eprintln!("not used: {:?}", unused);
+
                 for BranchEntry {
                     src_idx,
                     bbctx,
@@ -25,18 +30,18 @@ impl Codegen {
                     #[cfg(feature = "emit-tir")]
                     eprintln!("  write_back_all {src_idx}->{pos} {:?}", bbctx.stack_slot);
                     let wb = bbctx.get_write_back();
-                    self.jit.select(1);
+                    self.jit.select_page(1);
                     self.jit.bind_label(dest_label);
                     self.gen_write_back(wb);
                     monoasm!(self.jit,
                         jmp cur_label;
                     );
-                    self.jit.select(0);
+                    self.jit.select_page(0);
                 }
                 let mut ctx = BBContext::new(func.total_reg_num());
                 let pc = func.get_pc(cc.bb_pos);
                 let backedge_label = self.jit.label();
-                /*for (reg, class) in use_set {
+                for (reg, class) in use_set {
                     match class {
                         Some(FLOAT_CLASS) => {
                             ctx.xmm_read_assume_float(self, reg, pc + 1);
@@ -48,7 +53,7 @@ impl Codegen {
                             ctx.xmm_read_without_assumption(self, reg, pc + 1);
                         }
                     }
-                }*/
+                }
                 self.jit.bind_label(backedge_label);
                 cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone());
                 ctx
@@ -106,13 +111,13 @@ impl Codegen {
                     #[cfg(feature = "emit-tir")]
                     eprintln!("  write_back {src_idx}->{pos}",);
                     //let pc = func.get_pc(pos);
-                    self.jit.select(1);
+                    self.jit.select_page(1);
                     self.jit.bind_label(dest_label);
                     self.gen_write_back_with(&mut bbctx, &target_ctx);
                     monoasm!(self.jit,
                         jmp cur_label;
                     );
-                    self.jit.select(0);
+                    self.jit.select_page(0);
                 }
                 target_ctx
             }
@@ -140,13 +145,13 @@ impl Codegen {
                 eprintln!("  backedge_write_back {src_idx}->{bb_pos}");
 
                 let pc = func.get_pc(bb_pos);
-                self.jit.select(1);
+                self.jit.select_page(1);
                 self.jit.bind_label(dest_label);
                 self.gen_write_back_backedge(bbctx, &target_ctx, pc);
                 monoasm!(self.jit,
                     jmp target_label;
                 );
-                self.jit.select(0);
+                self.jit.select_page(0);
             }
         }
     }

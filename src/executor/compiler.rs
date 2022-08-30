@@ -199,6 +199,7 @@ impl Codegen {
     pub fn new(no_jit: bool) -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
+        jit.add_page();
 
         let class_version = jit.const_i32(0);
         let const_version = jit.const_i64(0);
@@ -208,7 +209,7 @@ impl Codegen {
         let vm_return = jit.label();
         let div_by_zero = jit.label();
         let heap_to_f64 = jit.label();
-        jit.select(1);
+        jit.select_page(1);
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -376,7 +377,7 @@ impl Codegen {
                 leave;
                 ret;
         };
-        jit.select(0);
+        jit.select_page(0);
         let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,

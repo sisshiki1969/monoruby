@@ -243,7 +243,7 @@ impl LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    pub(super) fn analyse(func: &NormalFuncInfo, bb_pos: usize) -> RegInfo {
+    pub(super) fn analyse(func: &NormalFuncInfo, bb_pos: usize) -> (RegInfo, Vec<usize>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx
@@ -283,15 +283,11 @@ impl LoopAnalysis {
             };
         }
         let info = ctx.backedge_info.unwrap();
-        //exit_info.merge(&info);
-        /*eprintln!(
-            "not used: backedge:{:?} exit:{:?}",
-            info.get_unused(),
-            exit_info.get_unused()
-        );*/
+        exit_info.merge(&info);
+
         #[cfg(feature = "emit-tir")]
         eprintln!("loop: {bb_pos} {:?}", info.get_loop_used_as_float());
-        info
+        (info, exit_info.get_unused())
     }
 
     fn scan_bb(

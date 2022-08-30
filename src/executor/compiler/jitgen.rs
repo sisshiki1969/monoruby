@@ -229,15 +229,6 @@ impl BBContext {
             .collect()
     }
 
-    fn xmm_conv_to_f64(&self, codegen: &mut Codegen, reg: SlotId, freg: u16, pc: BcPc) {
-        let wb = self.get_write_back();
-        let side_exit = codegen.gen_deopt_dest(pc, wb);
-        monoasm!(codegen.jit,
-            movq rdi, [rbp - (conv(reg))];
-        );
-        codegen.gen_val_to_f64(freg as u64 + 2, side_exit);
-    }
-
     fn xmm_read_assume(
         &mut self,
         codegen: &mut Codegen,
@@ -258,7 +249,7 @@ impl BBContext {
             LinkMode::None => {
                 let freg = self.alloc_xmm_read(reg);
                 let wb = self.get_write_back();
-                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
                 monoasm!(codegen.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
@@ -274,7 +265,7 @@ impl BBContext {
             _ => {
                 let freg = self.alloc_xmm_read(reg);
                 let wb = self.get_write_back();
-                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
                 monoasm!(codegen.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
@@ -290,7 +281,7 @@ impl BBContext {
             _ => {
                 let freg = self.alloc_xmm_read(reg);
                 let wb = self.get_write_back();
-                let side_exit = codegen.gen_deopt_dest(pc, wb);
+                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
                 monoasm!(codegen.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
@@ -387,7 +378,7 @@ macro_rules! cmp_main {
                     orq rax, (FALSE_VALUE);
                 exit:
                 };
-                self.jit.select(1);
+                self.jit.select_page(1);
                 monoasm!(self.jit,
                     generic:
                 );
@@ -401,7 +392,7 @@ macro_rules! cmp_main {
                 monoasm!(self.jit,
                     jmp  exit;
                 );
-                self.jit.select(0);
+                self.jit.select_page(0);
             }
         }
     };
@@ -426,7 +417,7 @@ macro_rules! cmp_opt_main {
                     },
                 }
                 self.jit.bind_label(cont);
-                self.jit.select(1);
+                self.jit.select_page(1);
                 monoasm!(self.jit,
                     generic:
                 );
@@ -452,7 +443,7 @@ macro_rules! cmp_opt_main {
                         jmp branch_dest;
                     },
                 }
-                self.jit.select(0);
+                self.jit.select_page(0);
             }
 
             fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
@@ -467,7 +458,7 @@ macro_rules! cmp_opt_main {
                     },
                 }
                 self.jit.bind_label(cont);
-                self.jit.select(1);
+                self.jit.select_page(1);
                 monoasm!(self.jit,
                     generic:
                 );
@@ -493,7 +484,7 @@ macro_rules! cmp_opt_main {
                         jmp branch_dest;
                     },
                 }
-                self.jit.select(0);
+                self.jit.select_page(0);
             }
         }
     };
@@ -521,17 +512,15 @@ extern "C" fn log_deoptimize(
         Some(name) => name.to_string(),
         None => "<unnamed>".to_string(),
     };
-    if let BcOp::LoopEnd = pc.op1() {
-        eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-    } else {
-        eprint!(
-            "<-- deoptimization occurs in {} {:?}. caused by {:?}",
-            name, func_id, v
-        );
-    }
     let bc_begin = globals.func[func_id].as_normal().get_bytecode_address(0);
     let index = pc - bc_begin;
-    eprintln!("    [{:05}] {:?}", index, *pc);
+    if let BcOp::LoopEnd = pc.op1() {
+        eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
+        eprintln!("    [{:05}] {:?}", index, *pc);
+    } else {
+        eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+        eprintln!("    [{:05}] {:?} caused by {:?}", index, *pc, v);
+    }
 }
 
 impl Codegen {
@@ -577,7 +566,7 @@ impl Codegen {
         let slow_path = self.jit.label();
         let exit = self.jit.label();
 
-        self.jit.select(1);
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.jit_get_constant(id, pc, xmm_using);
         monoasm!(self.jit,
@@ -586,7 +575,7 @@ impl Codegen {
             movq [rip + cached_const_version], rdi;
             jmp  exit;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
 
         monoasm!(self.jit,
             movq rax, [rip + global_const_version];
@@ -614,9 +603,9 @@ impl Codegen {
         let exit = self.jit.label();
 
         let cached_float = self.jit.const_f64(0.0);
-        let side_exit = self.gen_deopt_dest(pc, wb.clone());
+        let side_exit = self.gen_side_deopt_dest(pc, wb.clone());
 
-        self.jit.select(1);
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.jit_get_constant(id, pc, xmm_using.clone());
         monoasm!(self.jit,
@@ -630,7 +619,7 @@ impl Codegen {
             movq [rip + cached_const_version], rax;
             jmp  exit;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
 
         monoasm!(self.jit,
             movq rax, [rip + global_const_version];
@@ -775,7 +764,7 @@ impl Codegen {
             }
         }
         let len = src_ctx.stack_slot.0.len();
-        let mut conv = vec![];
+        let mut conv_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
@@ -785,22 +774,30 @@ impl Codegen {
                 (LinkMode::XmmR(_), LinkMode::None) => {}
                 (LinkMode::XmmR(l), LinkMode::XmmR(r)) => {
                     if l != r {
-                        conv.push((reg, r));
+                        conv_list.push((reg, r));
                     }
                 }
                 (LinkMode::None, LinkMode::XmmR(r)) => {
-                    conv.push((reg, r));
+                    conv_list.push((reg, r));
                 }
             }
         }
         #[cfg(feature = "emit-tir")]
-        eprintln!("      conv: {:?}", conv);
-        for (reg, freg) in conv {
-            src_ctx.xmm_conv_to_f64(self, reg, freg, pc + 1);
+        eprintln!("      conv: {:?}", conv_list);
+        let wb = src_ctx.get_write_back();
+        let side_exit = self.gen_side_deopt_dest(pc + 1, wb.clone());
+        for (reg, freg) in conv_list {
+            monoasm!(self.jit,
+                movq rdi, [rbp - (conv(reg))];
+            );
+            self.gen_val_to_f64(freg as u64 + 2, side_exit);
         }
     }
 
     fn gen_write_back_single(&mut self, freg: u16, v: Vec<SlotId>) {
+        if v.len() == 0 {
+            return;
+        }
         let f64_to_val = self.f64_to_val;
         monoasm!(self.jit,
             movq xmm0, xmm(freg as u64 + 2);
@@ -814,8 +811,9 @@ impl Codegen {
     ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
-    fn gen_deopt_dest(&mut self, pc: BcPc, wb: WriteBack) -> DestLabel {
-        self.jit.select(1);
+    fn gen_side_deopt_dest(&mut self, pc: BcPc, wb: WriteBack) -> DestLabel {
+        let old_p = self.jit.get_page();
+        self.jit.select_page(2);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         self.gen_write_back(wb);
@@ -836,7 +834,7 @@ impl Codegen {
         monoasm!(self.jit,
             jmp fetch;
         );
-        self.jit.select(0);
+        self.jit.select_page(old_p);
         entry
     }
 
@@ -845,7 +843,7 @@ impl Codegen {
     ///
     fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
         let wb = ctx.get_write_back();
-        let fallback = self.gen_deopt_dest(pc, wb);
+        let fallback = self.gen_side_deopt_dest(pc, wb);
         monoasm!(self.jit,
             jmp fallback;
         );
@@ -938,7 +936,7 @@ impl Codegen {
                 *code_end - *start,
                 *end - *code_end
             );
-            self.jit.select(0);
+            self.jit.select_page(0);
             eprintln!("{}", self.jit.dump_code().unwrap());
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -1068,7 +1066,7 @@ impl Codegen {
         wb: WriteBack,
         xmm_using: UsingXmm,
     ) {
-        let deopt = self.gen_deopt_dest(pc, wb);
+        let deopt = self.gen_side_deopt_dest(pc, wb);
         match kind {
             BinOpK::Add => {
                 match mode {
@@ -1421,7 +1419,7 @@ impl Codegen {
     }
 
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
-        self.jit.select(1);
+        self.jit.select_page(1);
         let zero = self.jit.label();
         monoasm!(self.jit,
         under:
@@ -1434,7 +1432,7 @@ impl Codegen {
             xorq rdi, rdi;
             jmp after;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
     }
 
     fn gen_shr(&mut self, generic: DestLabel, ret: SlotId, xmm_using: UsingXmm, pc: BcPc) {
@@ -1454,7 +1452,7 @@ impl Codegen {
         );
         self.store_rdi(ret);
         self.side_generic_op(generic, ret, shr_values as _, xmm_using, pc);
-        self.jit.select(1);
+        self.jit.select_page(1);
         monoasm!(self.jit,
         shl:
             negq rcx;
@@ -1465,7 +1463,7 @@ impl Codegen {
             salq rdi, rcx;
             jmp after;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
         self.shift_under(under, after);
     }
 
@@ -1489,7 +1487,7 @@ impl Codegen {
         self.store_rdi(ret);
 
         self.side_generic_op(generic, ret, shl_values as _, xmm_using, pc);
-        self.jit.select(1);
+        self.jit.select_page(1);
         monoasm!(self.jit,
         shr:
             negq rcx;
@@ -1498,7 +1496,7 @@ impl Codegen {
             sarq rdi, rcx;
             jmp after;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
         self.shift_under(under, after);
     }
 
@@ -1512,13 +1510,13 @@ impl Codegen {
     ) {
         let exit = self.jit.label();
         self.jit.bind_label(exit);
-        self.jit.select(1);
+        self.jit.select_page(1);
         self.jit.bind_label(generic);
         self.generic_binop(ret, func, xmm_using, pc);
         monoasm!(self.jit,
             jmp  exit;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
     }
 
     fn generic_binop(&mut self, ret: SlotId, func: u64, xmm_using: UsingXmm, pc: BcPc) {
@@ -1627,7 +1625,7 @@ impl Codegen {
             self.store_rax(ret);
         }
 
-        self.jit.select(1);
+        self.jit.select_page(1);
         // call site stub code.
         monoasm!(self.jit,
         slow_path:
@@ -1674,6 +1672,6 @@ impl Codegen {
             movq r13, (pc.0);
             jmp entry_return;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
     }
 }
