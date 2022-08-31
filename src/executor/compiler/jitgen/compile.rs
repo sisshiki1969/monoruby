@@ -24,14 +24,14 @@ impl Codegen {
                 }
 
                 for BranchEntry {
-                    src_idx,
+                    src_idx: _src_idx,
                     mut bbctx,
                     dest_label,
                 } in entries
                 {
                     bbctx.remove_unused(&unused);
                     #[cfg(feature = "emit-tir")]
-                    eprintln!("  write_back_all {src_idx}->{pos} {:?}", bbctx.stack_slot);
+                    eprintln!("  write_back_all {_src_idx}->{pos} {:?}", bbctx.stack_slot);
                     let wb = bbctx.get_write_back();
                     self.jit.select_page(1);
                     self.jit.bind_label(dest_label);
@@ -75,14 +75,14 @@ impl Codegen {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  {}->{pos}: {:?}", entries[0].src_idx, target_slot_info);
                 for BranchEntry {
-                    src_idx,
+                    src_idx: _src_idx,
                     bbctx,
                     dest_label: _,
                 } in entries.iter().skip(1)
                 {
                     let reg_info = &bbctx.stack_slot;
                     #[cfg(feature = "emit-tir")]
-                    eprintln!("  {src_idx}->{pos}: {:?}", reg_info);
+                    eprintln!("  {_src_idx}->{pos}: {:?}", reg_info);
                     target_slot_info
                         .0
                         .iter_mut()
@@ -105,13 +105,13 @@ impl Codegen {
                 let cur_label = cc.labels[&pos];
                 let target_ctx = BBContext::from(&target_slot_info);
                 for BranchEntry {
-                    src_idx,
+                    src_idx: _src_idx,
                     mut bbctx,
                     dest_label,
                 } in entries
                 {
                     #[cfg(feature = "emit-tir")]
-                    eprintln!("  write_back {src_idx}->{pos}",);
+                    eprintln!("  write_back {_src_idx}->{pos}",);
                     //let pc = func.get_pc(pos);
                     self.jit.select_page(1);
                     self.jit.bind_label(dest_label);
@@ -138,13 +138,13 @@ impl Codegen {
             let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
             let target_ctx = BBContext::from(&target_slot_info);
             for BranchEntry {
-                src_idx,
+                src_idx: _src_idx,
                 mut bbctx,
                 dest_label,
             } in entries
             {
                 #[cfg(feature = "emit-tir")]
-                eprintln!("  backedge_write_back {src_idx}->{bb_pos}");
+                eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 let pc = func.get_pc(bb_pos);
                 self.jit.select_page(1);
@@ -293,8 +293,6 @@ impl Codegen {
                     }
                 }
                 BcOp::BinOp(kind, ret, lhs, rhs) => {
-                    let wb = ctx.get_write_back();
-                    let xmm_using = ctx.get_xmm_using();
                     if pc.is_binary_integer() {
                         ctx.read_slot(self, lhs);
                         ctx.read_slot(self, rhs);
@@ -304,8 +302,8 @@ impl Codegen {
                             kind,
                             ret,
                             BinOpMode::RR(lhs, rhs),
-                            wb,
-                            xmm_using,
+                            ctx.get_write_back(),
+                            ctx.get_xmm_using(),
                         );
                     } else if pc.is_binary_float() {
                         let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);

@@ -180,10 +180,6 @@ extern "C" fn get_error_location(
     meta: Meta,
     pc: BcPc,
 ) {
-    if meta.kind() != 0 {
-        // currently, JIT is not yet supported.
-        return;
-    }
     let func_info = &globals.func[meta.func_id()];
     let bc_base = func_info.data.pc;
     let normal_info = match &func_info.kind {

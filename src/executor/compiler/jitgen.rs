@@ -162,7 +162,7 @@ impl BBContext {
                 self.xmm[freg as usize].retain(|e| *e != reg);
                 self.stack_slot[reg] = LinkMode::None;
             }
-            _ => {}
+            LinkMode::None => {}
         }
     }
 
@@ -511,7 +511,7 @@ enum BinOpMode {
     IR(i16, SlotId),
 }
 
-#[cfg(any(feature = "log-jit"))]
+#[cfg(feature = "log-jit")]
 extern "C" fn log_deoptimize(
     _interp: &mut Interp,
     globals: &mut Globals,
@@ -825,8 +825,8 @@ impl Codegen {
         self.jit.select_page(2);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
-        #[cfg(feature = "emit-tir")]
         if wb.len() != 0 {
+            #[cfg(feature = "emit-tir")]
             eprintln!("--gen deopt");
             self.gen_write_back(wb);
             #[cfg(feature = "emit-tir")]
@@ -836,7 +836,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq r13, (pc.0);
         );
-        #[cfg(any(feature = "log-jit"))]
+        #[cfg(feature = "log-jit")]
         monoasm!(self.jit,
             movq r8, rdi; // the Value which caused this deopt.
             movq rdi, rbx;

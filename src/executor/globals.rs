@@ -61,8 +61,8 @@ impl Globals {
         self.error = Some(err);
     }
 
-    pub fn err_method_not_found(&mut self, name: IdentId) {
-        self.set_error(MonorubyErr::method_not_found(name))
+    pub fn err_method_not_found(&mut self, name: IdentId, class: ClassId) {
+        self.set_error(MonorubyErr::method_not_found(name, class))
     }
 
     pub fn err_divide_by_zero(&mut self) {
@@ -286,7 +286,7 @@ impl Globals {
         let func_id = match self.get_method_inner(class_id, func_name) {
             Some(id) => id,
             None => {
-                self.error = Some(MonorubyErr::method_not_found(func_name));
+                self.err_method_not_found(func_name, class_id);
                 return None;
             }
         };
@@ -360,8 +360,12 @@ impl Globals {
             MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
             }
-            MonorubyErrKind::MethodNotFound(name) => {
-                format!("undefined method `{}'", self.get_ident_name(*name))
+            MonorubyErrKind::MethodNotFound(name, class) => {
+                format!(
+                    "undefined method `{}' for {:?}",
+                    self.get_ident_name(*name),
+                    class
+                )
             }
             MonorubyErrKind::WrongArguments(name) => name.to_string(),
             MonorubyErrKind::Syntax(kind) => format!("{:?}", kind),

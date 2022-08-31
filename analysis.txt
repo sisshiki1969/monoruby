@@ -1,17 +1,41 @@
---> start partial compile: /main FuncId(18) start:[00018] bytecode:0x55c2d54df270
 gen_merge bb(loop): 18
-loop: 18 []
+[]
+use set:  []
 not used: [%16]
   write_back_all 0->18 []
+merge_end
 gen_merge bb(loop): 23
-loop: 23 [(%1, Some(INTEGER)), (%5, Some(INTEGER))]
+[(1, R(false), Used), (5, R(false), Used)]
+use set:  [(%1, false), (%5, false)]
 not used: [%17]
   write_back_all 22->23 []
+merge_end
+--gen deopt
+      wb: 2->[%7]
+      wb: 3->[%8]
+      wb: 4->[%17]
+--gen deopt end
 gen_merge bb(loop): 41
-loop: 41 [(%7, Some(FLOAT)), (%8, Some(FLOAT)), (%9, Some(FLOAT)), (%10, Some(FLOAT))]
+[(7, RW, Used), (8, RW, Used), (9, R(true), Used), (10, R(true), Used)]
+use set:  [(%7, true), (%8, true), (%9, true), (%10, true)]
 not used: [%18]
-  write_back_all 40->41 [%1:R(0) %5:R(1) %6:R(5) %7:RW(2) %8:RW(3) %9:RW(7) %10:RW(8) %18:RW(6) ]
+  write_back_all 40->41 [%1:R(0) %5:R(1) %6:R(5) %7:RW(2) %8:RW(3) %9:RW(7) %10:RW(8) ]
+      wb: 2->[%7]
+      wb: 3->[%8]
+      wb: 7->[%9]
+      wb: 8->[%10]
+merge_end
+--gen deopt
+      wb: 0->[%18]
+      wb: 6->[%13, %7]
+      wb: 7->[%14, %8]
+--gen deopt end
 gen_merge bb: 64<-60
+--gen deopt
+      wb: 0->[%18]
+      wb: 6->[%13, %7]
+      wb: 7->[%14, %8]
+--gen deopt end
 gen_merge bb: 66
   43->66: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
   62->66: [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
@@ -19,11 +43,12 @@ gen_merge bb: 66
   write_back 43->66
       src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
   write_back 62->66
       src:    [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[%18], [], [], [], [], [], [%7, %13], [%8, %14], [], [], [], [], [], []]
+      wb: 0->[%18]
+      wb: 6->[%7, %13]
+      wb: 7->[%8, %14]
 gen_merge bb: 72<-69
 gen_merge bb: 73
   71->73: [%9:R(2) %10:R(3) ]
@@ -32,11 +57,9 @@ gen_merge bb: 73
   write_back 71->73
       src:    [%9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
   write_back 72->73
       src:    [%9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
 gen_merge bb: 87<-76
 gen_merge bb: 101
   86->101: [%9:R(2) %10:R(3) ]
@@ -46,30 +69,26 @@ gen_merge bb: 101
   write_back 86->101
       src:    [%9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
   write_back 88->101
       src:    [%9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
   write_back 100->101
       src:    [%9:R(2) %10:R(3) ]
       target: [%9:R(2) %10:R(3) ]
-      wb: [[], [], [], [], [], [], [], [], [], [], [], [], [], []]
 gen_merge bb: 103<-25
 gen_merge bb: 106<-20
   backedge_write_back 105->18
       src:    [%1:R(0) ]
       target: []
-      wb: []
-      conv: []
   backedge_write_back 65->41
       src:    [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %19:R(1) ]
       target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      wb: [(6, [%13, %7]), (7, [%14, %8])]
-      conv: [(%7, 0), (%8, 1)]
+      wb: 6->[%13, %7]
+      wb: 7->[%14, %8]
+      conv: %7->0
+      conv: %8->1
   backedge_write_back 102->23
       src:    [%9:R(2) %10:R(3) ]
       target: [%1:R(0) %5:R(1) ]
-      wb: []
-      conv: [(%1, 0), (%5, 1)]
-    finished compile.
+      conv: %1->0
+      conv: %5->1
