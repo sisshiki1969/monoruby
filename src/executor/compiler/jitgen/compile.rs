@@ -46,13 +46,10 @@ impl Codegen {
                 let backedge_label = self.jit.label();
                 for (reg, class) in use_set {
                     match class {
-                        Some(FLOAT_CLASS) => {
+                        true => {
                             ctx.xmm_read_assume_float(self, reg, pc + 1);
                         }
-                        Some(INTEGER_CLASS) => {
-                            ctx.xmm_read_assume_integer(self, reg, pc + 1);
-                        }
-                        _ => {
+                        false => {
                             ctx.xmm_read_without_assumption(self, reg, pc + 1);
                         }
                     }

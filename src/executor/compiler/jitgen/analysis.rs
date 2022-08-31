@@ -10,12 +10,13 @@ impl RegInfo {
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, Option<ClassId>)> {
+    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
         self.info
             .iter()
             .enumerate()
             .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
-                (XmmLink::Linked, IsUsed::Used(true, class)) => Some((SlotId(i as u16), class)),
+                (XmmLink::R(true) | XmmLink::RW, IsUsed::Used) => Some((SlotId(i as u16), true)),
+                (XmmLink::R(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
                 _ => None,
             })
             .collect()
@@ -52,67 +53,38 @@ impl RegInfo {
 
     fn use_as(&mut self, slot: SlotId, is_float: bool, class: ClassId) {
         self[slot].xmm_link = if is_float {
-            XmmLink::Linked
+            match self[slot].xmm_link {
+                XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::RW => XmmLink::RW,
+            }
         } else {
-            XmmLink::NotLinked
+            match self[slot].xmm_link {
+                XmmLink::None => XmmLink::None,
+                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::RW => XmmLink::R(true),
+            }
         };
         if self[slot].is_used != IsUsed::NotUsed {
-            self[slot].is_used = IsUsed::Used(is_float, Some(class));
-        }
-        match self[slot].is_used {
-            IsUsed::NotUsed | IsUsed::MaybeUsed => {}
-            IsUsed::ND => {
-                self[slot].is_used = IsUsed::Used(is_float, Some(class));
-            }
-            IsUsed::Used(old_is_float, old_class) => match (old_is_float, is_float) {
-                (true, true) => {
-                    self[slot].is_used = IsUsed::Used(
-                        true,
-                        match old_class {
-                            Some(old_class) => {
-                                if old_class == class {
-                                    Some(class)
-                                } else {
-                                    None
-                                }
-                            }
-                            None => None,
-                        },
-                    );
-                }
-                (true, false) => {
-                    self[slot].is_used = IsUsed::Used(true, old_class);
-                }
-                (false, true) => {
-                    self[slot].is_used = IsUsed::Used(true, Some(class));
-                }
-                (false, false) => {
-                    self[slot].is_used = IsUsed::Used(false, None);
-                }
-            },
+            self[slot].is_used = IsUsed::Used;
         }
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {
-        self[slot].xmm_link = if is_float {
-            XmmLink::Linked
-        } else {
-            XmmLink::NotLinked
-        };
+        self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
         }
     }
 
     fn copy(&mut self, dst: SlotId, src: SlotId) {
-        let is_used = match &self[dst].is_used {
-            IsUsed::Used(b, c) => IsUsed::Used(*b, *c),
-            _ => IsUsed::NotUsed,
-        };
-        self[dst] = RegState {
-            xmm_link: self[src].xmm_link,
-            is_used,
-        };
+        if self[src].is_used != IsUsed::NotUsed {
+            self[src].is_used = IsUsed::Used;
+        }
+        if self[dst].is_used == IsUsed::ND {
+            self[dst].is_used = IsUsed::NotUsed;
+        }
+        self[dst].xmm_link = self[src].xmm_link;
     }
 }
 
@@ -151,7 +123,7 @@ pub(super) struct RegState {
 impl RegState {
     fn new() -> Self {
         Self {
-            xmm_link: XmmLink::ND,
+            xmm_link: XmmLink::None,
             is_used: IsUsed::ND,
         }
     }
@@ -159,17 +131,19 @@ impl RegState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum XmmLink {
-    ND,
-    Linked,
-    NotLinked,
+    None,
+    /// R(isFloat)
+    R(bool),
+    RW,
 }
 
 impl XmmLink {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, other) {
-            (XmmLink::Linked, XmmLink::Linked) => XmmLink::Linked,
-            (XmmLink::NotLinked, XmmLink::NotLinked) => XmmLink::NotLinked,
-            _ => XmmLink::ND,
+            (XmmLink::RW, XmmLink::RW) => XmmLink::RW,
+            (XmmLink::R(true), XmmLink::R(true)) => XmmLink::R(true),
+            (_, XmmLink::R(_)) | (XmmLink::R(_), _) => XmmLink::R(false),
+            _ => XmmLink::None,
         };
     }
 }
@@ -177,20 +151,16 @@ impl XmmLink {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum IsUsed {
     ND,
-    Used(bool, Option<ClassId>),
-    MaybeUsed,
+    Used,
     NotUsed,
 }
 
 impl IsUsed {
     fn merge(&mut self, other: &Self) {
         *self = match (&self, other) {
-            (IsUsed::ND, IsUsed::ND) => IsUsed::ND,
-            (IsUsed::Used(b1, c1), IsUsed::Used(b2, c2)) => {
-                IsUsed::Used(*b1 | *b2, if c1 == c2 { *c1 } else { None })
-            }
+            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
             (IsUsed::NotUsed, IsUsed::NotUsed) => IsUsed::NotUsed,
-            _ => IsUsed::MaybeUsed,
+            _ => IsUsed::ND,
         };
     }
 }
@@ -284,6 +254,21 @@ impl LoopAnalysis {
         }
         let info = ctx.backedge_info.unwrap();
         exit_info.merge(&info);
+        #[cfg(feature = "emit-tir")]
+        eprintln!(
+            "{:?}",
+            info.info
+                .iter()
+                .enumerate()
+                .flat_map(|(i, state)| {
+                    if state.xmm_link == XmmLink::None || state.is_used != IsUsed::Used {
+                        None
+                    } else {
+                        Some((i, state.xmm_link, state.is_used))
+                    }
+                })
+                .collect::<Vec<_>>()
+        );
 
         (info, exit_info.get_unused())
     }

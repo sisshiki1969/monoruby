@@ -826,10 +826,12 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         #[cfg(feature = "emit-tir")]
-        eprintln!("--gen deopt");
-        self.gen_write_back(wb);
-        #[cfg(feature = "emit-tir")]
-        eprintln!("--gen deopt end");
+        if wb.len() != 0 {
+            eprintln!("--gen deopt");
+            self.gen_write_back(wb);
+            #[cfg(feature = "emit-tir")]
+            eprintln!("--gen deopt end");
+        }
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
             movq r13, (pc.0);
