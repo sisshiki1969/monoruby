@@ -747,8 +747,6 @@ impl Codegen {
                 }
             }
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      wb: {:?}", wb);
         for (i, v) in wb.into_iter().enumerate() {
             self.gen_write_back_single(i as u16, v);
         }
@@ -766,8 +764,6 @@ impl Codegen {
             eprintln!("      target: {:?}", target_ctx.stack_slot);
         }
         let wb = src_ctx.get_write_back();
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      wb: {:?}", wb);
         self.gen_write_back(wb);
         for info in src_ctx.stack_slot.0.iter_mut() {
             if let LinkMode::XmmRW(_) = info {
@@ -793,8 +789,6 @@ impl Codegen {
                 }
             }
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      conv: {:?}", conv_list);
         let wb = src_ctx.get_write_back();
         let side_exit = self.gen_side_deopt_dest(pc + 1, wb.clone());
         for (reg, freg) in conv_list {
@@ -802,6 +796,8 @@ impl Codegen {
                 movq rdi, [rbp - (conv(reg))];
             );
             self.gen_val_to_f64(freg as u64 + 2, side_exit);
+            #[cfg(feature = "emit-tir")]
+            eprintln!("      conv: {:?}->{:?}", reg, freg);
         }
     }
 
@@ -809,6 +805,8 @@ impl Codegen {
         if v.len() == 0 {
             return;
         }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      wb: {:?}->{:?}", freg, v);
         let f64_to_val = self.f64_to_val;
         monoasm!(self.jit,
             movq xmm0, xmm(freg as u64 + 2);
@@ -827,7 +825,11 @@ impl Codegen {
         self.jit.select_page(2);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
+        #[cfg(feature = "emit-tir")]
+        eprintln!("--gen deopt");
         self.gen_write_back(wb);
+        #[cfg(feature = "emit-tir")]
+        eprintln!("--gen deopt end");
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
             movq r13, (pc.0);

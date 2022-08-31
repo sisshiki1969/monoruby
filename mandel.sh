@@ -1,12 +1,12 @@
 #!/bin/bash
 
 cargo build --release
-ruby mandel.rb > mandel.ppm
-target/release/monoruby mandel.rb > mandel1.ppm
-target/release/monoruby --aot mandel.rb > mandel2.ppm
-target/release/monoruby --no-jit mandel.rb > mandel3.ppm
+ruby so_mandelbrot.rb > mandel.ppm
+target/release/monoruby so_mandelbrot.rb > mandel1.ppm
+target/release/monoruby --aot so_mandelbrot.rb > mandel2.ppm
+target/release/monoruby --no-jit so_mandelbrot.rb > mandel3.ppm
 diff -s mandel.ppm mandel1.ppm
 diff -s mandel.ppm mandel2.ppm
 diff -s mandel.ppm mandel3.ppm
 rm mandel.ppm mandel1.ppm mandel2.ppm mandel3.ppm
-benchmark-driver mandel.rb --rbenv '3.2.0-dev; 3.2.0-dev --yjit; 3.2.0-dev --mjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' -e 'target/release/monoruby --aot' --repeat-count 3
+benchmark-driver so_mandelbrot.rb --rbenv '3.2.0-dev; 3.2.0-dev --yjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 3

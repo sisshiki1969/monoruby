@@ -285,8 +285,6 @@ impl LoopAnalysis {
         let info = ctx.backedge_info.unwrap();
         exit_info.merge(&info);
 
-        #[cfg(feature = "emit-tir")]
-        eprintln!("loop: {bb_pos} {:?}", info.get_loop_used_as_float());
         (info, exit_info.get_unused())
     }
 

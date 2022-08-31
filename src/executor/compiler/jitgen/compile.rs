@@ -17,9 +17,11 @@ impl Codegen {
                 let (backedge_info, unused) = LoopAnalysis::analyse(func, cc.bb_pos);
                 let use_set = backedge_info.get_loop_used_as_float();
                 let cur_label = cc.labels[&pos];
-
                 #[cfg(feature = "emit-tir")]
-                eprintln!("not used: {:?}", unused);
+                {
+                    eprintln!("use set:  {:?}", use_set);
+                    eprintln!("not used: {:?}", unused);
+                }
 
                 for BranchEntry {
                     src_idx,
@@ -57,6 +59,8 @@ impl Codegen {
                 }
                 self.jit.bind_label(backedge_label);
                 cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone(), unused);
+                #[cfg(feature = "emit-tir")]
+                eprintln!("merge_end");
                 ctx
             } else {
                 if entries.len() == 1 {
