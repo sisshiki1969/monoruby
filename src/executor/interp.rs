@@ -16,15 +16,13 @@ impl Interp {
     }
 
     /// Execute top level method.
-    pub fn eval_toplevel(globals: &mut Globals, aot_flag: bool) -> Result<Value> {
+    pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
         let mut eval = Self::new(globals.no_jit);
-        if !aot_flag {
-            if !globals.no_jit {
-                eval.codegen.set_jit_stab(&mut globals.func)
-            } else {
-                eval.codegen.set_vm_stab(&mut globals.func)
-            }
-        };
+        if !globals.no_jit {
+            eval.codegen.set_jit_stab(&mut globals.func)
+        } else {
+            eval.codegen.set_vm_stab(&mut globals.func)
+        }
         let main_id = globals.get_main_func();
         let main_data = eval.get_func_data(globals, main_id) as *const _;
 

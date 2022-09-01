@@ -9,7 +9,7 @@ pub struct MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     UndefinedLocal(String),
-    MethodNotFound(IdentId),
+    MethodNotFound(IdentId, ClassId),
     WrongArguments(String),
     Syntax(ParseErrKind),
     Syntax2(String),
@@ -116,8 +116,8 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
-    pub fn method_not_found(name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::MethodNotFound(name))
+    pub fn method_not_found(name: IdentId, class: ClassId) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, class))
     }
 
     pub fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {

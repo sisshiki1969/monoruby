@@ -17,13 +17,13 @@ macro_rules! cmp_ops {
               self.[<cmp_ $op>](generic1, vec![]);
               self.vm_store_r15();
               self.fetch_and_dispatch();
-              self.jit.select(1);
+              self.jit.select_page(1);
               self.jit.bind_label(generic0);
               self.vm_save_binary_class();
               monoasm!(self.jit,
                   jmp  generic1;
               );
-              self.jit.select(0);
+              self.jit.select_page(0);
               label
           }
 
@@ -41,13 +41,13 @@ macro_rules! cmp_ops {
             self.[<cmp_ $op>](generic1, vec![]);
             self.vm_store_r15();
             self.fetch_and_dispatch();
-            self.jit.select(1);
+            self.jit.select_page(1);
             self.jit.bind_label(generic0);
             self.vm_save_lhs_class();
             monoasm!(self.jit,
                 jmp  generic1;
             );
-            self.jit.select(0);
+            self.jit.select_page(0);
             label
           }
       }
@@ -658,7 +658,7 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
 
-        self.jit.select(1);
+        self.jit.select_page(1);
         let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
@@ -679,7 +679,7 @@ impl Codegen {
             movq [r13 + 24], rdi;
             jmp exec;
         );
-        self.jit.select(0);
+        self.jit.select_page(0);
 
         label
     }

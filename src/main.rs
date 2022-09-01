@@ -33,9 +33,6 @@ struct CommandLineArgs {
     /// print the version number, then turn on verbose mode
     #[clap(short)]
     verbose: bool,
-    /// switch ahead-of-time compilation.
-    #[clap(short, long)]
-    aot: bool,
     /// switch just-in-time compilation.
     #[clap(short, long)]
     no_jit: bool,
@@ -53,7 +50,6 @@ fn main() {
         for code in args.exec {
             exec(
                 &code,
-                args.aot,
                 args.no_jit,
                 args.warning,
                 std::path::Path::new("REPL"),
@@ -69,7 +65,6 @@ fn main() {
             file.read_to_string(&mut code).unwrap();
             exec(
                 &code,
-                args.aot,
                 args.no_jit,
                 args.warning,
                 &std::path::Path::new(&file_name),
@@ -83,7 +78,7 @@ fn main() {
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes, args.aot, args.no_jit, args.warning);
+                        run_repl(&code, &mut all_codes, args.no_jit, args.warning);
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -101,7 +96,7 @@ fn main() {
     }
 }
 
-fn exec(code: &str, aot_flag: bool, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
+fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     let mut globals = Globals::new(warning, no_jit_flag);
     match globals.compile_script(code.to_string(), path) {
         Ok(_) => {}
@@ -112,43 +107,19 @@ fn exec(code: &str, aot_flag: bool, no_jit_flag: bool, warning: u8, path: &std::
         }
     };
 
-    match Interp::eval_toplevel(&mut globals, aot_flag) {
+    match Interp::eval_toplevel(&mut globals) {
         Ok(_val) => {
             #[cfg(debug_assertions)]
-            eprintln!("jit({:?}) {:?}", aot_flag, _val)
+            eprintln!("jit {:?}", _val)
         }
         Err(err) => {
-            eprintln!("{:?}", err.kind);
+            eprintln!("{}", err.get_error_message(&globals));
             err.show_loc();
         }
     };
 }
 
-fn repl_exec(
-    code: &str,
-    aot_flag: bool,
-    no_jit_flag: bool,
-    warning: u8,
-) -> Result<(), MonorubyErr> {
-    if !aot_flag {
-        let mut globals = Globals::new(warning, no_jit_flag);
-        match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("{}", err.get_error_message(&globals));
-                err.show_all_loc();
-                return Err(err);
-            }
-        };
-        match Interp::eval_toplevel(&mut globals, false) {
-            Ok(val) => eprintln!("vm: {}", val.to_s(&globals)),
-            Err(err) => {
-                eprintln!("vm:{}", err.get_error_message(&globals));
-                err.show_all_loc();
-            }
-        }
-    }
-
+fn repl_exec(code: &str, no_jit_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
     let mut globals = Globals::new(warning, no_jit_flag);
     match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
         Ok(_) => {}
@@ -158,28 +129,19 @@ fn repl_exec(
             return Err(err);
         }
     };
-    match Interp::eval_toplevel(&mut globals, true) {
-        Ok(val) => {
-            eprintln!("jit: {}", val.to_s(&globals));
-            Ok(())
-        }
+    match Interp::eval_toplevel(&mut globals) {
+        Ok(val) => eprintln!("vm: {}", val.to_s(&globals)),
         Err(err) => {
-            eprintln!("jit:{}", err.get_error_message(&globals));
+            eprintln!("vm:{}", err.get_error_message(&globals));
             err.show_all_loc();
-            Err(err)
         }
-    }
+    };
+    Ok(())
 }
 
-fn run_repl(
-    code: &str,
-    all_codes: &mut Vec<String>,
-    aot_flag: bool,
-    no_jit_flag: bool,
-    warning: u8,
-) {
+fn run_repl(code: &str, all_codes: &mut Vec<String>, no_jit_flag: bool, warning: u8) {
     all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";"), aot_flag, no_jit_flag, warning) {
+    if let Err(_) = repl_exec(&all_codes.join(";"), no_jit_flag, warning) {
         all_codes.pop();
     };
 }
@@ -219,33 +181,22 @@ pub fn run_test_no_result_check(code: &str) -> Value {
 pub fn run_test_main(code: &str) -> Value {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let jit_val = Interp::eval_toplevel(&mut new_globals(code), false);
+    let jit_val = Interp::eval_toplevel(&mut new_globals(code));
     let jit_val = jit_val.unwrap();
     #[cfg(not(debug_assertions))]
     eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("jit: {:?}", jit_val);
 
-    let aot_val = Interp::eval_toplevel(&mut new_globals(code), true);
-    let aot_val = aot_val.unwrap();
-    #[cfg(debug_assertions)]
-    eprintln!("aot: {:?}", aot_val);
-
-    assert!(Value::eq(jit_val, aot_val));
-    aot_val
+    jit_val
 }
 
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let jit_val = Interp::eval_toplevel(&mut new_globals(code), false);
-    eprintln!("interp: {:?}", jit_val);
-
-    let aot_val = Interp::eval_toplevel(&mut new_globals(code), true);
-    eprintln!("aot: {:?}", aot_val);
-
-    eprintln!("Error in JIT. {:?}", jit_val.unwrap_err());
-    eprintln!("Error in AOT. {:?}", aot_val.unwrap_err());
+    let jit_val = Interp::eval_toplevel(&mut new_globals(code));
+    eprintln!("result: {:?}", jit_val);
+    eprintln!("error:  {:?}", jit_val.unwrap_err());
 }
 
 fn new_globals(code: &str) -> Globals {
@@ -778,7 +729,7 @@ mod test {
 
     #[test]
     fn test9() {
-        run_test(
+        run_test2(
             r#"
             puts 100
         "#,

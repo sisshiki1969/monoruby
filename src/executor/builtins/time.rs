@@ -40,7 +40,7 @@ extern "C" fn sub(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
     let rhs = match &arg[0].try_rvalue().unwrap().kind {
         ObjKind::Time(time) => time.clone(),
         _ => {
-            globals.err_method_not_found(IdentId::_SUB);
+            globals.err_method_not_found(IdentId::_SUB, arg.self_value().class_id());
             return None;
         }
     };
