@@ -171,6 +171,7 @@ pub(super) struct LoopAnalysis {
     bb_info: Vec<Option<(usize, Vec<usize>)>>,
     loop_level: usize,
     backedge_info: Option<RegInfo>,
+    return_info: Option<RegInfo>,
     pc: BcPc,
 }
 
@@ -181,6 +182,7 @@ impl LoopAnalysis {
             bb_info: func.get_bb_info(),
             loop_level: 0,
             backedge_info: None,
+            return_info: None,
             pc: BcPc::default(),
         }
     }
@@ -203,11 +205,19 @@ impl LoopAnalysis {
         }
     }
 
-    fn merge_info(&mut self, incoming_info: &RegInfo) {
+    fn add_backedge(&mut self, incoming_info: &RegInfo) {
         if let Some(info) = &mut self.backedge_info {
             info.merge(incoming_info);
         } else {
             self.backedge_info = Some(incoming_info.clone());
+        }
+    }
+
+    fn add_return(&mut self, incoming_info: &RegInfo) {
+        if let Some(info) = &mut self.return_info {
+            info.merge(incoming_info);
+        } else {
+            self.return_info = Some(incoming_info.clone());
         }
     }
 }
@@ -234,10 +244,6 @@ impl LoopAnalysis {
         let mut exit_info = RegInfo::new(regnum);
         for bb_pos in bb_start_vec {
             let branches = ctx.get_branches(bb_pos);
-            /*#[cfg(feature = "emit-tir")]
-            for (from, info) in &branches {
-                eprintln!("{from}->{bb_pos}: {:?}", info.get_loop_used_as_float());
-            }*/
             let reg_info = if branches.is_empty() {
                 RegInfo::new(regnum)
             } else {
@@ -254,6 +260,9 @@ impl LoopAnalysis {
         }
         let info = ctx.backedge_info.unwrap();
         exit_info.merge(&info);
+        if let Some(info) = ctx.return_info {
+            exit_info.merge(&info);
+        }
         #[cfg(feature = "emit-tir")]
         eprintln!(
             "{:?}",
@@ -372,13 +381,16 @@ impl LoopAnalysis {
                     }
                     skip = true;
                 }
-                BcOp::Ret(_ret) => return None,
+                BcOp::Ret(_ret) => {
+                    self.add_return(&reg_info);
+                    return None;
+                }
                 BcOp::Br(disp) => {
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info, dest_idx);
                     } else if self.loop_level == 1 {
-                        self.merge_info(&reg_info);
+                        self.add_backedge(&reg_info);
                     }
                     return None;
                 }
@@ -388,7 +400,7 @@ impl LoopAnalysis {
                     if disp >= 0 {
                         self.add_branch(idx, reg_info.clone(), dest_idx);
                     } else if self.loop_level == 1 {
-                        self.merge_info(&reg_info);
+                        self.add_backedge(&reg_info);
                     }
                 }
             }

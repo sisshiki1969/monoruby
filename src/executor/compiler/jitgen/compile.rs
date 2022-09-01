@@ -17,11 +17,27 @@ impl Codegen {
                 let (backedge_info, unused) = LoopAnalysis::analyse(func, cc.bb_pos);
                 let use_set = backedge_info.get_loop_used_as_float();
                 let cur_label = cc.labels[&pos];
+
                 #[cfg(feature = "emit-tir")]
                 {
                     eprintln!("use set:  {:?}", use_set);
                     eprintln!("not used: {:?}", unused);
                 }
+
+                let mut ctx = BBContext::new(func.total_reg_num());
+                let pc = func.get_pc(cc.bb_pos);
+                for (reg, class) in use_set {
+                    match class {
+                        true => {
+                            ctx.xmm_read_assume_float(self, reg, pc + 1);
+                        }
+                        false => {
+                            ctx.xmm_read_without_assumption(self, reg, pc + 1);
+                        }
+                    }
+                }
+                #[cfg(feature = "emit-tir")]
+                eprintln!("target:   {:?}", ctx.stack_slot);
 
                 for BranchEntry {
                     src_idx: _src_idx,
@@ -41,19 +57,8 @@ impl Codegen {
                     );
                     self.jit.select_page(0);
                 }
-                let mut ctx = BBContext::new(func.total_reg_num());
-                let pc = func.get_pc(cc.bb_pos);
+
                 let backedge_label = self.jit.label();
-                for (reg, class) in use_set {
-                    match class {
-                        true => {
-                            ctx.xmm_read_assume_float(self, reg, pc + 1);
-                        }
-                        false => {
-                            ctx.xmm_read_without_assumption(self, reg, pc + 1);
-                        }
-                    }
-                }
                 self.jit.bind_label(backedge_label);
                 cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone(), unused);
                 #[cfg(feature = "emit-tir")]

@@ -33,7 +33,7 @@ enum LinkMode {
 ///
 /// Context of the current Basic block.
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BBContext {
     /// information for stack slots.
     stack_slot: StackSlotInfo,
@@ -41,7 +41,7 @@ pub(crate) struct BBContext {
     xmm: [Vec<SlotId>; 14],
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct StackSlotInfo(Vec<LinkMode>);
 
 impl std::fmt::Debug for StackSlotInfo {
@@ -113,43 +113,25 @@ impl BBContext {
     }
 
     ///
-    /// Allocate new xmm register to the given stack slot for read/write f64.
+    /// Allocate a new xmm register.
     ///
-    fn xmm_write(&mut self, reg: SlotId) -> u16 {
-        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
-            if self.xmm[freg as usize].len() == 1 {
-                assert_eq!(reg, self.xmm[freg as usize][0]);
-                return freg;
-            }
-        };
-        self.dealloc_xmm(reg);
+    fn alloc_xmm(&mut self) -> u16 {
         for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
-                self.stack_slot[reg] = LinkMode::XmmRW(flhs as u16);
-                xmm.push(reg);
                 return flhs as u16;
             }
         }
         unreachable!()
     }
 
-    ///
-    /// Allocate new xmm register to the given stack slot for read f64.
-    ///
-    fn alloc_xmm_read(&mut self, reg: SlotId) -> u16 {
-        match self.stack_slot[reg] {
-            LinkMode::None => {
-                for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
-                    if xmm.is_empty() {
-                        self.stack_slot[reg] = LinkMode::XmmR(flhs as u16);
-                        xmm.push(reg);
-                        return flhs as u16;
-                    }
-                }
-                unreachable!()
-            }
-            _ => unreachable!(),
-        };
+    fn link_rw_xmm(&mut self, reg: SlotId, freg: u16) {
+        self.stack_slot[reg] = LinkMode::XmmRW(freg as u16);
+        self.xmm[freg as usize].push(reg);
+    }
+
+    fn link_r_xmm(&mut self, reg: SlotId, freg: u16) {
+        self.stack_slot[reg] = LinkMode::XmmR(freg as u16);
+        self.xmm[freg as usize].push(reg);
     }
 
     ///
@@ -166,6 +148,50 @@ impl BBContext {
         }
     }
 
+    fn xmm_swap(&mut self, l: u16, r: u16) {
+        self.xmm.swap(l as usize, r as usize);
+        self.stack_slot.0.iter_mut().for_each(|mode| match mode {
+            LinkMode::XmmR(x) | LinkMode::XmmRW(x) => {
+                if *x == l {
+                    *x = r;
+                } else if *x == r {
+                    *x = l;
+                }
+            }
+            LinkMode::None => {}
+        });
+    }
+
+    ///
+    /// Allocate new xmm register to the given stack slot for read/write f64.
+    ///
+    fn xmm_write(&mut self, reg: SlotId) -> u16 {
+        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
+            if self.xmm[freg as usize].len() == 1 {
+                assert_eq!(reg, self.xmm[freg as usize][0]);
+                return freg;
+            }
+        };
+        self.dealloc_xmm(reg);
+        let freg = self.alloc_xmm();
+        self.link_rw_xmm(reg, freg);
+        freg
+    }
+
+    ///
+    /// Allocate new xmm register to the given stack slot for read f64.
+    ///
+    fn alloc_xmm_read(&mut self, reg: SlotId) -> u16 {
+        match self.stack_slot[reg] {
+            LinkMode::None => {
+                let freg = self.alloc_xmm();
+                self.link_r_xmm(reg, freg);
+                freg
+            }
+            _ => unreachable!(),
+        }
+    }
+
     ///
     /// Copy *src* to *dst*.
     ///
@@ -173,10 +199,9 @@ impl BBContext {
         self.dealloc_xmm(dst);
         match self.stack_slot[src] {
             LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
-                self.stack_slot[dst] = LinkMode::XmmRW(freg);
-                self.xmm[freg as usize].push(dst);
+                self.link_rw_xmm(dst, freg);
             }
-            _ => {
+            LinkMode::None => {
                 monoasm!(codegen.jit,
                   movq rax, [rbp - (conv(src))];
                   movq [rbp - (conv(dst))], rax;
@@ -212,14 +237,17 @@ impl BBContext {
         self.xmm
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i as u16) })
-            .map(|freg| {
-                let v: Vec<_> = self.xmm[freg as usize]
-                    .iter()
-                    .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
-                    .cloned()
-                    .collect();
-                (freg, v)
+            .filter_map(|(i, v)| {
+                if v.is_empty() {
+                    None
+                } else {
+                    let v: Vec<_> = self.xmm[i]
+                        .iter()
+                        .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
+                        .cloned()
+                        .collect();
+                    Some((i as u16, v))
+                }
             })
             .filter(|(_, v)| !v.is_empty())
             .collect()
@@ -763,25 +791,70 @@ impl Codegen {
             eprintln!("      src:    {:?}", src_ctx.stack_slot);
             eprintln!("      target: {:?}", target_ctx.stack_slot);
         }
-        let wb = src_ctx.get_write_back();
-        self.gen_write_back(wb);
-        for info in src_ctx.stack_slot.0.iter_mut() {
-            if let LinkMode::XmmRW(_) = info {
-                *info = LinkMode::None;
-            }
-        }
         let len = src_ctx.stack_slot.0.len();
+        for i in 0..len {
+            let reg = SlotId(i as u16);
+            if target_ctx.stack_slot[reg] == LinkMode::None {
+                match src_ctx.stack_slot[reg] {
+                    LinkMode::XmmRW(freg) => {
+                        let v = src_ctx.xmm[freg as usize].clone();
+                        for i in &v {
+                            src_ctx.stack_slot[*i] = LinkMode::XmmR(freg);
+                        }
+                        src_ctx.dealloc_xmm(reg);
+                        self.gen_write_back_single(freg, v);
+                    }
+                    LinkMode::XmmR(_) => {
+                        src_ctx.dealloc_xmm(reg);
+                    }
+                    _ => {}
+                }
+            };
+        }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      src2:   {:?}", src_ctx.stack_slot);
+
         let mut conv_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
                 (_, LinkMode::XmmRW(_)) => unreachable!(),
-                (LinkMode::XmmRW(_), _) => unreachable!(),
-                (LinkMode::None, LinkMode::None) => {}
-                (LinkMode::XmmR(_), LinkMode::None) => {}
+                (_, LinkMode::None) => {}
+                (LinkMode::XmmRW(l), LinkMode::XmmR(r)) => {
+                    self.gen_write_back_single(l, vec![reg]);
+                    if l == r {
+                        src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
+                    } else if src_ctx.xmm[r as usize].is_empty() {
+                        monoasm!(self.jit,
+                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                        );
+                        src_ctx.dealloc_xmm(reg);
+                        src_ctx.link_r_xmm(reg, r);
+                    } else {
+                        src_ctx.xmm_swap(l, r);
+                        monoasm!(self.jit,
+                            movq  xmm0, xmm(l as u64 + 2);
+                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
+                            movq  xmm(r as u64 + 2), xmm0;
+                        );
+                    }
+                }
                 (LinkMode::XmmR(l), LinkMode::XmmR(r)) => {
-                    if l != r {
-                        conv_list.push((reg, r));
+                    if l == r {
+                        src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
+                    } else if src_ctx.xmm[r as usize].is_empty() {
+                        monoasm!(self.jit,
+                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                        );
+                        src_ctx.dealloc_xmm(reg);
+                        src_ctx.link_r_xmm(reg, r);
+                    } else {
+                        src_ctx.xmm_swap(l, r);
+                        monoasm!(self.jit,
+                            movq  xmm0, xmm(l as u64 + 2);
+                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
+                            movq  xmm(r as u64 + 2), xmm0;
+                        );
                     }
                 }
                 (LinkMode::None, LinkMode::XmmR(r)) => {
@@ -789,6 +862,11 @@ impl Codegen {
                 }
             }
         }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      src3:   {:?}", src_ctx.stack_slot);
+
+        //assert_eq!(src_ctx, *target_ctx);
+
         let wb = src_ctx.get_write_back();
         let side_exit = self.gen_side_deopt_dest(pc + 1, wb.clone());
         for (reg, freg) in conv_list {
