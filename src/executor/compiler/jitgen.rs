@@ -305,22 +305,6 @@ impl BBContext {
         }
     }
 
-    fn xmm_read_without_assumption(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
-        match self.stack_slot[reg] {
-            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => freg,
-            LinkMode::None => {
-                let freg = self.alloc_xmm_read(reg);
-                let wb = self.get_write_back();
-                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
-                monoasm!(codegen.jit,
-                    movq rdi, [rbp - (conv(reg))];
-                );
-                codegen.gen_val_to_f64(freg as u64 + 2, side_exit);
-                freg
-            }
-        }
-    }
-
     fn xmm_read_assume_float(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
         match self.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
@@ -818,6 +802,7 @@ impl Codegen {
         }
 
         let mut conv_list = vec![];
+        let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
@@ -839,7 +824,25 @@ impl Codegen {
                         );
                     }
                 }
-                (_, LinkMode::XmmRW(_)) => unreachable!(),
+                (LinkMode::XmmR(l), LinkMode::XmmRW(r)) => {
+                    if l == r {
+                        src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
+                    } else if src_ctx.xmm[r as usize].is_empty() {
+                        monoasm!(self.jit,
+                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                        );
+                        src_ctx.dealloc_xmm(reg);
+                        src_ctx.link_rw_xmm(reg, r);
+                    } else {
+                        src_ctx.xmm_swap(l, r);
+                        monoasm!(self.jit,
+                            movq  xmm0, xmm(l as u64 + 2);
+                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
+                            movq  xmm(r as u64 + 2), xmm0;
+                        );
+                    }
+                    guard_list.push(reg);
+                }
                 (_, LinkMode::None) => {}
                 (LinkMode::XmmRW(l), LinkMode::XmmR(r)) => {
                     self.gen_write_back_single(l, vec![reg]);
@@ -882,6 +885,7 @@ impl Codegen {
                     src_ctx.link_r_xmm(reg, r);
                     conv_list.push((reg, r));
                 }
+                _ => unreachable!(),
             }
         }
         #[cfg(feature = "emit-tir")]
@@ -896,6 +900,9 @@ impl Codegen {
             self.gen_val_to_f64(freg as u64 + 2, side_exit);
             #[cfg(feature = "emit-tir")]
             eprintln!("      conv: {:?}->{:?}", reg, freg);
+        }
+        for reg in guard_list {
+            self.gen_assume_float(reg, side_exit);
         }
     }
 

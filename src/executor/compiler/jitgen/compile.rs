@@ -24,16 +24,20 @@ impl Codegen {
                     eprintln!("  not used: {:?}", unused);
                 }
 
+                let target_slot_info = StackSlotInfo::merge_entries(&entries);
                 let mut ctx = BBContext::new(func.total_reg_num());
                 for (reg, class) in use_set {
-                    match class {
-                        true => {
-                            ctx.xmm_read_assume_float(self, reg, pc + 1);
+                    match target_slot_info[reg] {
+                        LinkMode::None => {}
+                        LinkMode::XmmRW(_) if class => {
+                            let freg = ctx.alloc_xmm();
+                            ctx.link_rw_xmm(reg, freg);
                         }
-                        false => {
-                            ctx.xmm_read_without_assumption(self, reg, pc + 1);
+                        _ => {
+                            let freg = ctx.alloc_xmm();
+                            ctx.link_r_xmm(reg, freg);
                         }
-                    }
+                    };
                 }
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  merged target:   {:?}", ctx.stack_slot);
@@ -56,9 +60,7 @@ impl Codegen {
                     self.jit.select_page(0);
                 }
 
-                let backedge_label = self.jit.label();
-                self.jit.bind_label(backedge_label);
-                cc.new_backedge(cc.bb_pos, backedge_label, ctx.stack_slot.clone(), unused);
+                cc.new_backedge(cc.bb_pos, cur_label, ctx.stack_slot.clone(), unused);
                 #[cfg(feature = "emit-tir")]
                 eprintln!("merge_end");
                 ctx

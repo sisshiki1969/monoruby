@@ -539,6 +539,33 @@ impl Codegen {
     }
 
     ///
+    /// Confirm the Value is Float.
+    ///
+    /// side-exit if not Float.
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax, rdi
+    ///
+    pub(crate) fn gen_assume_float(&mut self, reg: SlotId, side_exit: DestLabel) {
+        let heap_to_f64 = self.heap_to_f64;
+        let heap = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+            movq rdi, [rbp - (conv(reg))];
+            testq rdi, 0b01;
+            jnz side_exit;
+            testq rdi, 0b10;
+            jnz exit;
+        heap:
+            call heap_to_f64;
+            testq rax, rax;
+            jz   side_exit;
+        exit:
+        );
+    }
+
+    ///
     /// Convert the Value to f64.
     ///
     /// side-exit if neither Float nor Integer.

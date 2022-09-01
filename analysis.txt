@@ -2,104 +2,223 @@ gen_merge bb(loop): 18
 []
   use set:  []
   not used: [%16]
-  target:   []
+  <-0: []
+  merged target:   []
   write_back 0->18 []
+      src:    []
+      target: []
+      src_end:   []
 merge_end
 gen_merge bb(loop): 23
 [(1, R(false), Used), (5, R(false), Used)]
   use set:  [(%1, false), (%5, false)]
   not used: [%17]
-  target:   [%1:R(0) %5:R(1) ]
+  <-22: []
+  merged target:   []
   write_back 22->23 []
+      src:    []
+      target: []
+      src_end:   []
 merge_end
 --gen deopt
-      wb: 2->[%7]
-      wb: 3->[%8]
-      wb: 4->[%17]
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%17]
+--gen deopt end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%17]
+--gen deopt end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%17]
+      wb: 5->[%18]
+      wb: 6->[%9]
 --gen deopt end
 gen_merge bb(loop): 41
 [(7, RW, Used), (8, RW, Used), (9, R(true), Used), (10, R(true), Used)]
   use set:  [(%7, true), (%8, true), (%9, true), (%10, true)]
   not used: [%18]
-  target:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  write_back 40->41 [%1:R(0) %5:R(1) %6:R(5) %7:RW(2) %8:RW(3) %9:RW(7) %10:RW(8) ]
-      wb: 2->[%7]
-      wb: 3->[%8]
-      wb: 7->[%9]
-      wb: 8->[%10]
+  <-40: [%1:R(4) %5:R(7) %6:R(3) %7:RW(0) %8:RW(1) %9:RW(6) %10:RW(8) %18:RW(5) ]
+  merged target:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  write_back 40->41 [%1:R(4) %5:R(7) %6:R(3) %7:RW(0) %8:RW(1) %9:RW(6) %10:RW(8) ]
+      src:    [%1:R(4) %5:R(7) %6:R(3) %7:RW(0) %8:RW(1) %9:RW(6) %10:RW(8) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
 merge_end
 --gen deopt
       wb: 0->[%18]
+      wb: 2->[%9]
+      wb: 3->[%10]
       wb: 6->[%13, %7]
       wb: 7->[%14, %8]
 --gen deopt end
 gen_merge bb: 64<-60
 --gen deopt
       wb: 0->[%18]
+      wb: 2->[%9]
+      wb: 3->[%10]
       wb: 6->[%13, %7]
       wb: 7->[%14, %8]
 --gen deopt end
 gen_merge bb: 66
-  43->66: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  62->66: [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
-  intersection: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+  <-43: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  <-62: [%7:RW(6) %8:RW(7) %9:RW(2) %10:RW(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
+  target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
   write_back 43->66
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
   write_back 62->66
-      src:    [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(6) %8:RW(7) %9:RW(2) %10:RW(3) %13:RW(6) %14:RW(7) %18:RW(0) %19:R(1) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
       wb: 6->[%13, %7]
       wb: 7->[%14, %8]
       wb: 0->[%18]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
+merge_end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
 gen_merge bb: 72<-69
 gen_merge bb: 73
-  71->73: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  72->73: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  intersection: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+  <-71: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  <-72: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
   write_back 71->73
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
   write_back 72->73
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
+merge_end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
 gen_merge bb: 87<-76
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
 gen_merge bb: 101
-  86->101: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  88->101: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  100->101: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-  intersection: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+  <-86: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  <-88: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  <-100: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+  target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
   write_back 86->101
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
   write_back 88->101
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
   write_back 100->101
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
+merge_end
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
 gen_merge bb: 103<-25
 gen_merge bb: 106<-20
   backedge_write_back 105->18
-      src:    [%1:R(0) ]
+      src:    []
       target: []
-      src3:   []
+      src_end:   []
   backedge_write_back 65->41
-      src:    [%7:RW(6) %8:RW(7) %9:R(2) %10:R(3) %13:RW(6) %14:RW(7) %19:R(1) ]
-      target: [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src:    [%7:RW(6) %8:RW(7) %9:RW(2) %10:RW(3) %13:RW(6) %14:RW(7) %19:R(1) ]
+      target: [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
       wb: 6->[%13, %7]
       wb: 7->[%14, %8]
-      src3:   [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
+      src_end:   [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+--gen deopt
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+--gen deopt end
   backedge_write_back 102->23
-      src:    [%7:R(0) %8:R(1) %9:R(2) %10:R(3) ]
-      target: [%1:R(0) %5:R(1) ]
-      src3:   []
-      conv: %1->0
-      conv: %5->1
+      src:    [%7:RW(0) %8:RW(1) %9:RW(2) %10:RW(3) ]
+      target: []
+      wb: 0->[%7]
+      wb: 1->[%8]
+      wb: 2->[%9]
+      wb: 3->[%10]
+      src_end:   []
