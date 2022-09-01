@@ -10,6 +10,7 @@ impl Codegen {
         is_loop: bool,
     ) -> BBContext {
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
+            let pc = func.get_pc(bb_pos);
             if is_loop {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb(loop): {bb_pos}");
@@ -24,7 +25,6 @@ impl Codegen {
                 }
 
                 let mut ctx = BBContext::new(func.total_reg_num());
-                let pc = func.get_pc(cc.bb_pos);
                 for (reg, class) in use_set {
                     match class {
                         true => {
@@ -36,7 +36,7 @@ impl Codegen {
                     }
                 }
                 #[cfg(feature = "emit-tir")]
-                eprintln!("  target:   {:?}", ctx.stack_slot);
+                eprintln!("  merged target:   {:?}", ctx.stack_slot);
 
                 for BranchEntry {
                     src_idx: _src_idx,
@@ -47,10 +47,9 @@ impl Codegen {
                     bbctx.remove_unused(&unused);
                     #[cfg(feature = "emit-tir")]
                     eprintln!("  write_back {_src_idx}->{bb_pos} {:?}", bbctx.stack_slot);
-                    let wb = bbctx.get_write_back();
                     self.jit.select_page(1);
                     self.jit.bind_label(dest_label);
-                    self.gen_write_back(wb);
+                    self.gen_write_back_for_target(bbctx, &ctx, pc + 1);
                     monoasm!(self.jit,
                         jmp cur_label;
                     );
@@ -75,39 +74,12 @@ impl Codegen {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb: {bb_pos}");
 
-                let mut target_slot_info = entries[0].bbctx.stack_slot.clone();
+                let target_slot_info = StackSlotInfo::merge_entries(&entries);
                 #[cfg(feature = "emit-tir")]
-                eprintln!("  {}->{bb_pos}: {:?}", entries[0].src_idx, target_slot_info);
-                for BranchEntry {
-                    src_idx: _src_idx,
-                    bbctx,
-                    dest_label: _,
-                } in entries.iter().skip(1)
-                {
-                    let reg_info = &bbctx.stack_slot;
-                    #[cfg(feature = "emit-tir")]
-                    eprintln!("  {_src_idx}->{bb_pos}: {:?}", reg_info);
-                    target_slot_info
-                        .0
-                        .iter_mut()
-                        .zip(reg_info.0.iter())
-                        .for_each(|(l, r)| {
-                            *l = match (&l, r) {
-                                (LinkMode::XmmR(l), LinkMode::XmmR(_) | LinkMode::XmmRW(_)) => {
-                                    LinkMode::XmmR(*l)
-                                }
-                                (LinkMode::XmmRW(l), LinkMode::XmmR(_)) => LinkMode::XmmR(*l),
-                                (LinkMode::XmmRW(l), LinkMode::XmmRW(_)) => LinkMode::XmmRW(*l),
-                                _ => LinkMode::None,
-                            };
-                        });
-                }
-                #[cfg(feature = "emit-tir")]
-                eprintln!("  intersection: {:?}", target_slot_info);
+                eprintln!("  target: {:?}", target_slot_info);
 
                 let cur_label = cc.labels[&bb_pos];
                 let target_ctx = BBContext::from(&target_slot_info);
-                let pc = func.get_pc(bb_pos);
                 for BranchEntry {
                     src_idx: _src_idx,
                     bbctx,
@@ -124,6 +96,10 @@ impl Codegen {
                     );
                     self.jit.select_page(0);
                 }
+
+                #[cfg(feature = "emit-tir")]
+                eprintln!("merge_end");
+
                 target_ctx
             }
         } else {

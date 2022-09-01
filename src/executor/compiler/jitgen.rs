@@ -73,6 +73,36 @@ impl std::ops::IndexMut<SlotId> for StackSlotInfo {
     }
 }
 
+impl StackSlotInfo {
+    fn merge(&mut self, other: &StackSlotInfo) {
+        self.0.iter_mut().zip(other.0.iter()).for_each(|(l, r)| {
+            *l = match (&l, r) {
+                (LinkMode::XmmR(l), LinkMode::XmmR(_) | LinkMode::XmmRW(_))
+                | (LinkMode::XmmRW(l), LinkMode::XmmR(_)) => LinkMode::XmmR(*l),
+                (LinkMode::XmmRW(l), LinkMode::XmmRW(_)) => LinkMode::XmmRW(*l),
+                _ => LinkMode::None,
+            };
+        });
+    }
+
+    fn merge_entries(entries: &Vec<BranchEntry>) -> Self {
+        let mut target = entries[0].bbctx.stack_slot.clone();
+        #[cfg(feature = "emit-tir")]
+        eprintln!("  <-{}: {:?}", entries[0].src_idx, target);
+        for BranchEntry {
+            src_idx: _src_idx,
+            bbctx,
+            dest_label: _,
+        } in entries.iter().skip(1)
+        {
+            #[cfg(feature = "emit-tir")]
+            eprintln!("  <-{_src_idx}: {:?}", bbctx.stack_slot);
+            target.merge(&bbctx.stack_slot);
+        }
+        target
+    }
+}
+
 type WriteBack = Vec<(u16, Vec<SlotId>)>;
 type UsingXmm = Vec<usize>;
 
@@ -766,6 +796,7 @@ impl Codegen {
             eprintln!("      target: {:?}", target_ctx.stack_slot);
         }
         let len = src_ctx.stack_slot.0.len();
+
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx.stack_slot[reg] == LinkMode::None {
@@ -785,8 +816,6 @@ impl Codegen {
                 }
             };
         }
-        //#[cfg(feature = "emit-tir")]
-        //eprintln!("      src2:   {:?}", src_ctx.stack_slot);
 
         let mut conv_list = vec![];
         for i in 0..len {
@@ -850,14 +879,13 @@ impl Codegen {
                     }
                 }
                 (LinkMode::None, LinkMode::XmmR(r)) => {
+                    src_ctx.link_r_xmm(reg, r);
                     conv_list.push((reg, r));
                 }
             }
         }
         #[cfg(feature = "emit-tir")]
-        eprintln!("      src3:   {:?}", src_ctx.stack_slot);
-
-        //assert_eq!(src_ctx, *target_ctx);
+        eprintln!("      src_end:   {:?}", src_ctx.stack_slot);
 
         let wb = src_ctx.get_write_back();
         let side_exit = self.gen_side_deopt_dest(pc + 1, wb.clone());
