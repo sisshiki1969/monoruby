@@ -754,33 +754,7 @@ impl Codegen {
         }
     }
 
-    fn gen_write_back_with(&mut self, src_ctx: &BBContext, target_ctx: &BBContext) {
-        #[cfg(feature = "emit-tir")]
-        {
-            eprintln!("      src:    {:?}", src_ctx.stack_slot);
-            eprintln!("      target: {:?}", target_ctx.stack_slot);
-        }
-        let len = src_ctx.stack_slot.0.len();
-        let mut wb = vec![vec![]; 14];
-        for i in 0..len {
-            let reg = SlotId(i as u16);
-            match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
-                (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) if l == r => {}
-                (_, LinkMode::XmmRW(_)) => unreachable!(),
-                (LinkMode::XmmR(l), LinkMode::XmmR(r)) if l == r => {}
-                (_, LinkMode::XmmR(_)) => unreachable!(),
-                (LinkMode::None | LinkMode::XmmR(_), LinkMode::None) => {}
-                (LinkMode::XmmRW(l), LinkMode::None) => {
-                    wb[l as usize].push(reg);
-                }
-            }
-        }
-        for (i, v) in wb.into_iter().enumerate() {
-            self.gen_write_back_single(i as u16, v);
-        }
-    }
-
-    fn gen_write_back_backedge(
+    fn gen_write_back_for_target(
         &mut self,
         mut src_ctx: BBContext,
         target_ctx: &BBContext,
@@ -811,13 +785,31 @@ impl Codegen {
                 }
             };
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      src2:   {:?}", src_ctx.stack_slot);
+        //#[cfg(feature = "emit-tir")]
+        //eprintln!("      src2:   {:?}", src_ctx.stack_slot);
 
         let mut conv_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
+                (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) => {
+                    if l == r {
+                        src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
+                    } else if src_ctx.xmm[r as usize].is_empty() {
+                        monoasm!(self.jit,
+                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                        );
+                        src_ctx.dealloc_xmm(reg);
+                        src_ctx.link_rw_xmm(reg, r);
+                    } else {
+                        src_ctx.xmm_swap(l, r);
+                        monoasm!(self.jit,
+                            movq  xmm0, xmm(l as u64 + 2);
+                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
+                            movq  xmm(r as u64 + 2), xmm0;
+                        );
+                    }
+                }
                 (_, LinkMode::XmmRW(_)) => unreachable!(),
                 (_, LinkMode::None) => {}
                 (LinkMode::XmmRW(l), LinkMode::XmmR(r)) => {
