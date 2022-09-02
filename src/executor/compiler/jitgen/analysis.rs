@@ -141,7 +141,9 @@ impl XmmLink {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, other) {
             (XmmLink::RW, XmmLink::RW) => XmmLink::RW,
-            (XmmLink::R(true), XmmLink::R(true)) => XmmLink::R(true),
+            (XmmLink::R(true), XmmLink::R(true))
+            | (XmmLink::R(true), XmmLink::RW)
+            | (XmmLink::RW, XmmLink::R(true)) => XmmLink::R(true),
             (_, XmmLink::R(_)) | (XmmLink::R(_), _) => XmmLink::R(false),
             _ => XmmLink::None,
         };
