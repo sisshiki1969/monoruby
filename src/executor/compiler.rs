@@ -39,6 +39,7 @@ pub struct Codegen {
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub f64_to_val: DestLabel,
+    pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
@@ -179,10 +180,6 @@ extern "C" fn get_error_location(
     meta: Meta,
     pc: BcPc,
 ) {
-    if meta.kind() != 0 {
-        // currently, JIT is not yet supported.
-        return;
-    }
     let func_info = &globals.func[meta.func_id()];
     let bc_base = func_info.data.pc;
     let normal_info = match &func_info.kind {
@@ -198,6 +195,7 @@ impl Codegen {
     pub fn new(no_jit: bool) -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
+        jit.add_page();
 
         let class_version = jit.const_i32(0);
         let const_version = jit.const_i64(0);
@@ -206,7 +204,8 @@ impl Codegen {
         let jit_return = jit.label();
         let vm_return = jit.label();
         let div_by_zero = jit.label();
-        jit.select(1);
+        let heap_to_f64 = jit.label();
+        jit.select_page(1);
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -250,6 +249,43 @@ impl Codegen {
             call rax;
             xorq rax, rax;
             leave;
+            ret;
+        heap_to_f64:
+            // we must save rdi for log_optimize.
+            subq rsp, 128;
+            movq [rsp + 112], rdi;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::val_tof);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
+            addq rsp, 128;
             ret;
         );
 
@@ -337,7 +373,7 @@ impl Codegen {
                 leave;
                 ret;
         };
-        jit.select(0);
+        jit.select_page(0);
         let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,
@@ -352,6 +388,7 @@ impl Codegen {
             entry_point_return: entry_unimpl,
             vm_return,
             f64_to_val: entry_panic,
+            heap_to_f64,
             div_by_zero,
             dispatch,
             invoker,
@@ -438,7 +475,7 @@ impl Codegen {
     ///
     /// - xmm0: f64
     ///
-    fn assume_int_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+    fn gen_val_to_f64_assume_integer(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
         let entry = self.jit.label();
         monoasm!(&mut self.jit,
         entry:
@@ -467,15 +504,17 @@ impl Codegen {
     ///
     /// - rax, rdi
     ///
-    fn assume_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+    fn gen_val_to_f64_assume_float(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
+        let heap_to_f64 = self.heap_to_f64;
         let entry = self.jit.label();
+        let heap = self.jit.label();
         let exit = self.jit.label();
         monoasm!(&mut self.jit,
         entry:
             testq rdi, 0b01;
             jnz side_exit;
             testq rdi, 0b10;
-            jz side_exit;
+            jz heap;
             xorps xmm(xmm), xmm(xmm);
             movq rax, (FLOAT_ZERO);
             cmpq rdi, rax;
@@ -487,9 +526,95 @@ impl Codegen {
             orq rdi, rax;
             rolq rdi, 61;
             movq xmm(xmm), rdi;
+            jmp exit;
+        heap:
+            call heap_to_f64;
+            testq rax, rax;
+            jz   side_exit;
+            movq xmm(xmm), xmm0;
         exit:
         );
+
         entry
+    }
+
+    ///
+    /// Confirm the Value is Float.
+    ///
+    /// side-exit if not Float.
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax, rdi
+    ///
+    pub(crate) fn gen_assume_float(&mut self, reg: SlotId, side_exit: DestLabel) {
+        let heap_to_f64 = self.heap_to_f64;
+        let heap = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+            movq rdi, [rbp - (conv(reg))];
+            testq rdi, 0b01;
+            jnz side_exit;
+            testq rdi, 0b10;
+            jnz exit;
+        heap:
+            call heap_to_f64;
+            testq rax, rax;
+            jz   side_exit;
+        exit:
+        );
+    }
+
+    ///
+    /// Convert the Value to f64.
+    ///
+    /// side-exit if neither Float nor Integer.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - xmm(*xmm*): f64
+    ///
+    /// ### registers destroyed
+    ///
+    /// - caller save registers except xmm registers(xmm2-xmm15).
+    ///
+    fn gen_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+        let heap_to_f64 = self.heap_to_f64;
+        let integer = self.jit.label();
+        let heap = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(&mut self.jit,
+            testq rdi, 0b01;
+            jnz integer;
+            testq rdi, 0b10;
+            jz  heap;
+            xorps xmm(xmm), xmm(xmm);
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            je  exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm(xmm), rdi;
+            jmp exit;
+        integer:
+            sarq rdi, 1;
+            cvtsi2sdq xmm(xmm), rdi;
+            jmp exit;
+        heap:
+            call heap_to_f64;
+            testq rax, rax;
+            jz   side_exit;
+            movq xmm(xmm), xmm0;
+        exit:
+        );
     }
 
     ///
@@ -520,7 +645,9 @@ impl Codegen {
             movq rax, (Value::new_float(0.0).get());
             ret;
         heap_alloc:
+        // we must save rdi for log_optimize.
             subq rsp, 120;
+            movq [rsp + 112], rdi;
             movq [rsp + 104], xmm15;
             movq [rsp + 96], xmm14;
             movq [rsp + 88], xmm13;
@@ -551,6 +678,7 @@ impl Codegen {
             movq xmm13, [rsp + 88];
             movq xmm14, [rsp + 96];
             movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
             addq rsp, 120;
             ret;
         normal:
@@ -747,7 +875,7 @@ impl Codegen {
         globals.func[func_id].data.meta.set_jit();
         let label = interp
             .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal(), None);
+            .jit_compile_normal(globals.func[func_id].as_normal_mut(), None);
         interp.codegen.jit.get_label_address(label)
     }
 
@@ -760,7 +888,7 @@ impl Codegen {
         let pc_index = pc - globals.func[func_id].data.pc;
         let label = interp
             .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal(), Some(pc_index));
+            .jit_compile_normal(globals.func[func_id].as_normal_mut(), Some(pc_index));
         interp.codegen.jit.get_label_address(label)
     }
 
@@ -841,7 +969,7 @@ fn float_test() {
     assume_float_to_f64:
         pushq rbp;
     );
-    gen.assume_float_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_float(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -857,13 +985,12 @@ fn float_test() {
         4.2,
         35354354354.2135365,
         -3535354345111.5696876565435432,
-        //f64::MAX,
-        //f64::MAX / 10.0,
-        //f64::MIN * 10.0,
-        //f64::NAN,
+        f64::MAX,
+        f64::MAX / 10.0,
+        f64::MIN * 10.0,
+        f64::NAN,
     ] {
         let v = from_f64(n);
-        //assert!(Value::eq(Value::new_float(n), v));
         let (lhs, rhs) = (n, to_f64(v));
         if lhs.is_nan() {
             assert!(rhs.is_nan());
@@ -883,7 +1010,7 @@ fn float_test2() {
     assume_float_to_f64:
         pushq rbp;
     );
-    gen.assume_float_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_float(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -893,7 +1020,7 @@ fn float_test2() {
     assume_int_to_f64:
         pushq rbp;
     );
-    gen.assume_int_to_f64(0, panic);
+    gen.gen_val_to_f64_assume_integer(0, panic);
     monoasm!(&mut gen.jit,
         popq rbp;
         ret;
@@ -910,4 +1037,34 @@ fn float_test2() {
     assert_eq!(143.0, int_to_f64(Value::new_integer(143)));
     assert_eq!(14354813558.0, int_to_f64(Value::new_integer(14354813558)));
     assert_eq!(-143.0, int_to_f64(Value::new_integer(-143)));
+}
+
+#[test]
+fn float_test3() {
+    let mut gen = Codegen::new(false);
+
+    let panic = gen.entry_panic;
+    let to_f64 = gen.jit.label();
+    monoasm!(&mut gen.jit,
+    to_f64:
+        pushq rbp;
+    );
+    gen.gen_val_to_f64(0, panic);
+    monoasm!(&mut gen.jit,
+        popq rbp;
+        ret;
+    );
+    gen.jit.finalize();
+    let to_f64_entry = gen.jit.get_label_address(to_f64);
+
+    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+    assert_eq!(3.574, to_f64(Value::new_float(3.574)));
+    assert_eq!(0.0, to_f64(Value::new_float(0.0)));
+    assert_eq!(f64::MAX, to_f64(Value::new_float(f64::MAX)));
+    assert_eq!(f64::MIN, to_f64(Value::new_float(f64::MIN)));
+    assert!(to_f64(Value::new_float(f64::NAN)).is_nan());
+    assert!(to_f64(Value::new_float(f64::INFINITY)).is_infinite());
+    assert_eq!(143.0, to_f64(Value::new_integer(143)));
+    assert_eq!(14354813558.0, to_f64(Value::new_integer(14354813558)));
+    assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
 }

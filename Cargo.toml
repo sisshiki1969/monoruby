@@ -12,6 +12,7 @@ license = "MIT"
 [features]
 emit-asm = []
 emit-bc = []
+emit-tir = []
 log-jit = []
 
 [dependencies]
@@ -30,3 +31,4 @@ dtoa = "1.0"
 chrono = "0.4.19"
 smallvec = "1.8.1"
 escape_string = "0.1.2"
+hex = "0.4.3"
