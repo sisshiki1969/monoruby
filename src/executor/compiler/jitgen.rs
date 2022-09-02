@@ -372,6 +372,9 @@ struct CompileContext {
     is_loop: bool,
     branch_map: HashMap<usize, Vec<BranchEntry>>,
     backedge_map: HashMap<usize, (DestLabel, StackSlotInfo, Vec<SlotId>)>,
+    start_codepos: usize,
+    #[cfg(feature = "emit-asm")]
+    sourcemap: Vec<(usize, usize)>,
 }
 
 impl CompileContext {
@@ -391,6 +394,9 @@ impl CompileContext {
             is_loop,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
+            start_codepos: 0,
+            #[cfg(feature = "emit-asm")]
+            sourcemap: vec![],
         }
     }
 
@@ -1021,6 +1027,7 @@ impl Codegen {
             })
             .collect();
         let reg_num = func.total_reg_num();
+        cc.start_codepos = self.jit.get_current();
         cc.branch_map.insert(
             start_pos,
             vec![BranchEntry {
@@ -1057,7 +1064,38 @@ impl Codegen {
                 *end - *code_end
             );
             self.jit.select_page(0);
-            eprintln!("{}", self.jit.dump_code().unwrap());
+            let dump: Vec<(usize, String)> = self
+                .jit
+                .dump_code()
+                .unwrap()
+                .split('\n')
+                .filter(|s| s.len() >= 29)
+                .map(|x| {
+                    (
+                        usize::from_str_radix(&x[0..4].trim(), 16).unwrap(),
+                        x[28..].to_string(),
+                    )
+                })
+                .collect();
+            for (i, text) in dump {
+                let v: Vec<_> = cc
+                    .sourcemap
+                    .iter()
+                    .filter_map(
+                        |(bc_pos, code_pos)| {
+                            if *code_pos == i {
+                                Some(*bc_pos)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .collect();
+                if v.len() != 0 {
+                    v.iter().for_each(|bc_pos| eprintln!(":{:05}", bc_pos));
+                }
+                eprintln!("  {:05x}: {}", i, text);
+            }
         }
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         eprintln!("    finished compile. elapsed:{:?}", elapsed);

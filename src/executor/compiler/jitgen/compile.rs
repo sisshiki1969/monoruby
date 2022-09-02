@@ -165,6 +165,9 @@ impl Codegen {
                 continue;
             }
 
+            #[cfg(feature = "emit-asm")]
+            cc.sourcemap
+                .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.op1() {
                 BcOp::LoopStart(_) => {
                     cc.loop_count += 1;
