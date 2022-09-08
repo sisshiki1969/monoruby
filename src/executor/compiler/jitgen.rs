@@ -462,7 +462,7 @@ macro_rules! cmp_main {
 }
 
 macro_rules! cmp_opt_main {
-    (($op:ident, $sop:ident)) => {
+    (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
         paste! {
             fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
                 let cont = self.jit.label();
@@ -471,15 +471,12 @@ macro_rules! cmp_opt_main {
                         [<j $sop>] branch_dest;
                     },
                     BrKind::BrIfNot => monoasm! { self.jit,
-                        [<j $sop>] cont;
-                        jmp branch_dest;
+                        [<j $rev_sop>] branch_dest;
                     },
                 }
                 self.jit.bind_label(cont);
                 self.jit.select_page(1);
-                monoasm!(self.jit,
-                    generic:
-                );
+                self.jit.bind_label(generic);
                 self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
                     // generic path
@@ -505,51 +502,23 @@ macro_rules! cmp_opt_main {
                 self.jit.select_page(0);
             }
 
-            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
+            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
                 let cont = self.jit.label();
                 match brkind {
                     BrKind::BrIf => monoasm! { self.jit,
                         [<j $op>] branch_dest;
                     },
                     BrKind::BrIfNot => monoasm! { self.jit,
-                        [<j $op>] cont;
-                        jmp branch_dest;
+                        [<j $rev_op>] branch_dest;
                     },
                 }
                 self.jit.bind_label(cont);
-                self.jit.select_page(1);
-                monoasm!(self.jit,
-                    generic:
-                );
-                self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
-                    // generic path
-                    movq rax, ([<cmp_ $sop _values>]);
-                    call rax;
-                );
-                self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
-                    orq  rax, 0x10;
-                    cmpq rax, (FALSE_VALUE);
-                    // if true, Z=0(not set).
-                );
-                match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
-                        jz  cont;
-                        jmp branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { self.jit,
-                        jnz cont;
-                        jmp branch_dest;
-                    },
-                }
-                self.jit.select_page(0);
             }
         }
     };
-    (($op1:ident, $sop1:ident), $(($op2:ident, $sop2:ident)),+) => {
-        cmp_opt_main!(($op1, $sop1));
-        cmp_opt_main!($(($op2, $sop2)),+);
+    (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
+        cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
+        cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
     };
 }
 
@@ -583,7 +552,14 @@ extern "C" fn log_deoptimize(
 }
 
 impl Codegen {
-    cmp_opt_main!((eq, eq), (ne, ne), (a, gt), (b, lt), (ae, ge), (be, le));
+    cmp_opt_main!(
+        (eq, ne, eq, ne),
+        (ne, eq, ne, eq),
+        (a, be, gt, le),
+        (b, ae, lt, ge),
+        (ae, b, ge, lt),
+        (be, a, le, gt)
+    );
     cmp_main!(eq, ne, lt, le, gt, ge);
 
     fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
@@ -1006,10 +982,6 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
 
-        if position.is_none() {
-            self.prologue(func.total_reg_num());
-        }
-
         let mut cc = CompileContext::new(func, self, start_pos, position.is_some());
         let bb_start_pos: Vec<_> = cc
             .bb_info
@@ -1028,6 +1000,11 @@ impl Codegen {
             .collect();
         let reg_num = func.total_reg_num();
         cc.start_codepos = self.jit.get_current();
+
+        if position.is_none() {
+            self.prologue(func.total_reg_num(), func.total_arg_num());
+        }
+
         cc.branch_map.insert(
             start_pos,
             vec![BranchEntry {
@@ -1078,8 +1055,7 @@ impl Codegen {
                 })
                 .collect();
             for (i, text) in dump {
-                let v: Vec<_> = cc
-                    .sourcemap
+                cc.sourcemap
                     .iter()
                     .filter_map(
                         |(bc_pos, code_pos)| {
@@ -1090,10 +1066,8 @@ impl Codegen {
                             }
                         },
                     )
-                    .collect();
-                if v.len() != 0 {
-                    v.iter().for_each(|bc_pos| eprintln!(":{:05}", bc_pos));
-                }
+                    .for_each(|bc_pos| eprintln!(":{:05}", bc_pos));
+
                 eprintln!("  {:05x}: {}", i, text);
             }
         }
@@ -1105,42 +1079,66 @@ impl Codegen {
         entry
     }
 
-    fn prologue(&mut self, regs: usize) {
+    fn prologue(&mut self, regs: usize, args: usize) {
         let offset = (regs + regs % 2) * 8 + 16;
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
+        let clear_len = regs - args;
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movq rax, (regs - 1);
-            subq rax, rdi;
-            jeq  loop_exit;
-            lea  rcx, [rsp - ((regs as i32) * 8 + 16)];
-            //
-            // rax: counter, regs - 1 - args_len
-            // rcx: pointer, the next quad word of the last register.
-            //       +-------------+
-            //       | return addr |
-            //       +-------------+
-            //       |   old rbp   |
-            //       +-------------+
-            //       |    meta     |
-            //       +-------------+
-            //       |     %0      |
-            //       +-------------+
-            //       |     %1      |
-            //       +-------------+
-            //       |     %2      |
-            //       +-------------+
-            // rcx-> |             |
-            //       +-------------+
-        loop_:
-            movq [rcx + rax * 8], (FALSE_VALUE);
-            subq rax, 1;
-            jne  loop_;
-        loop_exit:
             subq rsp, (offset);
         );
+        if clear_len > 2 {
+            monoasm!(self.jit,
+                movq rax, (NIL_VALUE);
+            );
+            for i in 0..clear_len {
+                monoasm!(self.jit,
+                    //
+                    //       +-------------+
+                    //       | return addr |
+                    //       +-------------+
+                    //       |   old rbp   |
+                    //       +-------------+
+                    //       |    meta     |
+                    //       +-------------+
+                    //       |     %0      |
+                    //       +-------------+
+                    //       |     %1      |
+                    //       +-------------+
+                    //       |     %2      |
+                    //       +-------------+
+                    //       |     %3      |
+                    //       +-------------+
+                    // rsp-> |             |
+                    //       +-------------+
+                    movq [rbp - ((args + i) as i32 * 8 + 16)], rax;
+                );
+            }
+        } else {
+            for i in 0..clear_len {
+                monoasm!(self.jit,
+                    //
+                    //       +-------------+
+                    //       | return addr |
+                    //       +-------------+
+                    //       |   old rbp   |
+                    //       +-------------+
+                    //       |    meta     |
+                    //       +-------------+
+                    //       |     %0      |
+                    //       +-------------+
+                    //       |     %1      |
+                    //       +-------------+
+                    //       |     %2      |
+                    //       +-------------+
+                    //       |     %3      |
+                    //       +-------------+
+                    // rsp-> |             |
+                    //       +-------------+
+                    movq [rbp - ((args + i) as i32 * 8 + 16)], (NIL_VALUE);
+                );
+            }
+        }
     }
 
     fn epilogue(&mut self) {
@@ -1529,21 +1527,14 @@ impl Codegen {
         }
     }
 
-    fn gen_cmp_float_opt(
-        &mut self,
-        kind: CmpKind,
-        branch_dest: DestLabel,
-        generic: DestLabel,
-        brkind: BrKind,
-        xmm_using: Vec<usize>,
-    ) {
+    fn gen_cmp_float_opt(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, generic, brkind, xmm_using),
-            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, generic, brkind, xmm_using),
-            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, generic, brkind, xmm_using),
-            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, generic, brkind, xmm_using),
-            CmpKind::Le => self.cmp_opt_float_le(branch_dest, generic, brkind, xmm_using),
-            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, generic, brkind, xmm_using),
+            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, brkind),
+            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, brkind),
+            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, brkind),
+            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, brkind),
+            CmpKind::Le => self.cmp_opt_float_le(branch_dest, brkind),
+            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, brkind),
             _ => unimplemented!(),
         }
     }

@@ -130,9 +130,9 @@ fn repl_exec(code: &str, no_jit_flag: bool, warning: u8) -> Result<(), MonorubyE
         }
     };
     match Interp::eval_toplevel(&mut globals) {
-        Ok(val) => eprintln!("vm: {}", val.to_s(&globals)),
+        Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
         Err(err) => {
-            eprintln!("vm:{}", err.get_error_message(&globals));
+            eprintln!("{}", err.get_error_message(&globals));
             err.show_all_loc();
         }
     };
