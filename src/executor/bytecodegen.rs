@@ -67,6 +67,13 @@ impl std::ops::Add<isize> for BcPc {
     }
 }
 
+impl std::ops::Sub<isize> for BcPc {
+    type Output = BcPc;
+    fn sub(self, rhs: isize) -> BcPc {
+        BcPc(unsafe { self.0.offset(-rhs) })
+    }
+}
+
 impl std::ops::AddAssign<i32> for BcPc {
     fn add_assign(&mut self, offset: i32) {
         unsafe {
@@ -91,6 +98,155 @@ impl std::ops::Deref for BcPc {
 impl BcPc {
     pub(super) fn op1(&self) -> BcOp {
         BcOp::from_bc(&*self)
+    }
+}
+
+impl BcPc {
+    fn format(&self, globals: &Globals, i: usize) -> Option<String> {
+        fn optstr(opt: bool) -> &'static str {
+            if opt {
+                "_"
+            } else {
+                ""
+            }
+        }
+        let s = match self.op1() {
+            BcOp::Br(disp) => {
+                format!("br =>:{:05}", i as i32 + 1 + disp)
+            }
+            BcOp::CondBr(reg, disp, opt, kind) => {
+                format!(
+                    "cond{}br {}{:?} =>:{:05}",
+                    kind.to_s(),
+                    optstr(opt),
+                    reg,
+                    i as i32 + 1 + disp
+                )
+            }
+            BcOp::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
+            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, globals.id_store.get_name(id)),
+            BcOp::Literal(reg, val) => {
+                format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
+            }
+            BcOp::Array(ret, src, len) => {
+                format!("{:?} = array[{:?}; {}]", ret, src, len)
+            }
+            BcOp::Index(ret, base, idx) => {
+                format!("{:?} = {:?}.[{:?}]", ret, base, idx)
+            }
+            BcOp::IndexAssign(src, base, idx) => {
+                format!("{:?}.[{:?}] = {:?}", base, idx, src)
+            }
+            BcOp::LoadConst(reg, id) => {
+                let name = globals.func[id].name;
+                let op1 = format!("{:?} = const[{}]", reg, globals.id_store.get_name(name));
+                format!(
+                    "{:36} [{}]",
+                    op1,
+                    match self.value() {
+                        None => "<invalid>".to_string(),
+                        Some(val) => val.inspect(globals),
+                    }
+                )
+            }
+            BcOp::StoreConst(reg, id) => {
+                format!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
+            }
+            BcOp::Nil(reg) => format!("{:?} = nil", reg),
+            BcOp::Neg(dst, src) => {
+                let op1 = format!("{:?} = neg {:?}", dst, src);
+                format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
+            }
+            BcOp::BinOp(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+                let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+                let op1 = format!(
+                    "{}{:?} = {:?} {:?} {}: i16",
+                    optstr(opt),
+                    dst,
+                    lhs,
+                    kind,
+                    rhs,
+                );
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+
+            BcOp::Ret(reg) => format!("ret {:?}", reg),
+            BcOp::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
+            BcOp::MethodCall(..) => return None,
+            BcOp::MethodArgs(recv, args, len) => {
+                let prev_pc = *self - 1;
+                let (recv, ret, name) = match prev_pc.op1() {
+                    BcOp::MethodCall(ret, name) => (recv, ret, name),
+                    _ => unreachable!(),
+                };
+                let class_id = prev_pc.classid1();
+                let name = globals.id_store.get_name(name);
+                let op1 = format!(
+                    "{} = {:?}.call {}({:?}; {})",
+                    ret.ret_str(),
+                    recv,
+                    name,
+                    args,
+                    len,
+                );
+                //skip = true;
+                format!("{:36} [{}]", op1, class_id.get_name(globals))
+            }
+            BcOp::MethodDef(name, func_id) => {
+                let name = globals.id_store.get_name(name);
+                format!("define {:?}: {:?}", name, func_id)
+            }
+            BcOp::ConcatStr(ret, args, len) => {
+                format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
+            }
+            BcOp::LoopStart(count) => format!(
+                "loop_start counter={} jit-addr={:016x}",
+                count,
+                self.from_jit_addr()
+            ),
+            BcOp::LoopEnd => format!("loop_end"),
+        };
+        Some(s)
     }
 }
 

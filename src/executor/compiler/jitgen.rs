@@ -1078,8 +1078,7 @@ impl Codegen {
                 })
                 .collect();
             for (i, text) in dump {
-                let v: Vec<_> = cc
-                    .sourcemap
+                cc.sourcemap
                     .iter()
                     .filter_map(
                         |(bc_pos, code_pos)| {
@@ -1090,10 +1089,11 @@ impl Codegen {
                             }
                         },
                     )
-                    .collect();
-                if v.len() != 0 {
-                    v.iter().for_each(|bc_pos| eprintln!(":{:05}", bc_pos));
-                }
+                    .for_each(|bc_pos| {
+                        let pc = func.bytecode()[bc_pos];
+                        eprintln!(":{:05} {:?}", bc_pos, pc);
+                    });
+
                 eprintln!("  {:05x}: {}", i, text);
             }
         }
