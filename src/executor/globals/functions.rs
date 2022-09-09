@@ -463,6 +463,11 @@ impl NormalFuncInfo {
         1 + self.locals.len() + self.temp_num as usize
     }
 
+    /// get a number of arguments(includes *self*).
+    pub(crate) fn total_arg_num(&self) -> usize {
+        1 + self.args.len()
+    }
+
     /// get name.
     #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
     pub(crate) fn name(&self) -> &Option<String> {

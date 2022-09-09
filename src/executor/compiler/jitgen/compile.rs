@@ -501,7 +501,6 @@ impl Codegen {
                 }
                 BcOp::CondBr(_, disp, true, brkind) => {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
-                    let generic = self.jit.label();
                     let pc = std::mem::take(&mut self.opt_buf).unwrap();
                     if pc.is_binary_float() {
                         let kind = match pc.op1() {
@@ -522,11 +521,11 @@ impl Codegen {
                             }
                             _ => unreachable!(),
                         };
-                        let xmm_using = ctx.get_xmm_using();
                         let branch_dest = self.jit.label();
                         cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
-                        self.gen_cmp_float_opt(kind, branch_dest, generic, brkind, xmm_using);
+                        self.gen_cmp_float_opt(kind, branch_dest, brkind);
                     } else {
+                        let generic = self.jit.label();
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, ret, lhs, rhs, true) => {
                                 ctx.read_slot(self, lhs);

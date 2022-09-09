@@ -1,0 +1,155 @@
+offset:Pos(8528) code: 660 bytes  data: 32 bytes
+  00000: push   rbp
+  00001: mov    rbp,rsp
+  00004: sub    rsp,0x70
+  00008: mov    rax,0x4
+  0000f: mov    QWORD PTR [rbp-0x30],rax
+  00013: mov    QWORD PTR [rbp-0x38],rax
+  00017: mov    QWORD PTR [rbp-0x40],rax
+  0001b: mov    QWORD PTR [rbp-0x48],rax
+  0001f: mov    QWORD PTR [rbp-0x50],rax
+  00023: mov    QWORD PTR [rbp-0x58],rax
+  00027: mov    QWORD PTR [rbp-0x60],rax
+:00000
+:00001
+  0002b: mov    rdi,QWORD PTR [rbp-0x18]
+  0002f: mov    rsi,QWORD PTR [rbp-0x20]
+  00033: test   rdi,0x1
+  0003a: je     0xfffbc590
+  00040: test   rsi,0x1
+  00047: je     0xfffbc590
+  0004d: cmp    rdi,rsi
+  00050: jg     0x5b
+  00056: jmp    0x28e
+:00002
+  0005b: mov    rdi,QWORD PTR [rbp-0x18]
+  0005f: test   rdi,0x1
+  00066: je     0xfff79eb0
+  0006c: sub    rdi,0x2
+  00070: jo     0xfff79eb0
+  00076: mov    QWORD PTR [rbp-0x40],rdi
+:00003
+  0007a: mov    rax,QWORD PTR [rbp-0x20]
+  0007e: mov    QWORD PTR [rbp-0x48],rax
+:00004
+  00082: mov    rax,QWORD PTR [rbp-0x28]
+  00086: mov    QWORD PTR [rbp-0x50],rax
+:00005
+:00006
+  0008a: mov    eax,DWORD PTR [rip+0xfffffffffffffe58]        # 0xfffffee8
+  00090: cmp    DWORD PTR [rip+0x1fe],eax        # 0x294
+  00096: jne    0xfffbc5af
+  0009c: mov    rax,QWORD PTR [rbp-0x10]
+  000a0: mov    QWORD PTR [rsp-0x20],rax
+  000a5: mov    rax,QWORD PTR [rbp-0x40]
+  000a9: mov    QWORD PTR [rsp-0x28],rax
+  000ae: mov    rax,QWORD PTR [rbp-0x48]
+  000b2: mov    QWORD PTR [rsp-0x30],rax
+  000b7: mov    rax,QWORD PTR [rbp-0x50]
+  000bb: mov    QWORD PTR [rsp-0x38],rax
+  000c0: movabs rax,0x8000000000000000
+  000ca: mov    QWORD PTR [rsp-0x18],rax
+  000cf: movabs r13,0x8000000000000000
+  000d9: mov    rdi,0x3
+  000e0: call   0xfffbbeb0
+  000e5: test   rax,rax
+  000e8: je     0xfffbc614
+  000ee: mov    QWORD PTR [rbp-0x38],rax
+:00008
+  000f2: mov    rdi,QWORD PTR [rbp-0x20]
+  000f6: test   rdi,0x1
+  000fd: je     0xfff79ebf
+  00103: sub    rdi,0x2
+  00107: jo     0xfff79ebf
+  0010d: mov    QWORD PTR [rbp-0x48],rdi
+:00009
+  00111: mov    rax,QWORD PTR [rbp-0x28]
+  00115: mov    QWORD PTR [rbp-0x50],rax
+:00010
+  00119: mov    rax,QWORD PTR [rbp-0x18]
+  0011d: mov    QWORD PTR [rbp-0x58],rax
+:00011
+:00012
+  00121: mov    eax,DWORD PTR [rip+0xfffffffffffffdc1]        # 0xfffffee8
+  00127: cmp    DWORD PTR [rip+0x16f],eax        # 0x29c
+  0012d: jne    0xfffbc623
+  00133: mov    rax,QWORD PTR [rbp-0x10]
+  00137: mov    QWORD PTR [rsp-0x20],rax
+  0013c: mov    rax,QWORD PTR [rbp-0x48]
+  00140: mov    QWORD PTR [rsp-0x28],rax
+  00145: mov    rax,QWORD PTR [rbp-0x50]
+  00149: mov    QWORD PTR [rsp-0x30],rax
+  0014e: mov    rax,QWORD PTR [rbp-0x58]
+  00152: mov    QWORD PTR [rsp-0x38],rax
+  00157: movabs rax,0x8000000000000000
+  00161: mov    QWORD PTR [rsp-0x18],rax
+  00166: movabs r13,0x8000000000000000
+  00170: mov    rdi,0x3
+  00177: call   0xfffbbeb0
+  0017c: test   rax,rax
+  0017f: je     0xfffbc688
+  00185: mov    QWORD PTR [rbp-0x40],rax
+:00014
+  00189: mov    rdi,QWORD PTR [rbp-0x28]
+  0018d: test   rdi,0x1
+  00194: je     0xfff79ece
+  0019a: sub    rdi,0x2
+  0019e: jo     0xfff79ece
+  001a4: mov    QWORD PTR [rbp-0x50],rdi
+:00015
+  001a8: mov    rax,QWORD PTR [rbp-0x18]
+  001ac: mov    QWORD PTR [rbp-0x58],rax
+:00016
+  001b0: mov    rax,QWORD PTR [rbp-0x20]
+  001b4: mov    QWORD PTR [rbp-0x60],rax
+:00017
+:00018
+  001b8: mov    eax,DWORD PTR [rip+0xfffffffffffffd2a]        # 0xfffffee8
+  001be: cmp    DWORD PTR [rip+0xe0],eax        # 0x2a4
+  001c4: jne    0xfffbc697
+  001ca: mov    rax,QWORD PTR [rbp-0x10]
+  001ce: mov    QWORD PTR [rsp-0x20],rax
+  001d3: mov    rax,QWORD PTR [rbp-0x50]
+  001d7: mov    QWORD PTR [rsp-0x28],rax
+  001dc: mov    rax,QWORD PTR [rbp-0x58]
+  001e0: mov    QWORD PTR [rsp-0x30],rax
+  001e5: mov    rax,QWORD PTR [rbp-0x60]
+  001e9: mov    QWORD PTR [rsp-0x38],rax
+  001ee: movabs rax,0x8000000000000000
+  001f8: mov    QWORD PTR [rsp-0x18],rax
+  001fd: movabs r13,0x8000000000000000
+  00207: mov    rdi,0x3
+  0020e: call   0xfffbbeb0
+  00213: test   rax,rax
+  00216: je     0xfffbc6fc
+  0021c: mov    QWORD PTR [rbp-0x48],rax
+:00020
+:00021
+  00220: mov    eax,DWORD PTR [rip+0xfffffffffffffcc2]        # 0xfffffee8
+  00226: cmp    DWORD PTR [rip+0x80],eax        # 0x2ac
+  0022c: jne    0xfffbc70b
+  00232: mov    rax,QWORD PTR [rbp-0x10]
+  00236: mov    QWORD PTR [rsp-0x20],rax
+  0023b: mov    rax,QWORD PTR [rbp-0x38]
+  0023f: mov    QWORD PTR [rsp-0x28],rax
+  00244: mov    rax,QWORD PTR [rbp-0x40]
+  00248: mov    QWORD PTR [rsp-0x30],rax
+  0024d: mov    rax,QWORD PTR [rbp-0x48]
+  00251: mov    QWORD PTR [rsp-0x38],rax
+  00256: movabs rax,0x8000000000000000
+  00260: mov    QWORD PTR [rsp-0x18],rax
+  00265: movabs r13,0x8000000000000000
+  0026f: mov    rdi,0x3
+  00276: call   0xfffbbeb0
+  0027b: test   rax,rax
+  0027e: je     0xfffbc770
+  00284: mov    QWORD PTR [rbp-0x30],rax
+:00023
+  00288: mov    rax,QWORD PTR [rbp-0x30]
+  0028c: leave  
+  0028d: ret    
+:00024
+  0028e: mov    rax,QWORD PTR [rbp-0x20]
+  00292: leave  
+  00293: ret    
+    finished compile. elapsed:27.4µs
