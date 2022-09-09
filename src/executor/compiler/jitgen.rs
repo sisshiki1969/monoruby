@@ -953,9 +953,11 @@ impl Codegen {
 
     pub(super) fn jit_compile_normal(
         &mut self,
-        func: &NormalFuncInfo,
+        globals: &Globals,
+        func_id: FuncId,
         position: Option<usize>,
     ) -> DestLabel {
+        let func = globals.func[func_id].as_normal();
         let start_pos = position.unwrap_or_default();
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
@@ -1067,8 +1069,15 @@ impl Codegen {
                         },
                     )
                     .for_each(|bc_pos| {
-                        let pc = func.bytecode()[bc_pos];
-                        eprintln!(":{:05} {:?}", bc_pos, pc);
+                        let pc = BcPc::from(&func.bytecode()[bc_pos]);
+                        eprintln!(
+                            ":{:05} {}",
+                            bc_pos,
+                            match pc.format(globals, bc_pos) {
+                                Some(s) => s,
+                                None => "".to_string(),
+                            }
+                        );
                     });
 
                 eprintln!("  {:05x}: {}", i, text);

@@ -212,7 +212,7 @@ impl std::fmt::Debug for Bc {
                 write!(f, "br => {}", disp_str(disp))
             }
             BcOp::CondBr(reg, disp, opt, kind) => {
-                writeln!(
+                write!(
                     f,
                     "cond{}br {}{:?} => {}",
                     kind.to_s(),

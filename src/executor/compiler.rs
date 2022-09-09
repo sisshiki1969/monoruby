@@ -778,28 +778,26 @@ impl Codegen {
 
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
         if globals.func[func_id].data.codeptr.is_none() {
-            let mut info = std::mem::take(&mut globals.func[func_id]);
-            self.jit_compile(&mut info);
-            globals.func[func_id] = info;
-        }
-    }
-
-    fn jit_compile(&mut self, func: &mut FuncInfo) {
-        let label = match &func.kind {
-            FuncKind::Normal(info) => {
-                func.data.meta.set_jit();
-                let jit_entry = self.jit_compile_normal(info, None);
-                let codeptr = self.jit.get_current_address();
-                monoasm!(self.jit,
-                    jmp jit_entry;
-                );
-                codeptr
+            let (label, is_ruby_func) = match &globals.func[func_id].kind {
+                FuncKind::Normal(_) => {
+                    let jit_entry = self.jit_compile_normal(globals, func_id, None);
+                    let codeptr = self.jit.get_current_address();
+                    monoasm!(self.jit,
+                        jmp jit_entry;
+                    );
+                    (codeptr, true)
+                }
+                FuncKind::Builtin { abs_address } => (self.wrap_builtin(*abs_address), false),
+            };
+            self.jit.finalize();
+            if is_ruby_func {
+                globals.func[func_id].data.meta.set_jit();
             }
-            FuncKind::Builtin { abs_address } => self.wrap_builtin(*abs_address),
-        };
-        self.jit.finalize();
-        assert_eq!(None, func.data.codeptr);
-        func.data.codeptr = Some(label);
+            assert_eq!(
+                None,
+                std::mem::replace(&mut globals.func[func_id].data.codeptr, Some(label))
+            );
+        }
     }
 
     pub fn wrap_builtin(&mut self, abs_address: u64) -> CodePtr {
@@ -867,18 +865,22 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// Execute JIT compilation for a Ruby method.
+    ///
     extern "C" fn exec_jit_compile(
         interp: &mut Interp,
         globals: &mut Globals,
         func_id: FuncId,
     ) -> CodePtr {
         globals.func[func_id].data.meta.set_jit();
-        let label = interp
-            .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal_mut(), None);
+        let label = interp.codegen.jit_compile_normal(globals, func_id, None);
         interp.codegen.jit.get_label_address(label)
     }
 
+    ///
+    /// Execute JIT compilation for a loop.
+    ///
     extern "C" fn exec_jit_partial_compile(
         interp: &mut Interp,
         globals: &mut Globals,
@@ -888,7 +890,7 @@ impl Codegen {
         let pc_index = pc - globals.func[func_id].data.pc;
         let label = interp
             .codegen
-            .jit_compile_normal(globals.func[func_id].as_normal_mut(), Some(pc_index));
+            .jit_compile_normal(globals, func_id, Some(pc_index));
         interp.codegen.jit.get_label_address(label)
     }
 

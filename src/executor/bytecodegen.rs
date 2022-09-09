@@ -102,7 +102,7 @@ impl BcPc {
 }
 
 impl BcPc {
-    fn format(&self, globals: &Globals, i: usize) -> Option<String> {
+    pub fn format(&self, globals: &Globals, i: usize) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {
             if opt {
                 "_"
@@ -212,14 +212,13 @@ impl BcPc {
 
             BcOp::Ret(reg) => format!("ret {:?}", reg),
             BcOp::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            BcOp::MethodCall(..) => return None,
-            BcOp::MethodArgs(recv, args, len) => {
-                let prev_pc = *self - 1;
-                let (recv, ret, name) = match prev_pc.op1() {
-                    BcOp::MethodCall(ret, name) => (recv, ret, name),
+            BcOp::MethodCall(ret, name) => {
+                let args_pc = *self + 1;
+                let (recv, args, len) = match args_pc.op1() {
+                    BcOp::MethodArgs(recv, args, len) => (recv, args, len),
                     _ => unreachable!(),
                 };
-                let class_id = prev_pc.classid1();
+                let class_id = self.classid1();
                 let name = globals.id_store.get_name(name);
                 let op1 = format!(
                     "{} = {:?}.call {}({:?}; {})",
@@ -232,6 +231,7 @@ impl BcPc {
                 //skip = true;
                 format!("{:36} [{}]", op1, class_id.get_name(globals))
             }
+            BcOp::MethodArgs(..) => return None,
             BcOp::MethodDef(name, func_id) => {
                 let name = globals.id_store.get_name(name);
                 format!("define {:?}: {:?}", name, func_id)
