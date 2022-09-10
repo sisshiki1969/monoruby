@@ -206,6 +206,10 @@ impl Value {
         RValue::new_class(id).pack()
     }
 
+    pub fn new_object() -> Self {
+        RValue::new_object().pack()
+    }
+
     pub fn new_string(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
     }

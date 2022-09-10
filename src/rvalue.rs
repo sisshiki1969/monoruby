@@ -102,6 +102,14 @@ impl RValue {
         }
     }
 
+    pub(crate) fn new_object() -> Self {
+        RValue {
+            flags: RVFlag::new(OBJECT_CLASS),
+            kind: ObjKind::Object,
+            var_table: None,
+        }
+    }
+
     pub(crate) fn new_bytes_from_smallvec(bytes: SmallVec<[u8; 31]>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS),
@@ -186,10 +194,11 @@ impl RVFlag {
 #[derive(Debug, Clone)]
 pub enum ObjKind {
     Class(ClassId),
+    Object,
     Bignum(BigInt),
     Float(f64),
     Bytes(SmallVec<[u8; 31]>),
     Time(TimeInfo),
-    Invalid,
     Array(Vec<Value>),
+    Invalid,
 }

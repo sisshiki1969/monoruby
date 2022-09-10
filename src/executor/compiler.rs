@@ -192,7 +192,7 @@ extern "C" fn get_error_location(
 }
 
 impl Codegen {
-    pub fn new(no_jit: bool) -> Self {
+    pub fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
         jit.add_page();
@@ -396,7 +396,7 @@ impl Codegen {
         };
         codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);
-        codegen.get_entry_point();
+        codegen.get_entry_point(main_object);
         codegen.jit.finalize();
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
@@ -962,7 +962,7 @@ impl Codegen {
 
 #[test]
 fn float_test() {
-    let mut gen = Codegen::new(false);
+    let mut gen = Codegen::new(false, Value::nil());
 
     let panic = gen.entry_panic;
     let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
@@ -1004,7 +1004,7 @@ fn float_test() {
 
 #[test]
 fn float_test2() {
-    let mut gen = Codegen::new(false);
+    let mut gen = Codegen::new(false, Value::nil());
 
     let panic = gen.entry_panic;
     let assume_float_to_f64 = gen.jit.label();
@@ -1043,7 +1043,7 @@ fn float_test2() {
 
 #[test]
 fn float_test3() {
-    let mut gen = Codegen::new(false);
+    let mut gen = Codegen::new(false, Value::nil());
 
     let panic = gen.entry_panic;
     let to_f64 = gen.jit.label();

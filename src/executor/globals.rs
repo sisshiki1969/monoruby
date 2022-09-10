@@ -146,6 +146,13 @@ impl Globals {
                         s
                     }
                 },
+                ObjKind::Object => {
+                    format!(
+                        "#<{}:0x{:016x}>",
+                        val.class_id().get_name(self),
+                        val.rvalue().id()
+                    )
+                }
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -186,6 +193,13 @@ impl Globals {
                         s
                     }
                 },
+                ObjKind::Object => {
+                    format!(
+                        "#<{}:0x{:016x}>",
+                        val.class_id().get_name(self),
+                        val.rvalue().id()
+                    )
+                }
                 _ => unreachable!(),
             },
         }

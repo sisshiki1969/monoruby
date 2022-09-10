@@ -9,15 +9,15 @@ pub struct Interp {
 }
 
 impl Interp {
-    fn new(no_jit: bool) -> Self {
+    fn new(no_jit: bool, main_object: Value) -> Self {
         Self {
-            codegen: Codegen::new(no_jit),
+            codegen: Codegen::new(no_jit, main_object),
         }
     }
 
     /// Execute top level method.
     pub fn eval_toplevel(globals: &mut Globals) -> Result<Value> {
-        let mut eval = Self::new(globals.no_jit);
+        let mut eval = Self::new(globals.no_jit, Value::new_object());
         if !globals.no_jit {
             eval.codegen.set_jit_stab(&mut globals.func)
         } else {

@@ -68,7 +68,7 @@ extern "C" fn vm_define_method(
 }
 
 impl Codegen {
-    pub(super) fn get_entry_point(&mut self) {
+    pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
         let return_label = self.jit.label();
         monoasm! { self.jit,
@@ -101,7 +101,8 @@ impl Codegen {
             //       |             |
             //
             // set self
-            movq [rsp - 0x20], (NIL_VALUE);
+            movq rax, (main_object.get());
+            movq [rsp - 0x20], rax;
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
