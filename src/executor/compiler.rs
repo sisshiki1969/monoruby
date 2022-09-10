@@ -928,10 +928,7 @@ impl Codegen {
                         addq rsp, 1024;
                         jmp entry;
                     );
-                    assert_eq!(
-                        None,
-                        std::mem::replace(&mut func.data.codeptr, Some(codeptr))
-                    );
+                    func.data.codeptr = Some(codeptr);
                 }
                 _ => {}
             };

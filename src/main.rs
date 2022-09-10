@@ -72,13 +72,13 @@ fn main() {
         }
         None => {
             let mut rl = Editor::<()>::new().unwrap();
-            let mut all_codes = vec![];
+            let mut globals = Globals::new(args.warning, args.no_jit);
             loop {
                 let readline = rl.readline("monoruby> ");
                 match readline {
                     Ok(code) => {
                         rl.add_history_entry(code.as_str());
-                        run_repl(&code, &mut all_codes, args.no_jit, args.warning);
+                        if let Err(_) = repl_exec(&mut globals, &code) {};
                     }
                     Err(ReadlineError::Interrupted) => {
                         break;
@@ -98,8 +98,8 @@ fn main() {
 
 fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     let mut globals = Globals::new(warning, no_jit_flag);
-    match globals.compile_script(code.to_string(), path) {
-        Ok(_) => {}
+    let main_fid = match globals.compile_script(code.to_string(), path) {
+        Ok(func_id) => func_id,
         Err(err) => {
             eprintln!("{:?}", err.get_error_message(&globals));
             err.show_loc();
@@ -107,7 +107,7 @@ fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
         }
     };
 
-    match Interp::eval_toplevel(&mut globals) {
+    match Interp::eval_toplevel(&mut globals, main_fid) {
         Ok(_val) => {
             #[cfg(debug_assertions)]
             eprintln!("jit {:?}", _val)
@@ -119,31 +119,23 @@ fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     };
 }
 
-fn repl_exec(code: &str, no_jit_flag: bool, warning: u8) -> Result<(), MonorubyErr> {
-    let mut globals = Globals::new(warning, no_jit_flag);
-    match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
-        Ok(_) => {}
+fn repl_exec(globals: &mut Globals, code: &str) -> Result<(), MonorubyErr> {
+    let main_fid = match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
+        Ok(fid) => fid,
         Err(err) => {
             eprintln!("{}", err.get_error_message(&globals));
             err.show_all_loc();
             return Err(err);
         }
     };
-    match Interp::eval_toplevel(&mut globals) {
-        Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
+    match Interp::eval_toplevel(globals, main_fid) {
+        Ok(val) => eprintln!("=> {}", val.to_s(globals)),
         Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
+            eprintln!("{}", err.get_error_message(globals));
             err.show_all_loc();
         }
     };
     Ok(())
-}
-
-fn run_repl(code: &str, all_codes: &mut Vec<String>, no_jit_flag: bool, warning: u8) {
-    all_codes.push(code.to_string());
-    if let Err(_) = repl_exec(&all_codes.join(";"), no_jit_flag, warning) {
-        all_codes.pop();
-    };
 }
 
 pub fn run_test(code: &str) {
@@ -181,7 +173,8 @@ pub fn run_test_no_result_check(code: &str) -> Value {
 pub fn run_test_main(code: &str) -> Value {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let jit_val = Interp::eval_toplevel(&mut new_globals(code));
+    let (mut globals, fid) = new_globals(code);
+    let jit_val = Interp::eval_toplevel(&mut globals, fid);
     let jit_val = jit_val.unwrap();
     #[cfg(not(debug_assertions))]
     eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
@@ -194,26 +187,27 @@ pub fn run_test_main(code: &str) -> Value {
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let jit_val = Interp::eval_toplevel(&mut new_globals(code));
+    let (mut globals, fid) = new_globals(code);
+    let jit_val = Interp::eval_toplevel(&mut globals, fid);
     eprintln!("result: {:?}", jit_val);
     eprintln!("error:  {:?}", jit_val.unwrap_err());
 }
 
-fn new_globals(code: &str) -> Globals {
+fn new_globals(code: &str) -> (Globals, FuncId) {
     let mut globals = Globals::new(1, false);
-    match globals.compile_script(code.to_string(), std::path::Path::new("")) {
-        Ok(_) => {}
+    let fid = match globals.compile_script(code.to_string(), std::path::Path::new("")) {
+        Ok(fid) => fid,
         Err(err) => {
             err.show_all_loc();
             panic!("Error in compiling AST. {:?}", err);
         }
     };
-    globals
+    (globals, fid)
 }
 
 fn run_ruby(code: &str) -> Value {
     use std::process::Command;
-    let mut globals = new_globals(code);
+    let (mut globals, _) = new_globals(code);
     let mut tmp_file = NamedTempFile::new().unwrap();
     tmp_file
         .write_all(

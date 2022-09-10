@@ -96,7 +96,6 @@ pub struct MethodDefInfo {
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
-    pub main: Option<FuncId>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
 }
@@ -131,7 +130,6 @@ impl FnStore {
     pub fn new() -> Self {
         Self {
             functions: Funcs::new(SourceInfoRef::default()),
-            main: None,
             constsite_info: vec![],
         }
     }
@@ -169,21 +167,21 @@ impl FnStore {
         ast: Node,
         id_store: &mut IdentifierTable,
         sourceinfo: SourceInfoRef,
-    ) -> Result<()> {
-        let mut fid = self.functions.add_normal_func(
+    ) -> Result<FuncId> {
+        let main_fid = self.functions.add_normal_func(
             Some("/main".to_string()),
             vec![],
             ast,
             sourceinfo.clone(),
         );
-        self.main = Some(fid);
+        let mut fid = main_fid;
 
         while self.len() > fid.0 as usize {
             self.compile_func(fid, id_store)?;
             fid = FuncId(fid.0 + 1);
         }
 
-        Ok(())
+        Ok(main_fid)
     }
 
     /// Generate bytecode for a function which has *func_id*.

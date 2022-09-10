@@ -205,11 +205,6 @@ impl Globals {
         }
     }
 
-    /// Get *FuncId* of the toplevel function.
-    pub fn get_main_func(&self) -> FuncId {
-        self.func.main.unwrap()
-    }
-
     pub fn get_ident_id(&mut self, name: &str) -> IdentId {
         self.id_store.get_ident_id(name)
     }
@@ -357,7 +352,7 @@ impl Globals {
         func_id
     }
 
-    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<()> {
+    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
         let res = match Parser::parse_program(code, path.into()) {
             Ok(res) => self
                 .func
