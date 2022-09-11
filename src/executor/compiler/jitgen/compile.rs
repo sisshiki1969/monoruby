@@ -265,6 +265,8 @@ impl Codegen {
                     ctx.read_slot(self, src);
                     self.jit_store_constant(id, src, xmm_using);
                 }
+                BcOp::LoadIvar(_dst, _id) => unimplemented!(),
+                BcOp::StoreIvar(_dst, _id) => unimplemented!(),
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,

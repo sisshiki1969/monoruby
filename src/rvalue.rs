@@ -78,6 +78,31 @@ impl RValue {
         self.flags.change_class(new_class_id);
     }
 
+    pub(crate) fn get_var(&self, id: IdentId) -> Option<Value> {
+        match &self.var_table {
+            Some(table) => table.get(&id).cloned(),
+            None => None,
+        }
+    }
+
+    pub(crate) fn set_var(&mut self, id: IdentId, val: Value) {
+        match &mut self.var_table {
+            Some(table) => {
+                table.insert(id, val);
+            }
+            None => {
+                let mut map = HashMap::default();
+                map.insert(id, val);
+                self.var_table = Some(Box::new(map));
+            }
+        }
+    }
+}
+
+//
+// constructors.
+//
+impl RValue {
     pub(crate) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
             flags: RVFlag::new(INTEGER_CLASS),

@@ -152,6 +152,12 @@ impl BcPc {
             BcOp::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
             }
+            BcOp::LoadIvar(reg, id) => {
+                format!("@{} = {:?}", globals.id_store.get_name(id), reg)
+            }
+            BcOp::StoreIvar(reg, id) => {
+                format!("{:?} = @{}", reg, globals.id_store.get_name(id))
+            }
             BcOp::Nil(reg) => format!("{:?} = nil", reg),
             BcOp::Neg(dst, src) => {
                 let op1 = format!("{:?} = neg {:?}", dst, src);
@@ -423,6 +429,24 @@ impl IrContext {
 
     fn gen_store_const(&mut self, src: BcReg, name: IdentId, loc: Loc) {
         self.push(BcIr::StoreConst(src, name), loc);
+    }
+
+    fn gen_load_ivar(
+        &mut self,
+        info: &mut NormalFuncInfo,
+        dst: Option<BcLocal>,
+        name: IdentId,
+        loc: Loc,
+    ) {
+        let reg = match dst {
+            Some(local) => local.into(),
+            None => info.push().into(),
+        };
+        self.push(BcIr::LoadIvar(reg, name), loc);
+    }
+
+    fn gen_store_ivar(&mut self, src: BcReg, name: IdentId, loc: Loc) {
+        self.push(BcIr::StoreIvar(src, name), loc);
     }
 
     fn gen_literal(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, v: Value) {
@@ -762,6 +786,11 @@ impl IrContext {
                             let src = self.push_expr(ctx, info, id_store, rhs)?;
                             self.gen_store_const(src.into(), name, loc);
                         }
+                        NodeKind::InstanceVar(name) => {
+                            let name = id_store.get_ident_id_from_string(name);
+                            let src = self.push_expr(ctx, info, id_store, rhs)?;
+                            self.gen_store_ivar(src.into(), name, loc);
+                        }
                         NodeKind::Index {
                             box base,
                             mut index,
@@ -799,6 +828,10 @@ impl IrContext {
                 assert!(!toplevel);
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, None, name, loc);
+            }
+            NodeKind::InstanceVar(name) => {
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_load_ivar(info, None, name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -1598,6 +1631,14 @@ impl IrContext {
                 BcIr::StoreConst(reg, name) => {
                     let op1 = info.get_index(reg);
                     Bc::from(enc_wl(11, op1.0, name.get()))
+                }
+                BcIr::LoadIvar(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(16, op1.0, name.get()))
+                }
+                BcIr::StoreIvar(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(17, op1.0, name.get()))
                 }
                 BcIr::Neg(dst, src) => {
                     let op1 = info.get_index(dst);

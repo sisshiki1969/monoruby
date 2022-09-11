@@ -158,6 +158,25 @@ extern "C" fn set_index(
     interp.invoke_method(globals, method, base, &[index, src])
 }
 
+extern "C" fn get_instance_var(
+    _interp: &mut Interp,
+    _globals: &mut Globals,
+    base: Value,
+    id: IdentId,
+) -> Value {
+    base.rvalue().get_var(id).unwrap_or_default()
+}
+
+extern "C" fn set_instance_var(
+    _interp: &mut Interp,
+    _globals: &mut Globals,
+    base: Value,
+    id: IdentId,
+    val: Value,
+) {
+    base.rvalue_mut().set_var(id, val)
+}
+
 extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
     panic!("unimplemented inst. {:016x}", opcode);
 }
