@@ -75,13 +75,14 @@ fn main() {
             let mut globals = Globals::new(args.warning, args.no_jit);
             let mut cont_mode = false;
             let mut buf = String::new();
+            let mut script_line = 0;
             loop {
-                let prompt = if cont_mode {
-                    "monoruby* "
-                } else {
-                    "monoruby> "
-                };
-                let readline = rl.readline(prompt);
+                let prompt = format!(
+                    "monoruby:{:03}{} ",
+                    script_line,
+                    if cont_mode { "*" } else { ">" }
+                );
+                let readline = rl.readline(&prompt);
                 match readline {
                     Ok(code) => {
                         buf = if cont_mode {
@@ -89,9 +90,10 @@ fn main() {
                         } else {
                             code.clone()
                         };
-                        let main_fid = match globals
-                            .compile_script(buf.clone(), std::path::Path::new("REPL"))
-                        {
+                        let main_fid = match globals.compile_script(
+                            buf.clone(),
+                            std::path::Path::new(&format!("REPL:{:03}", script_line)),
+                        ) {
                             Ok(fid) => fid,
                             Err(err) => {
                                 if err.kind == MonorubyErrKind::Syntax(ParseErrKind::UnexpectedEOF)
@@ -115,6 +117,7 @@ fn main() {
                                 err.show_all_loc();
                             }
                         };
+                        script_line += 1;
                     }
                     Err(ReadlineError::Interrupted) => {
                         // Ctrl-C
