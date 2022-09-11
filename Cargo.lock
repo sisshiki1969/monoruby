@@ -1084,7 +1084,7 @@ dependencies = [
 [[package]]
 name = "ruruby-parse"
 version = "0.0.1"
-source = "git+https://github.com/sisshiki1969/ruruby-parse.git#d85ebc8448de2d77f290695ba95a9528204c8c46"
+source = "git+https://github.com/sisshiki1969/ruruby-parse.git#8e3f3e19eee5744aa9e949f34fd0d7d975644776"
 dependencies = [
  "clap",
  "console",

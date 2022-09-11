@@ -76,6 +76,8 @@ fn main() {
             let mut cont_mode = false;
             let mut buf = String::new();
             let mut script_line = 0;
+            let mut context = None;
+            let mut interp = Interp::new(args.no_jit, Value::new_object());
             loop {
                 let prompt = format!(
                     "monoruby:{:03}{} ",
@@ -90,11 +92,15 @@ fn main() {
                         } else {
                             code.clone()
                         };
-                        let main_fid = match globals.compile_script(
+                        let main_fid = match globals.compile_script_with_binding(
                             buf.clone(),
                             std::path::Path::new(&format!("REPL:{:03}", script_line)),
+                            context.clone(),
                         ) {
-                            Ok(fid) => fid,
+                            Ok((fid, collector)) => {
+                                context = Some(collector);
+                                fid
+                            }
                             Err(err) => {
                                 if err.kind == MonorubyErrKind::Syntax(ParseErrKind::UnexpectedEOF)
                                 {
@@ -110,7 +116,7 @@ fn main() {
                         };
                         rl.add_history_entry(code.as_str());
                         cont_mode = false;
-                        match Interp::eval_toplevel(&mut globals, main_fid) {
+                        match interp.eval(&mut globals, main_fid) {
                             Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
                             Err(err) => {
                                 eprintln!("{}", err.get_error_message(&globals));

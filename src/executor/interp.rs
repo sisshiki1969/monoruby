@@ -9,7 +9,7 @@ pub struct Interp {
 }
 
 impl Interp {
-    fn new(no_jit: bool, main_object: Value) -> Self {
+    pub fn new(no_jit: bool, main_object: Value) -> Self {
         Self {
             codegen: Codegen::new(no_jit, main_object),
         }
@@ -18,14 +18,20 @@ impl Interp {
     /// Execute top level method.
     pub fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let mut eval = Self::new(globals.no_jit, Value::new_object());
-        if !globals.no_jit {
-            eval.codegen.set_jit_stab(&mut globals.func)
-        } else {
-            eval.codegen.set_vm_stab(&mut globals.func)
-        }
-        let main_data = eval.get_func_data(globals, func_id) as *const _;
+        eval.eval(globals, func_id)
+    }
 
-        let res = (eval.codegen.entry_point)(&mut eval, globals, main_data);
+    /// Execute top level method.
+    pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+        if !globals.no_jit {
+            self.codegen.set_jit_stab(&mut globals.func)
+        } else {
+            self.codegen.set_vm_stab(&mut globals.func)
+        }
+        let main_data = self.get_func_data(globals, func_id) as *const _;
+
+        let entry_point = self.codegen.entry_point;
+        let res = entry_point(self, globals, main_data);
         globals.flush_stdout();
 
         #[cfg(feature = "emit-bc")]

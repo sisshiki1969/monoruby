@@ -361,6 +361,24 @@ impl Globals {
         };
         res
     }
+
+    pub fn compile_script_with_binding(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        context: Option<LvarCollector>,
+    ) -> Result<(FuncId, LvarCollector)> {
+        match Parser::parse_program_binding(code, path.into(), context, None) {
+            Ok(res) => {
+                let collector = res.lvar_collector;
+                let fid =
+                    self.func
+                        .compile_script(res.node, &mut self.id_store, res.source_info)?;
+                return Ok((fid, collector));
+            }
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }
 }
 
 impl Globals {
