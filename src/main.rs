@@ -73,17 +73,55 @@ fn main() {
         None => {
             let mut rl = Editor::<()>::new().unwrap();
             let mut globals = Globals::new(args.warning, args.no_jit);
+            let mut cont_mode = false;
+            let mut buf = String::new();
             loop {
-                let readline = rl.readline("monoruby> ");
+                let prompt = if cont_mode {
+                    "monoruby* "
+                } else {
+                    "monoruby> "
+                };
+                let readline = rl.readline(prompt);
                 match readline {
                     Ok(code) => {
+                        buf = if cont_mode {
+                            format!("{}\n{}", buf, code)
+                        } else {
+                            code.clone()
+                        };
+                        let main_fid = match globals
+                            .compile_script(buf.clone(), std::path::Path::new("REPL"))
+                        {
+                            Ok(fid) => fid,
+                            Err(err) => {
+                                if err.kind == MonorubyErrKind::Syntax(ParseErrKind::UnexpectedEOF)
+                                {
+                                    rl.add_history_entry(code.as_str());
+                                    cont_mode = true;
+                                } else {
+                                    eprintln!("{}", err.get_error_message(&globals));
+                                    err.show_all_loc();
+                                    cont_mode = false;
+                                };
+                                continue;
+                            }
+                        };
                         rl.add_history_entry(code.as_str());
-                        if let Err(_) = repl_exec(&mut globals, &code) {};
+                        cont_mode = false;
+                        match Interp::eval_toplevel(&mut globals, main_fid) {
+                            Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
+                            Err(err) => {
+                                eprintln!("{}", err.get_error_message(&globals));
+                                err.show_all_loc();
+                            }
+                        };
                     }
                     Err(ReadlineError::Interrupted) => {
-                        break;
+                        // Ctrl-C
+                        cont_mode = false;
                     }
                     Err(ReadlineError::Eof) => {
+                        // Ctrl-D
                         break;
                     }
                     Err(err) => {
@@ -117,25 +155,6 @@ fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
             err.show_loc();
         }
     };
-}
-
-fn repl_exec(globals: &mut Globals, code: &str) -> Result<(), MonorubyErr> {
-    let main_fid = match globals.compile_script(code.to_string(), std::path::Path::new("REPL")) {
-        Ok(fid) => fid,
-        Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
-            err.show_all_loc();
-            return Err(err);
-        }
-    };
-    match Interp::eval_toplevel(globals, main_fid) {
-        Ok(val) => eprintln!("=> {}", val.to_s(globals)),
-        Err(err) => {
-            eprintln!("{}", err.get_error_message(globals));
-            err.show_all_loc();
-        }
-    };
-    Ok(())
 }
 
 pub fn run_test(code: &str) {
