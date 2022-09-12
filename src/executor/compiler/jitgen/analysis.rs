@@ -70,6 +70,10 @@ impl RegInfo {
         }
     }
 
+    fn use_non_float(&mut self, slot: SlotId) {
+        self.use_as(slot, false, NIL_CLASS)
+    }
+
     fn def_as(&mut self, slot: SlotId, is_float: bool) {
         self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
         if self[slot].is_used == IsUsed::ND {
@@ -328,7 +332,9 @@ impl LoopAnalysis {
                         pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::StoreIvar(..) => {}
+                BcOp::StoreIvar(src, _name) => {
+                    reg_info.use_non_float(src);
+                }
                 BcOp::LoadIvar(dst, _name) => {
                     reg_info.def_as(dst, false);
                 }
@@ -377,10 +383,13 @@ impl LoopAnalysis {
                     assert!(method_buf.is_none());
                     method_buf = Some((ret, pc.classid1(), id));
                 }
-                BcOp::MethodArgs(recv, _args, _len) => {
+                BcOp::MethodArgs(recv, args, len) => {
                     match std::mem::take(&mut method_buf) {
                         Some((ret, class, _id)) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                            for i in 0..len {
+                                reg_info.use_non_float(args + i);
+                            }
                             reg_info.def_as(ret, false);
                         }
                         None => unreachable!(),

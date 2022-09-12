@@ -153,10 +153,10 @@ impl BcPc {
                 format!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
             }
             BcOp::LoadIvar(reg, id) => {
-                format!("@{} = {:?}", globals.id_store.get_name(id), reg)
+                format!("{:?} = {}", reg, globals.id_store.get_name(id))
             }
             BcOp::StoreIvar(reg, id) => {
-                format!("{:?} = @{}", reg, globals.id_store.get_name(id))
+                format!("{} = {:?}", globals.id_store.get_name(id), reg)
             }
             BcOp::Nil(reg) => format!("{:?} = nil", reg),
             BcOp::Neg(dst, src) => {
@@ -1057,6 +1057,11 @@ impl IrContext {
                             self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                             self.gen_store_const(local.into(), name, loc);
                         }
+                        NodeKind::InstanceVar(name) => {
+                            let name = id_store.get_ident_id_from_string(name);
+                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                            self.gen_store_ivar(local.into(), name, loc);
+                        }
                         _ => {
                             return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone()))
                         }
@@ -1081,6 +1086,10 @@ impl IrContext {
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, local.into(), name, loc);
                 return Ok(());
+            }
+            NodeKind::InstanceVar(name) => {
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_load_ivar(info, local.into(), name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,

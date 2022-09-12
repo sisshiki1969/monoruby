@@ -424,6 +424,14 @@ mod test {
     }
 
     #[test]
+    fn test_instance_var() {
+        run_test("@a=42; @a");
+        run_test("@a=42; @a = @a * 2; @a");
+        run_test("@a=42; b = @a * 2; b");
+        run_test("@a=42; c = b = @a * 2; c");
+    }
+
+    #[test]
     fn test_fn() {
         run_test("def f; end; f");
     }
