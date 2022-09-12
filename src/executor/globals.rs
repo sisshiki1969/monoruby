@@ -119,6 +119,33 @@ impl Globals {
 }
 
 impl Globals {
+    fn array_tos(&self, v: &Vec<Value>) -> String {
+        match v.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", self.val_inspect(v[0])),
+            _ => {
+                let mut s = format!("[{}", self.val_inspect(v[0]));
+                for val in v[1..].iter() {
+                    s += &format!(", {}", self.val_inspect(*val));
+                }
+                s += "]";
+                s
+            }
+        }
+    }
+
+    fn object_tos(&self, val: Value) -> String {
+        if let Some(name) = val.rvalue().get_var(IdentId::_NAME) {
+            self.val_tos(name)
+        } else {
+            format!(
+                "#<{}:0x{:016x}>",
+                val.class_id().get_name(self),
+                val.rvalue().id()
+            )
+        }
+    }
+
     pub fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
@@ -134,25 +161,8 @@ impl Globals {
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
-                ObjKind::Array(v) => match v.len() {
-                    0 => "[]".to_string(),
-                    1 => format!("[{}]", self.val_inspect(v[0])),
-                    _ => {
-                        let mut s = format!("[{}", self.val_inspect(v[0]));
-                        for val in v[1..].iter() {
-                            s += &format!(", {}", self.val_inspect(*val));
-                        }
-                        s += "]";
-                        s
-                    }
-                },
-                ObjKind::Object => {
-                    format!(
-                        "#<{}:0x{:016x}>",
-                        val.class_id().get_name(self),
-                        val.rvalue().id()
-                    )
-                }
+                ObjKind::Array(v) => self.array_tos(v),
+                ObjKind::Object => self.object_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -181,25 +191,8 @@ impl Globals {
             RV::Object(rvalue) => match &rvalue.kind {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
-                ObjKind::Array(v) => match v.len() {
-                    0 => "[]".to_string(),
-                    1 => format!("[{}]", self.val_inspect(v[0])),
-                    _ => {
-                        let mut s = format!("[{}", self.val_inspect(v[0]));
-                        for val in v[1..].iter() {
-                            s += &format!(", {}", self.val_inspect(*val));
-                        }
-                        s += "]";
-                        s
-                    }
-                },
-                ObjKind::Object => {
-                    format!(
-                        "#<{}:0x{:016x}>",
-                        val.class_id().get_name(self),
-                        val.rvalue().id()
-                    )
-                }
+                ObjKind::Array(v) => self.array_tos(v),
+                ObjKind::Object => self.object_tos(val),
                 _ => unreachable!(),
             },
         }
