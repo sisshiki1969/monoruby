@@ -77,7 +77,7 @@ fn main() {
             let mut buf = String::new();
             let mut script_line = 0;
             let mut context = None;
-            let mut interp = Interp::new(args.no_jit, Value::new_object());
+            let mut interp = Interp::new(args.no_jit);
             loop {
                 let prompt = format!(
                     "monoruby:{:03}{} ",
@@ -157,7 +157,7 @@ fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     match Interp::eval_toplevel(&mut globals, main_fid) {
         Ok(_val) => {
             #[cfg(debug_assertions)]
-            eprintln!("jit {:?}", _val)
+            eprintln!("=> {:?}", _val)
         }
         Err(err) => {
             eprintln!("{}", err.get_error_message(&globals));
@@ -421,6 +421,14 @@ mod test {
         run_test("a=8; b=2; c = (a,b=b,a); [a,b,c]");
         run_test("e = (a,b,c=1,2,3); [e, a, b, c]");
         run_test("a=b=c=7; [a,b,c]");
+    }
+
+    #[test]
+    fn test_instance_var() {
+        run_test("@a=42; @a");
+        run_test("@a=42; @a = @a * 2; @a");
+        run_test("@a=42; b = @a * 2; b");
+        run_test("@a=42; c = b = @a * 2; c");
     }
 
     #[test]

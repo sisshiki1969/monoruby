@@ -82,6 +82,8 @@ pub(super) enum BcIr {
     IndexAssign(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, IdentId),
     StoreConst(BcReg, IdentId),
+    LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
+    StoreIvar(BcReg, IdentId), // src, id  - @id = %src
     Nil(BcReg),
     Neg(BcReg, BcReg),                       // ret, src
     BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
@@ -243,6 +245,12 @@ impl std::fmt::Debug for Bc {
             BcOp::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
+            BcOp::LoadIvar(reg, id) => {
+                write!(f, "{:?} = @[{:?}]", reg, id)
+            }
+            BcOp::StoreIvar(reg, id) => {
+                write!(f, "@[{:?}] = {:?}", id, reg)
+            }
             BcOp::Nil(reg) => write!(f, "{:?} = nil", reg),
             BcOp::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
             BcOp::BinOp(kind, dst, lhs, rhs) => {
@@ -358,6 +366,8 @@ pub(super) enum BcOp {
     IndexAssign(SlotId, SlotId, SlotId),
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
+    LoadIvar(SlotId, IdentId),  // ret, id  - %ret = @id
+    StoreIvar(SlotId, IdentId), // src, id  - @id = %src
     /// nil(%reg)
     Nil(SlotId),
     /// negate(%ret, %src)
@@ -449,6 +459,8 @@ impl BcOp {
                 ),
                 14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
+                16 => Self::LoadIvar(SlotId::new(op1), IdentId::from(op2)),
+                17 => Self::StoreIvar(SlotId::new(op1), IdentId::from(op2)),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

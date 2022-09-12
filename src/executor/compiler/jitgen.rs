@@ -695,6 +695,34 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
+    fn jit_load_ivar(&mut self, id: IdentId, ret: SlotId, xmm_using: UsingXmm) {
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+          movq rdx, [rbp - 16];  // base: Value
+          movq rcx, (id.get());  // id: IdentId
+          movq rdi, rbx;  // &mut Interp
+          movq rsi, r12;  // &mut Globals
+          movq rax, (get_instance_var);
+          call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        self.store_rax(ret);
+    }
+
+    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm) {
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+          movq rdx, [rbp - 16];  // base: Value
+          movq rcx, (id.get());  // id: IdentId
+          movq r8, [rbp - (conv(src))];   // val: Value
+          movq rdi, rbx;  // &mut Interp
+          movq rsi, r12;  // &mut Globals
+          movq rax, (set_instance_var);
+          call rax;
+        );
+        self.xmm_restore(&xmm_using);
+    }
+
     fn jit_get_index(
         &mut self,
         ret: SlotId,

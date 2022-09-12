@@ -684,6 +684,12 @@ impl NormalFuncInfo {
                 BcOp::StoreConst(reg, id) => {
                     eprintln!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
                 }
+                BcOp::LoadIvar(reg, id) => {
+                    eprintln!("{:?} = {}", reg, globals.id_store.get_name(id))
+                }
+                BcOp::StoreIvar(reg, id) => {
+                    eprintln!("{} = {:?}", globals.id_store.get_name(id), reg)
+                }
                 BcOp::Nil(reg) => eprintln!("{:?} = nil", reg),
                 BcOp::Neg(dst, src) => {
                     let op1 = format!("{:?} = neg {:?}", dst, src);

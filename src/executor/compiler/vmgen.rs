@@ -217,6 +217,8 @@ impl Codegen {
         self.dispatch[13] = self.vm_condnotbr(branch);
         self.dispatch[14] = self.vm_loop_start(no_jit);
         self.dispatch[15] = self.vm_loop_end();
+        self.dispatch[16] = self.vm_load_ivar();
+        self.dispatch[17] = self.vm_store_ivar();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -858,6 +860,38 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             addq [rip + const_version], 1;
             movq rax, (set_constant);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_load_ivar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, [rbp - 16];  // base: Value
+            movq rcx, rdi; // name: IdentId
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (get_instance_var);
+            call rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_store_ivar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, [rbp - 16];  // base: Value
+            movq rcx, rdi;  // name: IdentId
+            movq r8, [r15];     // val: Value
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (set_instance_var);
             call rax;
         };
         self.fetch_and_dispatch();

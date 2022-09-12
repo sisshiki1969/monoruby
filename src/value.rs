@@ -210,6 +210,14 @@ impl Value {
         RValue::new_object().pack()
     }
 
+    pub fn main_object() -> Self {
+        let main_object = Value::new_object();
+        main_object
+            .rvalue_mut()
+            .set_var(IdentId::_NAME, Value::new_string("main".bytes().collect()));
+        main_object
+    }
+
     pub fn new_string(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
     }
