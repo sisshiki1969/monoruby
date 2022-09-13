@@ -70,7 +70,7 @@ impl ClassId {
         }
         let val = self.get_obj(globals);
         match globals.class[self].get_name() {
-            Some(s) => s.to_string(),
+            Some(id) => globals.get_ident_name(id).to_string(),
             None => match globals.class[self].is_singleton {
                 None => format!("#<Class:{:016x}>", val.get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
@@ -82,7 +82,7 @@ impl ClassId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     /// the constant name which this class object is bound.
-    name: Option<String>,
+    name: Option<IdentId>,
     /// corresponding class object.
     object: Option<Value>,
     /// super class.
@@ -126,12 +126,12 @@ impl ClassInfo {
         self.object.unwrap()
     }
 
-    pub fn set_name(&mut self, name: String) {
+    pub fn set_name(&mut self, name: IdentId) {
         self.name = Some(name);
     }
 
-    pub fn get_name(&self) -> Option<&String> {
-        self.name.as_ref()
+    pub fn get_name(&self) -> Option<IdentId> {
+        self.name
     }
 
     pub(super) fn super_class(&self) -> Option<ClassId> {

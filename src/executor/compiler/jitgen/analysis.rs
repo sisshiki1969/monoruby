@@ -326,6 +326,7 @@ impl LoopAnalysis {
                 }
                 BcOp::IndexAssign(..) => {}
                 BcOp::MethodDef(..) => {}
+                BcOp::ClassDef(..) => {}
                 BcOp::StoreConst(..) => {}
                 BcOp::LoadConst(dst, _const_id) => {
                     let is_float =

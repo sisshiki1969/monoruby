@@ -67,6 +67,27 @@ extern "C" fn vm_define_method(
     globals.class.add_method(OBJECT_CLASS, name, func_id);
 }
 
+extern "C" fn vm_define_class(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+    func_id: FuncId,
+) -> Option<CodePtr> {
+    let codeptr = globals.func[func_id].data.codeptr;
+    let self_val = match globals.get_constant(name) {
+        Some(val) => {
+            if val.is_class().is_none() {
+                globals.err_is_not_class(name);
+                return None;
+            } else {
+                val
+            }
+        }
+        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS)),
+    };
+    codeptr
+}
+
 impl Codegen {
     pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
@@ -219,6 +240,7 @@ impl Codegen {
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
+        self.dispatch[18] = self.vm_class_def();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -1073,6 +1095,23 @@ impl Codegen {
             movq rax, (vm_define_method);
             call rax;
             addl [rip + class_version], 1;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_class_def(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let entry_return = self.vm_return;
+        monoasm! { self.jit,
+            movl rdx, [r13 - 8];  // name
+            movl rcx, [r13 - 4];  // func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_define_class);
+            call rax;
+            testq rax, rax;
+            jeq  entry_return;
         };
         self.fetch_and_dispatch();
         label
