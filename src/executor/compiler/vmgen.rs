@@ -71,9 +71,9 @@ extern "C" fn vm_define_class(
     _interp: &mut Interp,
     globals: &mut Globals,
     name: IdentId,
-    func_id: FuncId,
-) -> Option<CodePtr> {
-    let codeptr = globals.func[func_id].data.codeptr;
+    //func_id: FuncId,
+) -> Option<Value> {
+    //let codeptr = globals.func[func_id].data.codeptr;
     let self_val = match globals.get_constant(name) {
         Some(val) => {
             if val.is_class().is_none() {
@@ -85,7 +85,7 @@ extern "C" fn vm_define_class(
         }
         None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS)),
     };
-    codeptr
+    Some(self_val)
 }
 
 impl Codegen {
@@ -1105,7 +1105,7 @@ impl Codegen {
         let entry_return = self.vm_return;
         monoasm! { self.jit,
             movl rdx, [r13 - 8];  // name
-            movl rcx, [r13 - 4];  // func_id
+            //movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (vm_define_class);
