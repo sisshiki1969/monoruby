@@ -71,6 +71,14 @@ extern "C" fn find_method<'a>(
     Some(data)
 }
 
+extern "C" fn vm_get_func_data<'a>(
+    interp: &mut Interp,
+    globals: &'a mut Globals,
+    func_id: FuncId,
+) -> &'a FuncData {
+    interp.get_func_data(globals, func_id)
+}
+
 extern "C" fn define_method(
     _interp: &mut Interp,
     globals: &mut Globals,

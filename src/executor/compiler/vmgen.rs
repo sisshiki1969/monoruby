@@ -1102,16 +1102,52 @@ impl Codegen {
 
     fn vm_class_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let entry_return = self.vm_return;
+        let vm_return = self.vm_return;
         monoasm! { self.jit,
-            movl rdx, [r13 - 8];  // name
-            //movl rcx, [r13 - 4];  // func_id
+            movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (vm_define_class);
+            call rax;  // rax <- self: Value
+            pushq r13;
+            pushq r15;
+            testq rax, rax; // rax: Option<Value>
+            jeq  vm_return;
+            movq r15, rax; // r15 <- self
+            movl rdx, [r13 - 4];  // rdx <- func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_get_func_data);
+            call rax; // rax <- &FuncData
+            //
+            //       +-------------+
+            // +0x08 |     pc      |
+            //       +-------------+
+            //  0x00 |   ret reg   | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) | <- rdx
+            //       +-------------+
+            //       |             |
+            //
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rsp - 0x18], rdi;
+            movq [rsp - 0x20], r15;
+            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
             call rax;
+            popq r15;
+            popq r13;
             testq rax, rax;
-            jeq  entry_return;
+            jeq vm_return;
         };
         self.fetch_and_dispatch();
         label
