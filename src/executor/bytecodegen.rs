@@ -242,9 +242,9 @@ impl BcPc {
                 let name = globals.id_store.get_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
             }
-            BcOp::ClassDef(name, func_id) => {
+            BcOp::ClassDef(ret, name, func_id) => {
                 let name = globals.id_store.get_name(name);
-                format!("class_def {:?}: {:?}", name, func_id)
+                format!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
             }
             BcOp::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
@@ -987,10 +987,12 @@ impl IrContext {
                 assert!(base.is_none());
                 assert!(superclass.is_none());
                 assert!(!is_module);
-                self.gen_class_def(ctx, info, id_store, name.clone(), body, loc)?;
-                if use_value {
-                    self.gen_nil(info, None);
-                }
+                let ret = if use_value {
+                    Some(info.push().into())
+                } else {
+                    None
+                };
+                self.gen_class_def(ctx, info, id_store, name.clone(), body, ret, loc)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -1138,6 +1140,21 @@ impl IrContext {
             NodeKind::CompStmt(nodes) => {
                 return self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)
             }
+            NodeKind::ClassDef {
+                base,
+                name,
+                superclass,
+                box body,
+                lvar: _,
+                is_module,
+            } => {
+                assert!(base.is_none());
+                assert!(superclass.is_none());
+                assert!(!is_module);
+                let ret = Some(local.into());
+                self.gen_class_def(ctx, info, id_store, name, body, ret, loc)?;
+                return Ok(());
+            }
             _ => {
                 let ret = self.push_expr(ctx, info, id_store, rhs)?;
                 self.gen_mov(local.into(), ret.into());
@@ -1184,12 +1201,13 @@ impl IrContext {
         id_store: &mut IdentifierTable,
         name: String,
         node: Node,
+        ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
         let func_id =
             ctx.add_normal_func(Some(name.clone()), vec![], node, info.sourceinfo.clone());
         let name = id_store.get_ident_id_from_string(name);
-        self.push(BcIr::ClassDef(name, func_id), loc);
+        self.push(BcIr::ClassDef(ret, name, func_id), loc);
         Ok(())
     }
 
@@ -1765,8 +1783,12 @@ impl IrContext {
                 BcIr::MethodDef(name, func_id) => {
                     Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
                 }
-                BcIr::ClassDef(name, func_id) => {
-                    Bc::from_with_func_name_id(enc_l(18, 0), *name, *func_id)
+                BcIr::ClassDef(ret, name, func_id) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_func_name_id(enc_wl(18, op1.0, 0), *name, *func_id)
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));

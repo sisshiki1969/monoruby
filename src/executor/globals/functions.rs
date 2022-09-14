@@ -775,9 +775,9 @@ impl NormalFuncInfo {
                     let name = globals.id_store.get_name(name);
                     eprintln!("mthod_def {:?}: {:?}", name, func_id)
                 }
-                BcOp::ClassDef(name, func_id) => {
+                BcOp::ClassDef(ret, name, func_id) => {
                     let name = globals.id_store.get_name(name);
-                    eprintln!("class_def {:?}: {:?}", name, func_id)
+                    eprintln!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
                 }
                 BcOp::ConcatStr(ret, args, len) => {
                     eprintln!("{} = concat({:?}; {})", ret.ret_str(), args, len)

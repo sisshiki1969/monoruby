@@ -477,7 +477,7 @@ impl Codegen {
                         addl [rip + class_version], 1;
                     );
                 }
-                BcOp::ClassDef(_name, _func) => {
+                BcOp::ClassDef(_ret, _name, _func) => {
                     let wb = ctx.get_write_back();
                     let side_exit = self.gen_side_deopt_dest(pc, wb);
                     monoasm!(self.jit,

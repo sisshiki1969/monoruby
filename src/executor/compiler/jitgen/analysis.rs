@@ -75,6 +75,9 @@ impl RegInfo {
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {
+        if slot.is_zero() {
+            return;
+        }
         self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
@@ -326,7 +329,9 @@ impl LoopAnalysis {
                 }
                 BcOp::IndexAssign(..) => {}
                 BcOp::MethodDef(..) => {}
-                BcOp::ClassDef(..) => {}
+                BcOp::ClassDef(ret, ..) => {
+                    reg_info.def_as(ret, false);
+                }
                 BcOp::StoreConst(..) => {}
                 BcOp::LoadConst(dst, _const_id) => {
                     let is_float =

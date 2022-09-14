@@ -174,7 +174,7 @@ impl Codegen {
             negq rdi;
             lea  rcx, [rsp + rdi * 8 - 16];
         loop_:
-            movq [rcx + rdx * 8], (FALSE_VALUE);
+            movq [rcx + rdx * 8], (NIL_VALUE);
             subq rdx, 1;
             jne  loop_;
         loop_exit:
@@ -1149,6 +1149,8 @@ impl Codegen {
             testq rax, rax;
             jeq vm_return;
         };
+        let exit = self.jit.label();
+        self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
     }
