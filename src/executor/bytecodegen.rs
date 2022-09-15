@@ -827,11 +827,11 @@ impl IrContext {
                 toplevel,
                 name,
                 parent,
-                prefix,
+                prefix: _,
             } => {
                 assert!(!toplevel);
                 assert!(parent.is_none());
-                assert!(prefix.is_empty());
+                //assert!(prefix.is_empty());
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, None, name, loc);
             }
