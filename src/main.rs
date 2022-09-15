@@ -117,7 +117,7 @@ fn main() {
                         rl.add_history_entry(code.as_str());
                         cont_mode = false;
                         match interp.eval(&mut globals, main_fid) {
-                            Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
+                            Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                             Err(err) => {
                                 eprintln!("{}", err.get_error_message(&globals));
                                 err.show_all_loc();
@@ -428,6 +428,14 @@ mod test {
         run_test("@a=42; @a = @a * 2; @a");
         run_test("@a=42; b = @a * 2; b");
         run_test("@a=42; c = b = @a * 2; c");
+        run_test(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
+        run_test(r#"a=Object.new; a.instance_variable_get(:@i)"#);
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
+        );
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
+        );
     }
 
     #[test]

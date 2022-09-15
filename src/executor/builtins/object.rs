@@ -5,6 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
@@ -13,6 +14,32 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(
+        OBJECT_CLASS,
+        "instance_variable_defined?",
+        instance_variable_defined,
+        1,
+    );
+    globals.define_builtin_func(
+        OBJECT_CLASS,
+        "instance_variable_set",
+        instance_variable_set,
+        2,
+    );
+    globals.define_builtin_func(
+        OBJECT_CLASS,
+        "instance_variable_get",
+        instance_variable_get,
+        1,
+    );
+}
+
+/// ### Object.new
+/// - new -> Object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
+extern "C" fn new(_vm: &mut Interp, _globals: &mut Globals, _: Arg, _: usize) -> Option<Value> {
+    Some(Value::new_object())
 }
 
 /// ### Kernel#puts
@@ -135,6 +162,67 @@ extern "C" fn singleton_class(
     _len: usize,
 ) -> Option<Value> {
     Some(arg.self_value().get_singleton(globals))
+}
+
+/// ### Object#instance_variable_defined?
+/// - instance_variable_defined?(var) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
+extern "C" fn instance_variable_defined(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let id = match arg[0].unpack() {
+        RV::Symbol(sym) => sym,
+        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        _ => return None,
+    };
+    let b = arg.self_value().rvalue_mut().get_var(id).is_some();
+    Some(Value::bool(b))
+}
+
+/// ### Object#instance_variable_set
+/// - instance_variable_set(var, value) -> Object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
+extern "C" fn instance_variable_set(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let id = match arg[0].unpack() {
+        RV::Symbol(sym) => sym,
+        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        _ => return None,
+    };
+    arg.self_value().rvalue_mut().set_var(id, arg[1]);
+    Some(arg[1])
+}
+
+/// ### Object#instance_variable_get
+/// - instance_variable_get(var) -> Object | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
+extern "C" fn instance_variable_get(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let id = match arg[0].unpack() {
+        RV::Symbol(sym) => sym,
+        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        _ => return None,
+    };
+    let v = arg
+        .self_value()
+        .rvalue_mut()
+        .get_var(id)
+        .unwrap_or_default();
+    Some(v)
 }
 
 #[cfg(test)]

@@ -826,10 +826,12 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
-                prefix: _,
+                parent,
+                prefix,
             } => {
                 assert!(!toplevel);
+                assert!(parent.is_none());
+                assert!(prefix.is_empty());
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, None, name, loc);
             }
@@ -1105,13 +1107,14 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
-                prefix: _,
+                parent,
+                prefix,
             } => {
                 assert!(!toplevel);
+                assert!(parent.is_none());
+                assert!(prefix.is_empty());
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, local.into(), name, loc);
-                return Ok(());
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id_from_string(name);
@@ -1138,7 +1141,7 @@ impl IrContext {
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)
+                self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)?;
             }
             NodeKind::ClassDef {
                 base,
@@ -1153,13 +1156,11 @@ impl IrContext {
                 assert!(!is_module);
                 let ret = Some(local.into());
                 self.gen_class_def(ctx, info, id_store, name, body, ret, loc)?;
-                return Ok(());
             }
             _ => {
                 let ret = self.push_expr(ctx, info, id_store, rhs)?;
                 self.gen_mov(local.into(), ret.into());
                 info.pop();
-                return Ok(());
             }
         };
         Ok(())

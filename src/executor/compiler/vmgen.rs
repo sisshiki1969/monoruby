@@ -71,9 +71,7 @@ extern "C" fn vm_define_class(
     _interp: &mut Interp,
     globals: &mut Globals,
     name: IdentId,
-    //func_id: FuncId,
 ) -> Option<Value> {
-    //let codeptr = globals.func[func_id].data.codeptr;
     let self_val = match globals.get_constant(name) {
         Some(val) => {
             if val.is_class().is_none() {

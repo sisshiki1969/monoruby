@@ -156,6 +156,27 @@ impl Globals {
         }
     }
 
+    fn object_inspect(&self, val: Value) -> String {
+        if let Some(name) = val.rvalue().get_var(IdentId::_NAME) {
+            self.val_tos(name)
+        } else {
+            let mut ivars = String::new();
+            match val.rvalue().get_varmap() {
+                Some(vars) => {
+                    for (id, v) in vars.iter() {
+                        ivars += &format!(" {}={}", self.get_ident_name(*id), v.to_s(self));
+                    }
+                }
+                None => {}
+            };
+            format!(
+                "#<{}:0x{:016x}{ivars}>",
+                val.class_id().get_name(self),
+                val.rvalue().id()
+            )
+        }
+    }
+
     pub fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
@@ -180,7 +201,7 @@ impl Globals {
 
     pub fn val_tobytes(&self, val: Value) -> Vec<u8> {
         match val.unpack() {
-            RV::String(s) => return s.clone().into_vec(),
+            RV::String(s) => return s.to_vec(),
             _ => {}
         };
         self.val_tos(val).into_bytes()
@@ -202,7 +223,7 @@ impl Globals {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
                 ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object => self.object_tos(val),
+                ObjKind::Object => self.object_inspect(val),
                 _ => unreachable!(),
             },
         }
