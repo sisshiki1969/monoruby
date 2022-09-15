@@ -97,6 +97,7 @@ pub(super) enum BcIr {
     MethodArgs(BcReg, BcTemp, usize),   // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
+    ClassDef(Option<BcReg>, IdentId, FuncId),
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     LoopStart,
     LoopEnd,
@@ -302,7 +303,10 @@ impl std::fmt::Debug for Bc {
                 write!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
             }
             BcOp::MethodDef(name, _) => {
-                write!(f, "define {:?}", name)
+                write!(f, "method_def {:?}", name)
+            }
+            BcOp::ClassDef(ret, name, _) => {
+                write!(f, "{} = class_def {:?}", ret.ret_str(), name)
             }
             BcOp::ConcatStr(ret, args, len) => {
                 write!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
@@ -392,6 +396,8 @@ pub(super) enum BcOp {
     MethodArgs(SlotId, SlotId, u16),
     /// method definition(method_name, func_id)
     MethodDef(IdentId, FuncId),
+    /// class definition(method_name, func_id)
+    ClassDef(SlotId, IdentId, FuncId),
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     /// loop start marker
@@ -461,6 +467,11 @@ impl BcOp {
                 15 => Self::LoopEnd,
                 16 => Self::LoadIvar(SlotId::new(op1), IdentId::from(op2)),
                 17 => Self::StoreIvar(SlotId::new(op1), IdentId::from(op2)),
+                18 => Self::ClassDef(
+                    SlotId::new(op1),
+                    IdentId::from((bcop.op2.0) as u32),
+                    FuncId((bcop.op2.0 >> 32) as u32),
+                ),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

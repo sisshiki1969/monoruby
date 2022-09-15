@@ -67,6 +67,25 @@ extern "C" fn vm_define_method(
     globals.class.add_method(OBJECT_CLASS, name, func_id);
 }
 
+extern "C" fn vm_define_class(
+    _interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Option<Value> {
+    let self_val = match globals.get_constant(name) {
+        Some(val) => {
+            if val.is_class().is_none() {
+                globals.err_is_not_class(name);
+                return None;
+            } else {
+                val
+            }
+        }
+        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS)),
+    };
+    Some(self_val)
+}
+
 impl Codegen {
     pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
@@ -153,7 +172,7 @@ impl Codegen {
             negq rdi;
             lea  rcx, [rsp + rdi * 8 - 16];
         loop_:
-            movq [rcx + rdx * 8], (FALSE_VALUE);
+            movq [rcx + rdx * 8], (NIL_VALUE);
             subq rdx, 1;
             jne  loop_;
         loop_exit:
@@ -219,6 +238,7 @@ impl Codegen {
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
+        self.dispatch[18] = self.vm_class_def();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -1074,6 +1094,61 @@ impl Codegen {
             call rax;
             addl [rip + class_version], 1;
         };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_class_def(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let vm_return = self.vm_return;
+        monoasm! { self.jit,
+            movl rdx, [r13 - 8];  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_define_class);
+            call rax;  // rax <- self: Value
+            pushq r13;
+            pushq r15;
+            testq rax, rax; // rax: Option<Value>
+            jeq  vm_return;
+            movq r15, rax; // r15 <- self
+            movl rdx, [r13 - 4];  // rdx <- func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_get_func_data);
+            call rax; // rax <- &FuncData
+            //
+            //       +-------------+
+            // +0x08 |     pc      |
+            //       +-------------+
+            //  0x00 |   ret reg   | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) | <- rdx
+            //       +-------------+
+            //       |             |
+            //
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rsp - 0x18], rdi;
+            movq [rsp - 0x20], r15;
+            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
+            call rax;
+            popq r15;
+            popq r13;
+            testq rax, rax;
+            jeq vm_return;
+        };
+        let exit = self.jit.label();
+        self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
     }

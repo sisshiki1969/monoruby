@@ -85,6 +85,13 @@ impl RValue {
         }
     }
 
+    pub(crate) fn get_varmap(&self) -> Option<&HashMap<IdentId, Value>> {
+        match &self.var_table {
+            Some(box table) => Some(table),
+            None => None,
+        }
+    }
+
     pub(crate) fn set_var(&mut self, id: IdentId, val: Value) {
         match &mut self.var_table {
             Some(table) => {

@@ -240,7 +240,11 @@ impl BcPc {
             BcOp::MethodArgs(..) => return None,
             BcOp::MethodDef(name, func_id) => {
                 let name = globals.id_store.get_name(name);
-                format!("define {:?}: {:?}", name, func_id)
+                format!("method_def {:?}: {:?}", name, func_id)
+            }
+            BcOp::ClassDef(ret, name, func_id) => {
+                let name = globals.id_store.get_name(name);
+                format!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
             }
             BcOp::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
@@ -822,10 +826,12 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
-                prefix: _,
+                parent,
+                prefix,
             } => {
                 assert!(!toplevel);
+                assert!(parent.is_none());
+                assert!(prefix.is_empty());
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, None, name, loc);
             }
@@ -962,11 +968,33 @@ impl IrContext {
                 self.gen_expr(ctx, info, id_store, body, use_value, is_ret)?;
                 return Ok(());
             }
-            NodeKind::MethodDef(name, params, box node, _lv) => {
-                self.gen_method_def(ctx, info, id_store, name.clone(), params, node)?;
+            NodeKind::MethodDef(name, params, box body, _lv) => {
+                self.gen_method_def(ctx, info, id_store, name.clone(), params, body, loc)?;
                 if use_value {
                     self.gen_symbol(info, None, id_store.get_ident_id_from_string(name));
                 }
+                if is_ret {
+                    self.gen_ret(info, None);
+                }
+                return Ok(());
+            }
+            NodeKind::ClassDef {
+                base,
+                name,
+                superclass,
+                box body,
+                lvar: _,
+                is_module,
+            } => {
+                assert!(base.is_none());
+                assert!(superclass.is_none());
+                assert!(!is_module);
+                let ret = if use_value {
+                    Some(info.push().into())
+                } else {
+                    None
+                };
+                self.gen_class_def(ctx, info, id_store, name.clone(), body, ret, loc)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -1079,13 +1107,14 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
-                prefix: _,
+                parent,
+                prefix,
             } => {
                 assert!(!toplevel);
+                assert!(parent.is_none());
+                assert!(prefix.is_empty());
                 let name = id_store.get_ident_id_from_string(name);
                 self.gen_load_const(info, local.into(), name, loc);
-                return Ok(());
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id_from_string(name);
@@ -1112,13 +1141,26 @@ impl IrContext {
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)
+                self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)?;
+            }
+            NodeKind::ClassDef {
+                base,
+                name,
+                superclass,
+                box body,
+                lvar: _,
+                is_module,
+            } => {
+                assert!(base.is_none());
+                assert!(superclass.is_none());
+                assert!(!is_module);
+                let ret = Some(local.into());
+                self.gen_class_def(ctx, info, id_store, name, body, ret, loc)?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, id_store, rhs)?;
                 self.gen_mov(local.into(), ret.into());
                 info.pop();
-                return Ok(());
             }
         };
         Ok(())
@@ -1132,6 +1174,7 @@ impl IrContext {
         name: String,
         params: Vec<FormalParam>,
         node: Node,
+        loc: Loc,
     ) -> Result<()> {
         let mut args = vec![];
         for param in params {
@@ -1148,7 +1191,24 @@ impl IrContext {
         }
         let func_id = ctx.add_normal_func(Some(name.clone()), args, node, info.sourceinfo.clone());
         let name = id_store.get_ident_id_from_string(name);
-        self.push(BcIr::MethodDef(name, func_id), Loc::default());
+        self.push(BcIr::MethodDef(name, func_id), loc);
+        Ok(())
+    }
+
+    fn gen_class_def(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut NormalFuncInfo,
+        id_store: &mut IdentifierTable,
+        name: String,
+        node: Node,
+        ret: Option<BcReg>,
+        loc: Loc,
+    ) -> Result<()> {
+        let func_id =
+            ctx.add_normal_func(Some(name.clone()), vec![], node, info.sourceinfo.clone());
+        let name = id_store.get_ident_id_from_string(name);
+        self.push(BcIr::ClassDef(ret, name, func_id), loc);
         Ok(())
     }
 
@@ -1723,6 +1783,13 @@ impl IrContext {
                 BcIr::InlineCache => Bc::from(0),
                 BcIr::MethodDef(name, func_id) => {
                     Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
+                }
+                BcIr::ClassDef(ret, name, func_id) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_func_name_id(enc_wl(18, op1.0, 0), *name, *func_id)
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));

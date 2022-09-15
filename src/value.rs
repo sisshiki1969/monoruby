@@ -438,6 +438,16 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_class(&self) -> Option<ClassId> {
+        match self.unpack() {
+            RV::Object(rv) => match rv.kind {
+                ObjKind::Class(id) => Some(id),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_class(&self) -> ClassId {
         match self.unpack() {
             RV::Object(rv) => match rv.kind {

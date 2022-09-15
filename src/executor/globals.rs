@@ -95,6 +95,16 @@ impl Globals {
     }
 
     ///
+    /// Set TypeError with message "*name* is not a class".
+    ///
+    pub fn err_is_not_class(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "{} is not a class",
+            self.get_ident_name(name)
+        )));
+    }
+
+    ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///
     pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
@@ -146,6 +156,27 @@ impl Globals {
         }
     }
 
+    fn object_inspect(&self, val: Value) -> String {
+        if let Some(name) = val.rvalue().get_var(IdentId::_NAME) {
+            self.val_tos(name)
+        } else {
+            let mut ivars = String::new();
+            match val.rvalue().get_varmap() {
+                Some(vars) => {
+                    for (id, v) in vars.iter() {
+                        ivars += &format!(" {}={}", self.get_ident_name(*id), v.to_s(self));
+                    }
+                }
+                None => {}
+            };
+            format!(
+                "#<{}:0x{:016x}{ivars}>",
+                val.class_id().get_name(self),
+                val.rvalue().id()
+            )
+        }
+    }
+
     pub fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
@@ -170,7 +201,7 @@ impl Globals {
 
     pub fn val_tobytes(&self, val: Value) -> Vec<u8> {
         match val.unpack() {
-            RV::String(s) => return s.clone().into_vec(),
+            RV::String(s) => return s.to_vec(),
             _ => {}
         };
         self.val_tos(val).into_bytes()
@@ -192,7 +223,7 @@ impl Globals {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
                 ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object => self.object_tos(val),
+                ObjKind::Object => self.object_inspect(val),
                 _ => unreachable!(),
             },
         }
@@ -220,10 +251,18 @@ impl Globals {
 
     pub fn define_class(&mut self, name: &str, super_class: impl Into<Option<ClassId>>) -> Value {
         let name_id = self.get_ident_id(name);
+        self.define_class_by_ident_id(name_id, super_class)
+    }
+
+    pub fn define_class_by_ident_id(
+        &mut self,
+        name_id: IdentId,
+        super_class: impl Into<Option<ClassId>>,
+    ) -> Value {
         let id = self.class.add_class(super_class.into());
         let class_obj = Value::new_empty_class(id);
         self.class[id].set_class_obj(class_obj);
-        self.class[id].set_name(name.to_string());
+        self.class[id].set_name(name_id);
         self.set_constant(name_id, class_obj);
         class_obj
     }

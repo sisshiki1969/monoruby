@@ -117,7 +117,7 @@ fn main() {
                         rl.add_history_entry(code.as_str());
                         cont_mode = false;
                         match interp.eval(&mut globals, main_fid) {
-                            Ok(val) => eprintln!("=> {}", val.to_s(&globals)),
+                            Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                             Err(err) => {
                                 eprintln!("{}", err.get_error_message(&globals));
                                 err.show_all_loc();
@@ -179,15 +179,15 @@ pub fn run_test(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let interp_val = run_test_main(&wrapped);
-    let ruby_res = run_ruby(code);
+    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let ruby_res = run_ruby(code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
 
 pub fn run_test2(code: &str) {
-    let interp_val = run_test_main(code);
-    let ruby_res = run_ruby(code);
+    let (interp_val, mut globals) = run_test_main(code);
+    let ruby_res = run_ruby(code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
@@ -195,21 +195,21 @@ pub fn run_test2(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     dbg!(code);
-    run_test_main(code)
+    run_test_main(code).0
 }
 
-pub fn run_test_main(code: &str) -> Value {
+pub fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let (mut globals, fid) = new_globals(code);
-    let jit_val = Interp::eval_toplevel(&mut globals, fid);
-    let jit_val = jit_val.unwrap();
+    let jit_val = Interp::eval_toplevel(&mut globals, fid).unwrap();
+    let jit_str = jit_val.to_s(&globals);
     #[cfg(not(debug_assertions))]
-    eprintln!("jit: {:?} elapsed:{:?}", jit_val, now.elapsed());
+    eprintln!("jit: {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
-    eprintln!("jit: {:?}", jit_val);
+    eprintln!("jit: {jit_str}");
 
-    jit_val
+    (jit_val, globals)
 }
 
 pub fn run_test_error(code: &str) {
@@ -233,9 +233,8 @@ fn new_globals(code: &str) -> (Globals, FuncId) {
     (globals, fid)
 }
 
-fn run_ruby(code: &str) -> Value {
+fn run_ruby(code: &str, globals: &mut Globals) -> Value {
     use std::process::Command;
-    let (mut globals, _) = new_globals(code);
     let mut tmp_file = NamedTempFile::new().unwrap();
     tmp_file
         .write_all(
@@ -265,7 +264,7 @@ fn run_ruby(code: &str) -> Value {
                 .unwrap()
                 .node;
 
-            Value::from_ast(&nodes, &mut globals)
+            Value::from_ast(&nodes, globals)
         }
         Err(err) => {
             panic!("Error occured in executing Ruby. {:?}", err);
@@ -429,6 +428,41 @@ mod test {
         run_test("@a=42; @a = @a * 2; @a");
         run_test("@a=42; b = @a * 2; b");
         run_test("@a=42; c = b = @a * 2; c");
+        run_test(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
+        run_test(r#"a=Object.new; a.instance_variable_get(:@i)"#);
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
+        );
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
+        );
+    }
+
+    #[test]
+    fn test_class_def() {
+        run_test(
+            r#"
+        class C
+          self
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        class C
+          self
+        end
+        42
+        "#,
+        );
+        run_test(
+            r#"
+        a = class C
+          self
+        end
+        a
+        "#,
+        );
     }
 
     #[test]
