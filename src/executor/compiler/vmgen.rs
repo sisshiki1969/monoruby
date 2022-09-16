@@ -72,7 +72,7 @@ extern "C" fn vm_define_class(
     globals: &mut Globals,
     name: IdentId,
 ) -> Option<Value> {
-    let self_val = match globals.get_constant(name) {
+    let self_val = match globals.get_constant(OBJECT_CLASS, name) {
         Some(val) => {
             if val.is_class().is_none() {
                 globals.err_is_not_class(name);
@@ -848,6 +848,11 @@ impl Codegen {
         label
     }
 
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|ret|constId||     Value     |
+    // +---+---+---+---++---+---+---+---+
+    //
     fn vm_load_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let entry_return = self.vm_return;
@@ -869,6 +874,11 @@ impl Codegen {
         label
     }
 
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|src|identId||               |
+    // +---+---+---+---++---+---+---+---+
+    //
     fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;

@@ -344,7 +344,7 @@ pub extern "C" fn vm_get_constant(
         return *val;
     };
     let name = *name;
-    let res = globals.get_constant_checked(name);
+    let res = globals.get_constant_checked(OBJECT_CLASS, name);
     if res.is_some() {
         globals.func[site_id].cache = (const_version, res)
     }
@@ -362,7 +362,7 @@ pub extern "C" fn get_constant(
     site_id: ConstSiteId,
 ) -> Option<Value> {
     let ConstSiteInfo { name, .. } = globals.func[site_id].clone();
-    globals.get_constant_checked(name)
+    globals.get_constant_checked(OBJECT_CLASS, name)
 }
 
 pub extern "C" fn set_constant(
@@ -371,7 +371,7 @@ pub extern "C" fn set_constant(
     name: IdentId,
     val: Value,
 ) {
-    if globals.set_constant(name, val).is_some() && globals.warning >= 1 {
+    if globals.set_constant(OBJECT_CLASS, name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",
             globals.get_ident_name(name)

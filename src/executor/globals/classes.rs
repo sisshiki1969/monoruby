@@ -194,12 +194,16 @@ impl ClassStore {
         self[class_id].methods.get(&name).cloned()
     }
 
-    pub fn set_constants(&mut self, name: IdentId, val: Value) -> Option<Value> {
-        self.classes[0].constants.insert(name, val)
+    pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) -> Option<Value> {
+        self[class_id].constants.insert(name, val)
     }
 
-    pub fn get_constants(&self, name: IdentId) -> Option<Value> {
-        self.classes[0].constants.get(&name).cloned()
+    pub fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        self[class_id].constants.get(&name).cloned()
+    }
+
+    pub fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self[class_id].constants.keys().cloned().collect()
     }
 
     pub(super) fn get_real_class_obj(&self, val: Value) -> Value {

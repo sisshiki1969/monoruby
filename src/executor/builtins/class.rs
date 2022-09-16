@@ -7,6 +7,7 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
+    globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
 }
 
 /// ### Class#superclass
@@ -35,6 +36,25 @@ extern "C" fn tos(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
     let class_name = arg.self_value().as_class().get_name(globals);
     let res = Value::new_string(class_name.into_bytes());
     Some(res)
+}
+
+/// ### Module#constants
+/// - constants(inherit = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
+extern "C" fn constants(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let class_id = arg.self_value().as_class();
+    let v = globals
+        .get_constant_names(class_id)
+        .into_iter()
+        .map(|name| Value::new_symbol(name))
+        .collect();
+    Some(Value::new_array(v))
 }
 
 #[cfg(test)]

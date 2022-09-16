@@ -297,7 +297,7 @@ impl Value {
                 assert_eq!(None, *parent);
                 assert_eq!(0, prefix.len());
                 let constant = globals.get_ident_id(name);
-                globals.get_constant(constant).unwrap()
+                globals.get_constant(OBJECT_CLASS, constant).unwrap()
             }
             _ => unimplemented!(),
         }

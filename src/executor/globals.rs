@@ -263,7 +263,7 @@ impl Globals {
         let class_obj = Value::new_empty_class(id);
         self.class[id].set_class_obj(class_obj);
         self.class[id].set_name(name_id);
-        self.set_constant(name_id, class_obj);
+        self.set_constant(OBJECT_CLASS, name_id, class_obj);
         class_obj
     }
 
@@ -339,12 +339,16 @@ impl Globals {
         Some(func_id)
     }
 
-    pub fn get_constant(&self, name: IdentId) -> Option<Value> {
-        self.class.get_constants(name)
+    pub fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        self.class.get_constant(class_id, name)
     }
 
-    pub fn get_constant_checked(&mut self, name: IdentId) -> Option<Value> {
-        match self.get_constant(name) {
+    pub fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self.class.get_constant_names(class_id)
+    }
+
+    pub fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        match self.get_constant(class_id, name) {
             Some(v) => Some(v),
             None => {
                 self.err_uninitialized_constant(name);
@@ -353,8 +357,8 @@ impl Globals {
         }
     }
 
-    pub fn set_constant(&mut self, name: IdentId, val: Value) -> Option<Value> {
-        self.class.set_constants(name, val)
+    pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) -> Option<Value> {
+        self.class.set_constant(class_id, name, val)
     }
 
     pub fn define_builtin_func(
