@@ -378,7 +378,7 @@ struct CompileContext {
 }
 
 impl CompileContext {
-    fn new(func: &NormalFuncInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
+    fn new(func: &RubyFuncInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
         let bb_info = func.get_bb_info();
         let mut labels = HashMap::default();
         bb_info.into_iter().enumerate().for_each(|(idx, elem)| {
@@ -536,11 +536,11 @@ extern "C" fn log_deoptimize(
     pc: BcPc,
     v: Value,
 ) {
-    let name = match globals.func[func_id].as_normal().name() {
+    let name = match globals.func[func_id].as_ruby_func().name() {
         Some(name) => name.to_string(),
         None => "<unnamed>".to_string(),
     };
-    let bc_begin = globals.func[func_id].as_normal().get_bytecode_address(0);
+    let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
     if let BcOp::LoopEnd = pc.op1() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
@@ -979,13 +979,13 @@ impl Codegen {
         );
     }
 
-    pub(super) fn jit_compile_normal(
+    pub(super) fn jit_compile_ruby(
         &mut self,
         globals: &Globals,
         func_id: FuncId,
         position: Option<usize>,
     ) -> DestLabel {
-        let func = globals.func[func_id].as_normal();
+        let func = globals.func[func_id].as_ruby_func();
         let start_pos = position.unwrap_or_default();
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]

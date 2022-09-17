@@ -4,7 +4,7 @@ use super::*;
 impl Codegen {
     fn gen_merging_branches_loop(
         &mut self,
-        func: &NormalFuncInfo,
+        func: &RubyFuncInfo,
         cc: &mut CompileContext,
         bb_pos: usize,
     ) -> BBContext {
@@ -69,7 +69,7 @@ impl Codegen {
 
     fn gen_merging_branches(
         &mut self,
-        func: &NormalFuncInfo,
+        func: &RubyFuncInfo,
         cc: &mut CompileContext,
         bb_pos: usize,
     ) -> BBContext {
@@ -122,7 +122,7 @@ impl Codegen {
     pub(super) fn gen_backedge_branch(
         &mut self,
         cc: &mut CompileContext,
-        func: &NormalFuncInfo,
+        func: &RubyFuncInfo,
         bb_pos: usize,
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
@@ -149,7 +149,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn compile_bb(&mut self, func: &NormalFuncInfo, cc: &mut CompileContext) -> bool {
+    pub(super) fn compile_bb(&mut self, func: &RubyFuncInfo, cc: &mut CompileContext) -> bool {
         let mut skip = false;
         let is_loop = matches!(func.get_pc(cc.bb_pos).op1(), BcOp::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);

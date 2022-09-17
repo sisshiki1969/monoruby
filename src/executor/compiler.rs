@@ -807,14 +807,14 @@ impl Codegen {
         if globals.func[func_id].data.codeptr.is_none() {
             let (label, is_ruby_func) = match &globals.func[func_id].kind {
                 FuncKind::Normal(_) => {
-                    let jit_entry = self.jit_compile_normal(globals, func_id, None);
+                    let jit_entry = self.jit_compile_ruby(globals, func_id, None);
                     let codeptr = self.jit.get_current_address();
                     monoasm!(self.jit,
                         jmp jit_entry;
                     );
                     (codeptr, true)
                 }
-                FuncKind::Builtin { abs_address } => (self.wrap_builtin(*abs_address), false),
+                FuncKind::Builtin { abs_address } => (self.wrap_native_func(*abs_address), false),
             };
             self.jit.finalize();
             if is_ruby_func {
@@ -827,42 +827,44 @@ impl Codegen {
         }
     }
 
-    pub fn wrap_builtin(&mut self, abs_address: u64) -> CodePtr {
-        //
-        // generate a wrapper for a builtin function which has C ABI.
-        // stack layout at the point of just after a wrapper was called.
-        //
-        //       +-------------+
-        //  0x00 | return addr | <- rsp
-        //       +-------------+
-        // -0x08 |             |
-        //       +-------------+
-        // -0x10 |    meta     |
-        //       +-------------+
-        // -0x18 |  %0 (self)  |
-        //       +-------------+
-        // -0x20 | %1(1st arg) |
-        //       +-------------+
-        //
-        //  meta
-        // +-------------------+ -0x08
-        // |     2:Native      |
-        // +-------------------+ -0x0a
-        // |    register_len   |
-        // +-------------------+ -0x0c
-        // |                   |
-        // +      FuncId       + -0x0e
-        // |                   |
-        // +-------------------+ -0x10
-        //
-        // argument registers:
-        //   rdi: number of args
-        //
-        // global registers:
-        //   rbx: &mut Interp
-        //   r12: &mut Globals
-        //   r13: pc (dummy for builtin funcions)
-        //
+    ///
+    /// Generate a wrapper for a native function with C ABI.
+    ///
+    /// - stack layout at the point of just after a wrapper was called.
+    /// ~~~
+    ///       +-------------+
+    ///  0x00 | return addr | <- rsp
+    ///       +-------------+
+    /// -0x08 |             |
+    ///       +-------------+
+    /// -0x10 |    meta     |
+    ///       +-------------+
+    /// -0x18 |  %0 (self)  |
+    ///       +-------------+
+    /// -0x20 | %1(1st arg) |
+    ///       +-------------+
+    ///
+    ///  meta
+    /// +-------------------+ -0x08
+    /// |     2:Native      |
+    /// +-------------------+ -0x0a
+    /// |    register_len   |
+    /// +-------------------+ -0x0c
+    /// |                   |
+    /// +      FuncId       + -0x0e
+    /// |                   |
+    /// +-------------------+ -0x10
+    ///
+    /// argument registers:
+    ///   rdi: number of args
+    ///
+    /// global registers:
+    ///   rbx: &mut Interp
+    ///   r12: &mut Globals
+    ///   r13: pc (dummy for builtin funcions)
+    /// ~~~
+    ///
+    pub fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
@@ -893,7 +895,7 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Execute JIT compilation for a Ruby method.
+    /// Compile the Ruby method.
     ///
     extern "C" fn exec_jit_compile(
         interp: &mut Interp,
@@ -901,12 +903,12 @@ impl Codegen {
         func_id: FuncId,
     ) -> CodePtr {
         globals.func[func_id].data.meta.set_jit();
-        let label = interp.codegen.jit_compile_normal(globals, func_id, None);
+        let label = interp.codegen.jit_compile_ruby(globals, func_id, None);
         interp.codegen.jit.get_label_address(label)
     }
 
     ///
-    /// Execute JIT compilation for a loop.
+    /// Compile the loop.
     ///
     extern "C" fn exec_jit_partial_compile(
         interp: &mut Interp,
@@ -917,14 +919,12 @@ impl Codegen {
         let pc_index = pc - globals.func[func_id].data.pc;
         let label = interp
             .codegen
-            .jit_compile_normal(globals, func_id, Some(pc_index));
+            .jit_compile_ruby(globals, func_id, Some(pc_index));
         interp.codegen.jit.get_label_address(label)
     }
 
     ///
     /// Set jit compilation stab code for an entry point of each Ruby methods.
-    ///
-    /// This code will not be executed in "AOT" mode.
     ///
     pub fn set_jit_stab(&mut self, store: &mut FnStore) {
         let vm_entry = self.vm_entry;

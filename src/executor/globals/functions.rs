@@ -32,7 +32,7 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl Funcs {
     fn new(sourceinfo: SourceInfoRef) -> Self {
-        Self(vec![FuncInfo::new_normal(
+        Self(vec![FuncInfo::new_ruby(
             None,
             FuncId(0),
             vec![],
@@ -45,7 +45,7 @@ impl Funcs {
         FuncId(self.0.len() as u32)
     }
 
-    fn add_normal_func(
+    fn add_ruby_func(
         &mut self,
         name: Option<String>,
         args: Vec<String>,
@@ -54,13 +54,13 @@ impl Funcs {
     ) -> FuncId {
         let fid = self.next_func_id();
         self.0
-            .push(FuncInfo::new_normal(name, fid, args, ast, sourceinfo));
+            .push(FuncInfo::new_ruby(name, fid, args, ast, sourceinfo));
         fid
     }
 
-    fn add_builtin_func(&mut self, name: String, address: BuiltinFn, arity: i32) -> FuncId {
+    fn add_native_func(&mut self, name: String, address: BuiltinFn, arity: i32) -> FuncId {
         let id = self.next_func_id();
-        self.0.push(FuncInfo::new_builtin(id, name, address, arity));
+        self.0.push(FuncInfo::new_native(id, name, address, arity));
         id
     }
 }
@@ -87,11 +87,11 @@ impl ConstSiteId {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+/*#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MethodDefInfo {
     pub name: IdentId,
     pub func: FuncId,
-}
+}*/
 
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
@@ -157,7 +157,7 @@ impl FnStore {
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
-        self.functions.add_normal_func(name, args, ast, sourceinfo)
+        self.functions.add_ruby_func(name, args, ast, sourceinfo)
     }
 }
 
@@ -168,7 +168,7 @@ impl FnStore {
         id_store: &mut IdentifierTable,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let main_fid = self.functions.add_normal_func(
+        let main_fid = self.functions.add_ruby_func(
             Some("/main".to_string()),
             vec![],
             ast,
@@ -186,13 +186,13 @@ impl FnStore {
 
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId, id_store: &mut IdentifierTable) -> Result<()> {
-        let mut info = std::mem::take(self[func_id].as_normal_mut());
+        let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
         let mut ir = IrContext::compile_ast(&mut info, self, id_store)?;
         ir.ir_to_bytecode(&mut info, self);
 
         let regs = info.total_reg_num();
-        std::mem::swap(&mut info, self[func_id].as_normal_mut());
-        self[func_id].data.pc = self[func_id].as_normal().get_bytecode_address(0);
+        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
+        self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
         self[func_id].data.set_reg_num(regs as i64);
         Ok(())
     }
@@ -203,13 +203,13 @@ impl FnStore {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
-        self.functions.add_builtin_func(name, address, arity)
+        self.functions.add_native_func(name, address, arity)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FuncKind {
-    Normal(NormalFuncInfo),
+    Normal(RubyFuncInfo),
     Builtin { abs_address: u64 },
 }
 
@@ -339,14 +339,14 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    fn new_normal(
+    fn new_ruby(
         name: Option<String>,
         func_id: FuncId,
         args: Vec<String>,
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = NormalFuncInfo::new(func_id, name.clone(), args, ast, sourceinfo);
+        let info = RubyFuncInfo::new(func_id, name.clone(), args, ast, sourceinfo);
         Self {
             name,
             arity: info.args.len() as i32,
@@ -359,7 +359,7 @@ impl FuncInfo {
         }
     }
 
-    fn new_builtin(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
+    fn new_native(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
         let reg_num = if arity == -1 { -1 } else { arity as i64 };
         Self {
             name: Some(name),
@@ -383,14 +383,14 @@ impl FuncInfo {
         self.arity
     }
 
-    pub(crate) fn as_normal(&self) -> &NormalFuncInfo {
+    pub(crate) fn as_ruby_func(&self) -> &RubyFuncInfo {
         match &self.kind {
             FuncKind::Normal(info) => info,
             FuncKind::Builtin { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn as_normal_mut(&mut self) -> &mut NormalFuncInfo {
+    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut RubyFuncInfo {
         match &mut self.kind {
             FuncKind::Normal(info) => info,
             FuncKind::Builtin { .. } => unreachable!(),
@@ -399,7 +399,7 @@ impl FuncInfo {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct NormalFuncInfo {
+pub(crate) struct RubyFuncInfo {
     /// ID of this function.
     pub(crate) id: FuncId,
     name: Option<String>,
@@ -420,7 +420,7 @@ pub(crate) struct NormalFuncInfo {
     pub sourceinfo: SourceInfoRef,
 }
 
-impl NormalFuncInfo {
+impl RubyFuncInfo {
     pub(crate) fn new(
         id: FuncId,
         name: Option<String>,
@@ -428,7 +428,7 @@ impl NormalFuncInfo {
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let mut info = NormalFuncInfo {
+        let mut info = RubyFuncInfo {
             id,
             name,
             bytecode: None,
@@ -794,7 +794,7 @@ impl NormalFuncInfo {
     }
 }
 
-impl NormalFuncInfo {
+impl RubyFuncInfo {
     pub(crate) fn get_index(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,

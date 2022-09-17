@@ -24,7 +24,7 @@ impl std::ops::Add<InstId> for BcPcBase {
 }
 
 impl BcPcBase {
-    pub(super) fn new(func: &NormalFuncInfo) -> Self {
+    pub(super) fn new(func: &RubyFuncInfo) -> Self {
         BcPcBase(func.bytecode_top())
     }
 }
@@ -406,7 +406,7 @@ pub fn is_smi(node: &Node) -> Option<i16> {
 
 impl IrContext {
     pub fn compile_ast(
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         ctx: &mut FnStore,
         id_store: &mut IdentifierTable,
     ) -> Result<IrContext> {
@@ -419,7 +419,7 @@ impl IrContext {
 
     fn gen_load_const(
         &mut self,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         dst: Option<BcLocal>,
         name: IdentId,
         loc: Loc,
@@ -437,7 +437,7 @@ impl IrContext {
 
     fn gen_load_ivar(
         &mut self,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         dst: Option<BcLocal>,
         name: IdentId,
         loc: Loc,
@@ -453,7 +453,7 @@ impl IrContext {
         self.push(BcIr::StoreIvar(src, name), loc);
     }
 
-    fn gen_literal(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, v: Value) {
+    fn gen_literal(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
@@ -461,7 +461,7 @@ impl IrContext {
         self.push(BcIr::Literal(reg, v), Loc::default());
     }
 
-    fn gen_integer(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, i: i64) {
+    fn gen_integer(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local.into(),
@@ -473,11 +473,11 @@ impl IrContext {
         }
     }
 
-    fn gen_float(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, f: f64) {
+    fn gen_float(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, f: f64) {
         self.gen_literal(info, dst, Value::new_float(f));
     }
 
-    fn gen_symbol(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, sym: IdentId) {
+    fn gen_symbol(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, sym: IdentId) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
@@ -485,7 +485,7 @@ impl IrContext {
         self.push(BcIr::Symbol(reg, sym), Loc::default());
     }
 
-    fn gen_string(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, b: Vec<u8>) {
+    fn gen_string(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, b: Vec<u8>) {
         self.gen_literal(info, dst, Value::new_string(b));
     }
 
@@ -496,7 +496,7 @@ impl IrContext {
     fn gen_array(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         ret: Option<BcLocal>,
         nodes: Vec<Node>,
@@ -513,11 +513,11 @@ impl IrContext {
         Ok(())
     }
 
-    fn gen_bigint(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>, bigint: BigInt) {
+    fn gen_bigint(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, bigint: BigInt) {
         self.gen_literal(info, dst, Value::new_bigint(bigint));
     }
 
-    fn gen_nil(&mut self, info: &mut NormalFuncInfo, dst: Option<BcLocal>) {
+    fn gen_nil(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
@@ -525,7 +525,7 @@ impl IrContext {
         self.push(BcIr::Nil(reg), Loc::default());
     }
 
-    fn gen_neg(&mut self, info: &mut NormalFuncInfo, local: Option<BcLocal>, loc: Loc) {
+    fn gen_neg(&mut self, info: &mut RubyFuncInfo, local: Option<BcLocal>, loc: Loc) {
         match local {
             Some(local) => {
                 let local = local.into();
@@ -539,7 +539,7 @@ impl IrContext {
         };
     }
 
-    fn gen_ret(&mut self, info: &mut NormalFuncInfo, local: Option<BcLocal>) {
+    fn gen_ret(&mut self, info: &mut RubyFuncInfo, local: Option<BcLocal>) {
         let ret = match local {
             Some(local) => local.into(),
             None => info.pop().into(),
@@ -552,7 +552,7 @@ impl IrContext {
         self.push(BcIr::Mov(dst, src), Loc::default());
     }
 
-    fn gen_temp_mov(&mut self, info: &mut NormalFuncInfo, rhs: BcReg) {
+    fn gen_temp_mov(&mut self, info: &mut RubyFuncInfo, rhs: BcReg) {
         let lhs = info.push();
         self.gen_mov(lhs.into(), rhs);
     }
@@ -560,7 +560,7 @@ impl IrContext {
     fn gen_comp_stmts(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
@@ -594,7 +594,7 @@ impl IrContext {
     fn gen_temp_expr(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcReg> {
@@ -610,7 +610,7 @@ impl IrContext {
     fn gen_binary_temp_expr(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         lhs: Node,
         rhs: Node,
@@ -634,7 +634,7 @@ impl IrContext {
     fn gen_binop(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         op: BinOp,
         lhs: Node,
@@ -666,7 +666,7 @@ impl IrContext {
     fn push_expr(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcReg> {
@@ -679,7 +679,7 @@ impl IrContext {
     fn gen_expr(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         expr: Node,
         use_value: bool,
@@ -1030,7 +1030,7 @@ impl IrContext {
     fn gen_store_expr(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         local: BcLocal,
         rhs: Node,
@@ -1169,7 +1169,7 @@ impl IrContext {
     fn gen_method_def(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         name: String,
         params: Vec<FormalParam>,
@@ -1198,7 +1198,7 @@ impl IrContext {
     fn gen_class_def(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         name: String,
         node: Node,
@@ -1215,7 +1215,7 @@ impl IrContext {
     fn gen_args(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<BcTemp> {
@@ -1229,7 +1229,7 @@ impl IrContext {
     fn check_fast_call(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
@@ -1243,7 +1243,7 @@ impl IrContext {
     fn check_fast_call_inner(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
@@ -1270,7 +1270,7 @@ impl IrContext {
     fn gen_method_call(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         method: String,
         receiver: Node,
@@ -1299,7 +1299,7 @@ impl IrContext {
     fn gen_func_call(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         method: String,
         arglist: ArgList,
@@ -1319,7 +1319,7 @@ impl IrContext {
     fn gen_binary(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1336,7 +1336,7 @@ impl IrContext {
     fn gen_singular(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
@@ -1352,7 +1352,7 @@ impl IrContext {
     fn gen_cmp(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         kind: CmpKind,
@@ -1375,7 +1375,7 @@ impl IrContext {
     fn gen_mul_assign(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         mlhs: Vec<Node>,
         mrhs: Vec<Node>,
@@ -1426,7 +1426,7 @@ impl IrContext {
     fn gen_for(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         param: Vec<String>,
         iter: Node,
@@ -1490,7 +1490,7 @@ impl IrContext {
     fn gen_while(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut NormalFuncInfo,
+        info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         cond: Node,
         body: Node,
@@ -1541,7 +1541,7 @@ macro_rules! gen_ops {
             fn [<gen_ $op>](
                 &mut self,
                 ctx: &mut FnStore,
-                info: &mut NormalFuncInfo,
+                info: &mut RubyFuncInfo,
                 id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
@@ -1566,7 +1566,7 @@ macro_rules! gen_ri_ops {
             fn [<gen_ $op>](
                 &mut self,
                 ctx: &mut FnStore,
-                info: &mut NormalFuncInfo,
+                info: &mut RubyFuncInfo,
                 id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
@@ -1635,7 +1635,7 @@ fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
 }
 
 impl IrContext {
-    pub(crate) fn ir_to_bytecode(&mut self, info: &mut NormalFuncInfo, store: &mut FnStore) {
+    pub(crate) fn ir_to_bytecode(&mut self, info: &mut RubyFuncInfo, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
