@@ -831,7 +831,7 @@ impl Codegen {
     /// Generate a wrapper for a native function with C ABI.
     ///
     /// - stack layout at the point of just after a wrapper was called.
-    /// ~~~
+    /// ~~~text
     ///       +-------------+
     ///  0x00 | return addr | <- rsp
     ///       +-------------+

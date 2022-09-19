@@ -474,15 +474,18 @@ mod test {
     fn test_stacktrace() {
         run_test_no_result_check(
             r##"
-        def f(x)
+        class A 
+          __dump
+          def f(x)
             if x < 2
-                __dump
-                1
+              __dump
+              1
             else
-                x*f(x-1)
+              x*f(x-1)
             end
+          end
         end
-        f(5)
+        f(7)
         "##,
         );
     }

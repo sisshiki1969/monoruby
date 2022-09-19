@@ -161,7 +161,7 @@ impl Codegen {
         entry:
             pushq rbp;
             movq rbp, rsp;
-            movw [rbp - 0x02], 0;       // kind
+            //movb [rbp - 0x02], 0;       // kind
             movzxw rax, [rbp - 0x04];   // reg_num
             movq rdx, rax;  // rdx = reg_num
 

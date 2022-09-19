@@ -1189,7 +1189,13 @@ impl IrContext {
                 }
             }
         }
-        let func_id = ctx.add_normal_func(Some(name.clone()), args, node, info.sourceinfo.clone());
+        let func_id = ctx.add_ruby_func(
+            Some(name.clone()),
+            args,
+            node,
+            info.sourceinfo.clone(),
+            false,
+        );
         let name = id_store.get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
@@ -1205,8 +1211,13 @@ impl IrContext {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id =
-            ctx.add_normal_func(Some(name.clone()), vec![], node, info.sourceinfo.clone());
+        let func_id = ctx.add_ruby_func(
+            Some(name.clone()),
+            vec![],
+            node,
+            info.sourceinfo.clone(),
+            true,
+        );
         let name = id_store.get_ident_id_from_string(name);
         self.push(BcIr::ClassDef(ret, name, func_id), loc);
         Ok(())

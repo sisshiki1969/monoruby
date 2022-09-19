@@ -386,30 +386,34 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
         let prev_bp = unsafe { *bp as *const u64 };
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
-        let meta = Meta::new(unsafe { *bp.sub(1) });
-        let func_id = meta.func_id();
-        eprintln!(
-            "    name:[{}] {:?}",
-            globals.func[func_id]
-                .name()
-                .unwrap_or(&"<unnamed>".to_string()),
-            meta,
-        );
-        eprint!("    ");
-        for r in 0..meta.reg_num() as usize {
-            let v = unsafe { Value::from(*bp.sub(2 + r)) };
-            eprint!(
-                "%{}{}:[{}] ",
-                r,
-                if r == 0 { "(self)" } else { "" },
-                globals.val_inspect(v)
-            );
-        }
-        eprintln!();
+        _dump_frame_info(interp, globals, bp);
         if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
             break;
         }
         bp = prev_bp;
     }
     eprintln!("-----end stacktrace");
+}
+
+pub extern "C" fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, bp: *const u64) {
+    let meta = Meta::new(unsafe { *bp.sub(1) });
+    let func_id = meta.func_id();
+    eprintln!(
+        "name:[{}] {:?}",
+        globals.func[func_id]
+            .name()
+            .unwrap_or(&"<unnamed>".to_string()),
+        meta,
+    );
+    eprint!("    ");
+    for r in 0..meta.reg_num() as usize {
+        let v = unsafe { Value::from(*bp.sub(2 + r)) };
+        eprint!(
+            "%{}{}:[{}] ",
+            r,
+            if r == 0 { "(self)" } else { "" },
+            globals.val_inspect(v)
+        );
+    }
+    eprintln!();
 }
