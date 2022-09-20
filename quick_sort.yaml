@@ -17,20 +17,18 @@ prelude: |
     i = first
     while i < last
       if arr[i] <= pivot
-        temp = arr[i]
-        arr[i] = arr[p_index]
-        arr[p_index] = temp
+        arr[i], arr[p_index] = arr[p_index], arr[i]
         p_index += 1
       end
       i += 1
     end
-    temp = arr[p_index]
-    arr[p_index] = pivot
-    arr[last] = temp
+    arr[p_index], arr[last] = pivot, arr[p_index]
     return p_index
   end
 
 benchmark:
-  qsort: |
+  qsort_i: |
     quicksort([3,6,4,9,-1,58,-12,-19,1024,-1022,-510,768,200], 0, 12)
-loop_count: 5000000
+  qsort_f: |
+    quicksort([3.5,6.1,4.0,9.3,-1.8,58.1,-12.6,-19.3,1024.2,-1022.9,-510.5,768.7,200.0], 0, 12)
+loop_count: 50000
