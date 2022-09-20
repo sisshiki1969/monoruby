@@ -325,6 +325,9 @@ mod test {
     #[test]
     fn test_multi_assign() {
         run_test("a, B = 7, 9.5; a + B");
+        run_test("@a, @b = 1, 2; [@a, @b]");
+        run_test("@a, @b = 1, 2; @a, @b = @b, @a; [@a, @b]");
+        run_test("@a = []; @a[0], @a[1] = 1, 2; @a[0], @a[1] = @a[1], @a[0]; @a");
     }
 
     #[test]
@@ -405,6 +408,8 @@ mod test {
         run_test("a=36; a|=77; a");
         run_test("a=36; a&=77; a");
         run_test("a=36; a^=77; a");
+        run_test("@a=36; @a+=7; @a");
+        run_test("@a=[1,2,3]; @a[0]+=@a[1]; @a");
     }
 
     #[test]

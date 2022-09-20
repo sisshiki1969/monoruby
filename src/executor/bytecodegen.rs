@@ -759,6 +759,31 @@ impl IrContext {
                         let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
                         self.gen_store_const(src, name, lhs_loc);
                     }
+                    NodeKind::InstanceVar(name) => {
+                        let name = id_store.get_ident_id(name);
+                        let lhs_loc = lhs.loc;
+                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                        self.gen_store_ivar(src, name, lhs_loc);
+                    }
+                    NodeKind::Index { box base, index } => {
+                        assert_eq!(1, index.len());
+                        let lhs_loc = lhs.loc;
+                        let src = self.gen_binop(
+                            ctx,
+                            info,
+                            id_store,
+                            op,
+                            lhs.clone(),
+                            rhs.clone(),
+                            None,
+                            loc,
+                        )?;
+                        //let src = self.push_expr(ctx, info, id_store, rhs)?;
+                        let base = self.push_expr(ctx, info, id_store, base.clone())?;
+                        let idx = self.push_expr(ctx, info, id_store, index[0].clone())?;
+                        info.temp -= 2;
+                        self.push(BcIr::IndexAssign(src, base, idx), lhs_loc);
+                    }
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
                 };
             }
@@ -1417,6 +1442,21 @@ impl IrContext {
                 } if !toplevel && parent.is_none() && prefix.len() == 0 => {
                     let name = id_store.get_ident_id_from_string(name);
                     self.gen_store_const(temp_reg.into(), name, lhs.loc);
+                }
+                NodeKind::InstanceVar(name) => {
+                    let name = id_store.get_ident_id_from_string(name);
+                    self.gen_store_ivar(temp_reg.into(), name, loc);
+                }
+                NodeKind::Index {
+                    box base,
+                    mut index,
+                } => {
+                    assert_eq!(1, index.len());
+                    //let src = self.push_expr(ctx, info, id_store, rhs)?;
+                    let base = self.push_expr(ctx, info, id_store, base)?;
+                    let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
+                    info.temp -= 2;
+                    self.push(BcIr::IndexAssign(temp_reg.into(), base, idx), loc);
                 }
                 _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
             }
