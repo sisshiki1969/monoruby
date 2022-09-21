@@ -513,6 +513,77 @@ impl IrContext {
         Ok(())
     }
 
+    fn gen_index(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
+        ret: Option<BcLocal>,
+        base: Node,
+        index: Node,
+        loc: Loc,
+    ) -> Result<()> {
+        let (base, idx) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
+        let ret = match ret {
+            None => info.push().into(),
+            Some(local) => local.into(),
+        };
+        self.push(BcIr::Index(ret, base, idx), loc);
+        Ok(())
+    }
+
+    fn gen_index_assign(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
+        src: BcReg,
+        base: Node,
+        index: Node,
+        loc: Loc,
+    ) -> Result<()> {
+        let (base, idx) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
+        self.push(BcIr::IndexAssign(src, base, idx), loc);
+        Ok(())
+    }
+
+    fn gen_assign_lhs(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
+        src: BcReg,
+        lhs: Node,
+        loc: Loc,
+    ) -> Result<()> {
+        match lhs.kind {
+            NodeKind::Const {
+                toplevel,
+                name,
+                parent: _,
+                prefix: _,
+            } if !toplevel => {
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_store_const(src.into(), name, loc);
+            }
+            NodeKind::InstanceVar(name) => {
+                let name = id_store.get_ident_id_from_string(name);
+                self.gen_store_ivar(src.into(), name, loc);
+            }
+            NodeKind::Index {
+                box base,
+                mut index,
+            } => {
+                assert_eq!(1, index.len());
+                let index = index.remove(0);
+                self.gen_index_assign(ctx, info, id_store, src, base, index, loc)?;
+            }
+            NodeKind::LocalVar(_) => unreachable!(),
+            _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
+        }
+        Ok(())
+    }
+
     fn gen_bigint(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, bigint: BigInt) {
         self.gen_literal(info, dst, Value::new_bigint(bigint));
     }
@@ -719,10 +790,7 @@ impl IrContext {
                 mut index,
             } => {
                 assert_eq!(1, index.len());
-                let (base, idx) =
-                    self.gen_binary_temp_expr(ctx, info, id_store, base, index.remove(0))?;
-                let ret = info.push().into();
-                self.push(BcIr::Index(ret, base, idx), loc);
+                self.gen_index(ctx, info, id_store, None, base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
@@ -767,22 +835,11 @@ impl IrContext {
                     }
                     NodeKind::Index { box base, index } => {
                         assert_eq!(1, index.len());
+                        let base = base.clone();
+                        let index = index[0].clone();
                         let lhs_loc = lhs.loc;
-                        let src = self.gen_binop(
-                            ctx,
-                            info,
-                            id_store,
-                            op,
-                            lhs.clone(),
-                            rhs.clone(),
-                            None,
-                            loc,
-                        )?;
-                        //let src = self.push_expr(ctx, info, id_store, rhs)?;
-                        let base = self.push_expr(ctx, info, id_store, base.clone())?;
-                        let idx = self.push_expr(ctx, info, id_store, index[0].clone())?;
-                        info.temp -= 2;
-                        self.push(BcIr::IndexAssign(src, base, idx), lhs_loc);
+                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                        self.gen_index_assign(ctx, info, id_store, src, base, index, lhs_loc)?;
                     }
                     _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
                 };
@@ -793,47 +850,18 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    match lhs.kind {
-                        NodeKind::LocalVar(lhs) => {
-                            let local = info.find_local(&lhs);
-                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
-                            if is_ret {
-                                self.gen_ret(info, Some(local));
-                            } else if use_value {
-                                self.gen_temp_mov(info, local.into());
-                            }
-                            return Ok(());
+                    if let NodeKind::LocalVar(lhs) = lhs.kind {
+                        let local = info.find_local(&lhs);
+                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        if is_ret {
+                            self.gen_ret(info, Some(local));
+                        } else if use_value {
+                            self.gen_temp_mov(info, local.into());
                         }
-                        NodeKind::Const {
-                            toplevel,
-                            name,
-                            parent: _,
-                            prefix: _,
-                        } => {
-                            assert!(!toplevel);
-                            let name = id_store.get_ident_id_from_string(name);
-                            let src = self.push_expr(ctx, info, id_store, rhs)?;
-                            self.gen_store_const(src.into(), name, loc);
-                        }
-                        NodeKind::InstanceVar(name) => {
-                            let name = id_store.get_ident_id_from_string(name);
-                            let src = self.push_expr(ctx, info, id_store, rhs)?;
-                            self.gen_store_ivar(src.into(), name, loc);
-                        }
-                        NodeKind::Index {
-                            box base,
-                            mut index,
-                        } => {
-                            assert_eq!(1, index.len());
-                            let src = self.push_expr(ctx, info, id_store, rhs)?;
-                            let base = self.push_expr(ctx, info, id_store, base)?;
-                            let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
-                            info.temp -= 2;
-                            self.push(BcIr::IndexAssign(src, base, idx), loc);
-                        }
-                        _ => {
-                            return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone()))
-                        }
+                        return Ok(());
+                    } else {
+                        let src = self.push_expr(ctx, info, id_store, rhs)?;
+                        self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
                     }
                 } else {
                     return self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, use_value, is_ret);
@@ -1076,6 +1104,13 @@ impl IrContext {
             NodeKind::Array(nodes, _) => {
                 self.gen_array(ctx, info, id_store, Some(local), nodes, loc)?
             }
+            NodeKind::Index {
+                box base,
+                mut index,
+            } => {
+                assert_eq!(1, index.len());
+                self.gen_index(ctx, info, id_store, Some(local), base, index.remove(0), loc)?;
+            }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
@@ -1093,31 +1128,14 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    match lhs.kind {
-                        NodeKind::LocalVar(lhs) => {
-                            let src = info.find_local(&lhs);
-                            self.gen_store_expr(ctx, info, id_store, src, rhs)?;
-                            self.gen_mov(local.into(), src.into());
-                        }
-                        NodeKind::Const {
-                            toplevel,
-                            name,
-                            parent: _,
-                            prefix: _,
-                        } => {
-                            assert!(!toplevel);
-                            let name = id_store.get_ident_id_from_string(name);
-                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
-                            self.gen_store_const(local.into(), name, loc);
-                        }
-                        NodeKind::InstanceVar(name) => {
-                            let name = id_store.get_ident_id_from_string(name);
-                            self.gen_store_expr(ctx, info, id_store, local, rhs)?;
-                            self.gen_store_ivar(local.into(), name, loc);
-                        }
-                        _ => {
-                            return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone()))
-                        }
+                    if let NodeKind::LocalVar(lhs) = lhs.kind {
+                        let src = info.find_local(&lhs);
+                        self.gen_store_expr(ctx, info, id_store, src, rhs)?;
+                        self.gen_mov(local.into(), src.into());
+                    } else {
+                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        let src = local.into();
+                        self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
                     }
                 } else {
                     self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, true, false)?;
@@ -1429,36 +1447,12 @@ impl IrContext {
         }
         // Assign values to left-hand side expressions.
         for lhs in mlhs {
-            match lhs.kind {
-                NodeKind::LocalVar(lhs) => {
-                    let local = info.find_local(&lhs);
-                    self.gen_mov(local.into(), temp_reg.into());
-                }
-                NodeKind::Const {
-                    toplevel,
-                    parent,
-                    prefix,
-                    name,
-                } if !toplevel && parent.is_none() && prefix.len() == 0 => {
-                    let name = id_store.get_ident_id_from_string(name);
-                    self.gen_store_const(temp_reg.into(), name, lhs.loc);
-                }
-                NodeKind::InstanceVar(name) => {
-                    let name = id_store.get_ident_id_from_string(name);
-                    self.gen_store_ivar(temp_reg.into(), name, loc);
-                }
-                NodeKind::Index {
-                    box base,
-                    mut index,
-                } => {
-                    assert_eq!(1, index.len());
-                    //let src = self.push_expr(ctx, info, id_store, rhs)?;
-                    let base = self.push_expr(ctx, info, id_store, base)?;
-                    let idx = self.push_expr(ctx, info, id_store, index.remove(0))?;
-                    info.temp -= 2;
-                    self.push(BcIr::IndexAssign(temp_reg.into(), base, idx), loc);
-                }
-                _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
+            if let NodeKind::LocalVar(lhs) = lhs.kind {
+                let local = info.find_local(&lhs);
+                self.gen_mov(local.into(), temp_reg.into());
+            } else {
+                let src = temp_reg.into();
+                self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
             }
             temp_reg += 1;
         }
