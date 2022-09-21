@@ -404,11 +404,12 @@ pub fn is_smi(node: &Node) -> Option<i16> {
     None
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum LhsKind {
     Const(IdentId),
     InstanceVar(IdentId),
     Index { base: BcReg, index: BcReg },
+    Other,
 }
 
 impl IrContext {
@@ -539,42 +540,6 @@ impl IrContext {
         Ok(())
     }
 
-    fn eval_lhs(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
-        lhs: Node,
-    ) -> Result<LhsKind> {
-        let lhs = match lhs.kind {
-            NodeKind::Const {
-                toplevel,
-                name,
-                parent: _,
-                prefix: _,
-            } if !toplevel => {
-                let name = id_store.get_ident_id_from_string(name);
-                LhsKind::Const(name)
-            }
-            NodeKind::InstanceVar(name) => {
-                let name = id_store.get_ident_id_from_string(name);
-                LhsKind::InstanceVar(name)
-            }
-            NodeKind::Index {
-                box base,
-                mut index,
-            } => {
-                assert_eq!(1, index.len());
-                let index = index.remove(0);
-                let (base, index) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
-                LhsKind::Index { base, index }
-            }
-            NodeKind::LocalVar(_) => unreachable!(),
-            _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
-        };
-        Ok(lhs)
-    }
-
     fn eval_lhs2(
         &mut self,
         ctx: &mut FnStore,
@@ -606,7 +571,7 @@ impl IrContext {
                 let index = self.gen_expr_reg(ctx, info, id_store, index)?;
                 LhsKind::Index { base, index }
             }
-            NodeKind::LocalVar(_) => unreachable!(),
+            NodeKind::LocalVar(_) => LhsKind::Other,
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
         };
         Ok(lhs)
@@ -623,6 +588,7 @@ impl IrContext {
             LhsKind::Index { base, index } => {
                 self.push(BcIr::IndexAssign(src, base, index), loc);
             }
+            LhsKind::Other => unreachable!(),
         }
     }
 
@@ -1485,28 +1451,35 @@ impl IrContext {
         let mrhs_len = mrhs.len();
         let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
         assert!(mlhs_len == mrhs_len);
-        let mut temp_reg = info.next_reg();
+
+        let temp = info.temp;
+        let mut lhs_kind: Vec<LhsKind> = vec![];
+        for lhs in &mlhs {
+            lhs_kind.push(self.eval_lhs2(ctx, info, id_store, lhs.clone())?);
+        }
+
+        let rhs_reg = info.next_reg();
+        let mut temp_reg = rhs_reg;
         // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
             self.push_expr(ctx, info, id_store, rhs)?;
         }
         // Assign values to left-hand side expressions.
-        for lhs in mlhs {
-            if let NodeKind::LocalVar(lhs) = lhs.kind {
-                let local = info.find_local(&lhs);
+        for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
+            if let Some(local) = info.is_local(&lhs) {
+                assert_eq!(LhsKind::Other, kind);
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                let lhs = self.eval_lhs(ctx, info, id_store, lhs)?;
-                self.gen_lhs(src, lhs, loc);
+                self.gen_lhs(src, kind, loc);
             }
             temp_reg += 1;
         }
-        info.popn(mrhs_len);
+        info.temp = temp;
 
         if is_ret || use_value {
             let ret = info.push().into();
-            self.emit_array(ret, ret, mrhs_len, loc);
+            self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
         }
         if is_ret {
             self.gen_ret(info, None);

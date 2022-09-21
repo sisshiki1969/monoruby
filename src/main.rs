@@ -328,6 +328,25 @@ mod test {
         run_test("@a, @b = 1, 2; [@a, @b]");
         run_test("@a, @b = 1, 2; @a, @b = @b, @a; [@a, @b]");
         run_test("@a = []; @a[0], @a[1] = 1, 2; @a[0], @a[1] = @a[1], @a[0]; @a");
+        run_test(
+            r##"
+        @a = []
+
+        def foo
+          @a << :foo
+          []
+        end
+
+        def bar
+          @a << :bar
+          end
+
+        foo[0] = bar
+        a = foo[0] = bar
+        b = (x, foo[0] = bar, 0)
+        [@a, b]
+        "##,
+        );
     }
 
     #[test]
