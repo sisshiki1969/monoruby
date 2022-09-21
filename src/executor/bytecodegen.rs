@@ -404,6 +404,13 @@ pub fn is_smi(node: &Node) -> Option<i16> {
     None
 }
 
+#[derive(Debug, Clone)]
+enum LhsKind {
+    Const(IdentId),
+    InstanceVar(IdentId),
+    Index { base: BcReg, index: BcReg },
+}
+
 impl IrContext {
     pub fn compile_ast(
         info: &mut RubyFuncInfo,
@@ -532,31 +539,14 @@ impl IrContext {
         Ok(())
     }
 
-    fn gen_index_assign(
+    fn eval_lhs(
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
-        src: BcReg,
-        base: Node,
-        index: Node,
-        loc: Loc,
-    ) -> Result<()> {
-        let (base, idx) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
-        self.push(BcIr::IndexAssign(src, base, idx), loc);
-        Ok(())
-    }
-
-    fn gen_assign_lhs(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
-        src: BcReg,
         lhs: Node,
-        loc: Loc,
-    ) -> Result<()> {
-        match lhs.kind {
+    ) -> Result<LhsKind> {
+        let lhs = match lhs.kind {
             NodeKind::Const {
                 toplevel,
                 name,
@@ -564,11 +554,11 @@ impl IrContext {
                 prefix: _,
             } if !toplevel => {
                 let name = id_store.get_ident_id_from_string(name);
-                self.gen_store_const(src.into(), name, loc);
+                LhsKind::Const(name)
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id_from_string(name);
-                self.gen_store_ivar(src.into(), name, loc);
+                LhsKind::InstanceVar(name)
             }
             NodeKind::Index {
                 box base,
@@ -576,12 +566,64 @@ impl IrContext {
             } => {
                 assert_eq!(1, index.len());
                 let index = index.remove(0);
-                self.gen_index_assign(ctx, info, id_store, src, base, index, loc)?;
+                let (base, index) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
+                LhsKind::Index { base, index }
             }
             NodeKind::LocalVar(_) => unreachable!(),
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
+        };
+        Ok(lhs)
+    }
+
+    fn eval_lhs2(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
+        lhs: Node,
+    ) -> Result<LhsKind> {
+        let lhs = match lhs.kind {
+            NodeKind::Const {
+                toplevel,
+                name,
+                parent: _,
+                prefix: _,
+            } if !toplevel => {
+                let name = id_store.get_ident_id_from_string(name);
+                LhsKind::Const(name)
+            }
+            NodeKind::InstanceVar(name) => {
+                let name = id_store.get_ident_id_from_string(name);
+                LhsKind::InstanceVar(name)
+            }
+            NodeKind::Index {
+                box base,
+                mut index,
+            } => {
+                assert_eq!(1, index.len());
+                let index = index.remove(0);
+                let base = self.gen_expr_reg(ctx, info, id_store, base)?;
+                let index = self.gen_expr_reg(ctx, info, id_store, index)?;
+                LhsKind::Index { base, index }
+            }
+            NodeKind::LocalVar(_) => unreachable!(),
+            _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
+        };
+        Ok(lhs)
+    }
+
+    fn gen_lhs(&mut self, src: BcReg, lhs: LhsKind, loc: Loc) {
+        match lhs {
+            LhsKind::Const(name) => {
+                self.gen_store_const(src.into(), name, loc);
+            }
+            LhsKind::InstanceVar(name) => {
+                self.gen_store_ivar(src.into(), name, loc);
+            }
+            LhsKind::Index { base, index } => {
+                self.push(BcIr::IndexAssign(src, base, index), loc);
+            }
         }
-        Ok(())
     }
 
     fn gen_bigint(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, bigint: BigInt) {
@@ -620,7 +662,9 @@ impl IrContext {
     }
 
     fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
-        self.push(BcIr::Mov(dst, src), Loc::default());
+        if dst != src {
+            self.push(BcIr::Mov(dst, src), Loc::default());
+        }
     }
 
     fn gen_temp_mov(&mut self, info: &mut RubyFuncInfo, rhs: BcReg) {
@@ -659,6 +703,20 @@ impl IrContext {
             }
         }
         Ok(())
+    }
+
+    /// Generate bytecode Ir that evaluate *expr* and assign it to a temporary register.
+    fn gen_expr_reg(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
+        expr: Node,
+    ) -> Result<BcReg> {
+        Ok(match info.is_local(&expr) {
+            Some(lhs) => lhs.into(),
+            None => self.push_expr(ctx, info, id_store, expr)?,
+        })
     }
 
     /// Generate bytecode Ir that evaluate *expr* and assign it to a temporary register.
@@ -804,45 +862,25 @@ impl IrContext {
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                match &lhs.kind {
-                    NodeKind::LocalVar(lhs_) => {
-                        let local = info.find_local(lhs_);
-                        self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
-                        if is_ret {
-                            self.gen_ret(info, Some(local));
-                        } else if use_value {
-                            self.gen_temp_mov(info, local.into());
-                        }
-                        return Ok(());
+                if let Some(local) = info.is_local(&lhs) {
+                    self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
+                    if is_ret {
+                        self.gen_ret(info, Some(local));
+                    } else if use_value {
+                        self.gen_temp_mov(info, local.into());
                     }
-                    NodeKind::Const {
-                        toplevel,
-                        name,
-                        parent: _,
-                        prefix: _,
-                    } => {
-                        assert!(!toplevel);
-                        let name = id_store.get_ident_id(name);
-                        let lhs_loc = lhs.loc;
-                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
-                        self.gen_store_const(src, name, lhs_loc);
-                    }
-                    NodeKind::InstanceVar(name) => {
-                        let name = id_store.get_ident_id(name);
-                        let lhs_loc = lhs.loc;
-                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
-                        self.gen_store_ivar(src, name, lhs_loc);
-                    }
-                    NodeKind::Index { box base, index } => {
-                        assert_eq!(1, index.len());
-                        let base = base.clone();
-                        let index = index[0].clone();
-                        let lhs_loc = lhs.loc;
-                        let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
-                        self.gen_index_assign(ctx, info, id_store, src, base, index, lhs_loc)?;
-                    }
-                    _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
-                };
+                    return Ok(());
+                }
+                let lhs_loc = lhs.loc;
+                let temp = info.temp;
+                let lhs_kind = self.eval_lhs2(ctx, info, id_store, lhs.clone())?;
+                let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                self.gen_lhs(src, lhs_kind, lhs_loc);
+                info.temp = temp;
+                let res = info.push().into();
+                if use_value {
+                    self.gen_mov(res, src);
+                }
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
@@ -850,8 +888,7 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let NodeKind::LocalVar(lhs) = lhs.kind {
-                        let local = info.find_local(&lhs);
+                    if let Some(local) = info.is_local(&lhs) {
                         self.gen_store_expr(ctx, info, id_store, local, rhs)?;
                         if is_ret {
                             self.gen_ret(info, Some(local));
@@ -859,9 +896,15 @@ impl IrContext {
                             self.gen_temp_mov(info, local.into());
                         }
                         return Ok(());
-                    } else {
-                        let src = self.push_expr(ctx, info, id_store, rhs)?;
-                        self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
+                    }
+                    let temp = info.temp;
+                    let lhs = self.eval_lhs2(ctx, info, id_store, lhs)?;
+                    let src = self.push_expr(ctx, info, id_store, rhs)?;
+                    self.gen_lhs(src, lhs, loc);
+                    info.temp = temp;
+                    let res = info.push().into();
+                    if use_value {
+                        self.gen_mov(res, src);
                     }
                 } else {
                     return self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, use_value, is_ret);
@@ -1128,14 +1171,16 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let NodeKind::LocalVar(lhs) = lhs.kind {
-                        let src = info.find_local(&lhs);
+                    if let Some(src) = info.is_local(&lhs) {
                         self.gen_store_expr(ctx, info, id_store, src, rhs)?;
                         self.gen_mov(local.into(), src.into());
                     } else {
-                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        let temp = info.temp;
+                        let lhs = self.eval_lhs2(ctx, info, id_store, lhs)?;
                         let src = local.into();
-                        self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
+                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        self.gen_lhs(src, lhs, loc);
+                        info.temp = temp;
                     }
                 } else {
                     self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, true, false)?;
@@ -1452,7 +1497,8 @@ impl IrContext {
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.gen_assign_lhs(ctx, info, id_store, src, lhs, loc)?;
+                let lhs = self.eval_lhs(ctx, info, id_store, lhs)?;
+                self.gen_lhs(src, lhs, loc);
             }
             temp_reg += 1;
         }
