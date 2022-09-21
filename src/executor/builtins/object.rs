@@ -47,8 +47,21 @@ extern "C" fn new(_vm: &mut Interp, _globals: &mut Globals, _: Arg, _: usize) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
-    for offset in 0..len {
-        let mut bytes = arg[offset].to_bytes(globals);
+    fn decompose(collector: &mut Vec<Value>, val: Value) {
+        match val.as_array() {
+            Some(ary) => {
+                ary.iter().for_each(|v| decompose(collector, *v));
+            }
+            None => collector.push(val),
+        }
+    }
+    let mut collector = Vec::new();
+    for i in 0..len {
+        decompose(&mut collector, arg[i]);
+    }
+
+    for v in collector {
+        let mut bytes = v.to_bytes(globals);
         bytes.extend(b"\n");
         globals.write_stdout(&bytes);
     }

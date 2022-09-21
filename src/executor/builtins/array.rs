@@ -6,6 +6,7 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
 }
 
 /// ### Array#+
@@ -25,14 +26,33 @@ extern "C" fn add(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
     Some(Value::new_array(lhs))
 }
 
+/// ### Array#<<
+/// - self << obj -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
+extern "C" fn shl(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    arg.self_value().as_array_mut().push(arg[0]);
+    Some(arg.self_value())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn test_string() {
+    fn test_array_add() {
         run_test(r##"[1,2,3] + [4]"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; a"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; b"##);
+    }
+
+    #[test]
+    fn test_array_shl() {
+        run_test(r##"a = [1,2,3]; a << 10; a"##);
     }
 }

@@ -425,9 +425,9 @@ impl Globals {
             }
             MonorubyErrKind::MethodNotFound(name, class) => {
                 format!(
-                    "undefined method `{}' for {:?}",
+                    "undefined method `{}' for {}",
                     self.get_ident_name(*name),
-                    class
+                    class.get_name(self)
                 )
             }
             MonorubyErrKind::WrongArguments(name) => name.to_string(),
