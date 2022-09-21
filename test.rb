@@ -4,6 +4,7 @@ def foo
   @a << :foo
   []
 end
+
 def bar
   @a << :bar
 end
