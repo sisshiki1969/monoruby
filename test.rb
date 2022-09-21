@@ -1,7 +1,12 @@
-a = 2.3
-for i in 0..20
-  if i == 18
-    a = "42"
-  end
-  puts a + a
+@a = []
+
+def foo
+  @a << :foo
+  []
 end
+def bar
+  @a << :bar
+end
+
+x, foo[0] = bar, 0
+puts @a
