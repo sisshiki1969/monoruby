@@ -28,11 +28,11 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
 - measurements are shown in iteration/sec (the higher, the better).
 
-|   impl \ bench    |  app_fib  | so_mandelbrot  |  tarai  |
-|:-----------------:|----------:|---------------:|--------:|
-|  monoruby         |  25.423   |    15.049      |   0.379 |
-|  ruby(3.2.0d-ev)  |   3.590   |     0.647      |   0.064 |
-|  ruby --yjit      |  14.548   |     0.865      |   0.280 |
+|   impl \ bench    |  app_fib  | so_mandelbrot  |  tarai  | quicksort |
+|:-----------------:|----------:|---------------:|--------:|:---------:|
+|  monoruby         |  25.423   |    15.049      |  17.696 |  884.824k |
+|  ruby(3.2.0-dev)  |   3.590   |     0.647      |   2.979 |  185.218k |
+|  ruby --yjit      |  14.548   |     0.865      |  12.800 |  288.096k |
 
 ## How to run
 

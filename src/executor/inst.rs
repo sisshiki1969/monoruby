@@ -78,8 +78,8 @@ pub(super) enum BcIr {
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
     Array(BcReg, BcReg, u16),
-    Index(BcReg, BcReg, BcReg),       // ret, base, index
-    IndexAssign(BcReg, BcReg, BcReg), // src, base, index
+    Index(BcReg, BcReg, BcReg),      // ret, base, index
+    StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, IdentId),
     StoreConst(BcReg, IdentId),
     LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id

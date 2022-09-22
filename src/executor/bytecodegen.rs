@@ -439,10 +439,6 @@ impl IrContext {
         self.push(BcIr::LoadConst(reg, name), loc);
     }
 
-    fn gen_store_const(&mut self, src: BcReg, name: IdentId, loc: Loc) {
-        self.push(BcIr::StoreConst(src, name), loc);
-    }
-
     fn gen_load_ivar(
         &mut self,
         info: &mut RubyFuncInfo,
@@ -455,10 +451,6 @@ impl IrContext {
             None => info.push().into(),
         };
         self.push(BcIr::LoadIvar(reg, name), loc);
-    }
-
-    fn gen_store_ivar(&mut self, src: BcReg, name: IdentId, loc: Loc) {
-        self.push(BcIr::StoreIvar(src, name), loc);
     }
 
     fn gen_literal(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, v: Value) {
@@ -540,34 +532,34 @@ impl IrContext {
         Ok(())
     }
 
-    fn eval_lhs2(
+    ///
+    /// Evaluaate *lhs* as a lvalue.
+    ///
+    fn eval_lvalue(
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
-        lhs: Node,
+        lhs: &Node,
     ) -> Result<LhsKind> {
-        let lhs = match lhs.kind {
+        let lhs = match &lhs.kind {
             NodeKind::Const {
                 toplevel,
                 name,
                 parent: _,
                 prefix: _,
             } if !toplevel => {
-                let name = id_store.get_ident_id_from_string(name);
+                let name = id_store.get_ident_id(name);
                 LhsKind::Const(name)
             }
             NodeKind::InstanceVar(name) => {
-                let name = id_store.get_ident_id_from_string(name);
+                let name = id_store.get_ident_id(name);
                 LhsKind::InstanceVar(name)
             }
-            NodeKind::Index {
-                box base,
-                mut index,
-            } => {
+            NodeKind::Index { box base, index } => {
                 assert_eq!(1, index.len());
-                let index = index.remove(0);
-                let base = self.gen_expr_reg(ctx, info, id_store, base)?;
+                let index = index[0].clone();
+                let base = self.gen_expr_reg(ctx, info, id_store, base.clone())?;
                 let index = self.gen_expr_reg(ctx, info, id_store, index)?;
                 LhsKind::Index { base, index }
             }
@@ -577,16 +569,16 @@ impl IrContext {
         Ok(lhs)
     }
 
-    fn gen_lhs(&mut self, src: BcReg, lhs: LhsKind, loc: Loc) {
+    fn gen_assign(&mut self, src: BcReg, lhs: LhsKind, loc: Loc) {
         match lhs {
             LhsKind::Const(name) => {
-                self.gen_store_const(src.into(), name, loc);
+                self.push(BcIr::StoreConst(src, name), loc);
             }
             LhsKind::InstanceVar(name) => {
-                self.gen_store_ivar(src.into(), name, loc);
+                self.push(BcIr::StoreIvar(src, name), loc);
             }
             LhsKind::Index { base, index } => {
-                self.push(BcIr::IndexAssign(src, base, index), loc);
+                self.push(BcIr::StoreIndex(src, base, index), loc);
             }
             LhsKind::Other => unreachable!(),
         }
@@ -839,9 +831,12 @@ impl IrContext {
                 }
                 let lhs_loc = lhs.loc;
                 let temp = info.temp;
-                let lhs_kind = self.eval_lhs2(ctx, info, id_store, lhs.clone())?;
+                // First, evaluate lvalue.
+                let lhs_kind = self.eval_lvalue(ctx, info, id_store, &lhs)?;
+                // Evaluate rvalue.
                 let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
-                self.gen_lhs(src, lhs_kind, lhs_loc);
+                // Assign rvalue to lvalue.
+                self.gen_assign(src, lhs_kind, lhs_loc);
                 info.temp = temp;
                 let res = info.push().into();
                 if use_value {
@@ -864,9 +859,9 @@ impl IrContext {
                         return Ok(());
                     }
                     let temp = info.temp;
-                    let lhs = self.eval_lhs2(ctx, info, id_store, lhs)?;
+                    let lhs = self.eval_lvalue(ctx, info, id_store, &lhs)?;
                     let src = self.push_expr(ctx, info, id_store, rhs)?;
-                    self.gen_lhs(src, lhs, loc);
+                    self.gen_assign(src, lhs, loc);
                     info.temp = temp;
                     let res = info.push().into();
                     if use_value {
@@ -1142,10 +1137,10 @@ impl IrContext {
                         self.gen_mov(local.into(), src.into());
                     } else {
                         let temp = info.temp;
-                        let lhs = self.eval_lhs2(ctx, info, id_store, lhs)?;
+                        let lhs = self.eval_lvalue(ctx, info, id_store, &lhs)?;
                         let src = local.into();
                         self.gen_store_expr(ctx, info, id_store, local, rhs)?;
-                        self.gen_lhs(src, lhs, loc);
+                        self.gen_assign(src, lhs, loc);
                         info.temp = temp;
                     }
                 } else {
@@ -1437,6 +1432,11 @@ impl IrContext {
         }
     }
 
+    ///
+    /// Generate multiple assignment.
+    ///
+    /// This func always use a new temporary register for rhs even if the number of rhs is 1.
+    ///
     fn gen_mul_assign(
         &mut self,
         ctx: &mut FnStore,
@@ -1453,30 +1453,33 @@ impl IrContext {
         assert!(mlhs_len == mrhs_len);
 
         let temp = info.temp;
+        // At first, we evaluate lvalues and save their info(LhsKind).
         let mut lhs_kind: Vec<LhsKind> = vec![];
         for lhs in &mlhs {
-            lhs_kind.push(self.eval_lhs2(ctx, info, id_store, lhs.clone())?);
+            lhs_kind.push(self.eval_lvalue(ctx, info, id_store, lhs)?);
         }
 
+        // Next, we evaluate rvalues and save them in temporory registers which start from temp_reg.
         let rhs_reg = info.next_reg();
         let mut temp_reg = rhs_reg;
-        // At first we evaluate right-hand side values and save them in temporory registers.
         for rhs in mrhs {
             self.push_expr(ctx, info, id_store, rhs)?;
         }
-        // Assign values to left-hand side expressions.
+
+        // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
             if let Some(local) = info.is_local(&lhs) {
                 assert_eq!(LhsKind::Other, kind);
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.gen_lhs(src, kind, loc);
+                self.gen_assign(src, kind, loc);
             }
             temp_reg += 1;
         }
         info.temp = temp;
 
+        // Generate return value if needed.
         if is_ret || use_value {
             let ret = info.push().into();
             self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
@@ -1750,7 +1753,7 @@ impl IrContext {
                     let op3 = info.get_index(idx);
                     Bc::from(enc_www(132, op1.0, op2.0, op3.0))
                 }
-                BcIr::IndexAssign(src, base, idx) => {
+                BcIr::StoreIndex(src, base, idx) => {
                     let op1 = info.get_index(src);
                     let op2 = info.get_index(base);
                     let op3 = info.get_index(idx);

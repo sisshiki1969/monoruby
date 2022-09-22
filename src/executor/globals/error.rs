@@ -85,7 +85,7 @@ impl MonorubyErr {
         )
     }
 
-    pub fn unsupported_lhs(lhs: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),
             lhs.loc,
