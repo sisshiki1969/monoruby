@@ -17,7 +17,9 @@ pub use time::TimeInfo;
 pub fn init_builtins(globals: &mut Globals) {
     assert_eq!(
         OBJECT_CLASS,
-        globals.define_class("Object", None).as_class()
+        globals
+            .define_class("Object", None, OBJECT_CLASS)
+            .as_class()
     );
     assert_eq!(
         CLASS_CLASS,

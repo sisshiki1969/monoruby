@@ -58,32 +58,29 @@ macro_rules! cmp_ops {
   };
 }
 
-extern "C" fn vm_define_method(
-    _interp: &mut Interp,
-    globals: &mut Globals,
-    name: IdentId,
-    func_id: FuncId,
-) {
-    globals.class.add_method(OBJECT_CLASS, name, func_id);
-}
-
-extern "C" fn vm_define_class(
-    _interp: &mut Interp,
+extern "C" fn define_class(
+    interp: &mut Interp,
     globals: &mut Globals,
     name: IdentId,
 ) -> Option<Value> {
-    let self_val = match globals.get_constant(OBJECT_CLASS, name) {
+    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            if val.is_class().is_none() {
+            if val.is_class().is_some() {
+                val
+            } else {
                 globals.err_is_not_class(name);
                 return None;
-            } else {
-                val
             }
         }
-        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS)),
+        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
     };
+    interp.push_class_context(self_val.as_class());
     Some(self_val)
+}
+
+extern "C" fn pop_class_context(interp: &mut Interp, _globals: &mut Globals) {
+    interp.pop_class_context();
 }
 
 impl Codegen {
@@ -1100,7 +1097,7 @@ impl Codegen {
             movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (vm_define_method);
+            movq rax, (define_method);
             call rax;
             addl [rip + class_version], 1;
         };
@@ -1115,7 +1112,7 @@ impl Codegen {
             movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (vm_define_class);
+            movq rax, (define_class);
             call rax;  // rax <- self: Value
             pushq r13;
             pushq r15;
@@ -1159,6 +1156,13 @@ impl Codegen {
         };
         let exit = self.jit.label();
         self.vm_store_r15_if_nonzero(exit);
+        // pop class context.
+        monoasm!(self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (pop_class_context);
+            call rax;
+        );
         self.fetch_and_dispatch();
         label
     }

@@ -332,19 +332,11 @@ pub extern "C" fn vm_get_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
-    let ConstSiteInfo {
-        name,
-        prefix,
-        toplevel,
-        cache: (cached_version, val),
-    } = &globals.func[site_id];
-    assert_eq!(0, prefix.len());
-    assert!(!toplevel);
+    let (cached_version, val) = &globals.func[site_id].cache;
     if *cached_version == const_version {
         return *val;
     };
-    let name = *name;
-    let res = globals.get_constant_checked(OBJECT_CLASS, name);
+    let res = globals.find_constant(site_id);
     if res.is_some() {
         globals.func[site_id].cache = (const_version, res)
     }
@@ -361,22 +353,32 @@ pub extern "C" fn get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    let ConstSiteInfo { name, .. } = globals.func[site_id].clone();
-    globals.get_constant_checked(OBJECT_CLASS, name)
+    globals.find_constant(site_id)
 }
 
 pub extern "C" fn set_constant(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     name: IdentId,
     val: Value,
 ) {
-    if globals.set_constant(OBJECT_CLASS, name, val).is_some() && globals.warning >= 1 {
+    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",
             globals.get_ident_name(name)
         )
     }
+}
+
+pub extern "C" fn define_method(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+    func: FuncId,
+) {
+    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    globals.class.add_method(parent, name, func);
 }
 
 pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {

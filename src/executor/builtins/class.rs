@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
+    globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
 }
 
 /// ### Class#superclass
@@ -51,6 +52,29 @@ extern "C" fn constants(
     let class_id = arg.self_value().as_class();
     let v = globals
         .get_constant_names(class_id)
+        .into_iter()
+        .map(|name| Value::new_symbol(name))
+        .collect();
+    Some(Value::new_array(v))
+}
+
+/// ### Module#instance_methods
+/// - instance_methods(inherited_too = true) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
+///
+/// !! Currently, this method returns only the methods that is defined in *self*.
+///
+/// TODO: support inherited_too.
+extern "C" fn instance_methods(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let class_id = arg.self_value().as_class();
+    let v = globals
+        .get_instance_method_names(class_id)
         .into_iter()
         .map(|name| Value::new_symbol(name))
         .collect();

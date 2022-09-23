@@ -79,15 +79,6 @@ extern "C" fn vm_get_func_data<'a>(
     interp.get_func_data(globals, func_id)
 }
 
-extern "C" fn define_method(
-    _interp: &mut Interp,
-    globals: &mut Globals,
-    name: IdentId,
-    func: FuncId,
-) {
-    globals.class.add_method(OBJECT_CLASS, name, func);
-}
-
 extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     let mut v = if len == 0 {
         vec![]

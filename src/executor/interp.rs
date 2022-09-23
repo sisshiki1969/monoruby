@@ -6,13 +6,27 @@ use super::*;
 ///
 pub struct Interp {
     pub codegen: Codegen,
+    lexical_class: Vec<ClassId>,
 }
 
 impl Interp {
     pub fn new(no_jit: bool) -> Self {
         Self {
             codegen: Codegen::new(no_jit, Value::main_object()),
+            lexical_class: vec![],
         }
+    }
+
+    pub(crate) fn push_class_context(&mut self, class_id: ClassId) {
+        self.lexical_class.push(class_id);
+    }
+
+    pub(crate) fn pop_class_context(&mut self) -> Option<ClassId> {
+        self.lexical_class.pop()
+    }
+
+    pub(crate) fn get_class_context(&self) -> Option<ClassId> {
+        self.lexical_class.last().cloned()
     }
 
     /// Execute top level method.

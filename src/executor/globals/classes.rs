@@ -206,6 +206,10 @@ impl ClassStore {
         self[class_id].constants.keys().cloned().collect()
     }
 
+    pub fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self[class_id].methods.keys().cloned().collect()
+    }
+
     pub(super) fn get_real_class_obj(&self, val: Value) -> Value {
         let mut id = val.class_id();
         while self[id].is_singleton() {

@@ -202,7 +202,14 @@ pub fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
     let (mut globals, fid) = new_globals(code);
-    let jit_val = Interp::eval_toplevel(&mut globals, fid).unwrap();
+    let jit_val = match Interp::eval_toplevel(&mut globals, fid) {
+        Ok(val) => val,
+        Err(err) => {
+            eprintln!("{}", err.get_error_message(&globals));
+            err.show_loc();
+            panic!();
+        }
+    };
     let jit_str = jit_val.to_s(&globals);
     #[cfg(not(debug_assertions))]
     eprintln!("jit: {jit_str} elapsed:{:?}", now.elapsed());
@@ -498,15 +505,12 @@ mod test {
     fn test_stacktrace() {
         run_test_no_result_check(
             r##"
-        class A 
-          __dump
-          def f(x)
-            if x < 2
-              __dump
-              1
-            else
-              x*f(x-1)
-            end
+        def f(x)
+          if x < 2
+            __dump
+            1
+          else
+            x*f(x-1)
           end
         end
         f(7)

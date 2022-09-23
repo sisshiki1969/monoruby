@@ -246,24 +246,30 @@ impl Globals {
     }
 
     pub fn define_class_under_obj(&mut self, name: &str) -> Value {
-        self.define_class(name, Some(OBJECT_CLASS))
+        self.define_class(name, Some(OBJECT_CLASS), OBJECT_CLASS)
     }
 
-    pub fn define_class(&mut self, name: &str, super_class: impl Into<Option<ClassId>>) -> Value {
+    pub fn define_class(
+        &mut self,
+        name: &str,
+        super_class: impl Into<Option<ClassId>>,
+        parent: ClassId,
+    ) -> Value {
         let name_id = self.get_ident_id(name);
-        self.define_class_by_ident_id(name_id, super_class)
+        self.define_class_by_ident_id(name_id, super_class, parent)
     }
 
     pub fn define_class_by_ident_id(
         &mut self,
         name_id: IdentId,
         super_class: impl Into<Option<ClassId>>,
+        parent: ClassId,
     ) -> Value {
         let id = self.class.add_class(super_class.into());
         let class_obj = Value::new_empty_class(id);
         self.class[id].set_class_obj(class_obj);
         self.class[id].set_name(name_id);
-        self.set_constant(OBJECT_CLASS, name_id, class_obj);
+        self.set_constant(parent, name_id, class_obj);
         class_obj
     }
 
@@ -339,6 +345,35 @@ impl Globals {
         Some(func_id)
     }
 
+    ///
+    /// Get constant for *id*.
+    ///
+    /// If not found, set uninitialized constant error and return None.
+    ///
+    pub fn find_constant(&mut self, id: ConstSiteId) -> Option<Value> {
+        let ConstSiteInfo {
+            toplevel,
+            prefix,
+            name,
+            ..
+        } = self.func[id].clone();
+        let class_id = if toplevel {
+            OBJECT_CLASS
+        } else {
+            let mut class_id = OBJECT_CLASS;
+            for constant in prefix {
+                class_id = self.get_constant_checked(class_id, constant)?.as_class();
+            }
+            class_id
+        };
+        self.get_constant_checked(class_id, name)
+    }
+
+    ///
+    /// Get constant with *name* and parent class *class_id*.
+    ///
+    /// If not found, simply return None with no error.
+    ///
     pub fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
         self.class.get_constant(class_id, name)
     }
@@ -347,7 +382,16 @@ impl Globals {
         self.class.get_constant_names(class_id)
     }
 
-    pub fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+    pub fn get_instance_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self.class.get_method_names(class_id)
+    }
+
+    ///
+    /// Get constant with *name* and parent class *class_id*.
+    ///
+    /// If not found, set uninitialized constant error and return None.
+    ///
+    fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
         match self.get_constant(class_id, name) {
             Some(v) => Some(v),
             None => {

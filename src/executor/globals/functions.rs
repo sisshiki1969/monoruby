@@ -446,13 +446,6 @@ impl FuncInfo {
     #[cfg(feature = "emit-bc")]
     pub(crate) fn dump_bc(&self, globals: &Globals) {
         let info = self.as_ruby_func();
-        fn optstr(opt: bool) -> &'static str {
-            if opt {
-                "_"
-            } else {
-                ""
-            }
-        }
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} args:{:?} bc:{:?} meta:{:?}",
@@ -465,7 +458,6 @@ impl FuncInfo {
             BcPcBase::new(info),
             self.data.meta,
         );
-        let mut buf = None;
         let mut skip = false;
         let bb_info = info.get_bb_info();
         for (i, pc) in info.bytecode().iter().enumerate() {
@@ -476,158 +468,13 @@ impl FuncInfo {
             }
             let bcop1 = pc.op1();
             if let BcOp::MethodArgs(..) = bcop1 {
-            } else {
-                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i)
+                skip = true;
+                continue;
             };
-            match bcop1 {
-                BcOp::Br(disp) => {
-                    eprintln!("br =>:{:05}", i as i32 + 1 + disp);
-                }
-                BcOp::CondBr(reg, disp, opt, kind) => {
-                    eprintln!(
-                        "cond{}br {}{:?} =>:{:05}",
-                        kind.to_s(),
-                        optstr(opt),
-                        reg,
-                        i as i32 + 1 + disp
-                    );
-                }
-                BcOp::Integer(reg, num) => eprintln!("{:?} = {}: i32", reg, num),
-                BcOp::Symbol(reg, id) => {
-                    eprintln!("{:?} = :{}", reg, globals.id_store.get_name(id))
-                }
-                BcOp::Literal(reg, val) => {
-                    eprintln!("{:?} = literal[{}]", reg, globals.val_inspect(val))
-                }
-                BcOp::Array(ret, src, len) => {
-                    eprintln!("{:?} = array[{:?}; {}]", ret, src, len)
-                }
-                BcOp::Index(ret, base, idx) => {
-                    eprintln!("{:?} = {:?}.[{:?}]", ret, base, idx)
-                }
-                BcOp::IndexAssign(src, base, idx) => {
-                    eprintln!("{:?}.[{:?}] = {:?}", base, idx, src)
-                }
-                BcOp::LoadConst(reg, id) => {
-                    let name = globals.func[id].name;
-                    let op1 = format!("{:?} = const[{}]", reg, globals.id_store.get_name(name));
-                    eprintln!(
-                        "{:36} [{}]",
-                        op1,
-                        match pc.value() {
-                            None => "<invalid>".to_string(),
-                            Some(val) => val.inspect(globals),
-                        }
-                    );
-                }
-                BcOp::StoreConst(reg, id) => {
-                    eprintln!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
-                }
-                BcOp::LoadIvar(reg, id) => {
-                    eprintln!("{:?} = {}", reg, globals.id_store.get_name(id))
-                }
-                BcOp::StoreIvar(reg, id) => {
-                    eprintln!("{} = {:?}", globals.id_store.get_name(id), reg)
-                }
-                BcOp::Nil(reg) => eprintln!("{:?} = nil", reg),
-                BcOp::Neg(dst, src) => {
-                    let op1 = format!("{:?} = neg {:?}", dst, src);
-                    eprintln!("{:36} [{}]", op1, pc.classid1().get_name(globals),);
-                }
-                BcOp::BinOp(kind, dst, lhs, rhs) => {
-                    let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
-                    eprintln!(
-                        "{:36} [{}][{}]",
-                        op1,
-                        pc.classid1().get_name(globals),
-                        pc.classid2().get_name(globals)
-                    );
-                }
-                BcOp::BinOpRi(kind, dst, lhs, rhs) => {
-                    let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
-                    eprintln!(
-                        "{:36} [{}][{}]",
-                        op1,
-                        pc.classid1().get_name(globals),
-                        pc.classid2().get_name(globals)
-                    );
-                }
-                BcOp::BinOpIr(kind, dst, lhs, rhs) => {
-                    let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
-                    eprintln!(
-                        "{:36} [{}][{}]",
-                        op1,
-                        pc.classid1().get_name(globals),
-                        pc.classid2().get_name(globals)
-                    );
-                }
-                BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
-                    let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
-                    eprintln!(
-                        "{:36} [{}][{}]",
-                        op1,
-                        pc.classid1().get_name(globals),
-                        pc.classid2().get_name(globals)
-                    );
-                }
-                BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
-                    let op1 = format!(
-                        "{}{:?} = {:?} {:?} {}: i16",
-                        optstr(opt),
-                        dst,
-                        lhs,
-                        kind,
-                        rhs,
-                    );
-                    eprintln!(
-                        "{:36} [{}][{}]",
-                        op1,
-                        pc.classid1().get_name(globals),
-                        pc.classid2().get_name(globals)
-                    );
-                }
-
-                BcOp::Ret(reg) => eprintln!("ret {:?}", reg),
-                BcOp::Mov(dst, src) => eprintln!("{:?} = {:?}", dst, src),
-                BcOp::MethodCall(..) => {
-                    assert!(buf.is_none());
-                    buf = Some((bcop1.clone(), pc.classid1()));
-                }
-                BcOp::MethodArgs(recv, args, len) => {
-                    let (recv, ret, name, class_id) = match std::mem::take(&mut buf).unwrap() {
-                        (BcOp::MethodCall(ret, name), class_id) => (recv, ret, name, class_id),
-                        _ => unreachable!(),
-                    };
-                    let name = globals.id_store.get_name(name);
-                    let op1 = format!(
-                        "{} = {:?}.call {}({:?}; {})",
-                        ret.ret_str(),
-                        recv,
-                        name,
-                        args,
-                        len,
-                    );
-                    eprintln!("{:36} [{}]", op1, class_id.get_name(globals));
-                    skip = true;
-                }
-                BcOp::MethodDef(name, func_id) => {
-                    let name = globals.id_store.get_name(name);
-                    eprintln!("mthod_def {:?}: {:?}", name, func_id)
-                }
-                BcOp::ClassDef(ret, name, func_id) => {
-                    let name = globals.id_store.get_name(name);
-                    eprintln!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
-                }
-                BcOp::ConcatStr(ret, args, len) => {
-                    eprintln!("{} = concat({:?}; {})", ret.ret_str(), args, len)
-                }
-                BcOp::LoopStart(count) => eprintln!(
-                    "loop_start counter={} jit-addr={:016x}",
-                    count,
-                    pc.from_jit_addr()
-                ),
-                BcOp::LoopEnd => eprintln!("loop_end"),
-            }
+            if let Some(fmt) = pc.format(globals, i) {
+                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i);
+                eprintln!("{}", fmt);
+            };
         }
         eprintln!("------------------------------------");
     }

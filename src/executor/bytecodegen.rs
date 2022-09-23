@@ -124,7 +124,7 @@ impl BcPc {
                 )
             }
             BcOp::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, globals.id_store.get_name(id)),
+            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, globals.get_ident_name(id)),
             BcOp::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
             }
@@ -138,8 +138,18 @@ impl BcPc {
                 format!("{:?}.[{:?}] = {:?}", base, idx, src)
             }
             BcOp::LoadConst(reg, id) => {
-                let name = globals.func[id].name;
-                let op1 = format!("{:?} = const[{}]", reg, globals.id_store.get_name(name));
+                let ConstSiteInfo {
+                    name,
+                    prefix,
+                    toplevel,
+                    ..
+                } = globals.func[id].clone();
+                let mut const_name = if toplevel { "::" } else { "" }.to_string();
+                for c in prefix {
+                    const_name += &format!("{}::", globals.get_ident_name(c));
+                }
+                const_name += globals.get_ident_name(name);
+                let op1 = format!("{:?} = const[{}]", reg, const_name);
                 format!(
                     "{:36} [{}]",
                     op1,
@@ -150,13 +160,13 @@ impl BcPc {
                 )
             }
             BcOp::StoreConst(reg, id) => {
-                format!("const[{}] = {:?}", globals.id_store.get_name(id), reg)
+                format!("const[{}] = {:?}", globals.get_ident_name(id), reg)
             }
             BcOp::LoadIvar(reg, id) => {
-                format!("{:?} = {}", reg, globals.id_store.get_name(id))
+                format!("{:?} = {}", reg, globals.get_ident_name(id))
             }
             BcOp::StoreIvar(reg, id) => {
-                format!("{} = {:?}", globals.id_store.get_name(id), reg)
+                format!("{} = {:?}", globals.get_ident_name(id), reg)
             }
             BcOp::Nil(reg) => format!("{:?} = nil", reg),
             BcOp::Neg(dst, src) => {
@@ -225,7 +235,7 @@ impl BcPc {
                     _ => unreachable!(),
                 };
                 let class_id = self.classid1();
-                let name = globals.id_store.get_name(name);
+                let name = globals.get_ident_name(name);
                 let op1 = format!(
                     "{} = {:?}.call {}({:?}; {})",
                     ret.ret_str(),
@@ -234,16 +244,15 @@ impl BcPc {
                     args,
                     len,
                 );
-                //skip = true;
                 format!("{:36} [{}]", op1, class_id.get_name(globals))
             }
             BcOp::MethodArgs(..) => return None,
             BcOp::MethodDef(name, func_id) => {
-                let name = globals.id_store.get_name(name);
+                let name = globals.get_ident_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
             }
             BcOp::ClassDef(ret, name, func_id) => {
-                let name = globals.id_store.get_name(name);
+                let name = globals.get_ident_name(name);
                 format!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
             }
             BcOp::ConcatStr(ret, args, len) => {
@@ -428,15 +437,23 @@ impl IrContext {
     fn gen_load_const(
         &mut self,
         info: &mut RubyFuncInfo,
+        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
-        name: IdentId,
+        toplevel: bool,
+        name: String,
+        prefix: Vec<String>,
         loc: Loc,
     ) {
+        let name = id_store.get_ident_id_from_string(name);
+        let prefix = prefix
+            .into_iter()
+            .map(|s| id_store.get_ident_id_from_string(s))
+            .collect();
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
         };
-        self.push(BcIr::LoadConst(reg, name), loc);
+        self.push(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
     }
 
     fn gen_load_ivar(
@@ -883,14 +900,10 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent,
-                prefix: _,
+                parent: _,
+                prefix,
             } => {
-                assert!(!toplevel);
-                assert!(parent.is_none());
-                //assert!(prefix.is_empty());
-                let name = id_store.get_ident_id_from_string(name);
-                self.gen_load_const(info, None, name, loc);
+                self.gen_load_const(info, id_store, None, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id_from_string(name);
@@ -1156,14 +1169,10 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent,
+                parent: _,
                 prefix,
             } => {
-                assert!(!toplevel);
-                assert!(parent.is_none());
-                assert!(prefix.is_empty());
-                let name = id_store.get_ident_id_from_string(name);
-                self.gen_load_const(info, local.into(), name, loc);
+                self.gen_load_const(info, id_store, local.into(), toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id_from_string(name);
@@ -1759,9 +1768,9 @@ impl IrContext {
                     let op3 = info.get_index(idx);
                     Bc::from(enc_www(133, op1.0, op2.0, op3.0))
                 }
-                BcIr::LoadConst(reg, name) => {
+                BcIr::LoadConst(reg, toplevel, prefix, name) => {
                     let op1 = info.get_index(reg);
-                    let op2 = info.add_constsite(store, *name, vec![], false);
+                    let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
                     Bc::from(enc_wl(10, op1.0, op2.get()))
                 }
                 BcIr::StoreConst(reg, name) => {
