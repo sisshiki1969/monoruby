@@ -25,8 +25,12 @@ impl Interp {
         self.lexical_class.pop()
     }
 
-    pub(crate) fn get_class_context(&self) -> Option<ClassId> {
-        self.lexical_class.last().cloned()
+    pub(crate) fn get_class_context(&self) -> ClassId {
+        self.lexical_class.last().cloned().unwrap_or(OBJECT_CLASS)
+    }
+
+    pub(crate) fn class_context_stack(&self) -> &[ClassId] {
+        &self.lexical_class
     }
 
     /// Execute top level method.

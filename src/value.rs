@@ -458,6 +458,16 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_class(&self, name: IdentId, globals: &mut Globals) -> Option<ClassId> {
+        match self.is_class() {
+            Some(class) => Some(class),
+            None => {
+                globals.err_is_not_class(name);
+                None
+            }
+        }
+    }
+
     pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
         match self.unpack() {
             RV::String(b) => b,

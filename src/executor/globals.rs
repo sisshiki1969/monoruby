@@ -350,23 +350,47 @@ impl Globals {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    pub fn find_constant(&mut self, id: ConstSiteId) -> Option<Value> {
+    pub fn find_constant(&mut self, id: ConstSiteId, class_context: &[ClassId]) -> Option<Value> {
         let ConstSiteInfo {
             toplevel,
-            prefix,
+            mut prefix,
             name,
             ..
         } = self.func[id].clone();
-        let class_id = if toplevel {
-            OBJECT_CLASS
-        } else {
-            let mut class_id = OBJECT_CLASS;
+        if toplevel {
+            let mut parent = OBJECT_CLASS;
             for constant in prefix {
-                class_id = self.get_constant_checked(class_id, constant)?.as_class();
+                parent = self
+                    .get_constant_checked(parent, constant)?
+                    .expect_class(name, self)?;
             }
-            class_id
-        };
-        self.get_constant_checked(class_id, name)
+            self.get_constant_checked(parent, name)
+        } else if prefix.is_empty() {
+            match self.search_lexical_stack(name, class_context) {
+                Some(v) => Some(v),
+                _ => self.get_constant_checked(OBJECT_CLASS, name),
+            }
+        } else {
+            let parent = prefix.remove(0);
+            let mut parent = match self.search_lexical_stack(parent, class_context) {
+                Some(v) => v,
+                None => self.get_constant_checked(OBJECT_CLASS, parent)?,
+            }
+            .expect_class(name, self)?;
+            for constant in prefix {
+                parent = self
+                    .get_constant_checked(parent, constant)?
+                    .expect_class(name, self)?;
+            }
+            self.get_constant_checked(parent, name)
+        }
+    }
+
+    fn search_lexical_stack(&self, name: IdentId, class_context: &[ClassId]) -> Option<Value> {
+        class_context
+            .iter()
+            .rev()
+            .find_map(|class| self.get_constant(*class, name))
     }
 
     ///

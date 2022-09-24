@@ -563,9 +563,9 @@ impl IrContext {
             NodeKind::Const {
                 toplevel,
                 name,
-                parent: _,
-                prefix: _,
-            } if !toplevel => {
+                parent,
+                prefix,
+            } if !toplevel && parent.is_none() && prefix.is_empty() => {
                 let name = id_store.get_ident_id(name);
                 LhsKind::Const(name)
             }

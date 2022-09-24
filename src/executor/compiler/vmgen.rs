@@ -63,15 +63,11 @@ extern "C" fn define_class(
     globals: &mut Globals,
     name: IdentId,
 ) -> Option<Value> {
-    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    let parent = interp.get_class_context();
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            if val.is_class().is_some() {
-                val
-            } else {
-                globals.err_is_not_class(name);
-                return None;
-            }
+            val.expect_class(name, globals)?;
+            val
         }
         None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
     };

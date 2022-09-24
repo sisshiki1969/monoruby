@@ -327,7 +327,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
 }
 
 pub extern "C" fn vm_get_constant(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
@@ -336,7 +336,8 @@ pub extern "C" fn vm_get_constant(
     if *cached_version == const_version {
         return *val;
     };
-    let res = globals.find_constant(site_id);
+    let current = interp.class_context_stack();
+    let res = globals.find_constant(site_id, current);
     if res.is_some() {
         globals.func[site_id].cache = (const_version, res)
     }
@@ -349,11 +350,12 @@ pub extern "C" fn vm_get_constant(
 /// rax: Option<Value>
 ///
 pub extern "C" fn get_constant(
-    _interp: &mut Interp,
+    interp: &mut Interp,
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    globals.find_constant(site_id)
+    let current = interp.class_context_stack();
+    globals.find_constant(site_id, current)
 }
 
 pub extern "C" fn set_constant(
@@ -362,7 +364,7 @@ pub extern "C" fn set_constant(
     name: IdentId,
     val: Value,
 ) {
-    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    let parent = interp.get_class_context();
     if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",
@@ -377,7 +379,7 @@ pub extern "C" fn define_method(
     name: IdentId,
     func: FuncId,
 ) {
-    let parent = interp.get_class_context().unwrap_or(OBJECT_CLASS);
+    let parent = interp.get_class_context();
     globals.class.add_method(parent, name, func);
 }
 
