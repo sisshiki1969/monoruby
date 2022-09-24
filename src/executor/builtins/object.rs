@@ -38,10 +38,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-extern "C" fn new(_vm: &mut Interp, _globals: &mut Globals, _: Arg, _: usize) -> Option<Value> {
-    Some(Value::new_object())
+extern "C" fn new(_: &mut Interp, _: &mut Globals, _: Arg, _: usize) -> Option<Value> {
+    Some(Value::new_object(OBJECT_CLASS))
 }
-
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
 ///
@@ -254,5 +253,17 @@ mod test {
         run_test("nil.inspect");
         run_test("Time.singleton_class.to_s");
         run_test(r#"File.write("/tmp/foo", "woo")"#);
+    }
+
+    #[test]
+    fn test_object() {
+        run_test(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
+        run_test(r#"a=Object.new; a.instance_variable_get(:@i)"#);
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
+        );
+        run_test(
+            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
+        );
     }
 }

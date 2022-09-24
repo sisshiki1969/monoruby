@@ -5,10 +5,22 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_func(CLASS_CLASS, "new", new, 0);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
+    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
     globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
+}
+
+/// ### Class#new
+/// - new(*args, &block) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
+///
+/// !! We must call Object#initialize.
+extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
+    allocate(vm, globals, arg, len)
 }
 
 /// ### Class#superclass
@@ -27,6 +39,21 @@ extern "C" fn superclass(
         Some(super_id) => super_id.get_obj(globals),
     };
     Some(res)
+}
+
+/// ### Class#allocate
+/// - allocate -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
+extern "C" fn allocate(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let class_id = arg.self_value().as_class();
+    let obj = Value::new_object(class_id);
+    Some(obj)
 }
 
 /// ### Class#to_s
@@ -88,5 +115,25 @@ mod test {
     #[test]
     fn test_class() {
         run_test("Time.superclass.to_s");
+        run_test(
+            r#"
+        class A
+          def f
+            42
+          end
+        end
+        A.new.f"#,
+        );
+        run_test(
+            r#"
+        class A
+          class B
+            def f
+              42
+            end
+          end
+        end
+        A::B.new.f"#,
+        );
     }
 }

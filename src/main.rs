@@ -459,14 +459,6 @@ mod test {
         run_test("@a=42; @a = @a * 2; @a");
         run_test("@a=42; b = @a * 2; b");
         run_test("@a=42; c = b = @a * 2; c");
-        run_test(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
-        run_test(r#"a=Object.new; a.instance_variable_get(:@i)"#);
-        run_test(
-            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
-        );
-        run_test(
-            r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
-        );
     }
 
     #[test]

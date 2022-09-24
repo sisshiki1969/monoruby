@@ -542,12 +542,16 @@ extern "C" fn log_deoptimize(
     };
     let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
+    let fmt = pc.format(globals, index).unwrap_or_default();
     if let BcOp::LoopEnd = pc.op1() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {:?}", index, *pc);
+        eprintln!("    [{:05}] {}", index, fmt);
+    } else if let BcOp::ClassDef(_, _, _) = pc.op1() {
+        eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+        eprintln!("    [{:05}] {}", index, fmt);
     } else {
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {:?} caused by {:?}", index, *pc, v);
+        eprintln!("    [{:05}] {} caused by {:?}", index, fmt, v);
     }
 }
 

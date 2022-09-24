@@ -1,15 +1,8 @@
-@a = []
-
-def foo
-  @a << :foo
-  []
+class A
+  class B
+    def f
+      42
+    end
+  end
 end
-
-def bar
-  @a << :bar
-end
-
-foo[0] = bar
-a = foo[0] = bar
-x, foo[0] = bar, 0
-puts @a
+puts A::B.new.f

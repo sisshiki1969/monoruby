@@ -126,6 +126,9 @@ impl RValue {
         }
     }
 
+    ///
+    /// Create new class object with *class_id*.
+    ///
     pub(crate) fn new_class(id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(CLASS_CLASS),
@@ -134,9 +137,12 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_object() -> Self {
+    ///
+    /// Create new instance object of class *class_id*.
+    ///
+    pub(crate) fn new_object(class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(OBJECT_CLASS),
+            flags: RVFlag::new(class_id),
             kind: ObjKind::Object,
             var_table: None,
         }
