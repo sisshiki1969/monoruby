@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
     globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
+    globals.define_builtin_func(CLASS_CLASS, "attr_reader", attr_reader, -1);
 }
 
 /// ### Class#new
@@ -108,6 +109,27 @@ extern "C" fn instance_methods(
     Some(Value::new_array(v))
 }
 
+/// ### Module#attr_reader
+/// - attr_reader(*name) -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
+extern "C" fn attr_reader(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    let mut res = vec![];
+    let class_id = arg.self_value().as_class();
+    for i in 0..len {
+        let arg_name = arg[i].expect_symbol_or_string(globals)?;
+        let ivar_id = globals.get_ident_id(&arg_name);
+        res.push(Value::new_symbol(ivar_id));
+        globals.define_attr_reader(class_id, arg_name);
+    }
+    Some(Value::new_array(res))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -134,6 +156,24 @@ mod test {
           end
         end
         A::B.new.f"#,
+        );
+    }
+
+    #[test]
+    fn attr_reader() {
+        run_test(
+            r#"
+        c = class A
+          def f(x,y)
+            @v = x
+            @w = y
+          end
+          attr_reader :v, "w"
+        end
+        a = A.new
+        a.f(7,11)
+        [a.v, a.w, c]
+        "#,
         );
     }
 }

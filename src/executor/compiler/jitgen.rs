@@ -702,10 +702,8 @@ impl Codegen {
     fn jit_load_ivar(&mut self, id: IdentId, ret: SlotId, xmm_using: UsingXmm) {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdx, [rbp - 16];  // base: Value
-          movq rcx, (id.get());  // id: IdentId
-          movq rdi, rbx;  // &mut Interp
-          movq rsi, r12;  // &mut Globals
+          movq rdi, [rbp - 16];  // base: Value
+          movq rsi, (id.get());  // id: IdentId
           movq rax, (get_instance_var);
           call rax;
         );
@@ -716,11 +714,9 @@ impl Codegen {
     fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm) {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdx, [rbp - 16];  // base: Value
-          movq rcx, (id.get());  // id: IdentId
-          movq r8, [rbp - (conv(src))];   // val: Value
-          movq rdi, rbx;  // &mut Interp
-          movq rsi, r12;  // &mut Globals
+          movq rdi, [rbp - 16];  // base: Value
+          movq rsi, (id.get());  // id: IdentId
+          movq rdx, [rbp - (conv(src))];   // val: Value
           movq rax, (set_instance_var);
           call rax;
         );

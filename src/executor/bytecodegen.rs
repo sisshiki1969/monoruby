@@ -877,7 +877,7 @@ impl IrContext {
                     }
                     let temp = info.temp;
                     let lhs = self.eval_lvalue(ctx, info, id_store, &lhs)?;
-                    let src = self.push_expr(ctx, info, id_store, rhs)?;
+                    let src = self.gen_expr_reg(ctx, info, id_store, rhs)?;
                     self.gen_assign(src, lhs, loc);
                     info.temp = temp;
                     let res = info.push().into();

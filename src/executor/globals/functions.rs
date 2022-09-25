@@ -71,6 +71,12 @@ impl Funcs {
         self.0.push(FuncInfo::new_native(id, name, address, arity));
         id
     }
+
+    fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+        let id = self.next_func_id();
+        self.0.push(FuncInfo::new_attr_reader(id, name, ivar_name));
+        id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,12 +222,17 @@ impl FnStore {
     ) -> FuncId {
         self.functions.add_native_func(name, address, arity)
     }
+
+    pub(super) fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+        self.functions.add_attr_reader(name, ivar_name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FuncKind {
     Normal(RubyFuncInfo),
     Builtin { abs_address: u64 },
+    AttrReader { ivar_name: IdentId },
 }
 
 impl std::default::Default for FuncKind {
@@ -315,11 +326,17 @@ impl Meta {
         (self.0 >> 56) as u8
     }
 
+    ///
+    /// Set JIT flag in Meta.
+    ///
     pub fn set_jit(&mut self) {
         let meta = (self.0 & 0xff00_ffff_ffff_ffff) | (1 << 48);
         self.0 = meta;
     }
 
+    ///
+    /// Set the number of registers in Meta.
+    ///
     pub fn set_reg_num(&mut self, reg_num: i64) {
         let meta = (self.0 & 0xffff_0000_ffff_ffff) | ((reg_num as i16 as u16 as u64) << 32);
         self.0 = meta;
@@ -419,6 +436,19 @@ impl FuncInfo {
         }
     }
 
+    fn new_attr_reader(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
+        Self {
+            name: Some(name),
+            arity: 0,
+            data: FuncData {
+                codeptr: None,
+                pc: BcPc::default(),
+                meta: Meta::native(func_id, 0),
+            },
+            kind: FuncKind::AttrReader { ivar_name },
+        }
+    }
+
     pub(crate) fn name(&self) -> Option<&String> {
         self.name.as_ref()
     }
@@ -430,14 +460,14 @@ impl FuncInfo {
     pub(crate) fn as_ruby_func(&self) -> &RubyFuncInfo {
         match &self.kind {
             FuncKind::Normal(info) => info,
-            FuncKind::Builtin { .. } => unreachable!(),
+            _ => unreachable!(),
         }
     }
 
     pub(crate) fn as_ruby_func_mut(&mut self) -> &mut RubyFuncInfo {
         match &mut self.kind {
             FuncKind::Normal(info) => info,
-            FuncKind::Builtin { .. } => unreachable!(),
+            _ => unreachable!(),
         }
     }
 }
