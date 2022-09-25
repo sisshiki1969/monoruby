@@ -469,12 +469,23 @@ impl Globals {
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_reader(&mut self, class_id: ClassId, ivar_name: String) -> FuncId {
+    pub fn define_attr_reader(&mut self, class_id: ClassId, ivar_name: String) -> IdentId {
         let ivar_id = self.get_ident_id(&format!("@{}", ivar_name));
         let method_name = self.get_ident_id(&ivar_name);
         let func_id = self.func.add_attr_reader(ivar_name, ivar_id);
         self.class.add_method(class_id, method_name, func_id);
-        func_id
+        method_name
+    }
+
+    ///
+    /// Define attribute writer for *class_id* and *ivar_name*.
+    ///
+    pub fn define_attr_writer(&mut self, class_id: ClassId, ivar_name: String) -> IdentId {
+        let ivar_id = self.get_ident_id(&format!("@{}", ivar_name));
+        let method_name = self.get_ident_id(&format!("{}=", ivar_name));
+        let func_id = self.func.add_attr_writer(ivar_name, ivar_id);
+        self.class.add_method(class_id, method_name, func_id);
+        method_name
     }
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {

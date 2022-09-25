@@ -77,6 +77,12 @@ impl Funcs {
         self.0.push(FuncInfo::new_attr_reader(id, name, ivar_name));
         id
     }
+
+    fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+        let id = self.next_func_id();
+        self.0.push(FuncInfo::new_attr_writer(id, name, ivar_name));
+        id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,6 +232,10 @@ impl FnStore {
     pub(super) fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_reader(name, ivar_name)
     }
+
+    pub(super) fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+        self.functions.add_attr_writer(name, ivar_name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +243,7 @@ pub(crate) enum FuncKind {
     Normal(RubyFuncInfo),
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
+    AttrWriter { ivar_name: IdentId },
 }
 
 impl std::default::Default for FuncKind {
@@ -446,6 +457,19 @@ impl FuncInfo {
                 meta: Meta::native(func_id, 0),
             },
             kind: FuncKind::AttrReader { ivar_name },
+        }
+    }
+
+    fn new_attr_writer(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
+        Self {
+            name: Some(name),
+            arity: 1,
+            data: FuncData {
+                codeptr: None,
+                pc: BcPc::default(),
+                meta: Meta::native(func_id, 1),
+            },
+            kind: FuncKind::AttrWriter { ivar_name },
         }
     }
 

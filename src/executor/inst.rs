@@ -94,7 +94,7 @@ pub(super) enum BcIr {
     Ret(BcReg),
     Mov(BcReg, BcReg),                  // dst, offset
     MethodCall(Option<BcReg>, IdentId), // (ret, id)
-    MethodArgs(BcReg, BcTemp, usize),   // (recv, args, args_len)
+    MethodArgs(BcReg, BcReg, usize),    // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
     ClassDef(Option<BcReg>, IdentId, FuncId),

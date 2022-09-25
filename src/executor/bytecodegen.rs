@@ -414,10 +414,11 @@ pub fn is_smi(node: &Node) -> Option<i16> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum LhsKind {
+enum LvalueKind {
     Const(IdentId),
     InstanceVar(IdentId),
     Index { base: BcReg, index: BcReg },
+    Send { recv: BcReg, method: IdentId },
     Other,
 }
 
@@ -558,7 +559,7 @@ impl IrContext {
         info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         lhs: &Node,
-    ) -> Result<LhsKind> {
+    ) -> Result<LvalueKind> {
         let lhs = match &lhs.kind {
             NodeKind::Const {
                 toplevel,
@@ -567,37 +568,54 @@ impl IrContext {
                 prefix,
             } if !toplevel && parent.is_none() && prefix.is_empty() => {
                 let name = id_store.get_ident_id(name);
-                LhsKind::Const(name)
+                LvalueKind::Const(name)
             }
             NodeKind::InstanceVar(name) => {
                 let name = id_store.get_ident_id(name);
-                LhsKind::InstanceVar(name)
+                LvalueKind::InstanceVar(name)
             }
             NodeKind::Index { box base, index } => {
                 assert_eq!(1, index.len());
                 let index = index[0].clone();
                 let base = self.gen_expr_reg(ctx, info, id_store, base.clone())?;
                 let index = self.gen_expr_reg(ctx, info, id_store, index)?;
-                LhsKind::Index { base, index }
+                LvalueKind::Index { base, index }
             }
-            NodeKind::LocalVar(_) => LhsKind::Other,
+            NodeKind::MethodCall {
+                box receiver,
+                method,
+                arglist,
+                safe_nav,
+            } if arglist.args.is_empty()
+                && arglist.block.is_none()
+                && arglist.kw_args.is_empty()
+                && !safe_nav =>
+            {
+                let recv = self.gen_expr_reg(ctx, info, id_store, receiver.clone())?;
+                let method = id_store.get_ident_id(&format!("{}=", method));
+                LvalueKind::Send { recv, method }
+            }
+            NodeKind::LocalVar(_) => LvalueKind::Other,
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
         };
         Ok(lhs)
     }
 
-    fn gen_assign(&mut self, src: BcReg, lhs: LhsKind, loc: Loc) {
+    fn gen_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
         match lhs {
-            LhsKind::Const(name) => {
+            LvalueKind::Const(name) => {
                 self.push(BcIr::StoreConst(src, name), loc);
             }
-            LhsKind::InstanceVar(name) => {
+            LvalueKind::InstanceVar(name) => {
                 self.push(BcIr::StoreIvar(src, name), loc);
             }
-            LhsKind::Index { base, index } => {
+            LvalueKind::Index { base, index } => {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
             }
-            LhsKind::Other => unreachable!(),
+            LvalueKind::Send { recv, method } => {
+                self.gen_method_assign(method, recv, src, loc);
+            }
+            LvalueKind::Other => unreachable!(),
         }
     }
 
@@ -1327,7 +1345,7 @@ impl IrContext {
         recv: BcReg,
         method: IdentId,
         ret: Option<BcReg>,
-        arg: BcTemp,
+        arg: BcReg,
         len: usize,
         loc: Loc,
     ) {
@@ -1351,18 +1369,22 @@ impl IrContext {
         let method = id_store.get_ident_id_from_string(method);
         let (recv, arg, len) = if receiver.kind == NodeKind::SelfValue {
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
-            (BcReg::Self_, arg, len)
+            (BcReg::Self_, arg.into(), len)
         } else {
             self.push_expr(ctx, info, id_store, receiver)?;
             let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
             let recv = info.pop().into();
-            (recv, arg, len)
+            (recv, arg.into(), len)
         };
         self.gen_call(recv, method, ret, arg, len, loc);
         if is_ret {
             self.gen_ret(info, None);
         }
         return Ok(());
+    }
+
+    fn gen_method_assign(&mut self, method: IdentId, receiver: BcReg, val: BcReg, loc: Loc) {
+        self.gen_call(receiver, method, None, val, 1, loc);
     }
 
     fn gen_func_call(
@@ -1378,7 +1400,7 @@ impl IrContext {
     ) -> Result<()> {
         let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
         let method = id_store.get_ident_id_from_string(method);
-        self.gen_call(BcReg::Self_, method, ret, arg, len, loc);
+        self.gen_call(BcReg::Self_, method, ret, arg.into(), len, loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1463,7 +1485,7 @@ impl IrContext {
 
         let temp = info.temp;
         // At first, we evaluate lvalues and save their info(LhsKind).
-        let mut lhs_kind: Vec<LhsKind> = vec![];
+        let mut lhs_kind: Vec<LvalueKind> = vec![];
         for lhs in &mlhs {
             lhs_kind.push(self.eval_lvalue(ctx, info, id_store, lhs)?);
         }
@@ -1478,7 +1500,7 @@ impl IrContext {
         // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
             if let Some(local) = info.is_local(&lhs) {
-                assert_eq!(LhsKind::Other, kind);
+                assert_eq!(LvalueKind::Other, kind);
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
