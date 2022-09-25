@@ -157,22 +157,11 @@ extern "C" fn set_index(
     interp.invoke_method(globals, method, base, &[index, src])
 }
 
-extern "C" fn get_instance_var(
-    _interp: &mut Interp,
-    _globals: &mut Globals,
-    base: Value,
-    id: IdentId,
-) -> Value {
+extern "C" fn get_instance_var(base: Value, id: IdentId) -> Value {
     base.rvalue().get_var(id).unwrap_or_default()
 }
 
-extern "C" fn set_instance_var(
-    _interp: &mut Interp,
-    _globals: &mut Globals,
-    base: Value,
-    id: IdentId,
-    val: Value,
-) {
+extern "C" fn set_instance_var(base: Value, id: IdentId, val: Value) {
     base.rvalue_mut().set_var(id, val)
 }
 
@@ -203,6 +192,8 @@ extern "C" fn get_error_location(
     let normal_info = match &func_info.kind {
         FuncKind::Normal(info) => info,
         FuncKind::Builtin { .. } => return,
+        FuncKind::AttrReader { .. } => return,
+        FuncKind::AttrWriter { .. } => return,
     };
     let sourceinfo = normal_info.sourceinfo.clone();
     let loc = normal_info.sourcemap[pc - bc_base];
@@ -806,6 +797,8 @@ impl Codegen {
                     (codeptr, true)
                 }
                 FuncKind::Builtin { abs_address } => (self.wrap_native_func(*abs_address), false),
+                FuncKind::AttrReader { ivar_name } => (self.gen_attr_reader(*ivar_name), false),
+                FuncKind::AttrWriter { ivar_name } => (self.gen_attr_writer(*ivar_name), false),
             };
             self.jit.finalize();
             if is_ruby_func {
@@ -878,6 +871,68 @@ impl Codegen {
             call rax;
 
             leave;
+            ret;
+        );
+        label
+    }
+
+    ///
+    /// Generate attr_reader.
+    ///
+    /// - stack layout at the point of just after being called.
+    /// ~~~text
+    ///       +-------------+
+    ///  0x00 | return addr | <- rsp
+    ///       +-------------+
+    /// -0x08 |             |
+    ///       +-------------+
+    /// -0x10 |    meta     |
+    ///       +-------------+
+    /// -0x18 |  %0 (self)  |
+    ///       +-------------+
+    /// ~~~
+    fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm!(self.jit,
+            movq rdi, [rsp - 0x18];  // self: Value
+            movq rsi, (ivar_name.get()); // name: IdentId
+            movq rax, (get_instance_var);
+            pushq rbp;
+            call rax;
+            popq rbp;
+            ret;
+        );
+        label
+    }
+
+    ///
+    /// Generate attr_writer.
+    ///
+    /// - stack layout at the point of just after being called.
+    /// ~~~text
+    ///       +-------------+
+    ///  0x00 | return addr | <- rsp
+    ///       +-------------+
+    /// -0x08 |             |
+    ///       +-------------+
+    /// -0x10 |    meta     |
+    ///       +-------------+
+    /// -0x18 |  %0 (self)  |
+    ///       +-------------+
+    /// -0x20 |   %1(val)   |
+    ///       +-------------+
+    /// ~~~
+    fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm!(self.jit,
+            movq rdi, [rsp - 0x18];  // self: Value
+            movq rsi, (ivar_name.get()); // name: IdentId
+            movq rdx, [rsp - 0x20];  //val: Value
+            movq rax, (set_instance_var);
+            pushq rbp;
+            call rax;
+            movq rax, (NIL_VALUE);
+            popq rbp;
             ret;
         );
         label

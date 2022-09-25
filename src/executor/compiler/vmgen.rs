@@ -893,10 +893,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rdx, [rbp - 16];  // base: Value
-            movq rcx, rdi; // name: IdentId
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+            movq rsi, rdi; // name: IdentId
+            movq rdi, [rbp - 16];  // base: Value
             movq rax, (get_instance_var);
             call rax;
         };
@@ -909,11 +907,9 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rdx, [rbp - 16];  // base: Value
-            movq rcx, rdi;  // name: IdentId
-            movq r8, [r15];     // val: Value
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+            movq rsi, rdi;  // name: IdentId
+            movq rdi, [rbp - 16];  // base: Value
+            movq rdx, [r15];     // val: Value
             movq rax, (set_instance_var);
             call rax;
         };
