@@ -51,6 +51,28 @@ impl Globals {
     pub fn write_stdout(&mut self, bytes: &[u8]) {
         self.stdout.write(bytes).unwrap();
     }
+
+    pub fn exec_startup(&mut self) {
+        let path = std::path::Path::new("startup/startup.rb");
+        let code = include_str!("../../startup/startup.rb").to_string();
+        let startup_fid = match self.compile_script(code, path) {
+            Ok(func_id) => func_id,
+            Err(err) => {
+                eprintln!("error occured in startup.rb");
+                eprintln!("{}", err.get_error_message(&self));
+                err.show_loc();
+                return;
+            }
+        };
+        match Interp::eval_toplevel(self, startup_fid) {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("error occured in startup.rb");
+                eprintln!("{}", err.get_error_message(self));
+                err.show_loc();
+            }
+        };
+    }
 }
 
 //

@@ -79,6 +79,9 @@ fn main() {
         None => {
             let mut rl = Editor::<()>::new().unwrap();
             let mut globals = Globals::new(args.warning, args.no_jit);
+
+            globals.exec_startup();
+
             let mut cont_mode = false;
             let mut buf = String::new();
             let mut script_line = 0;
@@ -151,10 +154,11 @@ fn main() {
 
 fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     let mut globals = Globals::new(warning, no_jit_flag);
+    globals.exec_startup();
     let main_fid = match globals.compile_script(code.to_string(), path) {
         Ok(func_id) => func_id,
         Err(err) => {
-            eprintln!("{:?}", err.get_error_message(&globals));
+            eprintln!("{}", err.get_error_message(&globals));
             err.show_loc();
             return;
         }

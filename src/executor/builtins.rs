@@ -61,7 +61,7 @@ pub fn init_builtins(globals: &mut Globals) {
         ARRAY_CLASS,
         globals.define_class_under_obj("Array").as_class()
     );
-    globals.define_class_under_obj("Process");
+    //globals.define_class_under_obj("Process");
     let file_class = globals.define_class_under_obj("File").as_class();
 
     object::init(globals);
