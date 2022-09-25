@@ -258,4 +258,19 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn attr_accessor_assign_op() {
+        run_test(
+            r#"
+        class A
+          attr_accessor :v
+        end
+        a = A.new
+        a.v = 7
+        a.v *= 3
+        a.v
+        "#,
+        );
+    }
 }
