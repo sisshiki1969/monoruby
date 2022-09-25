@@ -131,9 +131,7 @@ extern "C" fn respond_to(
         RV::String(b) => globals.get_ident_id(String::from_utf8_lossy(b).as_ref()),
         _ => unimplemented!(),
     };
-    Some(Value::bool(
-        globals.get_method_inner(class_id, name).is_some(),
-    ))
+    Some(Value::bool(globals.find_method(class_id, name).is_some()))
 }
 
 /// ### Object#inspect

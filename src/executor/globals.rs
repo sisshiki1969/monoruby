@@ -321,7 +321,7 @@ impl Globals {
         singleton_id
     }
 
-    pub fn get_method_inner(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    pub fn find_method(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.class.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -340,19 +340,24 @@ impl Globals {
         func_name: IdentId,
         args_len: usize,
     ) -> Option<FuncId> {
-        let func_id = match self.get_method_inner(class_id, func_name) {
+        let func_id = match self.find_method(class_id, func_name) {
             Some(id) => id,
             None => {
                 self.err_method_not_found(func_name, class_id);
                 return None;
             }
         };
+        self.check_arg(func_id, args_len)?;
+        Some(func_id)
+    }
+
+    pub fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
         let arity = self.func[func_id].arity();
         if arity != -1 && (arity as usize) != args_len {
             self.error = Some(MonorubyErr::wrong_arguments(arity as usize, args_len));
             return None;
         }
-        Some(func_id)
+        Some(())
     }
 
     ///
@@ -469,10 +474,10 @@ impl Globals {
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_reader(&mut self, class_id: ClassId, ivar_name: String) -> IdentId {
-        let ivar_id = self.get_ident_id(&format!("@{}", ivar_name));
-        let method_name = self.get_ident_id(&ivar_name);
-        let func_id = self.func.add_attr_reader(ivar_name, ivar_id);
+    pub fn define_attr_reader(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+        let ivar_name = self.id_store.add_ivar_prefix(method_name);
+        let method_name_str = self.get_ident_name(method_name).to_string();
+        let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
         method_name
     }
@@ -480,10 +485,11 @@ impl Globals {
     ///
     /// Define attribute writer for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_writer(&mut self, class_id: ClassId, ivar_name: String) -> IdentId {
-        let ivar_id = self.get_ident_id(&format!("@{}", ivar_name));
-        let method_name = self.get_ident_id(&format!("{}=", ivar_name));
-        let func_id = self.func.add_attr_writer(ivar_name, ivar_id);
+    pub fn define_attr_writer(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+        let ivar_name = self.id_store.add_ivar_prefix(method_name);
+        let method_name = self.id_store.add_assign_postfix(method_name);
+        let method_name_str = self.get_ident_name(method_name).to_string();
+        let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
         method_name
     }

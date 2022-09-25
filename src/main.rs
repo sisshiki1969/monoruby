@@ -1,9 +1,13 @@
 #![feature(box_patterns)]
 #![feature(int_roundings)]
+#![feature(const_option)]
 pub use alloc::*;
 pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;
-pub use ruruby_parse::*;
+pub use ruruby_parse::{
+    ArgList, BinOp, BlockInfo, CmpKind, FormalParam, Loc, LvarCollector, Node, NodeKind, ParamKind,
+    ParseErr, ParseErrKind, Parser, SourceInfoRef, UnOp,
+};
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -18,9 +22,11 @@ use rustyline::Editor;
 
 mod alloc;
 mod executor;
+mod id_table;
 mod rvalue;
 mod value;
 use executor::*;
+use id_table::*;
 use rvalue::*;
 use value::*;
 

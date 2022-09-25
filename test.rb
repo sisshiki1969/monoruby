@@ -1,10 +1,12 @@
 class A
-  attr_reader "v"
-  def f(x)
-    @v=x
+  attr_accessor :w,:x,:y,:z
+  def initialize(x,y,z)
+    @w=42
+    @x=x
+    @y=y
+    @z=z
   end
 end
-a = A.new
-a.f(42)
+a = A.new(3,7,11)
 #puts A.instance_methods
-puts a.v
+puts a.x, a.y, a.z

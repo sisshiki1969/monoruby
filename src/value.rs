@@ -421,12 +421,12 @@ impl Value {
         unsafe { &mut *(self.get() as *mut RValue) }
     }
 
-    pub(crate) fn is_symbol(&self) -> Option<IdentId> {
+    /*pub(crate) fn is_symbol(&self) -> Option<IdentId> {
         match self.unpack() {
             RV::Symbol(sym) => Some(sym),
             _ => None,
         }
-    }
+    }*/
 
     pub(crate) fn as_array_mut(&self) -> &mut Vec<Value> {
         match &mut self.rvalue_mut().kind {
@@ -475,24 +475,25 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_symbol_or_string(&self, globals: &mut Globals) -> Option<String> {
-        if let Some(sym) = self.is_symbol() {
-            return Some(globals.get_ident_name(sym).to_string());
+    pub(crate) fn expect_symbol_or_string(&self, globals: &mut Globals) -> Option<IdentId> {
+        match self.unpack() {
+            RV::Symbol(sym) => return Some(sym),
+            RV::String(s) => {
+                let s = String::from_utf8_lossy(s);
+                return Some(globals.get_ident_id(s.as_ref()));
+            }
+            _ => {}
         }
-        if let Some(s) = self.is_string() {
-            return Some(String::from_utf8_lossy(s).to_string());
-        }
-
         globals.err_is_not_symbol_nor_string(*self);
         None
     }
 
-    pub(crate) fn is_string(&self) -> Option<&SmallVec<[u8; 31]>> {
+    /*pub(crate) fn is_string(&self) -> Option<&SmallVec<[u8; 31]>> {
         match self.unpack() {
             RV::String(b) => Some(b),
             _ => None,
         }
-    }
+    }*/
 
     pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
         match self.unpack() {

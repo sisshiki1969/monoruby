@@ -5,7 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_func(CLASS_CLASS, "new", new, 0);
+    globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
@@ -23,7 +23,13 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// !! We must call Object#initialize.
 extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
-    allocate(vm, globals, arg, len)
+    let obj = allocate(vm, globals, arg, 0)?;
+    if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
+        globals.check_arg(func_id, len)?;
+        let args: Vec<Value> = (0..len).into_iter().map(|i| arg[i]).collect();
+        vm.invoke_func(globals, func_id, obj, &args)?;
+    };
+    Some(obj)
 }
 
 /// ### Class#superclass
@@ -270,6 +276,25 @@ mod test {
         a.v = 7
         a.v *= 3
         a.v
+        "#,
+        );
+    }
+
+    #[test]
+    fn initializer() {
+        run_test(
+            r#"
+        class A
+          attr_accessor :w, :x, :y, :z
+          def initialize(x,y,z)
+            @w = 42
+            @x = x
+            @y = y
+            @z = z
+          end
+        end
+        a = A.new(7, 11, 17)
+        [a.w, a.x, a.y, a.z]
         "#,
         );
     }

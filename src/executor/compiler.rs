@@ -353,10 +353,12 @@ impl Codegen {
             movq rdi, r9;
             testq r9, r9;
             jeq  loop_exit;
+            movq r10, r9;
             negq r9;
         loop_:
-            movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8- 0x20], rax;
+            movq rax, [r8 + r10 * 8 - 8];
+            movq [rsp + r9 * 8 - 0x20], rax;
+            subq r10, 1;
             addq r9, 1;
             jne  loop_;
         loop_exit:

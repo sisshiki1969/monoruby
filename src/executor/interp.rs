@@ -60,7 +60,9 @@ impl Interp {
 }
 
 impl Interp {
-    /// Invoke method from native function.
+    ///
+    /// Invoke method for *receiver* and *method* from native function.
+    ///
     pub fn invoke_method(
         &mut self,
         globals: &mut Globals,
@@ -70,6 +72,17 @@ impl Interp {
     ) -> Option<Value> {
         let len = args.len();
         let func_id = globals.get_method(receiver.class_id(), method, len)?;
+        self.invoke_func(globals, func_id, receiver, args)
+    }
+
+    pub fn invoke_func(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        let len = args.len();
         let data = self.get_func_data(globals, func_id) as *const _;
         (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), len)
     }

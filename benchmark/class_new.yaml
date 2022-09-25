@@ -1,0 +1,18 @@
+prelude: |
+  class A
+    def initialize(x,y)
+    end
+  end
+benchmark:
+  class_new: |
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+    a = A.new(1,2)
+loop_count: 300000
