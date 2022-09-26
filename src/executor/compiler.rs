@@ -788,29 +788,66 @@ impl Codegen {
     ///
 
     pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
-        if globals.func[func_id].data.codeptr.is_none() {
-            let (label, is_ruby_func) = match &globals.func[func_id].kind {
+        let func = &mut globals.func[func_id];
+        if func.data.codeptr.is_none() {
+            let codeptr = match func.kind {
                 FuncKind::Normal(_) => {
-                    let jit_entry = self.jit_compile_ruby(globals, func_id, None);
-                    let codeptr = self.jit.get_current_address();
-                    monoasm!(self.jit,
-                        jmp jit_entry;
-                    );
-                    (codeptr, true)
+                    let codeptr = if !globals.no_jit {
+                        self.gen_jit_stub()
+                    } else {
+                        self.gen_vm_stub()
+                    };
+                    func.data.meta.set_jit();
+                    codeptr
                 }
-                FuncKind::Builtin { abs_address } => (self.wrap_native_func(*abs_address), false),
-                FuncKind::AttrReader { ivar_name } => (self.gen_attr_reader(*ivar_name), false),
-                FuncKind::AttrWriter { ivar_name } => (self.gen_attr_writer(*ivar_name), false),
+                FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
+                FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(ivar_name),
+                FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
             };
             self.jit.finalize();
-            if is_ruby_func {
-                globals.func[func_id].data.meta.set_jit();
-            }
-            assert_eq!(
-                None,
-                std::mem::replace(&mut globals.func[func_id].data.codeptr, Some(label))
-            );
+            func.data.codeptr = Some(codeptr);
         }
+    }
+
+    ///
+    /// Set jit compilation stub code for an entry point of each Ruby methods.
+    ///
+    fn gen_jit_stub(&mut self) -> CodePtr {
+        let vm_entry = self.vm_entry;
+        let codeptr = self.jit.get_current_address();
+        let counter = self.jit.const_i32(5);
+        let entry = self.jit.label();
+        monoasm!(self.jit,
+        entry:
+            subl [rip + counter], 1;
+            jne vm_entry;
+            movl rax, [rsp - 16];
+            subq rsp, 1024;
+            pushq rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, rax;
+            movq rax, (Self::exec_jit_compile);
+            call rax;
+            movw [rip + entry], 0xe9;
+            lea rdi, [rip + entry];
+            addq rdi, 5;
+            subq rax, rdi;
+            movl [rdi - 4], rax;
+            popq rdi;
+            addq rsp, 1024;
+            jmp entry;
+        );
+        codeptr
+    }
+
+    fn gen_vm_stub(&mut self) -> CodePtr {
+        let vm_entry = self.vm_entry;
+        let codeptr = self.jit.get_current_address();
+        monoasm!(self.jit,
+            jmp vm_entry;
+        );
+        codeptr
     }
 
     ///
@@ -850,7 +887,7 @@ impl Codegen {
     ///   r13: pc (dummy for builtin funcions)
     /// ~~~
     ///
-    pub fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
+    fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
@@ -969,66 +1006,6 @@ impl Codegen {
             .codegen
             .jit_compile_ruby(globals, func_id, Some(pc_index));
         interp.codegen.jit.get_label_address(label)
-    }
-
-    ///
-    /// Set jit compilation stab code for an entry point of each Ruby methods.
-    ///
-    pub fn set_jit_stab(&mut self, store: &mut FnStore) {
-        let vm_entry = self.vm_entry;
-        for func in store.funcs_mut().iter_mut() {
-            match &func.kind {
-                FuncKind::Normal(_) => {
-                    let codeptr = self.jit.get_current_address();
-                    let counter = self.jit.const_i32(5);
-                    let entry = self.jit.label();
-                    monoasm!(self.jit,
-                    entry:
-                        subl [rip + counter], 1;
-                        jne vm_entry;
-                        movl rax, [rsp - 16];
-                        subq rsp, 1024;
-                        pushq rdi;
-                        movq rdi, rbx;
-                        movq rsi, r12;
-                        movl rdx, rax;
-                        movq rax, (Self::exec_jit_compile);
-                        call rax;
-                        movw [rip + entry], 0xe9;
-                        lea rdi, [rip + entry];
-                        addq rdi, 5;
-                        subq rax, rdi;
-                        movl [rdi - 4], rax;
-                        popq rdi;
-                        addq rsp, 1024;
-                        jmp entry;
-                    );
-                    func.data.codeptr = Some(codeptr);
-                }
-                _ => {}
-            };
-        }
-        self.jit.finalize();
-    }
-
-    pub fn set_vm_stab(&mut self, store: &mut FnStore) {
-        let vm_entry = self.vm_entry;
-        for func in store.funcs_mut().iter_mut() {
-            match &func.kind {
-                FuncKind::Normal(_) => {
-                    let codeptr = self.jit.get_current_address();
-                    monoasm!(self.jit,
-                        jmp vm_entry;
-                    );
-                    assert_eq!(
-                        None,
-                        std::mem::replace(&mut func.data.codeptr, Some(codeptr))
-                    );
-                }
-                _ => {}
-            };
-        }
-        self.jit.finalize();
     }
 }
 
