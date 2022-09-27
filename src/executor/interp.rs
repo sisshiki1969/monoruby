@@ -41,11 +41,6 @@ impl Interp {
 
     /// Execute top level method.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        if !globals.no_jit {
-            self.codegen.set_jit_stab(&mut globals.func)
-        } else {
-            self.codegen.set_vm_stab(&mut globals.func)
-        }
         let main_data = self.get_func_data(globals, func_id) as *const _;
 
         let entry_point = self.codegen.entry_point;
