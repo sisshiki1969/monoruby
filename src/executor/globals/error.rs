@@ -19,6 +19,7 @@ pub enum MonorubyErrKind {
     Range(String),
     Type(String),
     Index(String),
+    Frozen(String),
 }
 
 impl MonorubyErr {
@@ -145,5 +146,9 @@ impl MonorubyErr {
 
     pub fn indexerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index(msg))
+    }
+
+    pub fn frozenerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Frozen(msg))
     }
 }

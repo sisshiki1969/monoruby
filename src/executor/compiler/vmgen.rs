@@ -905,13 +905,17 @@ impl Codegen {
 
     fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let entry_return = self.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rsi, rdi;  // name: IdentId
-            movq rdi, [rbp - 16];  // base: Value
-            movq rdx, [r15];     // val: Value
+            movq rdx, rdi;  // name: IdentId
+            movq rdi, r12; //&mut Globals
+            movq rsi, [rbp - 16];  // base: Value
+            movq rcx, [r15];     // val: Value
             movq rax, (set_instance_var);
             call rax;
+            testq rax, rax;
+            jeq  entry_return;
         };
         self.fetch_and_dispatch();
         label

@@ -711,16 +711,18 @@ impl Codegen {
         self.store_rax(ret);
     }
 
-    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm) {
+    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm, pc: BcPc) {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdi, [rbp - 16];  // base: Value
-          movq rsi, (id.get());  // id: IdentId
-          movq rdx, [rbp - (conv(src))];   // val: Value
+          movq rdi, r12; //&mut Globals
+          movq rsi, [rbp - 16];  // base: Value
+          movq rdx, (id.get());  // id: IdentId
+          movq rcx, [rbp - (conv(src))];   // val: Value
           movq rax, (set_instance_var);
           call rax;
         );
         self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
     }
 
     fn jit_get_index(

@@ -141,8 +141,19 @@ impl Globals {
     ///
     pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
         self.set_error(MonorubyErr::indexerr(format!(
-            " index {} too small for array; minimum: {}",
+            "index {} too small for array; minimum: {}",
             actual, minimum,
+        )));
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub fn err_cant_modify_frozen(&mut self, val: Value) {
+        self.set_error(MonorubyErr::indexerr(format!(
+            "can't modify frozen {}: {}",
+            val.class_id().get_name(self),
+            self.val_tos(val),
         )));
     }
 
@@ -569,6 +580,7 @@ impl Globals {
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
             MonorubyErrKind::Index(msg) => msg.to_string(),
+            MonorubyErrKind::Frozen(msg) => msg.to_string(),
         }
     }
 }

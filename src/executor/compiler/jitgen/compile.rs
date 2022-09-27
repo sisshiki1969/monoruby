@@ -278,7 +278,7 @@ impl Codegen {
                 BcOp::StoreIvar(src, id) => {
                     ctx.read_slot(self, src);
                     let xmm_using = ctx.get_xmm_using();
-                    self.jit_store_ivar(id, src, xmm_using);
+                    self.jit_store_ivar(id, src, xmm_using, pc);
                 }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
@@ -485,26 +485,28 @@ impl Codegen {
                                             movq rax, (get_instance_var);
                                             call rax;
                                         );
+                                        self.xmm_restore(&xmm_using);
                                         if !ret.is_zero() {
                                             self.store_rax(ret);
                                         }
-                                        self.xmm_restore(&xmm_using);
                                     }
                                     FuncKind::AttrWriter { ivar_name } => {
                                         assert_eq!(1, len);
                                         let xmm_using = ctx.get_xmm_using();
                                         self.xmm_save(&xmm_using);
                                         monoasm!(self.jit,
-                                            movq rdi, [rbp - (conv(recv))];  // recv: Value
-                                            movq rsi, (ivar_name.get()); // name: IdentId
-                                            movq rdx, [rbp - (conv(args))];  //val: Value
+                                            movq rdi, r12; //&mut Globals
+                                            movq rsi, [rbp - (conv(recv))];  // recv: Value
+                                            movq rdx, (ivar_name.get()); // name: IdentId
+                                            movq rcx, [rbp - (conv(args))];  //val: Value
                                             movq rax, (set_instance_var);
                                             call rax;
                                         );
+                                        self.xmm_restore(&xmm_using);
+                                        self.handle_error(pc);
                                         if !ret.is_zero() {
                                             self.store_rax(args);
                                         }
-                                        self.xmm_restore(&xmm_using);
                                     }
                                     _ => self.jit_method_call(
                                         recv,
