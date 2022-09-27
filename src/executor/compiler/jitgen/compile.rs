@@ -432,15 +432,10 @@ impl Codegen {
                         BcOp::MethodCall(ret, name) => {
                             ctx.dealloc_xmm(ret);
                             let callee_codeptr = pc.codeptr();
-                            if let Some(id) = callee_codeptr {
+                            if let Some(_codeptr) = callee_codeptr {
                                 let meta = (pc + 1).meta();
-                                let pc = (pc + 1).pc();
-                                /*eprintln!(
-                                    "{:?} {:?} {:?}",
-                                    globals.func[meta.func_id()].kind,
-                                    id,
-                                    pc
-                                );*/
+                                let _callee_pc = (pc + 1).pc();
+                                let (_class_id, _version) = (pc - 1).class_version();
                                 match globals.func[meta.func_id()].kind {
                                     FuncKind::AttrReader { ivar_name } => {
                                         assert_eq!(0, len);
@@ -483,10 +478,20 @@ impl Codegen {
                                         len,
                                         &ctx,
                                         pc + 2,
+                                        None,
                                     ),
                                 };
                             } else {
-                                self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
+                                self.jit_method_call(
+                                    recv,
+                                    name,
+                                    ret,
+                                    args,
+                                    len,
+                                    &ctx,
+                                    pc + 2,
+                                    None,
+                                );
                             }
                         }
                         _ => unreachable!(),

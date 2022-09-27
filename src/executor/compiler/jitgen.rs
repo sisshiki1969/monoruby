@@ -1722,6 +1722,7 @@ impl Codegen {
         len: u16,
         ctx: &BBContext,
         pc: BcPc,
+        cache_info: Option<(ClassId, u32, CodePtr, Meta, BcPc)>,
     ) {
         // set arguments to a callee stack.
         //
@@ -1743,14 +1744,27 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
+
         let method_resolved = self.jit.label();
         let patch_meta = self.jit.label();
         let patch_adr = self.jit.label();
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
-        let cached_class_version = self.jit.const_i32(-1);
-        let cached_recv_class = self.jit.const_i32(0);
+        let cached_class_version =
+            self.jit
+                .const_i32(if let Some((_, version, _, _, _)) = cache_info {
+                    version as i32
+                } else {
+                    -1
+                });
+        let cached_recv_class =
+            self.jit
+                .const_i32(if let Some((class_id, _, _, _, _)) = cache_info {
+                    class_id.get() as i32
+                } else {
+                    0
+                });
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;

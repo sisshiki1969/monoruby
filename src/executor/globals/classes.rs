@@ -20,6 +20,10 @@ impl ClassId {
     pub const fn new(id: u32) -> Self {
         Self(id)
     }
+
+    pub fn get(&self) -> u32 {
+        self.0
+    }
 }
 
 impl std::fmt::Debug for ClassId {

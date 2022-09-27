@@ -154,6 +154,11 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
+    pub(crate) fn class_version(&self) -> (ClassId, u32) {
+        let op = self.op2.0;
+        (ClassId::new(op as u32), (op >> 32) as u32)
+    }
+
     pub(crate) fn codeptr(&self) -> Option<CodePtr> {
         let op = self.op2.0;
         if op == 0 {
