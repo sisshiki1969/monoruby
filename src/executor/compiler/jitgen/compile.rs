@@ -149,7 +149,12 @@ impl Codegen {
         }
     }
 
-    pub(super) fn compile_bb(&mut self, func: &RubyFuncInfo, cc: &mut CompileContext) -> bool {
+    pub(super) fn compile_bb(
+        &mut self,
+        globals: &Globals,
+        func: &RubyFuncInfo,
+        cc: &mut CompileContext,
+    ) -> bool {
         let mut skip = false;
         let is_loop = matches!(func.get_pc(cc.bb_pos).op1(), BcOp::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
@@ -459,7 +464,61 @@ impl Codegen {
                     match std::mem::take(&mut self.opt_buf).unwrap().op1() {
                         BcOp::MethodCall(ret, name) => {
                             ctx.dealloc_xmm(ret);
-                            self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
+                            let callee_codeptr = pc.codeptr();
+                            if let Some(id) = callee_codeptr {
+                                let meta = (pc + 1).meta();
+                                let pc = (pc + 1).pc();
+                                /*eprintln!(
+                                    "{:?} {:?} {:?}",
+                                    globals.func[meta.func_id()].kind,
+                                    id,
+                                    pc
+                                );*/
+                                match globals.func[meta.func_id()].kind {
+                                    FuncKind::AttrReader { ivar_name } => {
+                                        assert_eq!(0, len);
+                                        let xmm_using = ctx.get_xmm_using();
+                                        self.xmm_save(&xmm_using);
+                                        monoasm!(self.jit,
+                                            movq rdi, [rbp - (conv(recv))];  // recv: Value
+                                            movq rsi, (ivar_name.get()); // name: IdentId
+                                            movq rax, (get_instance_var);
+                                            call rax;
+                                        );
+                                        if !ret.is_zero() {
+                                            self.store_rax(ret);
+                                        }
+                                        self.xmm_restore(&xmm_using);
+                                    }
+                                    FuncKind::AttrWriter { ivar_name } => {
+                                        assert_eq!(1, len);
+                                        let xmm_using = ctx.get_xmm_using();
+                                        self.xmm_save(&xmm_using);
+                                        monoasm!(self.jit,
+                                            movq rdi, [rbp - (conv(recv))];  // recv: Value
+                                            movq rsi, (ivar_name.get()); // name: IdentId
+                                            movq rdx, [rbp - (conv(args))];  //val: Value
+                                            movq rax, (set_instance_var);
+                                            call rax;
+                                        );
+                                        if !ret.is_zero() {
+                                            self.store_rax(args);
+                                        }
+                                        self.xmm_restore(&xmm_using);
+                                    }
+                                    _ => self.jit_method_call(
+                                        recv,
+                                        name,
+                                        ret,
+                                        args,
+                                        len,
+                                        &ctx,
+                                        pc + 2,
+                                    ),
+                                };
+                            } else {
+                                self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2);
+                            }
                         }
                         _ => unreachable!(),
                     }

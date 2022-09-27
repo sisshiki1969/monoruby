@@ -40,6 +40,10 @@ impl BcPc {
     pub(crate) fn from(bc: &Bc) -> Self {
         Self(bc as *const _)
     }
+
+    pub(crate) fn from_u64(ptr: u64) -> Self {
+        Self(ptr as *const _)
+    }
 }
 
 impl std::ops::Sub<BcPcBase> for BcPc {

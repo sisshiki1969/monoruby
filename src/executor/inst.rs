@@ -154,6 +154,23 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
+    pub(crate) fn codeptr(&self) -> Option<CodePtr> {
+        let op = self.op2.0;
+        if op == 0 {
+            None
+        } else {
+            Some(CodePtr::from(op as _))
+        }
+    }
+
+    pub(crate) fn meta(&self) -> Meta {
+        Meta::new(self.op1)
+    }
+
+    pub(crate) fn pc(&self) -> BcPc {
+        BcPc::from_u64(self.op2.0)
+    }
+
     pub(crate) fn value(&self) -> Option<Value> {
         match self.op2.0 {
             0 => None,
@@ -390,6 +407,14 @@ pub(super) enum BcOp {
     Ret(SlotId),
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
+    //                0       4       8       12      16
+    //                +-------+-------+-------+-------+
+    // MethodCall     |   |ret|identid| class |version|
+    //                +-------+-------+-------+-------+
+    // MethodArgs     |   |rcv|arg|len|    CodePtr    |
+    //                +-------+-------+-------+-------+
+    //                |      Meta     |      PC       |
+    //                +-------+-------+-------+-------+
     /// func call(%ret, name)
     MethodCall(SlotId, IdentId),
     /// func call 2nd opecode(%recv, %args, len)

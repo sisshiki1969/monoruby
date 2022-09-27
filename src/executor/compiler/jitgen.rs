@@ -1045,7 +1045,7 @@ impl Codegen {
         );
         for i in bb_start_pos {
             cc.bb_pos = i;
-            if self.compile_bb(func, &mut cc) {
+            if self.compile_bb(globals, func, &mut cc) {
                 break;
             };
         }
