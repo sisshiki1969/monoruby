@@ -243,42 +243,34 @@ impl Codegen {
                     ctx.read_slot(self, base);
                     ctx.read_slot(self, idx);
                     ctx.dealloc_xmm(ret);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.jit_get_index(ret, base, idx, pc, xmm_using);
+                    self.jit_get_index(ret, base, idx, pc, &ctx);
                 }
                 BcOp::IndexAssign(src, base, idx) => {
                     ctx.read_slot(self, base);
                     ctx.read_slot(self, idx);
                     ctx.read_slot(self, src);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.jit_index_assign(src, base, idx, pc, xmm_using);
+                    self.jit_index_assign(src, base, idx, pc, &ctx);
                 }
                 BcOp::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    let xmm_using = ctx.get_xmm_using();
-
                     if pc.value().is_none() || pc.value().unwrap().class_id() != FLOAT_CLASS {
-                        self.load_constant(dst, id, pc, xmm_using);
+                        self.load_constant(dst, id, pc, &ctx);
                     } else {
-                        let wb = ctx.get_write_back();
                         let fdst = ctx.alloc_xmm_read(dst);
-                        self.load_float_constant(dst, fdst, id, pc, xmm_using, wb);
+                        self.load_float_constant(dst, fdst, id, pc, &ctx);
                     }
                 }
                 BcOp::StoreConst(src, id) => {
-                    let xmm_using = ctx.get_xmm_using();
                     ctx.read_slot(self, src);
-                    self.jit_store_constant(id, src, xmm_using);
+                    self.jit_store_constant(id, src, &ctx);
                 }
                 BcOp::LoadIvar(ret, id) => {
                     ctx.dealloc_xmm(ret);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.jit_load_ivar(id, ret, xmm_using);
+                    self.jit_load_ivar(id, ret, &ctx);
                 }
                 BcOp::StoreIvar(src, id) => {
                     ctx.read_slot(self, src);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.jit_store_ivar(id, src, xmm_using, pc);
+                    self.jit_store_ivar(id, src, &ctx, pc);
                 }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
@@ -288,7 +280,7 @@ impl Codegen {
                 }
                 BcOp::Neg(dst, src) => {
                     if pc.is_float1() {
-                        let fsrc = ctx.xmm_read_assume_float(self, src, pc);
+                        let fsrc = self.xmm_read_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(dst);
                         let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         self.xmm_mov(fsrc, fdst);
@@ -310,16 +302,9 @@ impl Codegen {
                         ctx.read_slot(self, lhs);
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(
-                            pc,
-                            kind,
-                            ret,
-                            BinOpMode::RR(lhs, rhs),
-                            ctx.get_write_back(),
-                            ctx.get_xmm_using(),
-                        );
+                        self.gen_binop_integer(pc, kind, ret, BinOpMode::RR(lhs, rhs), &ctx);
                     } else if pc.is_binary_float() {
-                        let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                        let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float(kind, fret, flhs, frhs);
                     } else {
@@ -327,26 +312,17 @@ impl Codegen {
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
                         self.load_binary_args(lhs, rhs);
-                        self.gen_binop_kind(ctx.get_xmm_using(), pc, kind, ret);
+                        self.gen_binop_kind(&ctx, pc, kind, ret);
                     }
                 }
 
                 BcOp::BinOpRi(kind, ret, lhs, rhs) => {
-                    let wb = ctx.get_write_back();
-                    let xmm_using = ctx.get_xmm_using();
                     if pc.is_integer1() {
                         ctx.read_slot(self, lhs);
                         ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(
-                            pc,
-                            kind,
-                            ret,
-                            BinOpMode::RI(lhs, rhs),
-                            wb,
-                            xmm_using,
-                        );
+                        self.gen_binop_integer(pc, kind, ret, BinOpMode::RI(lhs, rhs), &ctx);
                     } else if pc.is_float1() {
-                        let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                        let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ri(kind, fret, flhs, rhs);
                     } else {
@@ -356,26 +332,17 @@ impl Codegen {
                             movq rdi, [rbp - (conv(lhs))];
                             movq rsi, (Value::int32(rhs as i32).get());
                         );
-                        self.gen_binop_kind(ctx.get_xmm_using(), pc, kind, ret);
+                        self.gen_binop_kind(&ctx, pc, kind, ret);
                     }
                 }
 
                 BcOp::BinOpIr(kind, ret, lhs, rhs) => {
-                    let wb = ctx.get_write_back();
-                    let xmm_using = ctx.get_xmm_using();
                     if pc.is_integer2() {
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(
-                            pc,
-                            kind,
-                            ret,
-                            BinOpMode::IR(lhs, rhs),
-                            wb,
-                            xmm_using,
-                        );
+                        self.gen_binop_integer(pc, kind, ret, BinOpMode::IR(lhs, rhs), &ctx);
                     } else if pc.is_float2() {
-                        let frhs = ctx.xmm_read_assume_float(self, rhs, pc);
+                        let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ir(kind, fret, lhs, frhs);
                     } else {
@@ -385,7 +352,7 @@ impl Codegen {
                             movq rdi, (Value::int32(lhs as i32).get());
                             movq rsi, [rbp - (conv(rhs))];
                         );
-                        self.gen_binop_kind(ctx.get_xmm_using(), pc, kind, ret);
+                        self.gen_binop_kind(&ctx, pc, kind, ret);
                     }
                 }
 
@@ -394,7 +361,7 @@ impl Codegen {
                         assert!(self.opt_buf.is_none());
                         self.opt_buf = Some(pc);
                     } else if pc.is_binary_float() {
-                        let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                        let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                         ctx.dealloc_xmm(ret);
                         monoasm! { self.jit,
                             xorq rax, rax;
@@ -408,7 +375,7 @@ impl Codegen {
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, ctx.get_xmm_using());
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
                 BcOp::Cmpri(kind, ret, lhs, rhs, optimizable) => {
@@ -417,7 +384,7 @@ impl Codegen {
                         self.opt_buf = Some(pc);
                     } else if pc.is_float1() {
                         let rhs_label = self.jit.const_f64(rhs as f64);
-                        let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                        let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         ctx.dealloc_xmm(ret);
                         monoasm! { self.jit,
                             xorq rax, rax;
@@ -430,7 +397,7 @@ impl Codegen {
                         ctx.read_slot(self, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, ctx.get_xmm_using());
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
                 BcOp::Mov(dst, src) => {
@@ -539,8 +506,7 @@ impl Codegen {
                     );
                 }
                 BcOp::ClassDef(_ret, _name, _func) => {
-                    let wb = ctx.get_write_back();
-                    let side_exit = self.gen_side_deopt_dest(pc, wb);
+                    let side_exit = self.gen_side_deopt_dest(pc, &ctx);
                     monoasm!(self.jit,
                         jmp side_exit;
                     );
@@ -583,7 +549,7 @@ impl Codegen {
                     if pc.is_binary_float() {
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, _ret, lhs, rhs, true) => {
-                                let (flhs, frhs) = ctx.xmm_read_binary(self, lhs, rhs, pc);
+                                let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                                 monoasm! { self.jit,
                                     ucomisd xmm(flhs as u64 + 2), xmm(frhs as u64 + 2);
                                 };
@@ -591,7 +557,7 @@ impl Codegen {
                             }
                             BcOp::Cmpri(kind, _ret, lhs, rhs, true) => {
                                 let rhs_label = self.jit.const_f64(rhs as f64);
-                                let flhs = ctx.xmm_read_assume_float(self, lhs, pc);
+                                let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                                 monoasm! { self.jit,
                                     ucomisd xmm(flhs as u64 + 2), [rip + rhs_label];
                                 };
