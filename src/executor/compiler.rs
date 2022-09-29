@@ -43,7 +43,6 @@ pub struct Codegen {
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    opt_buf: Option<BcPc>,
 }
 
 fn conv(reg: SlotId) -> i64 {
@@ -420,7 +419,6 @@ impl Codegen {
             div_by_zero,
             dispatch,
             invoker,
-            opt_buf: None,
         };
         codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);

@@ -1,6 +1,292 @@
 use super::*;
 
 ///
+/// Program counter base.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct BcPcBase(*const Bc);
+
+impl std::ops::Add<usize> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: usize) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs as isize) })
+    }
+}
+
+impl std::ops::Add<InstId> for BcPcBase {
+    type Output = BcPc;
+    fn add(self, rhs: InstId) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs.0 as isize) })
+    }
+}
+
+impl BcPcBase {
+    pub(super) fn new(func: &RubyFuncInfo) -> Self {
+        BcPcBase(func.bytecode_top())
+    }
+}
+
+///
+/// Program counter
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct BcPc(*const Bc);
+
+impl BcPc {
+    pub(crate) fn from(bc: &Bc) -> Self {
+        Self(bc as *const _)
+    }
+
+    pub(crate) fn from_u64(ptr: u64) -> Self {
+        Self(ptr as *const _)
+    }
+
+    pub(crate) fn get_u64(self) -> u64 {
+        self.0 as _
+    }
+}
+
+impl std::ops::Sub<BcPcBase> for BcPc {
+    type Output = usize;
+    fn sub(self, rhs: BcPcBase) -> usize {
+        let offset = unsafe { self.0.offset_from(rhs.0) };
+        assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
+        offset as usize
+    }
+}
+
+impl std::ops::Sub<BcPc> for BcPc {
+    type Output = usize;
+    fn sub(self, rhs: BcPc) -> usize {
+        let offset = unsafe { self.0.offset_from(rhs.0) };
+        assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
+        offset as usize
+    }
+}
+
+impl std::ops::Add<isize> for BcPc {
+    type Output = BcPc;
+    fn add(self, rhs: isize) -> BcPc {
+        BcPc(unsafe { self.0.offset(rhs) })
+    }
+}
+
+impl std::ops::Sub<isize> for BcPc {
+    type Output = BcPc;
+    fn sub(self, rhs: isize) -> BcPc {
+        BcPc(unsafe { self.0.offset(-rhs) })
+    }
+}
+
+impl std::ops::AddAssign<i32> for BcPc {
+    fn add_assign(&mut self, offset: i32) {
+        unsafe {
+            *self = BcPc(self.0.offset(offset as isize));
+        }
+    }
+}
+
+impl std::default::Default for BcPc {
+    fn default() -> Self {
+        Self(std::ptr::null())
+    }
+}
+
+impl std::ops::Deref for BcPc {
+    type Target = Bc;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0 }
+    }
+}
+
+impl BcPc {
+    pub(super) fn op1(&self) -> BcOp {
+        BcOp::from_bc(*self)
+    }
+}
+
+impl BcPc {
+    pub fn format(&self, globals: &Globals, i: usize) -> Option<String> {
+        fn optstr(opt: bool) -> &'static str {
+            if opt {
+                "_"
+            } else {
+                ""
+            }
+        }
+        let s = match self.op1() {
+            BcOp::Br(disp) => {
+                format!("br =>:{:05}", i as i32 + 1 + disp)
+            }
+            BcOp::CondBr(reg, disp, opt, kind) => {
+                format!(
+                    "cond{}br {}{:?} =>:{:05}",
+                    kind.to_s(),
+                    optstr(opt),
+                    reg,
+                    i as i32 + 1 + disp
+                )
+            }
+            BcOp::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
+            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, globals.get_ident_name(id)),
+            BcOp::Literal(reg, val) => {
+                format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
+            }
+            BcOp::Array(ret, src, len) => {
+                format!("{:?} = array[{:?}; {}]", ret, src, len)
+            }
+            BcOp::Index(ret, base, idx) => {
+                format!("{:?} = {:?}.[{:?}]", ret, base, idx)
+            }
+            BcOp::IndexAssign(src, base, idx) => {
+                format!("{:?}.[{:?}] = {:?}", base, idx, src)
+            }
+            BcOp::LoadConst(reg, id) => {
+                let ConstSiteInfo {
+                    name,
+                    prefix,
+                    toplevel,
+                    ..
+                } = globals.func[id].clone();
+                let mut const_name = if toplevel { "::" } else { "" }.to_string();
+                for c in prefix {
+                    const_name += &format!("{}::", globals.get_ident_name(c));
+                }
+                const_name += globals.get_ident_name(name);
+                let op1 = format!("{:?} = const[{}]", reg, const_name);
+                format!(
+                    "{:36} [{}]",
+                    op1,
+                    match self.value() {
+                        None => "<invalid>".to_string(),
+                        Some(val) => val.inspect(globals),
+                    }
+                )
+            }
+            BcOp::StoreConst(reg, id) => {
+                format!("const[{}] = {:?}", globals.get_ident_name(id), reg)
+            }
+            BcOp::LoadIvar(reg, id) => {
+                format!("{:?} = {}", reg, globals.get_ident_name(id))
+            }
+            BcOp::StoreIvar(reg, id) => {
+                format!("{} = {:?}", globals.get_ident_name(id), reg)
+            }
+            BcOp::Nil(reg) => format!("{:?} = nil", reg),
+            BcOp::Neg(dst, src) => {
+                let op1 = format!("{:?} = neg {:?}", dst, src);
+                format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
+            }
+            BcOp::BinOp(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+                let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+                let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+            BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+                let op1 = format!(
+                    "{}{:?} = {:?} {:?} {}: i16",
+                    optstr(opt),
+                    dst,
+                    lhs,
+                    kind,
+                    rhs,
+                );
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
+            }
+
+            BcOp::Ret(reg) => format!("ret {:?}", reg),
+            BcOp::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
+            BcOp::MethodCall(ret, name, class_id, _) => {
+                let args_pc = *self + 1;
+                let (recv, args, len) = match args_pc.op1() {
+                    BcOp::MethodArgs(recv, args, len, _) => (recv, args, len),
+                    _ => unreachable!(),
+                };
+                let name = globals.get_ident_name(name);
+                let op1 = format!(
+                    "{} = {:?}.call {}({:?}; {})",
+                    ret.ret_str(),
+                    recv,
+                    name,
+                    args,
+                    len,
+                );
+                format!("{:36} [{}]", op1, class_id.get_name(globals))
+            }
+            BcOp::MethodArgs(..) => return None,
+            BcOp::MethodDef(name, func_id) => {
+                let name = globals.get_ident_name(name);
+                format!("method_def {:?}: {:?}", name, func_id)
+            }
+            BcOp::ClassDef(ret, name, func_id) => {
+                let name = globals.get_ident_name(name);
+                format!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
+            }
+            BcOp::ConcatStr(ret, args, len) => {
+                format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
+            }
+            BcOp::LoopStart(count) => format!(
+                "loop_start counter={} jit-addr={:016x}",
+                count,
+                self.from_jit_addr()
+            ),
+            BcOp::LoopEnd => format!("loop_end"),
+        };
+        Some(s)
+    }
+}
+
+///
+/// ID of instruction.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) struct InstId(pub u32);
+
+impl std::fmt::Debug for InstId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":{:05}", self.0)
+    }
+}
+
+///
 /// kinds of binary operation.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -154,12 +440,12 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
-    pub(crate) fn class_version(&self) -> (ClassId, u32) {
+    fn class_version(&self) -> (ClassId, u32) {
         let op = self.op2.0;
         (ClassId::new(op as u32), (op >> 32) as u32)
     }
 
-    pub(crate) fn codeptr(&self) -> Option<CodePtr> {
+    fn codeptr(&self) -> Option<CodePtr> {
         let op = self.op2.0;
         if op == 0 {
             None
@@ -232,7 +518,8 @@ impl std::fmt::Debug for Bc {
                 format!("{:05}", disp + 1)
             }
         }
-        match BcOp::from_bc(self) {
+        let pc = BcPc::from(self);
+        match pc.op1() {
             BcOp::Br(disp) => {
                 write!(f, "br => {}", disp_str(disp))
             }
@@ -316,12 +603,11 @@ impl std::fmt::Debug for Bc {
 
             BcOp::Ret(reg) => write!(f, "ret {:?}", reg),
             BcOp::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
-            BcOp::MethodCall(ret, name) => {
-                let class_id = self.classid1();
+            BcOp::MethodCall(ret, name, class_id, _) => {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
                 write!(f, "{:28} {:?}", op1, class_id)
             }
-            BcOp::MethodArgs(recv, args, len) => {
+            BcOp::MethodArgs(recv, args, len, _) => {
                 write!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
             }
             BcOp::MethodDef(name, _) => {
@@ -421,9 +707,9 @@ pub(super) enum BcOp {
     //                |      Meta     |      PC       |
     //                +-------+-------+-------+-------+
     /// func call(%ret, name)
-    MethodCall(SlotId, IdentId),
+    MethodCall(SlotId, IdentId, ClassId, u32),
     /// func call 2nd opecode(%recv, %args, len)
-    MethodArgs(SlotId, SlotId, u16),
+    MethodArgs(SlotId, SlotId, u16, Option<CodePtr>),
     /// method definition(method_name, func_id)
     MethodDef(IdentId, FuncId),
     /// class definition(method_name, func_id)
@@ -467,22 +753,30 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl BcOp {
-    pub fn from_bc(bcop: &Bc) -> Self {
-        let op = bcop.op1;
+    pub fn from_bc(pc: BcPc) -> Self {
+        let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::MethodCall(SlotId::new(op1), IdentId::from(op2)),
+                1 => {
+                    let class_version = pc.class_version();
+                    Self::MethodCall(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        class_version.0,
+                        class_version.1,
+                    )
+                }
                 2 => Self::MethodDef(
-                    IdentId::from((bcop.op2.0) as u32),
-                    FuncId((bcop.op2.0 >> 32) as u32),
+                    IdentId::from((pc.op2.0) as u32),
+                    FuncId((pc.op2.0 >> 32) as u32),
                 ),
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIf),
                 5 => Self::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIfNot),
                 6 => Self::Integer(SlotId::new(op1), op2 as i32),
-                7 => Self::Literal(SlotId::new(op1), bcop.op2.get_value()),
+                7 => Self::Literal(SlotId::new(op1), pc.op2.get_value()),
                 8 => Self::Nil(SlotId::new(op1)),
                 9 => Self::Symbol(SlotId::new(op1), IdentId::from(op2)),
                 10 => Self::LoadConst(SlotId::new(op1), ConstSiteId(op2)),
@@ -499,8 +793,8 @@ impl BcOp {
                 17 => Self::StoreIvar(SlotId::new(op1), IdentId::from(op2)),
                 18 => Self::ClassDef(
                     SlotId::new(op1),
-                    IdentId::from((bcop.op2.0) as u32),
-                    FuncId((bcop.op2.0 >> 32) as u32),
+                    IdentId::from((pc.op2.0) as u32),
+                    FuncId((pc.op2.0 >> 32) as u32),
                 ),
                 _ => unreachable!("{:016x}", op),
             }
@@ -508,7 +802,7 @@ impl BcOp {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 129 => Self::Neg(SlotId::new(op1), SlotId::new(op2)),
-                130 => Self::MethodArgs(SlotId::new(op1), SlotId::new(op2), op3),
+                130 => Self::MethodArgs(SlotId::new(op1), SlotId::new(op2), op3, pc.codeptr()),
                 131 => Self::Array(SlotId::new(op1), SlotId::new(op2), op3),
                 132 => Self::Index(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
                 133 => Self::IndexAssign(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),

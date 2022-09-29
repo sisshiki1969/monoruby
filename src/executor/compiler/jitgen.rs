@@ -592,7 +592,7 @@ impl Codegen {
     fn handle_error(&mut self, pc: BcPc) {
         let jit_return = self.vm_return;
         monoasm!(self.jit,
-            movq r13, ((pc + 1).0);
+            movq r13, ((pc + 1).get_u64());
             testq rax, rax; // Option<Value>
             jeq  jit_return;
         );
@@ -949,7 +949,7 @@ impl Codegen {
         }
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
-            movq r13, (pc.0);
+            movq r13, (pc.get_u64());
         );
         #[cfg(feature = "log-jit")]
         monoasm!(self.jit,
@@ -1706,7 +1706,7 @@ impl Codegen {
     fn generic_binop(&mut self, ret: SlotId, func: u64, xmm_using: UsingXmm, pc: BcPc) {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq r13, ((pc + 1).0);
+            movq r13, ((pc + 1).get_u64());
         );
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
@@ -1744,6 +1744,16 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
+        let (cached_class, cached_version, codeptr, meta, cached_pc) = match cache_info {
+            Some((class, version, codeptr, meta, pc)) => (
+                class.get() as i32,
+                version as i32,
+                Some(codeptr),
+                meta.get(),
+                pc.get_u64(),
+            ),
+            None => (0, -1, None, 0, 0),
+        };
 
         let method_resolved = self.jit.label();
         let patch_meta = self.jit.label();
@@ -1751,20 +1761,8 @@ impl Codegen {
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
-        let cached_class_version =
-            self.jit
-                .const_i32(if let Some((_, version, _, _, _)) = cache_info {
-                    version as i32
-                } else {
-                    -1
-                });
-        let cached_recv_class =
-            self.jit
-                .const_i32(if let Some((class_id, _, _, _, _)) = cache_info {
-                    class_id.get() as i32
-                } else {
-                    0
-                });
+        let cached_class_version = self.jit.const_i32(cached_version);
+        let cached_recv_class = self.jit.const_i32(cached_class);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
@@ -1803,17 +1801,31 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, 0x8000_0000_0000_0000;
-        patch_meta:
+            movq rax, qword (meta);
+            patch_meta:
             movq [rsp - 0x18], rax;
 
-            movq r13, 0x8000_0000_0000_0000;
-        patch_pc:
+            movq r13, qword (cached_pc);
+            patch_pc:
             movq rdi, (len);
-            // patch point
-            call entry_panic;
-        patch_adr:
         );
+        let src_point = self.jit.get_current_address();
+        match codeptr {
+            Some(codeptr) => {
+                monoasm!(self.jit,
+                    // patch point
+                    call (codeptr - src_point - 5);
+                patch_adr:
+                );
+            }
+            None => {
+                monoasm!(self.jit,
+                    // patch point
+                    call entry_panic;
+                patch_adr:
+                );
+            }
+        }
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
             testq rax, rax;
@@ -1867,7 +1879,7 @@ impl Codegen {
         // raise error.
         monoasm!(self.jit,
         raise:
-            movq r13, (pc.0);
+            movq r13, (pc.get_u64());
             jmp entry_return;
         );
         self.jit.select_page(0);

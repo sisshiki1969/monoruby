@@ -298,7 +298,6 @@ impl LoopAnalysis {
         bb_pos: usize,
     ) -> Option<RegInfo> {
         let mut skip = false;
-        let mut method_buf = None;
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
             self.pc = BcPc::from(pc);
             let idx = bb_pos + ofs;
@@ -307,7 +306,7 @@ impl LoopAnalysis {
                 continue;
             }
 
-            match BcOp::from_bc(pc) {
+            match self.pc.op1() {
                 BcOp::LoopStart(_) => {
                     self.loop_level += 1;
                 }
@@ -385,21 +384,17 @@ impl LoopAnalysis {
                     }
                     reg_info.def_as(dst, false);
                 }
-                BcOp::MethodCall(ret, id) => {
-                    assert!(method_buf.is_none());
-                    method_buf = Some((ret, pc.classid1(), id));
-                }
-                BcOp::MethodArgs(recv, args, len) => {
-                    match std::mem::take(&mut method_buf) {
-                        Some((ret, class, _id)) => {
-                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
-                            for i in 0..len {
-                                reg_info.use_non_float(args + i);
-                            }
-                            reg_info.def_as(ret, false);
+                BcOp::MethodCall(..) => {}
+                BcOp::MethodArgs(recv, args, len, _) => {
+                    if let BcOp::MethodCall(ret, _, class, _) = (self.pc - 1).op1() {
+                        reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                        for i in 0..len {
+                            reg_info.use_non_float(args + i);
                         }
-                        None => unreachable!(),
-                    }
+                        reg_info.def_as(ret, false);
+                    } else {
+                        unreachable!()
+                    };
                     skip = true;
                 }
                 BcOp::Ret(_ret) => {
