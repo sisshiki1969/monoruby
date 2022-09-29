@@ -58,27 +58,6 @@ macro_rules! cmp_ops {
   };
 }
 
-extern "C" fn define_class(
-    interp: &mut Interp,
-    globals: &mut Globals,
-    name: IdentId,
-) -> Option<Value> {
-    let parent = interp.get_class_context();
-    let self_val = match globals.get_constant(parent, name) {
-        Some(val) => {
-            val.expect_class(name, globals)?;
-            val
-        }
-        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
-    };
-    interp.push_class_context(self_val.as_class());
-    Some(self_val)
-}
-
-extern "C" fn pop_class_context(interp: &mut Interp, _globals: &mut Globals) {
-    interp.pop_class_context();
-}
-
 impl Codegen {
     pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();

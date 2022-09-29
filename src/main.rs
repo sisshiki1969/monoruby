@@ -234,8 +234,9 @@ pub fn run_test_error(code: &str) {
     dbg!(code);
     let (mut globals, fid) = new_globals(code);
     let jit_val = Interp::eval_toplevel(&mut globals, fid);
-    eprintln!("result: {:?}", jit_val);
-    eprintln!("error:  {:?}", jit_val.unwrap_err());
+    let err = jit_val.unwrap_err();
+    eprintln!("{}", err.get_error_message(&globals));
+    err.show_loc();
 }
 
 fn new_globals(code: &str) -> (Globals, FuncId) {

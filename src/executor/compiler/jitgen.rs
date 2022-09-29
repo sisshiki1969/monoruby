@@ -1713,6 +1713,54 @@ impl Codegen {
         self.store_rax(ret);
     }
 
+    fn jit_attr_reader(
+        &mut self,
+        recv: SlotId,
+        ivar_name: IdentId,
+        ret: SlotId,
+        cached_class_id: ClassId,
+        cached_version: u32,
+        ctx: &BBContext,
+        pc: BcPc,
+    ) {
+        let global_class_version = self.class_version;
+        let side_exit = self.jit.label();
+        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(recv))];
+            movq r15, rdi;
+            movq rax, (Value::get_class);
+            call rax;
+            movq rdi, r15;
+        );
+        monoasm!(self.jit,
+            cmpl rax, (cached_class_id.get());
+            jne side_exit;
+
+            movl rax, [rip + global_class_version];
+            cmpl rax, (cached_version);
+            jne side_exit;
+
+            movq rsi, (ivar_name.get()); // name: IdentId
+            movq rax, (get_instance_var);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+
+        self.jit.select_page(1);
+        self.xmm_restore(&xmm_using);
+        monoasm!(self.jit,
+        side_exit:
+            jmp deopt;
+        );
+        self.jit.select_page(0);
+    }
+
     fn jit_method_call(
         &mut self,
         recv: SlotId,
@@ -1879,9 +1927,70 @@ impl Codegen {
         // raise error.
         monoasm!(self.jit,
         raise:
-            movq r13, (pc.get_u64());
+            movq r13, ((pc + 2).get_u64());
             jmp entry_return;
         );
         self.jit.select_page(0);
+    }
+
+    fn jit_class_def(&mut self, ctx: &BBContext, ret: SlotId, name: IdentId, func_id: FuncId) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        let jit_return = self.vm_return;
+        monoasm! { self.jit,
+            movl rdx, (name.get());  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (define_class);
+            call rax;  // rax <- self: Value
+            testq rax, rax; // rax: Option<Value>
+            jeq  jit_return;
+            movq r15, rax; // r15 <- self
+            movl rdx, (func_id.0);  // rdx <- func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_get_func_data);
+            call rax; // rax <- &FuncData
+            //
+            //       +-------------+
+            // +0x08 |     pc      |
+            //       +-------------+
+            //  0x00 |   ret reg   | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) | <- rdx
+            //       +-------------+
+            //       |             |
+            //
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rsp - 0x18], rdi;
+            movq [rsp - 0x20], r15;
+            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
+            call rax;
+            testq rax, rax;
+            jeq jit_return;
+        };
+        if !ret.is_zero() {
+            monoasm!(self.jit,
+                movq [rbp - (conv(ret))], rax;
+            );
+        }
+        // pop class context.
+        monoasm!(self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (pop_class_context);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
     }
 }

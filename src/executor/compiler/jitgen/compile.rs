@@ -423,7 +423,9 @@ impl Codegen {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);
 
-                    if let BcOp::MethodCall(ret, name, class_id, version) = (pc - 1).op1() {
+                    if let BcOp::MethodCall(ret, name, cached_class_id, cached_version) =
+                        (pc - 1).op1()
+                    {
                         ctx.dealloc_xmm(ret);
                         if let Some(codeptr) = callee_codeptr {
                             let meta = (pc + 1).meta();
@@ -431,18 +433,15 @@ impl Codegen {
                             match globals.func[meta.func_id()].kind {
                                 FuncKind::AttrReader { ivar_name } => {
                                     assert_eq!(0, len);
-                                    let xmm_using = ctx.get_xmm_using();
-                                    self.xmm_save(&xmm_using);
-                                    monoasm!(self.jit,
-                                        movq rdi, [rbp - (conv(recv))];  // recv: Value
-                                        movq rsi, (ivar_name.get()); // name: IdentId
-                                        movq rax, (get_instance_var);
-                                        call rax;
+                                    self.jit_attr_reader(
+                                        recv,
+                                        ivar_name,
+                                        ret,
+                                        cached_class_id,
+                                        cached_version,
+                                        &ctx,
+                                        pc,
                                     );
-                                    self.xmm_restore(&xmm_using);
-                                    if !ret.is_zero() {
-                                        self.store_rax(ret);
-                                    }
                                 }
                                 FuncKind::AttrWriter { ivar_name } => {
                                     assert_eq!(1, len);
@@ -462,19 +461,23 @@ impl Codegen {
                                         self.store_rax(args);
                                     }
                                 }
-                                _ => self.jit_method_call(
-                                    recv,
-                                    name,
-                                    ret,
-                                    args,
-                                    len,
-                                    &ctx,
-                                    pc + 2,
-                                    Some((class_id, version, codeptr, meta, callee_pc)),
-                                ),
+                                _ => {
+                                    let cache_info =
+                                        (cached_class_id, cached_version, codeptr, meta, callee_pc);
+                                    self.jit_method_call(
+                                        recv,
+                                        name,
+                                        ret,
+                                        args,
+                                        len,
+                                        &ctx,
+                                        pc,
+                                        Some(cache_info),
+                                    );
+                                }
                             };
                         } else {
-                            self.jit_method_call(recv, name, ret, args, len, &ctx, pc + 2, None);
+                            self.jit_method_call(recv, name, ret, args, len, &ctx, pc, None);
                         }
                     } else {
                         unreachable!()
@@ -483,6 +486,8 @@ impl Codegen {
                 }
                 BcOp::MethodDef(name, func) => {
                     let class_version = self.class_version;
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
                         movq rdi, rbx; // &mut Interp
                         movq rsi, r12; // &Globals
@@ -492,12 +497,10 @@ impl Codegen {
                         call rax;
                         addl [rip + class_version], 1;
                     );
+                    self.xmm_restore(&xmm_using);
                 }
-                BcOp::ClassDef(_ret, _name, _func) => {
-                    let side_exit = self.gen_side_deopt_dest(pc, &ctx);
-                    monoasm!(self.jit,
-                        jmp side_exit;
-                    );
+                BcOp::ClassDef(ret, name, func_id) => {
+                    self.jit_class_def(&ctx, ret, name, func_id);
                 }
                 BcOp::Ret(lhs) => {
                     ctx.read_slot(self, lhs);
@@ -597,5 +600,85 @@ impl Codegen {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn raise_method_recv_class() {
+        run_test_error(
+            r##"
+          class A
+            def w
+              42
+            end
+          end
+          class B
+          end
+          a = A.new
+          res = []
+          for i in 0..10
+            if i == 8
+              a = B.new
+            end
+            res << a.w
+          end
+          res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_reader_recv_class() {
+        run_test(
+            r##"
+        class A
+            attr_accessor :w
+        end
+        class B
+          def w
+            100
+          end
+        end
+        a = A.new
+        a.w = 42
+        res = []
+        for i in 0..10
+          if i == 8
+            a = B.new
+          end
+          res << a.w
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_reader_recv_version() {
+        run_test(
+            r##"
+        class A
+          attr_accessor :w
+        end
+        a = A.new
+        a.w = 42
+        res = []
+        for i in 0..10
+          if i == 8
+            class A
+              def w
+                99
+              end
+            end
+          end
+          res << a.w
+        end
+        res
+        "##,
+        );
     }
 }

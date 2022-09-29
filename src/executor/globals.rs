@@ -507,23 +507,35 @@ impl Globals {
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_reader(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+    pub fn define_attr_reader(
+        &mut self,
+        interp: &mut Interp,
+        class_id: ClassId,
+        method_name: IdentId,
+    ) -> IdentId {
         let ivar_name = self.id_store.add_ivar_prefix(method_name);
         let method_name_str = self.get_ident_name(method_name).to_string();
         let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
+        interp.class_version_inc();
         method_name
     }
 
     ///
     /// Define attribute writer for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_writer(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+    pub fn define_attr_writer(
+        &mut self,
+        interp: &mut Interp,
+        class_id: ClassId,
+        method_name: IdentId,
+    ) -> IdentId {
         let ivar_name = self.id_store.add_ivar_prefix(method_name);
         let method_name = self.id_store.add_assign_postfix(method_name);
         let method_name_str = self.get_ident_name(method_name).to_string();
         let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
+        interp.class_version_inc();
         method_name
     }
 

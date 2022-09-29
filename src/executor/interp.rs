@@ -39,6 +39,10 @@ impl Interp {
         eval.eval(globals, func_id)
     }
 
+    pub fn class_version_inc(&mut self) {
+        unsafe { *self.codegen.class_version_addr += 1 }
+    }
+
     /// Execute top level method.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let main_data = self.get_func_data(globals, func_id) as *const _;
