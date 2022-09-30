@@ -556,6 +556,84 @@ impl Codegen {
 }
 
 impl Codegen {
+    fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+        match class_id {
+            INTEGER_CLASS => {
+                let exit = self.jit.label();
+                monoasm!(self.jit,
+                    testq rdi, 0b001;
+                    jnz exit;
+                );
+                self.guard_unpacked_class(class_id, side_exit);
+                self.jit.bind_label(exit);
+            }
+            FLOAT_CLASS => {
+                let exit = self.jit.label();
+                monoasm!(self.jit,
+                    testq rdi, 0b001;
+                    jnz side_exit;
+                    testq rdi, 0b010;
+                    jnz exit;
+                );
+                self.guard_unpacked_class(class_id, side_exit);
+                self.jit.bind_label(exit);
+            }
+            NIL_CLASS => {
+                monoasm!(self.jit,
+                    cmpq rdi, (NIL_VALUE);
+                    jnz side_exit;
+                );
+            }
+            SYMBOL_CLASS | TRUE_CLASS | FALSE_CLASS => unimplemented!(),
+            _ => self.guard_unpacked_class(class_id, side_exit),
+        }
+    }
+
+    fn guard_unpacked_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+        monoasm!(self.jit,
+            testq rdi, 0b111;
+            jnz side_exit;
+            movl rdi, [rdi + 4];    // rdi <- ClassId
+            cmpl rdi, (class_id.get());
+            jne side_exit;
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn guard_class() {
+        let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+        let side_exit = gen.entry_panic;
+
+        for (class, value) in [
+            (INTEGER_CLASS, Value::new_integer(-2558)),
+            (INTEGER_CLASS, Value::new_integer(i64::MAX)),
+            (INTEGER_CLASS, Value::new_integer(i64::MIN)),
+            (FLOAT_CLASS, Value::new_float(1.44e-17)),
+            (FLOAT_CLASS, Value::new_float(0.0)),
+            (FLOAT_CLASS, Value::new_float(f64::MAX)),
+            (FLOAT_CLASS, Value::new_float(f64::MIN)),
+            (NIL_CLASS, Value::nil()),
+        ] {
+            let entry_point = gen.jit.get_current_address();
+            gen.guard_class(class, side_exit);
+            monoasm!(gen.jit,
+                xorq rax, rax;
+                ret;
+            );
+            gen.jit.finalize();
+
+            let func: fn(Value) -> u64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
+            assert_eq!(0, func(value));
+        }
+    }
+}
+
+impl Codegen {
     cmp_opt_main!(
         (eq, ne, eq, ne),
         (ne, eq, ne, eq),
@@ -1731,18 +1809,14 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(recv))];
             movq r15, rdi;
-            movq rax, (Value::get_class);
-            call rax;
-            movq rdi, r15;
         );
+        self.guard_class(cached_class_id, side_exit);
         monoasm!(self.jit,
-            cmpl rax, (cached_class_id.get());
-            jne side_exit;
-
             movl rax, [rip + global_class_version];
             cmpl rax, (cached_version);
             jne side_exit;
 
+            movq rdi, r15;
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rax, (get_instance_var);
             call rax;
