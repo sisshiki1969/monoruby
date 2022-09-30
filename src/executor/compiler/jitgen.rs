@@ -556,6 +556,24 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, deoptimize and go to *side_exit*.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - rdi: Value
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
     fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
             INTEGER_CLASS => {
@@ -593,8 +611,8 @@ impl Codegen {
         monoasm!(self.jit,
             testq rdi, 0b111;
             jnz side_exit;
-            movl rdi, [rdi + 4];    // rdi <- ClassId
-            cmpl rdi, (class_id.get());
+            movl rax, [rdi + 4];    // rdi <- ClassId
+            cmpl rax, (class_id.get());
             jne side_exit;
         )
     }
@@ -1802,21 +1820,19 @@ impl Codegen {
         pc: BcPc,
     ) {
         let global_class_version = self.class_version;
-        let side_exit = self.jit.label();
         let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(recv))];
-            movq r15, rdi;
         );
-        self.guard_class(cached_class_id, side_exit);
+        self.guard_class(cached_class_id, deopt);
         monoasm!(self.jit,
             movl rax, [rip + global_class_version];
             cmpl rax, (cached_version);
-            jne side_exit;
-
-            movq rdi, r15;
+            jne deopt;
+        );
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rax, (get_instance_var);
             call rax;
@@ -1825,14 +1841,45 @@ impl Codegen {
         if !ret.is_zero() {
             self.store_rax(ret);
         }
+    }
 
-        self.jit.select_page(1);
-        self.xmm_restore(&xmm_using);
+    fn jit_attr_writer(
+        &mut self,
+        recv: SlotId,
+        ivar_name: IdentId,
+        ret: SlotId,
+        args: SlotId,
+        cached_class_id: ClassId,
+        cached_version: u32,
+        ctx: &BBContext,
+        pc: BcPc,
+    ) {
+        let global_class_version = self.class_version;
+        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
         monoasm!(self.jit,
-        side_exit:
-            jmp deopt;
+            movq rdi, [rbp - (conv(recv))];
         );
-        self.jit.select_page(0);
+        self.guard_class(cached_class_id, deopt);
+        monoasm!(self.jit,
+            movl rax, [rip + global_class_version];
+            cmpl rax, (cached_version);
+            jne deopt;
+        );
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rsi, rdi;  // recv: Value
+            movq rdi, r12; //&mut Globals
+            movq rdx, (ivar_name.get()); // name: IdentId
+            movq rcx, [rbp - (conv(args))];  //val: Value
+            movq rax, (set_instance_var);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+        if !ret.is_zero() {
+            self.store_rax(args);
+        }
     }
 
     fn jit_method_call(

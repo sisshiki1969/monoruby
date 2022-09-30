@@ -445,21 +445,16 @@ impl Codegen {
                                 }
                                 FuncKind::AttrWriter { ivar_name } => {
                                     assert_eq!(1, len);
-                                    let xmm_using = ctx.get_xmm_using();
-                                    self.xmm_save(&xmm_using);
-                                    monoasm!(self.jit,
-                                        movq rdi, r12; //&mut Globals
-                                        movq rsi, [rbp - (conv(recv))];  // recv: Value
-                                        movq rdx, (ivar_name.get()); // name: IdentId
-                                        movq rcx, [rbp - (conv(args))];  //val: Value
-                                        movq rax, (set_instance_var);
-                                        call rax;
+                                    self.jit_attr_writer(
+                                        recv,
+                                        ivar_name,
+                                        ret,
+                                        args,
+                                        cached_class_id,
+                                        cached_version,
+                                        &ctx,
+                                        pc,
                                     );
-                                    self.xmm_restore(&xmm_using);
-                                    self.handle_error(pc);
-                                    if !ret.is_zero() {
-                                        self.store_rax(args);
-                                    }
                                 }
                                 _ => {
                                     let cache_info =
@@ -658,7 +653,34 @@ mod test {
     }
 
     #[test]
-    fn deopt_reader_recv_version() {
+    fn deopt_writer_recv_class() {
+        run_test(
+            r##"
+        class A
+          attr_accessor :w
+        end
+        class B
+          attr_reader :w
+          def w=(v)
+            @w = v * 2
+          end
+        end
+        a = A.new
+        res = []
+        for i in 0..10
+          if i == 8
+            a = B.new
+          end
+          a.w = 42
+          res << a.w
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_reader_class_version() {
         run_test(
             r##"
         class A
@@ -675,6 +697,31 @@ mod test {
               end
             end
           end
+          res << a.w
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn deopt_writer_class_version() {
+        run_test(
+            r##"
+        class A
+          attr_accessor :w
+        end
+        a = A.new
+        res = []
+        for i in 0..10
+          if i == 8
+            class A
+              def w=(v)
+                @w = v * 2
+              end
+            end
+          end
+          a.w = 42
           res << a.w
         end
         res
