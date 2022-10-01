@@ -58,27 +58,6 @@ macro_rules! cmp_ops {
   };
 }
 
-extern "C" fn define_class(
-    interp: &mut Interp,
-    globals: &mut Globals,
-    name: IdentId,
-) -> Option<Value> {
-    let parent = interp.get_class_context();
-    let self_val = match globals.get_constant(parent, name) {
-        Some(val) => {
-            val.expect_class(name, globals)?;
-            val
-        }
-        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
-    };
-    interp.push_class_context(self_val.as_class());
-    Some(self_val)
-}
-
-extern "C" fn pop_class_context(interp: &mut Interp, _globals: &mut Globals) {
-    interp.pop_class_context();
-}
-
 impl Codegen {
     pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
@@ -905,13 +884,17 @@ impl Codegen {
 
     fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let entry_return = self.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rsi, rdi;  // name: IdentId
-            movq rdi, [rbp - 16];  // base: Value
-            movq rdx, [r15];     // val: Value
+            movq rdx, rdi;  // name: IdentId
+            movq rdi, r12; //&mut Globals
+            movq rsi, [rbp - 16];  // base: Value
+            movq rcx, [r15];     // val: Value
             movq rax, (set_instance_var);
             call rax;
+            testq rax, rax;
+            jeq  entry_return;
         };
         self.fetch_and_dispatch();
         label

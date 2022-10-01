@@ -534,7 +534,7 @@ impl FuncInfo {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct RubyFuncInfo {
     /// ID of this function.
     pub(crate) id: FuncId,
@@ -554,6 +554,16 @@ pub(crate) struct RubyFuncInfo {
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
+}
+
+impl std::fmt::Debug for RubyFuncInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RubyFuncInfo {{ id: {}, name: {:?}. args: {:?} }}",
+            self.id.0, self.name, self.args
+        )
+    }
 }
 
 impl RubyFuncInfo {

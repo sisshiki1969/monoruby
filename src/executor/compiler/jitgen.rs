@@ -290,70 +290,6 @@ impl BBContext {
             .filter_map(|(i, v)| if v.is_empty() { None } else { Some(i) })
             .collect()
     }
-
-    fn xmm_read_assume(
-        &mut self,
-        codegen: &mut Codegen,
-        rhs: SlotId,
-        class: ClassId,
-        pc: BcPc,
-    ) -> u16 {
-        match class {
-            INTEGER_CLASS => self.xmm_read_assume_integer(codegen, rhs, pc),
-            FLOAT_CLASS => self.xmm_read_assume_float(codegen, rhs, pc),
-            _ => unreachable!(),
-        }
-    }
-
-    fn xmm_read_assume_float(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
-        match self.stack_slot[reg] {
-            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
-            _ => {
-                let freg = self.alloc_xmm_read(reg);
-                let wb = self.get_write_back();
-                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
-                monoasm!(codegen.jit,
-                    movq rdi, [rbp - (conv(reg))];
-                );
-                codegen.gen_val_to_f64_assume_float(freg as u64 + 2, side_exit);
-                freg
-            }
-        }
-    }
-
-    fn xmm_read_assume_integer(&mut self, codegen: &mut Codegen, reg: SlotId, pc: BcPc) -> u16 {
-        match self.stack_slot[reg] {
-            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
-            _ => {
-                let freg = self.alloc_xmm_read(reg);
-                let wb = self.get_write_back();
-                let side_exit = codegen.gen_side_deopt_dest(pc, wb);
-                monoasm!(codegen.jit,
-                    movq rdi, [rbp - (conv(reg))];
-                );
-                codegen.gen_val_to_f64_assume_integer(freg as u64 + 2, side_exit);
-                freg
-            }
-        }
-    }
-
-    fn xmm_read_binary(
-        &mut self,
-        codegen: &mut Codegen,
-        lhs: SlotId,
-        rhs: SlotId,
-        pc: BcPc,
-    ) -> (u16, u16) {
-        if lhs != rhs {
-            (
-                self.xmm_read_assume(codegen, lhs, pc.classid1(), pc),
-                self.xmm_read_assume(codegen, rhs, pc.classid2(), pc),
-            )
-        } else {
-            let lhs = self.xmm_read_assume(codegen, lhs, pc.classid1(), pc);
-            (lhs, lhs)
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -556,6 +492,166 @@ extern "C" fn log_deoptimize(
 }
 
 impl Codegen {
+    fn xmm_read_assume(
+        &mut self,
+        ctx: &mut BBContext,
+        rhs: SlotId,
+        class: ClassId,
+        pc: BcPc,
+    ) -> u16 {
+        match class {
+            INTEGER_CLASS => self.xmm_read_assume_integer(ctx, rhs, pc),
+            FLOAT_CLASS => self.xmm_read_assume_float(ctx, rhs, pc),
+            _ => unreachable!(),
+        }
+    }
+
+    fn xmm_read_assume_float(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> u16 {
+        match ctx.stack_slot[reg] {
+            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
+            _ => {
+                let freg = ctx.alloc_xmm_read(reg);
+                let side_exit = self.gen_side_deopt_dest(pc, ctx);
+                monoasm!(self.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                );
+                self.gen_val_to_f64_assume_float(freg as u64 + 2, side_exit);
+                freg
+            }
+        }
+    }
+
+    fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> u16 {
+        match ctx.stack_slot[reg] {
+            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
+            _ => {
+                let freg = ctx.alloc_xmm_read(reg);
+                let side_exit = self.gen_side_deopt_dest(pc, ctx);
+                monoasm!(self.jit,
+                    movq rdi, [rbp - (conv(reg))];
+                );
+                self.gen_val_to_f64_assume_integer(freg as u64 + 2, side_exit);
+                freg
+            }
+        }
+    }
+
+    fn xmm_read_binary(
+        &mut self,
+        ctx: &mut BBContext,
+        lhs: SlotId,
+        rhs: SlotId,
+        pc: BcPc,
+    ) -> (u16, u16) {
+        if lhs != rhs {
+            (
+                self.xmm_read_assume(ctx, lhs, pc.classid1(), pc),
+                self.xmm_read_assume(ctx, rhs, pc.classid2(), pc),
+            )
+        } else {
+            let lhs = self.xmm_read_assume(ctx, lhs, pc.classid1(), pc);
+            (lhs, lhs)
+        }
+    }
+}
+
+impl Codegen {
+    ///
+    /// Type guard.
+    ///
+    /// Generate type guard for *class_id*.
+    /// If the type was not matched, deoptimize and go to *side_exit*.
+    ///
+    /// ### in
+    ///
+    /// - rdi: Value
+    ///
+    /// ### out
+    ///
+    /// - rdi: Value
+    ///
+    /// ### registers destroyed
+    ///
+    /// - rax
+    ///
+    fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+        match class_id {
+            INTEGER_CLASS => {
+                let exit = self.jit.label();
+                monoasm!(self.jit,
+                    testq rdi, 0b001;
+                    jnz exit;
+                );
+                self.guard_unpacked_class(class_id, side_exit);
+                self.jit.bind_label(exit);
+            }
+            FLOAT_CLASS => {
+                let exit = self.jit.label();
+                monoasm!(self.jit,
+                    testq rdi, 0b001;
+                    jnz side_exit;
+                    testq rdi, 0b010;
+                    jnz exit;
+                );
+                self.guard_unpacked_class(class_id, side_exit);
+                self.jit.bind_label(exit);
+            }
+            NIL_CLASS => {
+                monoasm!(self.jit,
+                    cmpq rdi, (NIL_VALUE);
+                    jnz side_exit;
+                );
+            }
+            SYMBOL_CLASS | TRUE_CLASS | FALSE_CLASS => unimplemented!(),
+            _ => self.guard_unpacked_class(class_id, side_exit),
+        }
+    }
+
+    fn guard_unpacked_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+        monoasm!(self.jit,
+            testq rdi, 0b111;
+            jnz side_exit;
+            movl rax, [rdi + 4];    // rdi <- ClassId
+            cmpl rax, (class_id.get());
+            jne side_exit;
+        )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn guard_class() {
+        let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+        let side_exit = gen.entry_panic;
+
+        for (class, value) in [
+            (INTEGER_CLASS, Value::new_integer(-2558)),
+            (INTEGER_CLASS, Value::new_integer(i64::MAX)),
+            (INTEGER_CLASS, Value::new_integer(i64::MIN)),
+            (FLOAT_CLASS, Value::new_float(1.44e-17)),
+            (FLOAT_CLASS, Value::new_float(0.0)),
+            (FLOAT_CLASS, Value::new_float(f64::MAX)),
+            (FLOAT_CLASS, Value::new_float(f64::MIN)),
+            (NIL_CLASS, Value::nil()),
+        ] {
+            let entry_point = gen.jit.get_current_address();
+            gen.guard_class(class, side_exit);
+            monoasm!(gen.jit,
+                xorq rax, rax;
+                ret;
+            );
+            gen.jit.finalize();
+
+            let func: fn(Value) -> u64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
+            assert_eq!(0, func(value));
+        }
+    }
+}
+
+impl Codegen {
     cmp_opt_main!(
         (eq, ne, eq, ne),
         (ne, eq, ne, eq),
@@ -592,13 +688,13 @@ impl Codegen {
     fn handle_error(&mut self, pc: BcPc) {
         let jit_return = self.vm_return;
         monoasm!(self.jit,
-            movq r13, ((pc + 1).0);
+            movq r13, ((pc + 1).get_u64());
             testq rax, rax; // Option<Value>
             jeq  jit_return;
         );
     }
 
-    fn load_constant(&mut self, dst: SlotId, id: ConstSiteId, pc: BcPc, xmm_using: UsingXmm) {
+    fn load_constant(&mut self, dst: SlotId, id: ConstSiteId, pc: BcPc, ctx: &BBContext) {
         let cached_value = self.jit.const_i64(0);
         let cached_const_version = self.jit.const_i64(-1);
         let global_const_version = self.const_version;
@@ -607,7 +703,7 @@ impl Codegen {
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
-        self.jit_get_constant(id, pc, xmm_using);
+        self.jit_get_constant(id, pc, ctx);
         monoasm!(self.jit,
             movq [rip + cached_value], rax;
             movq rdi, [rip + global_const_version];
@@ -632,8 +728,7 @@ impl Codegen {
         fdst: u16,
         id: ConstSiteId,
         pc: BcPc,
-        xmm_using: UsingXmm,
-        wb: WriteBack,
+        ctx: &BBContext,
     ) {
         let cached_value = self.jit.const_i64(0);
         let cached_const_version = self.jit.const_i64(-1);
@@ -642,11 +737,11 @@ impl Codegen {
         let exit = self.jit.label();
 
         let cached_float = self.jit.const_f64(0.0);
-        let side_exit = self.gen_side_deopt_dest(pc, wb.clone());
+        let side_exit = self.gen_side_deopt_dest(pc, ctx);
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
-        self.jit_get_constant(id, pc, xmm_using.clone());
+        self.jit_get_constant(id, pc, ctx);
         monoasm!(self.jit,
             movq [rip + cached_value], rax;
             movq rdi, rax;
@@ -671,7 +766,8 @@ impl Codegen {
         self.store_rax(dst);
     }
 
-    fn jit_get_constant(&mut self, id: ConstSiteId, pc: BcPc, xmm_using: UsingXmm) {
+    fn jit_get_constant(&mut self, id: ConstSiteId, pc: BcPc, ctx: &BBContext) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rdx, (id.get());  // name: ConstSiteId
@@ -684,8 +780,9 @@ impl Codegen {
         self.handle_error(pc);
     }
 
-    fn jit_store_constant(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm) {
+    fn jit_store_constant(&mut self, id: IdentId, src: SlotId, ctx: &BBContext) {
         let const_version = self.const_version;
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
           movq rdx, (id.get());  // name: IdentId
@@ -699,7 +796,8 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
-    fn jit_load_ivar(&mut self, id: IdentId, ret: SlotId, xmm_using: UsingXmm) {
+    fn jit_load_ivar(&mut self, id: IdentId, ret: SlotId, ctx: &BBContext) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
           movq rdi, [rbp - 16];  // base: Value
@@ -711,26 +809,23 @@ impl Codegen {
         self.store_rax(ret);
     }
 
-    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, xmm_using: UsingXmm) {
+    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, ctx: &BBContext, pc: BcPc) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdi, [rbp - 16];  // base: Value
-          movq rsi, (id.get());  // id: IdentId
-          movq rdx, [rbp - (conv(src))];   // val: Value
+          movq rdi, r12; //&mut Globals
+          movq rsi, [rbp - 16];  // base: Value
+          movq rdx, (id.get());  // id: IdentId
+          movq rcx, [rbp - (conv(src))];   // val: Value
           movq rax, (set_instance_var);
           call rax;
         );
         self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
     }
 
-    fn jit_get_index(
-        &mut self,
-        ret: SlotId,
-        base: SlotId,
-        idx: SlotId,
-        pc: BcPc,
-        xmm_using: UsingXmm,
-    ) {
+    fn jit_get_index(&mut self, ret: SlotId, base: SlotId, idx: SlotId, pc: BcPc, ctx: &BBContext) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
             movq rdx, [rbp - (conv(base))]; // base: Value
@@ -751,8 +846,9 @@ impl Codegen {
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
-        xmm_using: UsingXmm,
+        ctx: &BBContext,
     ) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
             movq rdx, [rbp - (conv(base))]; // base: Value
@@ -901,8 +997,7 @@ impl Codegen {
         #[cfg(feature = "emit-tir")]
         eprintln!("      src_end:   {:?}", src_ctx.stack_slot);
 
-        let wb = src_ctx.get_write_back();
-        let side_exit = self.gen_side_deopt_dest(pc + 1, wb.clone());
+        let side_exit = self.gen_side_deopt_dest(pc + 1, &src_ctx);
         for (reg, freg) in conv_list {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(reg))];
@@ -935,7 +1030,8 @@ impl Codegen {
     ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
-    fn gen_side_deopt_dest(&mut self, pc: BcPc, wb: WriteBack) -> DestLabel {
+    fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
+        let wb = ctx.get_write_back();
         let old_p = self.jit.get_page();
         self.jit.select_page(2);
         let entry = self.jit.label();
@@ -949,7 +1045,7 @@ impl Codegen {
         }
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
-            movq r13, (pc.0);
+            movq r13, (pc.get_u64());
         );
         #[cfg(feature = "log-jit")]
         monoasm!(self.jit,
@@ -972,8 +1068,7 @@ impl Codegen {
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
     fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
-        let wb = ctx.get_write_back();
-        let fallback = self.gen_side_deopt_dest(pc, wb);
+        let fallback = self.gen_side_deopt_dest(pc, ctx);
         monoasm!(self.jit,
             jmp fallback;
         );
@@ -1045,7 +1140,7 @@ impl Codegen {
         );
         for i in bb_start_pos {
             cc.bb_pos = i;
-            if self.compile_bb(func, &mut cc) {
+            if self.compile_bb(globals, func, &mut cc) {
                 break;
             };
         }
@@ -1259,10 +1354,10 @@ impl Codegen {
         kind: BinOpK,
         ret: SlotId,
         mode: BinOpMode,
-        wb: WriteBack,
-        xmm_using: UsingXmm,
+        ctx: &BBContext,
     ) {
-        let deopt = self.gen_side_deopt_dest(pc, wb);
+        let xmm_using = ctx.get_xmm_using();
+        let deopt = self.gen_side_deopt_dest(pc, ctx);
         match kind {
             BinOpK::Add => {
                 match mode {
@@ -1496,8 +1591,9 @@ impl Codegen {
         }
     }
 
-    fn gen_binop_kind(&mut self, using_xmm: UsingXmm, pc: BcPc, kind: BinOpK, ret: SlotId) {
-        self.generic_binop(ret, kind.generic_func() as _, using_xmm, pc);
+    fn gen_binop_kind(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, ret: SlotId) {
+        let xmm_using = ctx.get_xmm_using();
+        self.generic_binop(ret, kind.generic_func() as _, xmm_using, pc);
     }
 
     fn setflag_float(&mut self, kind: CmpKind) {
@@ -1529,13 +1625,8 @@ impl Codegen {
         self.guard_rdi_fixnum(generic);
     }
 
-    fn gen_cmp_kind(
-        &mut self,
-        kind: CmpKind,
-        generic: DestLabel,
-        ret: SlotId,
-        xmm_using: Vec<usize>,
-    ) {
+    fn gen_cmp_kind(&mut self, kind: CmpKind, generic: DestLabel, ret: SlotId, ctx: &BBContext) {
+        let xmm_using = ctx.get_xmm_using();
         match kind {
             CmpKind::Eq => self.cmp_eq(generic, xmm_using),
             CmpKind::Ne => self.cmp_ne(generic, xmm_using),
@@ -1711,11 +1802,84 @@ impl Codegen {
     fn generic_binop(&mut self, ret: SlotId, func: u64, xmm_using: UsingXmm, pc: BcPc) {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq r13, ((pc + 1).0);
+            movq r13, ((pc + 1).get_u64());
         );
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.store_rax(ret);
+    }
+
+    fn jit_attr_reader(
+        &mut self,
+        recv: SlotId,
+        ivar_name: IdentId,
+        ret: SlotId,
+        cached_class_id: ClassId,
+        cached_version: u32,
+        ctx: &BBContext,
+        pc: BcPc,
+    ) {
+        let global_class_version = self.class_version;
+        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(recv))];
+        );
+        self.guard_class(cached_class_id, deopt);
+        monoasm!(self.jit,
+            movl rax, [rip + global_class_version];
+            cmpl rax, (cached_version);
+            jne deopt;
+        );
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rsi, (ivar_name.get()); // name: IdentId
+            movq rax, (get_instance_var);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+    }
+
+    fn jit_attr_writer(
+        &mut self,
+        recv: SlotId,
+        ivar_name: IdentId,
+        ret: SlotId,
+        args: SlotId,
+        cached_class_id: ClassId,
+        cached_version: u32,
+        ctx: &BBContext,
+        pc: BcPc,
+    ) {
+        let global_class_version = self.class_version;
+        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(recv))];
+        );
+        self.guard_class(cached_class_id, deopt);
+        monoasm!(self.jit,
+            movl rax, [rip + global_class_version];
+            cmpl rax, (cached_version);
+            jne deopt;
+        );
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rsi, rdi;  // recv: Value
+            movq rdi, r12; //&mut Globals
+            movq rdx, (ivar_name.get()); // name: IdentId
+            movq rcx, [rbp - (conv(args))];  //val: Value
+            movq rax, (set_instance_var);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+        if !ret.is_zero() {
+            self.store_rax(args);
+        }
     }
 
     fn jit_method_call(
@@ -1727,6 +1891,7 @@ impl Codegen {
         len: u16,
         ctx: &BBContext,
         pc: BcPc,
+        cache_info: Option<(ClassId, u32, CodePtr, Meta, BcPc)>,
     ) {
         // set arguments to a callee stack.
         //
@@ -1748,14 +1913,25 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         //
+        let (cached_class, cached_version, codeptr, meta, cached_pc) = match cache_info {
+            Some((class, version, codeptr, meta, pc)) => (
+                class.get() as i32,
+                version as i32,
+                Some(codeptr),
+                meta.get(),
+                pc.get_u64(),
+            ),
+            None => (0, -1, None, 0, 0),
+        };
+
         let method_resolved = self.jit.label();
         let patch_meta = self.jit.label();
         let patch_adr = self.jit.label();
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
-        let cached_class_version = self.jit.const_i32(-1);
-        let cached_recv_class = self.jit.const_i32(0);
+        let cached_class_version = self.jit.const_i32(cached_version);
+        let cached_recv_class = self.jit.const_i32(cached_class);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
@@ -1794,17 +1970,31 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, 0x8000_0000_0000_0000;
-        patch_meta:
+            movq rax, qword (meta);
+            patch_meta:
             movq [rsp - 0x18], rax;
 
-            movq r13, 0x8000_0000_0000_0000;
-        patch_pc:
+            movq r13, qword (cached_pc);
+            patch_pc:
             movq rdi, (len);
-            // patch point
-            call entry_panic;
-        patch_adr:
         );
+        let src_point = self.jit.get_current_address();
+        match codeptr {
+            Some(codeptr) => {
+                monoasm!(self.jit,
+                    // patch point
+                    call (codeptr - src_point - 5);
+                patch_adr:
+                );
+            }
+            None => {
+                monoasm!(self.jit,
+                    // patch point
+                    call entry_panic;
+                patch_adr:
+                );
+            }
+        }
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
             testq rax, rax;
@@ -1858,9 +2048,70 @@ impl Codegen {
         // raise error.
         monoasm!(self.jit,
         raise:
-            movq r13, (pc.0);
+            movq r13, ((pc + 2).get_u64());
             jmp entry_return;
         );
         self.jit.select_page(0);
+    }
+
+    fn jit_class_def(&mut self, ctx: &BBContext, ret: SlotId, name: IdentId, func_id: FuncId) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        let jit_return = self.vm_return;
+        monoasm! { self.jit,
+            movl rdx, (name.get());  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (define_class);
+            call rax;  // rax <- self: Value
+            testq rax, rax; // rax: Option<Value>
+            jeq  jit_return;
+            movq r15, rax; // r15 <- self
+            movl rdx, (func_id.0);  // rdx <- func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (vm_get_func_data);
+            call rax; // rax <- &FuncData
+            //
+            //       +-------------+
+            // +0x08 |     pc      |
+            //       +-------------+
+            //  0x00 |   ret reg   | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |     %0      |
+            //       +-------------+
+            // -0x28 | %1(1st arg) | <- rdx
+            //       +-------------+
+            //       |             |
+            //
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rsp - 0x18], rdi;
+            movq [rsp - 0x20], r15;
+            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
+            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
+            call rax;
+            testq rax, rax;
+            jeq jit_return;
+        };
+        if !ret.is_zero() {
+            monoasm!(self.jit,
+                movq [rbp - (conv(ret))], rax;
+            );
+        }
+        // pop class context.
+        monoasm!(self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (pop_class_context);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
     }
 }

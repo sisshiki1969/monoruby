@@ -6,6 +6,7 @@ pub type ValueTable = HashMap<IdentId, Value>;
 
 /// Heap-allocated objects.
 #[derive(Clone)]
+#[repr(C)]
 pub struct RValue {
     /// flags. 8 bytes
     flags: RVFlag,
@@ -203,6 +204,7 @@ impl RValue {
 }
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 union RVFlag {
     flag: u64,
     next: Option<std::ptr::NonNull<RValue>>,

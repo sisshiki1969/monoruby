@@ -141,8 +141,19 @@ impl Globals {
     ///
     pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
         self.set_error(MonorubyErr::indexerr(format!(
-            " index {} too small for array; minimum: {}",
+            "index {} too small for array; minimum: {}",
             actual, minimum,
+        )));
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub fn err_cant_modify_frozen(&mut self, val: Value) {
+        self.set_error(MonorubyErr::indexerr(format!(
+            "can't modify frozen {}: {}",
+            val.class_id().get_name(self),
+            self.val_tos(val),
         )));
     }
 
@@ -496,23 +507,35 @@ impl Globals {
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_reader(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+    pub fn define_attr_reader(
+        &mut self,
+        interp: &mut Interp,
+        class_id: ClassId,
+        method_name: IdentId,
+    ) -> IdentId {
         let ivar_name = self.id_store.add_ivar_prefix(method_name);
         let method_name_str = self.get_ident_name(method_name).to_string();
         let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
+        interp.class_version_inc();
         method_name
     }
 
     ///
     /// Define attribute writer for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_writer(&mut self, class_id: ClassId, method_name: IdentId) -> IdentId {
+    pub fn define_attr_writer(
+        &mut self,
+        interp: &mut Interp,
+        class_id: ClassId,
+        method_name: IdentId,
+    ) -> IdentId {
         let ivar_name = self.id_store.add_ivar_prefix(method_name);
         let method_name = self.id_store.add_assign_postfix(method_name);
         let method_name_str = self.get_ident_name(method_name).to_string();
         let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
+        interp.class_version_inc();
         method_name
     }
 
@@ -569,6 +592,7 @@ impl Globals {
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
             MonorubyErrKind::Index(msg) => msg.to_string(),
+            MonorubyErrKind::Frozen(msg) => msg.to_string(),
         }
     }
 }

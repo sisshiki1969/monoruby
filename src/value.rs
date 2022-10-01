@@ -404,12 +404,23 @@ impl Value {
 
     /// Get reference of RValue from `self`.
     ///
-    /// return None if `self` was not a packed value.
+    /// return None if `self` was a packed value.
     pub(crate) fn try_rvalue(&self) -> Option<&RValue> {
         if self.is_packed_value() {
             None
         } else {
             Some(self.rvalue())
+        }
+    }
+
+    /// Get mutable reference of RValue from `self`.
+    ///
+    /// return None if `self` was a packed value.
+    pub(crate) fn try_rvalue_mut(&mut self) -> Option<&mut RValue> {
+        if self.is_packed_value() {
+            None
+        } else {
+            Some(self.rvalue_mut())
         }
     }
 

@@ -43,7 +43,6 @@ pub struct Codegen {
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    opt_buf: Option<BcPc>,
 }
 
 fn conv(reg: SlotId) -> i64 {
@@ -158,11 +157,49 @@ extern "C" fn set_index(
 }
 
 extern "C" fn get_instance_var(base: Value, id: IdentId) -> Value {
-    base.rvalue().get_var(id).unwrap_or_default()
+    match base.try_rvalue() {
+        Some(rv) => rv.get_var(id).unwrap_or_default(),
+        None => Value::nil(),
+    }
 }
 
-extern "C" fn set_instance_var(base: Value, id: IdentId, val: Value) {
-    base.rvalue_mut().set_var(id, val)
+extern "C" fn set_instance_var(
+    globals: &mut Globals,
+    mut base: Value,
+    id: IdentId,
+    val: Value,
+) -> Option<Value> {
+    match base.try_rvalue_mut() {
+        Some(rv) => {
+            rv.set_var(id, val);
+            Some(val)
+        }
+        None => {
+            globals.err_cant_modify_frozen(base);
+            None
+        }
+    }
+}
+
+extern "C" fn define_class(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    name: IdentId,
+) -> Option<Value> {
+    let parent = interp.get_class_context();
+    let self_val = match globals.get_constant(parent, name) {
+        Some(val) => {
+            val.expect_class(name, globals)?;
+            val
+        }
+        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
+    };
+    interp.push_class_context(self_val.as_class());
+    Some(self_val)
+}
+
+extern "C" fn pop_class_context(interp: &mut Interp, _globals: &mut Globals) {
+    interp.pop_class_context();
 }
 
 extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
@@ -403,7 +440,6 @@ impl Codegen {
             div_by_zero,
             dispatch,
             invoker,
-            opt_buf: None,
         };
         codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);
@@ -964,14 +1000,14 @@ impl Codegen {
     fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         monoasm!(self.jit,
-            movq rdi, [rsp - 0x18];  // self: Value
-            movq rsi, (ivar_name.get()); // name: IdentId
-            movq rdx, [rsp - 0x20];  //val: Value
+            movq rdi, r12; //&mut Globals
+            movq rsi, [rsp - 0x18];  // self: Value
+            movq rdx, (ivar_name.get()); // name: IdentId
+            movq rcx, [rsp - 0x20];  //val: Value
             movq rax, (set_instance_var);
-            pushq rbp;
+            subq rsp, 8;
             call rax;
-            movq rax, (NIL_VALUE);
-            popq rbp;
+            addq rsp, 8;
             ret;
         );
         label

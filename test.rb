@@ -1,12 +1,19 @@
 class A
-  attr_accessor :w,:x,:y,:z
-  def initialize(x,y,z)
-    @w=42
-    @x=x
-    @y=y
-    @z=z
-  end
+  attr_accessor :w
 end
-a = A.new(3,7,11)
-#puts A.instance_methods
-puts a.x, a.y, a.z
+a = A.new
+res = []
+for i in 0..100
+  puts i
+  if i == 8
+    class A
+      puts "redefine"
+      def w=(v)
+        @w = v * 2
+      end
+    end
+  end
+  a.w = 42
+  res << a.w
+end
+res
