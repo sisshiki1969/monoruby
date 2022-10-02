@@ -256,9 +256,20 @@ impl BcPc {
                 let name = globals.get_ident_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
             }
-            BcOp::ClassDef(ret, name, func_id) => {
+            BcOp::ClassDef {
+                ret,
+                superclass,
+                name,
+                func_id,
+            } => {
                 let name = globals.get_ident_name(name);
-                format!("{} = class_def {:?}: {:?}", ret.ret_str(), name, func_id)
+                format!(
+                    "{} = class_def {:?} < {}: {:?}",
+                    ret.ret_str(),
+                    name,
+                    superclass.ret_str(),
+                    func_id
+                )
             }
             BcOp::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
@@ -383,7 +394,12 @@ pub(super) enum BcIr {
     MethodArgs(BcReg, BcReg, usize),    // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
-    ClassDef(Option<BcReg>, IdentId, FuncId),
+    ClassDef {
+        ret: Option<BcReg>,
+        superclass: Option<BcReg>,
+        name: IdentId,
+        func_id: FuncId,
+    },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     LoopStart,
     LoopEnd,
@@ -613,7 +629,7 @@ impl std::fmt::Debug for Bc {
             BcOp::MethodDef(name, _) => {
                 write!(f, "method_def {:?}", name)
             }
-            BcOp::ClassDef(ret, name, _) => {
+            BcOp::ClassDef { ret, name, .. } => {
                 write!(f, "{} = class_def {:?}", ret.ret_str(), name)
             }
             BcOp::ConcatStr(ret, args, len) => {
@@ -713,7 +729,12 @@ pub(super) enum BcOp {
     /// method definition(method_name, func_id)
     MethodDef(IdentId, FuncId),
     /// class definition(method_name, func_id)
-    ClassDef(SlotId, IdentId, FuncId),
+    ClassDef {
+        ret: SlotId,
+        superclass: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+    },
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     /// loop start marker
@@ -791,11 +812,12 @@ impl BcOp {
                 15 => Self::LoopEnd,
                 16 => Self::LoadIvar(SlotId::new(op1), IdentId::from(op2)),
                 17 => Self::StoreIvar(SlotId::new(op1), IdentId::from(op2)),
-                18 => Self::ClassDef(
-                    SlotId::new(op1),
-                    IdentId::from((pc.op2.0) as u32),
-                    FuncId((pc.op2.0 >> 32) as u32),
-                ),
+                18 => Self::ClassDef {
+                    ret: SlotId::new(op1),
+                    superclass: SlotId::new(op2 as u16),
+                    name: IdentId::from((pc.op2.0) as u32),
+                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                },
                 _ => unreachable!("{:016x}", op),
             }
         } else {

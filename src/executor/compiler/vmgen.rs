@@ -1083,7 +1083,15 @@ impl Codegen {
     fn vm_class_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let vm_return = self.vm_return;
+        let super_ = self.jit.label();
         monoasm! { self.jit,
+            cmpl rdi, 0;
+            jeq super_;
+        }
+        self.vm_get_rdi();
+        monoasm! { self.jit,
+        super_:
+            movq rcx, rdi;
             movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals

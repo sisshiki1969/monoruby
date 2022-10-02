@@ -501,6 +501,28 @@ mod test {
     }
 
     #[test]
+    fn test_class_def2() {
+        run_test(
+            r#"
+        class A
+        end
+        class B < A
+        end
+        class C < B
+        end
+        [A, B.superclass, C.superclass.superclass]
+        "#,
+        );
+        run_test(
+            r#"
+        class A < Array
+        end
+        [A, A.superclass]
+        "#,
+        );
+    }
+
+    #[test]
     fn test_fn() {
         run_test("def f; end; f");
     }

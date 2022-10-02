@@ -127,6 +127,16 @@ impl Globals {
     }
 
     ///
+    /// Set TypeError with message "superclass mismatch for class *name*".
+    ///
+    pub fn err_superclass_mismatch(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "superclass mismatch for class {}",
+            self.get_ident_name(name)
+        )));
+    }
+
+    ///
     /// Set TypeError with message "*name* is not a class".
     ///
     pub fn err_is_not_symbol_nor_string(&mut self, val: Value) {

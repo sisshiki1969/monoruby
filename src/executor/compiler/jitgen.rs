@@ -482,7 +482,7 @@ extern "C" fn log_deoptimize(
     if let BcOp::LoopEnd = pc.op1() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {}", index, fmt);
-    } else if let BcOp::ClassDef(_, _, _) = pc.op1() {
+    } else if let BcOp::ClassDef { .. } = pc.op1() {
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {}", index, fmt);
     } else {
@@ -2054,10 +2054,26 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn jit_class_def(&mut self, ctx: &BBContext, ret: SlotId, name: IdentId, func_id: FuncId) {
+    fn jit_class_def(
+        &mut self,
+        ctx: &BBContext,
+        ret: SlotId,
+        superclass: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+    ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         let jit_return = self.vm_return;
+        if superclass.is_zero() {
+            monoasm! { self.jit,
+                xorq rcx, rcx;
+            }
+        } else {
+            monoasm! { self.jit,
+                movq rcx, [rbp - (conv(superclass))];  // rcx <- superclass: Option<Value>
+            }
+        }
         monoasm! { self.jit,
             movl rdx, (name.get());  // rdx <- name
             movq rdi, rbx;  // &mut Interp

@@ -796,14 +796,23 @@ impl IrContext {
                 is_module,
             } => {
                 assert!(base.is_none());
-                assert!(superclass.is_none());
                 assert!(!is_module);
                 let ret = if use_value {
                     Some(info.push().into())
                 } else {
                     None
                 };
-                self.gen_class_def(ctx, info, id_store, name.clone(), body, ret, loc)?;
+                let superclass = superclass.map(|c| *c);
+                self.gen_class_def(
+                    ctx,
+                    info,
+                    id_store,
+                    name.clone(),
+                    superclass,
+                    body,
+                    ret,
+                    loc,
+                )?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -949,10 +958,10 @@ impl IrContext {
                 is_module,
             } => {
                 assert!(base.is_none());
-                assert!(superclass.is_none());
                 assert!(!is_module);
                 let ret = Some(local.into());
-                self.gen_class_def(ctx, info, id_store, name, body, ret, loc)?;
+                let superclass = superclass.map(|c| *c);
+                self.gen_class_def(ctx, info, id_store, name, superclass, body, ret, loc)?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, id_store, rhs)?;
@@ -1004,6 +1013,7 @@ impl IrContext {
         info: &mut RubyFuncInfo,
         id_store: &mut IdentifierTable,
         name: String,
+        superclass: Option<Node>,
         node: Node,
         ret: Option<BcReg>,
         loc: Loc,
@@ -1016,7 +1026,19 @@ impl IrContext {
             true,
         );
         let name = id_store.get_ident_id_from_string(name);
-        self.push(BcIr::ClassDef(ret, name, func_id), loc);
+        let superclass = match superclass {
+            Some(superclass) => Some(self.gen_temp_expr(ctx, info, id_store, superclass)?),
+            None => None,
+        };
+        self.push(
+            BcIr::ClassDef {
+                ret,
+                superclass,
+                name,
+                func_id,
+            },
+            loc,
+        );
         Ok(())
     }
 
@@ -1603,12 +1625,21 @@ impl IrContext {
                 BcIr::MethodDef(name, func_id) => {
                     Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
                 }
-                BcIr::ClassDef(ret, name, func_id) => {
+                BcIr::ClassDef {
+                    ret,
+                    superclass,
+                    name,
+                    func_id,
+                } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
-                    Bc::from_with_func_name_id(enc_wl(18, op1.0, 0), *name, *func_id)
+                    let op2 = match superclass {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), *name, *func_id)
                 }
                 BcIr::ConcatStr(ret, arg, len) => {
                     let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));

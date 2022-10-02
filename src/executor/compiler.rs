@@ -185,14 +185,34 @@ extern "C" fn define_class(
     interp: &mut Interp,
     globals: &mut Globals,
     name: IdentId,
+    superclass: Option<Value>,
 ) -> Option<Value> {
     let parent = interp.get_class_context();
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            val.expect_class(name, globals)?;
+            let class = val.expect_class(name, globals)?;
+            if let Some(superclass) = superclass {
+                let super_name = globals.val_tos(superclass);
+                let super_name = globals.get_ident_id(&super_name);
+                let super_class = superclass.expect_class(super_name, globals)?;
+                if Some(super_class) != class.super_class(globals) {
+                    globals.err_superclass_mismatch(name);
+                    return None;
+                }
+            }
             val
         }
-        None => globals.define_class_by_ident_id(name, Some(OBJECT_CLASS), parent),
+        None => {
+            let superclass = match superclass {
+                Some(superclass) => {
+                    let name = globals.val_tos(superclass);
+                    let name = globals.get_ident_id(&name);
+                    superclass.expect_class(name, globals)?
+                }
+                None => OBJECT_CLASS,
+            };
+            globals.define_class_by_ident_id(name, Some(superclass), parent)
+        }
     };
     interp.push_class_context(self_val.as_class());
     Some(self_val)

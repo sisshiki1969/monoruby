@@ -183,6 +183,14 @@ impl RValue {
         }
     }
 
+    pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+        RValue {
+            flags: RVFlag::new(class_id),
+            kind: ObjKind::Array(v),
+            var_table: None,
+        }
+    }
+
     pub(crate) fn new_time(time: TimeInfo) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS),

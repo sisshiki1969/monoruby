@@ -494,8 +494,13 @@ impl Codegen {
                     );
                     self.xmm_restore(&xmm_using);
                 }
-                BcOp::ClassDef(ret, name, func_id) => {
-                    self.jit_class_def(&ctx, ret, name, func_id);
+                BcOp::ClassDef {
+                    ret,
+                    superclass,
+                    name,
+                    func_id,
+                } => {
+                    self.jit_class_def(&ctx, ret, superclass, name, func_id);
                 }
                 BcOp::Ret(lhs) => {
                     ctx.read_slot(self, lhs);

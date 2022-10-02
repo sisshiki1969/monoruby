@@ -234,6 +234,10 @@ impl Value {
         RValue::new_array(v).pack()
     }
 
+    pub fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+        RValue::new_array_with_class(v, class_id).pack()
+    }
+
     pub fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }

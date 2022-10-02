@@ -5,8 +5,29 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_singleton_func(ARRAY_CLASS, "new", new, -1);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
+}
+
+/// ### Array.new
+/// - new(size = 0, val = nil) -> Array
+/// - new(ary) -> Array
+/// - new(size) {|index| ... } -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
+///
+/// TODO: Support arguments.
+extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
+    let class = arg.self_value().as_class();
+    let obj = Value::new_array_with_class(vec![], class);
+    if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
+        globals.check_arg(func_id, len)?;
+        let args: Vec<Value> = (0..len).into_iter().map(|i| arg[i]).collect();
+        vm.invoke_func(globals, func_id, obj, &args)?;
+    };
+    Some(obj)
 }
 
 /// ### Array#+
@@ -40,9 +61,63 @@ extern "C" fn shl(
     Some(arg.self_value())
 }
 
+/// ### Array#[]=
+/// - self[nth] = val
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
+extern "C" fn index_assign(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let i = arg[0];
+    let val = arg[1];
+    let self_val = arg.self_value();
+    let v = self_val.as_array_mut();
+    if let Some(idx) = i.try_fixnum() {
+        if idx >= 0 {
+            match v.get_mut(idx as usize) {
+                Some(v) => *v = val,
+                None => {
+                    let idx = idx as usize;
+                    v.extend((v.len()..idx).into_iter().map(|_| Value::nil()));
+                    v.push(val);
+                }
+            }
+        } else {
+            let idx_positive = v.len() as i64 + idx;
+            if idx_positive < 0 {
+                globals.err_index_too_small(idx, -(v.len() as i64));
+                return None;
+            } else {
+                v[idx_positive as usize] = val;
+            }
+        };
+    } else {
+        unimplemented!()
+    }
+    Some(val)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_array_new() {
+        run_test(
+            r##"
+        class A < Array
+        end
+        A.singleton_class  # TODO: currently, this is neccesary.
+        a = A.new
+        a << 4
+        a[2] = 5
+        a
+        "##,
+        );
+    }
 
     #[test]
     fn test_array_add() {
@@ -54,5 +129,18 @@ mod test {
     #[test]
     fn test_array_shl() {
         run_test(r##"a = [1,2,3]; a << 10; a"##);
+    }
+
+    #[test]
+    fn test_array_index() {
+        run_test(
+            r##"
+        a = [1,2,3];
+        a.[]=(2, 42);
+        a.[]=(4,99);
+        a.[]=(-2, 14);
+        a
+        "##,
+        );
     }
 }

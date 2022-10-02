@@ -328,7 +328,7 @@ impl LoopAnalysis {
                 }
                 BcOp::IndexAssign(..) => {}
                 BcOp::MethodDef(..) => {}
-                BcOp::ClassDef(ret, ..) => {
+                BcOp::ClassDef { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
                 BcOp::StoreConst(..) => {}
