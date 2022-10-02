@@ -81,10 +81,6 @@ impl Arg {
     pub fn as_ptr(&self) -> *const Value {
         self.0
     }
-
-    pub fn self_value(&self) -> Value {
-        unsafe { *self.0.add(1) }
-    }
 }
 
 impl std::ops::Index<usize> for Arg {

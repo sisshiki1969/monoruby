@@ -38,14 +38,20 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-extern "C" fn new(_: &mut Interp, _: &mut Globals, _: Arg, _: usize) -> Option<Value> {
+extern "C" fn new(_: &mut Interp, _: &mut Globals, _: Value, _: Arg, _: usize) -> Option<Value> {
     Some(Value::new_object(OBJECT_CLASS))
 }
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
-extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
+extern "C" fn puts(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.as_array() {
             Some(ary) => {
@@ -75,6 +81,7 @@ extern "C" fn puts(_vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize
 extern "C" fn print(
     _vm: &mut Interp,
     globals: &mut Globals,
+    _: Value,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -87,6 +94,7 @@ extern "C" fn print(
 extern "C" fn assert(
     _vm: &mut Interp,
     _globals: &mut Globals,
+    _: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -101,6 +109,7 @@ use std::arch::asm;
 extern "C" fn dump(
     vm: &mut Interp,
     globals: &mut Globals,
+    _: Value,
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -122,10 +131,11 @@ extern "C" fn dump(
 extern "C" fn respond_to(
     _vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = arg.self_value().class_id();
+    let class_id = self_val.class_id();
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => globals.get_ident_id(String::from_utf8_lossy(b).as_ref()),
@@ -141,10 +151,11 @@ extern "C" fn respond_to(
 extern "C" fn inspect(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let s = arg.self_value().inspect(globals);
+    let s = self_val.inspect(globals);
     Some(Value::new_string(s.into_bytes()))
 }
 
@@ -155,10 +166,11 @@ extern "C" fn inspect(
 extern "C" fn class(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _: Arg,
     _len: usize,
 ) -> Option<Value> {
-    Some(arg.self_value().get_real_class_obj(globals))
+    Some(self_val.get_real_class_obj(globals))
 }
 
 /// ### Object#singleton_class
@@ -168,10 +180,11 @@ extern "C" fn class(
 extern "C" fn singleton_class(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _: Arg,
     _len: usize,
 ) -> Option<Value> {
-    Some(arg.self_value().get_singleton(globals))
+    Some(self_val.get_singleton(globals))
 }
 
 /// ### Object#instance_variable_defined?
@@ -181,6 +194,7 @@ extern "C" fn singleton_class(
 extern "C" fn instance_variable_defined(
     _vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -189,7 +203,7 @@ extern "C" fn instance_variable_defined(
         RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
         _ => return None,
     };
-    let b = arg.self_value().rvalue_mut().get_var(id).is_some();
+    let b = self_val.rvalue_mut().get_var(id).is_some();
     Some(Value::bool(b))
 }
 
@@ -200,6 +214,7 @@ extern "C" fn instance_variable_defined(
 extern "C" fn instance_variable_set(
     _vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -208,7 +223,7 @@ extern "C" fn instance_variable_set(
         RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
         _ => return None,
     };
-    arg.self_value().rvalue_mut().set_var(id, arg[1]);
+    self_val.rvalue_mut().set_var(id, arg[1]);
     Some(arg[1])
 }
 
@@ -219,6 +234,7 @@ extern "C" fn instance_variable_set(
 extern "C" fn instance_variable_get(
     _vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -227,11 +243,7 @@ extern "C" fn instance_variable_get(
         RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
         _ => return None,
     };
-    let v = arg
-        .self_value()
-        .rvalue_mut()
-        .get_var(id)
-        .unwrap_or_default();
+    let v = self_val.rvalue_mut().get_var(id).unwrap_or_default();
     Some(v)
 }
 

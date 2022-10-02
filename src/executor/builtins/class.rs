@@ -22,12 +22,17 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 ///
 /// !! We must call Object#initialize.
-extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
-    let obj = allocate(vm, globals, arg, 0)?;
+extern "C" fn new(
+    vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    let obj = allocate(vm, globals, self_val, arg, 0)?;
     if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
-        let args: Vec<Value> = (0..len).into_iter().map(|i| arg[i]).collect();
-        vm.invoke_func(globals, func_id, obj, &args)?;
+        vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
 }
@@ -39,10 +44,11 @@ extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) 
 extern "C" fn superclass(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     let res = match class_id.super_class(globals) {
         None => Value::nil(),
         Some(super_id) => super_id.get_obj(globals),
@@ -57,10 +63,11 @@ extern "C" fn superclass(
 extern "C" fn allocate(
     _vm: &mut Interp,
     _globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     let obj = Value::new_object(class_id);
     Some(obj)
 }
@@ -69,8 +76,14 @@ extern "C" fn allocate(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
-extern "C" fn tos(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
-    let class_name = arg.self_value().as_class().get_name(globals);
+extern "C" fn tos(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let class_name = self_val.as_class().get_name(globals);
     let res = Value::new_string(class_name.into_bytes());
     Some(res)
 }
@@ -82,10 +95,11 @@ extern "C" fn tos(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
 extern "C" fn constants(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     let v = globals
         .get_constant_names(class_id)
         .into_iter()
@@ -105,10 +119,11 @@ extern "C" fn constants(
 extern "C" fn instance_methods(
     _vm: &mut Interp,
     globals: &mut Globals,
-    arg: Arg,
+    self_val: Value,
+    _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     let v = globals
         .get_instance_method_names(class_id)
         .into_iter()
@@ -124,11 +139,12 @@ extern "C" fn instance_methods(
 extern "C" fn attr_reader(
     vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(vm, class_id, arg_name);
@@ -144,11 +160,12 @@ extern "C" fn attr_reader(
 extern "C" fn attr_writer(
     vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(vm, class_id, arg_name);
@@ -164,11 +181,12 @@ extern "C" fn attr_writer(
 extern "C" fn attr_accessor(
     vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = arg.self_value().as_class();
+    let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(vm, class_id, arg_name.clone());

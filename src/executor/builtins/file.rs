@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 extern "C" fn write(
     _vm: &mut Interp,
     globals: &mut Globals,
+    _self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {

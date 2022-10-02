@@ -13,8 +13,14 @@ pub(super) fn init(globals: &mut Globals) {
 /// - chr(encoding) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
-extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
-    match arg.self_value().try_fixnum() {
+extern "C" fn chr(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    match self_val.try_fixnum() {
         Some(i) => {
             if let Ok(b) = u8::try_from(i) {
                 return Some(Value::new_string_from_slice(&[b]));
@@ -22,6 +28,6 @@ extern "C" fn chr(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
         }
         _ => {}
     };
-    globals.err_char_out_of_range(arg.self_value());
+    globals.err_char_out_of_range(self_val);
     return None;
 }

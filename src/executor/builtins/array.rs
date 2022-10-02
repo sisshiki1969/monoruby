@@ -19,13 +19,18 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 ///
 /// TODO: Support arguments.
-extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) -> Option<Value> {
-    let class = arg.self_value().as_class();
+extern "C" fn new(
+    vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    let class = self_val.as_class();
     let obj = Value::new_array_with_class(vec![], class);
     if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
-        let args: Vec<Value> = (0..len).into_iter().map(|i| arg[i]).collect();
-        vm.invoke_func(globals, func_id, obj, &args)?;
+        vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
 }
@@ -34,8 +39,14 @@ extern "C" fn new(vm: &mut Interp, globals: &mut Globals, arg: Arg, len: usize) 
 /// - self + other -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
-extern "C" fn add(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
-    let mut lhs = arg.self_value().as_array().unwrap().clone();
+extern "C" fn add(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let mut lhs = self_val.as_array().unwrap().clone();
     let rhs = match arg[0].as_array() {
         Some(v) => v,
         None => {
@@ -54,11 +65,12 @@ extern "C" fn add(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize
 extern "C" fn shl(
     _vm: &mut Interp,
     _globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    arg.self_value().as_array_mut().push(arg[0]);
-    Some(arg.self_value())
+    self_val.as_array_mut().push(arg[0]);
+    Some(self_val)
 }
 
 /// ### Array#[]=
@@ -68,12 +80,13 @@ extern "C" fn shl(
 extern "C" fn index_assign(
     _vm: &mut Interp,
     globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
     let i = arg[0];
     let val = arg[1];
-    let self_val = arg.self_value();
+    let self_val = self_val;
     let v = self_val.as_array_mut();
     if let Some(idx) = i.try_fixnum() {
         if idx >= 0 {

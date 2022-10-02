@@ -20,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn now(
     _vm: &mut Interp,
     _globals: &mut Globals,
+    _self_val: Value,
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -32,15 +33,21 @@ extern "C" fn now(
 /// - self - time -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
-extern "C" fn sub(_vm: &mut Interp, globals: &mut Globals, arg: Arg, _len: usize) -> Option<Value> {
-    let lhs = match &arg.self_value().try_rvalue().unwrap().kind {
+extern "C" fn sub(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let lhs = match &self_val.try_rvalue().unwrap().kind {
         ObjKind::Time(time) => time.clone(),
         _ => unreachable!(),
     };
     let rhs = match &arg[0].try_rvalue().unwrap().kind {
         ObjKind::Time(time) => time.clone(),
         _ => {
-            globals.err_method_not_found(IdentId::_SUB, arg.self_value().class_id());
+            globals.err_method_not_found(IdentId::_SUB, self_val.class_id());
             return None;
         }
     };

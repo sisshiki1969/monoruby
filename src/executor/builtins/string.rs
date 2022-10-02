@@ -15,10 +15,11 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn add(
     _vm: &mut Interp,
     _globals: &mut Globals,
+    self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let mut b = arg.self_value().as_string().clone();
+    let mut b = self_val.as_string().clone();
     b.extend_from_slice(arg[0].as_string());
     Some(Value::new_string_from_smallvec(b))
 }
