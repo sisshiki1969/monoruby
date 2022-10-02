@@ -491,6 +491,14 @@ extern "C" fn log_deoptimize(
     }
 }
 
+struct Cached {
+    codeptr: CodePtr,
+    meta: Meta,
+    class_id: ClassId,
+    version: u32,
+    pc: BcPc,
+}
+
 impl Codegen {
     fn xmm_read_assume(
         &mut self,
@@ -602,7 +610,24 @@ impl Codegen {
                     jnz side_exit;
                 );
             }
-            SYMBOL_CLASS | TRUE_CLASS | FALSE_CLASS => unimplemented!(),
+            SYMBOL_CLASS => {
+                monoasm!(self.jit,
+                    cmpb rdi, (TAG_SYMBOL);
+                    jnz side_exit;
+                );
+            }
+            TRUE_CLASS => {
+                monoasm!(self.jit,
+                    cmpq rdi, (TRUE_VALUE);
+                    jnz side_exit;
+                );
+            }
+            FALSE_CLASS => {
+                monoasm!(self.jit,
+                    cmpq rdi, (FALSE_VALUE);
+                    jnz side_exit;
+                );
+            }
             _ => self.guard_unpacked_class(class_id, side_exit),
         }
     }
@@ -615,6 +640,15 @@ impl Codegen {
             cmpl rax, (class_id.get());
             jne side_exit;
         )
+    }
+
+    fn guard_version(&mut self, cached_version: u32, deopt: DestLabel) {
+        let global_class_version = self.class_version;
+        monoasm!(self.jit,
+            movl rax, [rip + global_class_version];
+            cmpl rax, (cached_version);
+            jne deopt;
+        );
     }
 }
 
@@ -1222,54 +1256,36 @@ impl Codegen {
             movq rbp, rsp;
             subq rsp, (offset);
         );
+        //
+        //       +-------------+
+        //       | return addr |
+        //       +-------------+
+        //       |   old rbp   |
+        //       +-------------+
+        //       |    meta     |
+        //       +-------------+
+        //       |     %0      |
+        //       +-------------+
+        //       |     %1      |
+        //       +-------------+
+        //       |     %2      |
+        //       +-------------+
+        //       |     %3      |
+        //       +-------------+
+        // rsp-> |             |
+        //       +-------------+
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    //
-                    //       +-------------+
-                    //       | return addr |
-                    //       +-------------+
-                    //       |   old rbp   |
-                    //       +-------------+
-                    //       |    meta     |
-                    //       +-------------+
-                    //       |     %0      |
-                    //       +-------------+
-                    //       |     %1      |
-                    //       +-------------+
-                    //       |     %2      |
-                    //       +-------------+
-                    //       |     %3      |
-                    //       +-------------+
-                    // rsp-> |             |
-                    //       +-------------+
                     movq [rbp - ((args + i) as i32 * 8 + 16)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    //
-                    //       +-------------+
-                    //       | return addr |
-                    //       +-------------+
-                    //       |   old rbp   |
-                    //       +-------------+
-                    //       |    meta     |
-                    //       +-------------+
-                    //       |     %0      |
-                    //       +-------------+
-                    //       |     %1      |
-                    //       +-------------+
-                    //       |     %2      |
-                    //       +-------------+
-                    //       |     %3      |
-                    //       +-------------+
-                    // rsp-> |             |
-                    //       +-------------+
                     movq [rbp - ((args + i) as i32 * 8 + 16)], (NIL_VALUE);
                 );
             }
@@ -1807,251 +1823,6 @@ impl Codegen {
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
         self.store_rax(ret);
-    }
-
-    fn jit_attr_reader(
-        &mut self,
-        recv: SlotId,
-        ivar_name: IdentId,
-        ret: SlotId,
-        cached_class_id: ClassId,
-        cached_version: u32,
-        ctx: &BBContext,
-        pc: BcPc,
-    ) {
-        let global_class_version = self.class_version;
-        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(recv))];
-        );
-        self.guard_class(cached_class_id, deopt);
-        monoasm!(self.jit,
-            movl rax, [rip + global_class_version];
-            cmpl rax, (cached_version);
-            jne deopt;
-        );
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rsi, (ivar_name.get()); // name: IdentId
-            movq rax, (get_instance_var);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
-    }
-
-    fn jit_attr_writer(
-        &mut self,
-        recv: SlotId,
-        ivar_name: IdentId,
-        ret: SlotId,
-        args: SlotId,
-        cached_class_id: ClassId,
-        cached_version: u32,
-        ctx: &BBContext,
-        pc: BcPc,
-    ) {
-        let global_class_version = self.class_version;
-        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(recv))];
-        );
-        self.guard_class(cached_class_id, deopt);
-        monoasm!(self.jit,
-            movl rax, [rip + global_class_version];
-            cmpl rax, (cached_version);
-            jne deopt;
-        );
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rsi, rdi;  // recv: Value
-            movq rdi, r12; //&mut Globals
-            movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rbp - (conv(args))];  //val: Value
-            movq rax, (set_instance_var);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
-        if !ret.is_zero() {
-            self.store_rax(args);
-        }
-    }
-
-    fn jit_method_call(
-        &mut self,
-        recv: SlotId,
-        name: IdentId,
-        ret: SlotId,
-        args: SlotId,
-        len: u16,
-        ctx: &BBContext,
-        pc: BcPc,
-        cache_info: Option<(ClassId, u32, CodePtr, Meta, BcPc)>,
-    ) {
-        // set arguments to a callee stack.
-        //
-        //       +-------------+
-        //  0x00 |             | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |   old rbp   |
-        //       +-------------+
-        // -0x18 |    meta     |
-        //       +-------------+
-        // -0x20 |     %0      |
-        //       +-------------+
-        // -0x28 | %1(1st arg) |
-        //       +-------------+
-        //       |             |
-        //
-        // argument registers:
-        //   rdi: args len
-        //
-        let (cached_class, cached_version, codeptr, meta, cached_pc) = match cache_info {
-            Some((class, version, codeptr, meta, pc)) => (
-                class.get() as i32,
-                version as i32,
-                Some(codeptr),
-                meta.get(),
-                pc.get_u64(),
-            ),
-            None => (0, -1, None, 0, 0),
-        };
-
-        let method_resolved = self.jit.label();
-        let patch_meta = self.jit.label();
-        let patch_adr = self.jit.label();
-        let patch_pc = self.jit.label();
-        let slow_path = self.jit.label();
-        let raise = self.jit.label();
-        let cached_class_version = self.jit.const_i32(cached_version);
-        let cached_recv_class = self.jit.const_i32(cached_class);
-        let global_class_version = self.class_version;
-        let entry_find_method = self.entry_find_method;
-        let entry_panic = self.entry_panic;
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        if !recv.is_zero() {
-            monoasm!(self.jit,
-                movq rdi, [rbp - (conv(recv))];
-                movq rax, (Value::get_class);
-                call rax;
-                movl r15, rax;  // r15: receiver class_id
-                cmpl r15, [rip + cached_recv_class];
-                jne slow_path;
-            );
-        }
-        monoasm!(self.jit,
-            movl rax, [rip + global_class_version];
-            cmpl [rip + cached_class_version], rax;
-            jne slow_path;
-        method_resolved:
-        );
-
-        // set self
-        monoasm!(self.jit,
-            movq rax, [rbp - (conv(recv))];
-            movq [rsp - 0x20], rax;
-        );
-        // set arguments
-        for i in 0..len {
-            let reg = args + i;
-            monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - ((0x28 + i * 8) as i64)], rax;
-            );
-        }
-
-        monoasm!(self.jit,
-            // set meta.
-            movq rax, qword (meta);
-            patch_meta:
-            movq [rsp - 0x18], rax;
-
-            movq r13, qword (cached_pc);
-            patch_pc:
-            movq rdi, (len);
-        );
-        let src_point = self.jit.get_current_address();
-        match codeptr {
-            Some(codeptr) => {
-                monoasm!(self.jit,
-                    // patch point
-                    call (codeptr - src_point - 5);
-                patch_adr:
-                );
-            }
-            None => {
-                monoasm!(self.jit,
-                    // patch point
-                    call entry_panic;
-                patch_adr:
-                );
-            }
-        }
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            testq rax, rax;
-            jeq raise;
-        );
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
-
-        self.jit.select_page(1);
-        // call site stub code.
-        monoasm!(self.jit,
-        slow_path:
-            movq rdx, (u32::from(name)); // IdentId
-            movq rcx, (len as usize); // args_len: usize
-            movq r8, [rbp - (conv(recv))]; // receiver: Value
-            call entry_find_method;
-            // absolute address was returned to rax.
-            testq rax, rax;
-            jeq raise;
-
-            lea rdi, [rip + patch_meta];
-            subq rdi, 8;
-            movq rcx, [rax + (FUNCDATA_OFFSET_META)];
-            movq [rdi], rcx;
-
-            lea rdi, [rip + patch_pc];
-            subq rdi, 8;
-            movq rcx, [rax + (FUNCDATA_OFFSET_PC)];
-            movq [rdi], rcx;
-
-            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
-            lea rdi, [rip + patch_adr];
-            // calculate a displacement to the function address.
-            subq rax, rdi;
-            // apply patch.
-            movl [rdi - 4], rax;
-
-            movl rax, [rip + global_class_version];
-            movl [rip + cached_class_version], rax;
-        );
-        if !recv.is_zero() {
-            monoasm!(self.jit,
-                movl [rip + cached_recv_class], r15;
-            );
-        }
-        monoasm!(self.jit,
-            jmp method_resolved;
-        );
-        let entry_return = self.vm_return;
-        // raise error.
-        monoasm!(self.jit,
-        raise:
-            movq r13, ((pc + 2).get_u64());
-            jmp entry_return;
-        );
-        self.jit.select_page(0);
     }
 
     fn jit_class_def(

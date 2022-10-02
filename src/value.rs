@@ -7,7 +7,7 @@ use crate::alloc::{Allocator, GC};
 //const UNINITIALIZED: u64 = 0x24; // 0010_0100
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
-const TRUE_VALUE: u64 = 0x1c; // 0001_1100
+pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
 pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
