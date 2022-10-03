@@ -642,12 +642,12 @@ impl Codegen {
         )
     }
 
-    fn guard_version(&mut self, cached_version: u32, deopt: DestLabel) {
+    fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
         let global_class_version = self.class_version;
         monoasm!(self.jit,
             movl rax, [rip + global_class_version];
             cmpl rax, (cached_version);
-            jne deopt;
+            jne side_exit;
         );
     }
 }

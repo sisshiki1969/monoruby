@@ -438,7 +438,7 @@ impl Codegen {
                                 pc: callee_pc,
                             };
                             self.gen_method_call_cached(
-                                globals, &ctx, name, recv, args, len, ret, cached, pc,
+                                globals, &ctx, recv, args, len, ret, cached, pc,
                             );
                         } else {
                             self.jit_method_call(recv, name, ret, args, len, &ctx, None, pc);
@@ -577,7 +577,6 @@ impl Codegen {
         &mut self,
         globals: &Globals,
         ctx: &BBContext,
-        name: IdentId,
         recv: SlotId,
         args: SlotId,
         len: u16,
@@ -585,39 +584,29 @@ impl Codegen {
         cached: Cached,
         pc: BcPc,
     ) {
+        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(recv))];
+        );
+        if !recv.is_zero() {
+            self.guard_class(cached.class_id, deopt);
+        }
+        self.guard_version(cached.version, deopt);
         let func_id = cached.meta.func_id();
         match globals.func[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-                monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(recv))];
-                );
-                self.guard_class(cached.class_id, deopt);
-                self.guard_version(cached.version, deopt);
                 self.jit_attr_reader(&ctx, ivar_name, ret);
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-                monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(recv))];
-                );
-                self.guard_class(cached.class_id, deopt);
-                self.guard_version(cached.version, deopt);
                 self.jit_attr_writer(&ctx, ivar_name, ret, args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
-                monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(recv))];
-                );
-                self.guard_class(cached.class_id, deopt);
-                self.guard_version(cached.version, deopt);
                 self.jit_native_call(&ctx, ret, args, len, abs_address, pc);
             }
-            _ => {
-                self.jit_method_call(recv, name, ret, args, len, &ctx, Some(cached), pc);
+            FuncKind::Normal(_) => {
+                self.jit_method_call_cached(recv, ret, args, len, &ctx, cached, pc);
             }
         };
     }
@@ -682,6 +671,74 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+    }
+
+    fn jit_method_call_cached(
+        &mut self,
+        recv: SlotId,
+        ret: SlotId,
+        args: SlotId,
+        len: u16,
+        ctx: &BBContext,
+        cached: Cached,
+        pc: BcPc,
+    ) {
+        // set arguments to a callee stack.
+        //
+        //       +-------------+
+        //  0x00 |             | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |   old rbp   |
+        //       +-------------+
+        // -0x18 |    meta     |
+        //       +-------------+
+        // -0x20 |     %0      |
+        //       +-------------+
+        // -0x28 | %1(1st arg) |
+        //       +-------------+
+        //       |             |
+        //
+        // argument registers:
+        //   rdi: args len
+        //
+        let method_resolved = self.jit.label();
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+
+        // set self
+        monoasm!(self.jit,
+        method_resolved:
+            movq rax, [rbp - (conv(recv))];
+            movq [rsp - 0x20], rax;
+        );
+        // set arguments
+        for i in 0..len {
+            let reg = args + i;
+            monoasm!(self.jit,
+                movq rax, [rbp - (conv(reg))];
+                movq [rsp - ((0x28 + i * 8) as i64)], rax;
+            );
+        }
+
+        monoasm!(self.jit,
+            // set meta.
+            movq rax, qword (cached.meta.get());
+            movq [rsp - 0x18], rax;
+
+            movq r13, qword (cached.pc.get_u64());
+            movq rdi, (len);
+        );
+        let src_point = self.jit.get_current_address();
+        monoasm!(self.jit,
+            // patch point
+            call (cached.codeptr - src_point - 5);
+        );
         self.handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
