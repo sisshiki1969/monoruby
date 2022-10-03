@@ -1,6 +1,7 @@
 #![feature(box_patterns)]
 #![feature(int_roundings)]
 #![feature(const_option)]
+#![feature(once_cell)]
 pub use alloc::*;
 pub use fxhash::FxHashMap as HashMap;
 pub use monoasm::CodePtr;

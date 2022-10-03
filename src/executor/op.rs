@@ -368,7 +368,7 @@ pub extern "C" fn set_constant(
     if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
         eprintln!(
             "warning: already initialized constant {}",
-            globals.get_ident_name(name)
+            IdentId::get_name(name)
         )
     }
 }

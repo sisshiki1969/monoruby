@@ -187,7 +187,6 @@ impl FnStore {
     pub(super) fn compile_script(
         &mut self,
         ast: Node,
-        id_store: &mut IdentifierTable,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let main_fid = self.functions.add_ruby_func(
@@ -200,7 +199,7 @@ impl FnStore {
         let mut fid = main_fid;
 
         while self.len() > fid.0 as usize {
-            self.compile_func(fid, id_store)?;
+            self.compile_func(fid)?;
             fid = FuncId(fid.0 + 1);
         }
 
@@ -208,9 +207,9 @@ impl FnStore {
     }
 
     /// Generate bytecode for a function which has *func_id*.
-    fn compile_func(&mut self, func_id: FuncId, id_store: &mut IdentifierTable) -> Result<()> {
+    fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        let mut ir = IrContext::compile_ast(&mut info, self, id_store)?;
+        let mut ir = IrContext::compile_ast(&mut info, self)?;
         ir.ir_to_bytecode(&mut info, self);
 
         let regs = info.total_reg_num();

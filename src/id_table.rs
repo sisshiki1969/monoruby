@@ -1,5 +1,9 @@
 use crate::*;
 use std::num::NonZeroU32;
+use std::sync::{LazyLock, RwLock};
+
+static ID: LazyLock<RwLock<IdentifierTable>> =
+    LazyLock::new(|| RwLock::new(IdentifierTable::new()));
 
 ///
 /// Wrapper of ID for strings.
@@ -90,6 +94,38 @@ impl IdentId {
     }
 }
 
+impl IdentId {
+    pub fn get_ident_id(name: &str) -> IdentId {
+        ID.write().unwrap().get_ident_id(name)
+    }
+
+    pub fn get_ident_id_from_string(name: String) -> IdentId {
+        ID.write().unwrap().get_ident_id_from_string(name)
+    }
+
+    pub fn get_name(id: IdentId) -> String {
+        ID.read().unwrap().get_name(id).to_string()
+    }
+
+    ///
+    /// Get instance variable name from *id*.
+    ///
+    /// ex) "var" -> "@var"
+    ///
+    pub fn add_ivar_prefix(id: IdentId) -> IdentId {
+        ID.write().unwrap().add_ivar_prefix(id)
+    }
+
+    ///
+    /// Get assign method name from *id*.
+    ///
+    /// ex) "var" -> "var="
+    ///
+    pub fn add_assign_postfix(id: IdentId) -> IdentId {
+        ID.write().unwrap().add_assign_postfix(id)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct IdentifierTable {
     rev_table: HashMap<String, IdentId>,
@@ -146,7 +182,7 @@ impl IdentifierTable {
         self.table[id.to_usize() - 1] = name.to_string();
     }
 
-    pub fn get_ident_id<'a>(&mut self, name: &str) -> IdentId {
+    fn get_ident_id<'a>(&mut self, name: &str) -> IdentId {
         match self.rev_table.get(name) {
             Some(id) => (*id).into(),
             None => {
@@ -158,7 +194,7 @@ impl IdentifierTable {
         }
     }
 
-    pub fn get_ident_id_from_string<'a>(&mut self, name: String) -> IdentId {
+    fn get_ident_id_from_string<'a>(&mut self, name: String) -> IdentId {
         match self.rev_table.get(&name) {
             Some(id) => (*id).into(),
             None => {
@@ -170,7 +206,7 @@ impl IdentifierTable {
         }
     }
 
-    pub fn get_name(&self, id: IdentId) -> &str {
+    fn get_name(&self, id: IdentId) -> &str {
         &self.table[id.to_usize() - 1]
     }
 
@@ -179,7 +215,7 @@ impl IdentifierTable {
     ///
     /// ex) "var" -> "@var"
     ///
-    pub fn add_ivar_prefix(&mut self, id: IdentId) -> IdentId {
+    fn add_ivar_prefix(&mut self, id: IdentId) -> IdentId {
         let ivar_name = format!("@{}", self.table[id.to_usize() - 1]);
         self.get_ident_id_from_string(ivar_name)
     }
@@ -189,7 +225,7 @@ impl IdentifierTable {
     ///
     /// ex) "var" -> "var="
     ///
-    pub fn add_assign_postfix(&mut self, id: IdentId) -> IdentId {
+    fn add_assign_postfix(&mut self, id: IdentId) -> IdentId {
         let method_name = format!("{}=", self.table[id.to_usize() - 1]);
         self.get_ident_id_from_string(method_name)
     }

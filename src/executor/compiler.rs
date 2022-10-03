@@ -115,8 +115,7 @@ extern "C" fn get_index(
         },
         _ => {}
     }
-    let method = globals.get_ident_id("[]");
-    interp.invoke_method(globals, method, base, &[index])
+    interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 
 extern "C" fn set_index(
@@ -153,8 +152,7 @@ extern "C" fn set_index(
         }
         _ => {}
     }
-    let method = globals.get_ident_id("[]=");
-    interp.invoke_method(globals, method, base, &[index, src])
+    interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
 extern "C" fn get_instance_var(base: Value, id: IdentId) -> Value {
@@ -194,7 +192,7 @@ extern "C" fn define_class(
             let class = val.expect_class(name, globals)?;
             if let Some(superclass) = superclass {
                 let super_name = globals.val_tos(superclass);
-                let super_name = globals.get_ident_id(&super_name);
+                let super_name = IdentId::get_ident_id(&super_name);
                 let super_class = superclass.expect_class(super_name, globals)?;
                 if Some(super_class) != class.super_class(globals) {
                     globals.err_superclass_mismatch(name);
@@ -207,7 +205,7 @@ extern "C" fn define_class(
             let superclass = match superclass {
                 Some(superclass) => {
                     let name = globals.val_tos(superclass);
-                    let name = globals.get_ident_id(&name);
+                    let name = IdentId::get_ident_id_from_string(name);
                     superclass.expect_class(name, globals)?
                 }
                 None => OBJECT_CLASS,

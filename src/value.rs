@@ -282,7 +282,7 @@ impl Value {
             NodeKind::Float(num) => Value::new_float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(globals.get_ident_id(sym)),
+            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
             NodeKind::String(s) => Value::new_string(s.as_bytes().to_vec()),
             NodeKind::Array(v, _) => {
                 let v = v
@@ -300,7 +300,7 @@ impl Value {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
                 assert_eq!(0, prefix.len());
-                let constant = globals.get_ident_id(name);
+                let constant = IdentId::get_ident_id(name);
                 globals.get_constant(OBJECT_CLASS, constant).unwrap()
             }
             _ => unimplemented!(),
@@ -494,8 +494,8 @@ impl Value {
         match self.unpack() {
             RV::Symbol(sym) => return Some(sym),
             RV::String(s) => {
-                let s = String::from_utf8_lossy(s);
-                return Some(globals.get_ident_id(s.as_ref()));
+                let s = String::from_utf8_lossy(s).into_owned();
+                return Some(IdentId::get_ident_id_from_string(s));
             }
             _ => {}
         }

@@ -130,7 +130,7 @@ impl BcPc {
                 )
             }
             BcOp::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, globals.get_ident_name(id)),
+            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, IdentId::get_name(id)),
             BcOp::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
             }
@@ -152,9 +152,9 @@ impl BcPc {
                 } = globals.func[id].clone();
                 let mut const_name = if toplevel { "::" } else { "" }.to_string();
                 for c in prefix {
-                    const_name += &format!("{}::", globals.get_ident_name(c));
+                    const_name += &format!("{}::", IdentId::get_name(c));
                 }
-                const_name += globals.get_ident_name(name);
+                const_name += &IdentId::get_name(name);
                 let op1 = format!("{:?} = const[{}]", reg, const_name);
                 format!(
                     "{:36} [{}]",
@@ -166,13 +166,13 @@ impl BcPc {
                 )
             }
             BcOp::StoreConst(reg, id) => {
-                format!("const[{}] = {:?}", globals.get_ident_name(id), reg)
+                format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
             BcOp::LoadIvar(reg, id) => {
-                format!("{:?} = {}", reg, globals.get_ident_name(id))
+                format!("{:?} = {}", reg, IdentId::get_name(id))
             }
             BcOp::StoreIvar(reg, id) => {
-                format!("{} = {:?}", globals.get_ident_name(id), reg)
+                format!("{} = {:?}", IdentId::get_name(id), reg)
             }
             BcOp::Nil(reg) => format!("{:?} = nil", reg),
             BcOp::Neg(dst, src) => {
@@ -240,7 +240,7 @@ impl BcPc {
                     BcOp::MethodArgs(recv, args, len, _) => (recv, args, len),
                     _ => unreachable!(),
                 };
-                let name = globals.get_ident_name(name);
+                let name = IdentId::get_name(name);
                 let op1 = format!(
                     "{} = {:?}.call {}({:?}; {})",
                     ret.ret_str(),
@@ -253,7 +253,7 @@ impl BcPc {
             }
             BcOp::MethodArgs(..) => return None,
             BcOp::MethodDef(name, func_id) => {
-                let name = globals.get_ident_name(name);
+                let name = IdentId::get_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
             }
             BcOp::ClassDef {
@@ -262,7 +262,7 @@ impl BcPc {
                 name,
                 func_id,
             } => {
-                let name = globals.get_ident_name(name);
+                let name = IdentId::get_name(name);
                 format!(
                     "{} = class_def {:?} < {}: {:?}",
                     ret.ret_str(),

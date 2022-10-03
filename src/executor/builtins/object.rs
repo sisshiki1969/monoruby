@@ -138,7 +138,7 @@ extern "C" fn respond_to(
     let class_id = self_val.class_id();
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
-        RV::String(b) => globals.get_ident_id(String::from_utf8_lossy(b).as_ref()),
+        RV::String(b) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
     Some(Value::bool(globals.find_method(class_id, name).is_some()))
@@ -193,14 +193,14 @@ extern "C" fn singleton_class(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 extern "C" fn instance_variable_defined(
     _vm: &mut Interp,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        RV::String(s) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(s).into_owned()),
         _ => return None,
     };
     let b = self_val.rvalue_mut().get_var(id).is_some();
@@ -213,14 +213,14 @@ extern "C" fn instance_variable_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 extern "C" fn instance_variable_set(
     _vm: &mut Interp,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        RV::String(s) => IdentId::get_ident_id(&String::from_utf8_lossy(s).into_owned()),
         _ => return None,
     };
     self_val.rvalue_mut().set_var(id, arg[1]);
@@ -233,14 +233,14 @@ extern "C" fn instance_variable_set(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 extern "C" fn instance_variable_get(
     _vm: &mut Interp,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => globals.get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
+        RV::String(s) => IdentId::get_ident_id(&String::from_utf8(s.to_vec()).unwrap()),
         _ => return None,
     };
     let v = self_val.rvalue_mut().get_var(id).unwrap_or_default();

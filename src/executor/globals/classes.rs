@@ -74,7 +74,7 @@ impl ClassId {
         }
         let val = self.get_obj(globals);
         match globals.class[self].get_name() {
-            Some(id) => globals.get_ident_name(id).to_string(),
+            Some(id) => IdentId::get_name(id),
             None => match globals.class[self].is_singleton {
                 None => format!("#<Class:{:016x}>", val.get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),

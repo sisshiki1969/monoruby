@@ -16,8 +16,6 @@ pub use functions::*;
 pub struct Globals {
     /// function info.
     pub func: FnStore,
-    /// identifier table.
-    pub id_store: IdentifierTable,
     /// class table.
     pub class: ClassStore,
     error: Option<MonorubyErr>,
@@ -33,7 +31,6 @@ impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
         let mut globals = Self {
             func: FnStore::new(),
-            id_store: IdentifierTable::new(),
             class: ClassStore::new(),
             error: None,
             warning,
@@ -122,7 +119,7 @@ impl Globals {
     pub fn err_is_not_class(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "{} is not a class",
-            self.get_ident_name(name)
+            IdentId::get_name(name)
         )));
     }
 
@@ -132,7 +129,7 @@ impl Globals {
     pub fn err_superclass_mismatch(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "superclass mismatch for class {}",
-            self.get_ident_name(name)
+            IdentId::get_name(name)
         )));
     }
 
@@ -217,7 +214,7 @@ impl Globals {
             match val.rvalue().get_varmap() {
                 Some(vars) => {
                     for (id, v) in vars.iter() {
-                        ivars += &format!(" {}={}", self.get_ident_name(*id), v.to_s(self));
+                        ivars += &format!(" {}={}", IdentId::get_name(*id), v.to_s(self));
                     }
                 }
                 None => {}
@@ -237,7 +234,7 @@ impl Globals {
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => self.get_ident_name(id).to_string(),
+            RV::Symbol(id) => IdentId::get_name(id),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => s,
                 Err(_) => format!("{:?}", s),
@@ -267,7 +264,7 @@ impl Globals {
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => format!(":{}", self.get_ident_name(id)),
+            RV::Symbol(id) => format!(":{}", IdentId::get_name(id)),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => format!("\"{}\"", escape_string::escape(&s)),
                 Err(_) => format!("{:?}", s),
@@ -280,14 +277,6 @@ impl Globals {
                 _ => unreachable!(),
             },
         }
-    }
-
-    pub fn get_ident_id(&mut self, name: &str) -> IdentId {
-        self.id_store.get_ident_id(name)
-    }
-
-    pub fn get_ident_name(&self, id: IdentId) -> &str {
-        self.id_store.get_name(id)
     }
 
     pub fn get_class_obj(&self, class_id: ClassId) -> Value {
@@ -308,7 +297,7 @@ impl Globals {
         super_class: impl Into<Option<ClassId>>,
         parent: ClassId,
     ) -> Value {
-        let name_id = self.get_ident_id(name);
+        let name_id = IdentId::get_ident_id(name);
         self.define_class_by_ident_id(name_id, super_class, parent)
     }
 
@@ -495,7 +484,7 @@ impl Globals {
         arity: i32,
     ) -> FuncId {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = self.get_ident_id(name);
+        let name_id = IdentId::get_ident_id(name);
         self.class.add_method(class_id, name_id, func_id);
         func_id
     }
@@ -509,7 +498,7 @@ impl Globals {
     ) -> FuncId {
         let class_id = self.get_singleton_id(class_id);
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = self.get_ident_id(name);
+        let name_id = IdentId::get_ident_id(name);
         self.class.add_method(class_id, name_id, func_id);
         func_id
     }
@@ -523,8 +512,8 @@ impl Globals {
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {
-        let ivar_name = self.id_store.add_ivar_prefix(method_name);
-        let method_name_str = self.get_ident_name(method_name).to_string();
+        let ivar_name = IdentId::add_ivar_prefix(method_name);
+        let method_name_str = IdentId::get_name(method_name);
         let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
         interp.class_version_inc();
@@ -540,9 +529,9 @@ impl Globals {
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {
-        let ivar_name = self.id_store.add_ivar_prefix(method_name);
-        let method_name = self.id_store.add_assign_postfix(method_name);
-        let method_name_str = self.get_ident_name(method_name).to_string();
+        let ivar_name = IdentId::add_ivar_prefix(method_name);
+        let method_name = IdentId::add_assign_postfix(method_name);
+        let method_name_str = IdentId::get_name(method_name);
         let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
         self.class.add_method(class_id, method_name, func_id);
         interp.class_version_inc();
@@ -551,9 +540,7 @@ impl Globals {
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
         let res = match Parser::parse_program(code, path.into()) {
-            Ok(res) => self
-                .func
-                .compile_script(res.node, &mut self.id_store, res.source_info),
+            Ok(res) => self.func.compile_script(res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         };
         res
@@ -568,9 +555,7 @@ impl Globals {
         match Parser::parse_program_binding(code, path.into(), context, None) {
             Ok(res) => {
                 let collector = res.lvar_collector;
-                let fid =
-                    self.func
-                        .compile_script(res.node, &mut self.id_store, res.source_info)?;
+                let fid = self.func.compile_script(res.node, res.source_info)?;
                 return Ok((fid, collector));
             }
             Err(err) => Err(MonorubyErr::parse(err)),
@@ -587,7 +572,7 @@ impl Globals {
             MonorubyErrKind::MethodNotFound(name, class) => {
                 format!(
                     "undefined method `{}' for {}",
-                    self.get_ident_name(*name),
+                    IdentId::get_name(*name),
                     class.get_name(self)
                 )
             }
@@ -596,7 +581,7 @@ impl Globals {
             MonorubyErrKind::Syntax2(msg) => msg.to_string(),
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
             MonorubyErrKind::UninitConst(name) => {
-                format!("uninitialized constant {}", self.get_ident_name(*name))
+                format!("uninitialized constant {}", IdentId::get_name(*name))
             }
             MonorubyErrKind::DivideByZero => format!("divided by 0"),
             MonorubyErrKind::Range(msg) => msg.to_string(),

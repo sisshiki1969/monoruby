@@ -144,14 +144,10 @@ enum LvalueKind {
 }
 
 impl IrContext {
-    pub fn compile_ast(
-        info: &mut RubyFuncInfo,
-        ctx: &mut FnStore,
-        id_store: &mut IdentifierTable,
-    ) -> Result<IrContext> {
+    pub fn compile_ast(info: &mut RubyFuncInfo, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_expr(ctx, info, id_store, ast, true, true)?;
+        ir.gen_expr(ctx, info, ast, true, true)?;
         assert_eq!(0, info.temp);
         Ok(ir)
     }
@@ -159,17 +155,16 @@ impl IrContext {
     fn gen_load_const(
         &mut self,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         toplevel: bool,
         name: String,
         prefix: Vec<String>,
         loc: Loc,
     ) {
-        let name = id_store.get_ident_id_from_string(name);
+        let name = IdentId::get_ident_id_from_string(name);
         let prefix = prefix
             .into_iter()
-            .map(|s| id_store.get_ident_id_from_string(s))
+            .map(|s| IdentId::get_ident_id_from_string(s))
             .collect();
         let reg = match dst {
             Some(local) => local.into(),
@@ -236,13 +231,12 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         ret: Option<BcLocal>,
         nodes: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
         let len = nodes.len();
-        let src = self.gen_args(ctx, info, id_store, nodes)?.into();
+        let src = self.gen_args(ctx, info, nodes)?.into();
         info.popn(len);
         let ret = match ret {
             Some(local) => local.into(),
@@ -256,13 +250,12 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         ret: Option<BcLocal>,
         base: Node,
         index: Node,
         loc: Loc,
     ) -> Result<()> {
-        let (base, idx) = self.gen_binary_temp_expr(ctx, info, id_store, base, index)?;
+        let (base, idx) = self.gen_binary_temp_expr(ctx, info, base, index)?;
         let ret = match ret {
             None => info.push().into(),
             Some(local) => local.into(),
@@ -278,7 +271,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         lhs: &Node,
     ) -> Result<LvalueKind> {
         let lhs = match &lhs.kind {
@@ -288,18 +280,18 @@ impl IrContext {
                 parent,
                 prefix,
             } if !toplevel && parent.is_none() && prefix.is_empty() => {
-                let name = id_store.get_ident_id(name);
+                let name = IdentId::get_ident_id(name);
                 LvalueKind::Const(name)
             }
             NodeKind::InstanceVar(name) => {
-                let name = id_store.get_ident_id(name);
+                let name = IdentId::get_ident_id(name);
                 LvalueKind::InstanceVar(name)
             }
             NodeKind::Index { box base, index } => {
                 assert_eq!(1, index.len());
                 let index = index[0].clone();
-                let base = self.gen_expr_reg(ctx, info, id_store, base.clone())?;
-                let index = self.gen_expr_reg(ctx, info, id_store, index)?;
+                let base = self.gen_expr_reg(ctx, info, base.clone())?;
+                let index = self.gen_expr_reg(ctx, info, index)?;
                 LvalueKind::Index { base, index }
             }
             NodeKind::MethodCall {
@@ -312,8 +304,8 @@ impl IrContext {
                 && arglist.kw_args.is_empty()
                 && !safe_nav =>
             {
-                let recv = self.gen_expr_reg(ctx, info, id_store, receiver.clone())?;
-                let method = id_store.get_ident_id(&format!("{}=", method));
+                let recv = self.gen_expr_reg(ctx, info, receiver.clone())?;
+                let method = IdentId::get_ident_id(&format!("{}=", method));
                 LvalueKind::Send { recv, method }
             }
             NodeKind::LocalVar(_) => LvalueKind::Other,
@@ -390,7 +382,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         mut nodes: Vec<Node>,
         ret: Option<BcLocal>,
         use_value: bool,
@@ -401,11 +392,11 @@ impl IrContext {
             None => Node::new_nil(Loc(0, 0)),
         };
         for node in nodes.into_iter() {
-            self.gen_expr(ctx, info, id_store, node, false, false)?;
+            self.gen_expr(ctx, info, node, false, false)?;
         }
         match ret {
             Some(ret) => {
-                self.gen_store_expr(ctx, info, id_store, ret, last)?;
+                self.gen_store_expr(ctx, info, ret, last)?;
                 if is_ret {
                     self.gen_ret(info, ret.into());
                 } else if use_value {
@@ -413,7 +404,7 @@ impl IrContext {
                 }
             }
             None => {
-                self.gen_expr(ctx, info, id_store, last, use_value, is_ret)?;
+                self.gen_expr(ctx, info, last, use_value, is_ret)?;
             }
         }
         Ok(())
@@ -424,12 +415,11 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcReg> {
         Ok(match info.is_local(&expr) {
             Some(lhs) => lhs.into(),
-            None => self.push_expr(ctx, info, id_store, expr)?,
+            None => self.push_expr(ctx, info, expr)?,
         })
     }
 
@@ -438,13 +428,12 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcReg> {
         Ok(match info.is_local(&expr) {
             Some(lhs) => lhs.into(),
             None => {
-                self.push_expr(ctx, info, id_store, expr)?;
+                self.push_expr(ctx, info, expr)?;
                 info.pop().into()
             }
         })
@@ -454,20 +443,19 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg)> {
         match (info.is_local(&lhs), info.is_local(&rhs)) {
             (None, None) => {
-                let lhs = self.push_expr(ctx, info, id_store, lhs)?;
-                let rhs = self.push_expr(ctx, info, id_store, rhs)?;
+                let lhs = self.push_expr(ctx, info, lhs)?;
+                let rhs = self.push_expr(ctx, info, rhs)?;
                 info.temp -= 2;
                 Ok((lhs, rhs))
             }
             _ => {
-                let lhs = self.gen_temp_expr(ctx, info, id_store, lhs)?;
-                let rhs = self.gen_temp_expr(ctx, info, id_store, rhs)?;
+                let lhs = self.gen_temp_expr(ctx, info, lhs)?;
+                let rhs = self.gen_temp_expr(ctx, info, rhs)?;
                 Ok((lhs, rhs))
             }
         }
@@ -478,7 +466,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         op: BinOp,
         lhs: Node,
         rhs: Node,
@@ -486,16 +473,16 @@ impl IrContext {
         loc: Loc,
     ) -> Result<BcReg> {
         match op {
-            BinOp::Add => self.gen_add(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Sub => self.gen_sub(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Mul => self.gen_mul(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Div => self.gen_div(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::BitOr => self.gen_bitor(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::BitAnd => self.gen_bitand(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::BitXor => self.gen_bitxor(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Shr => self.gen_shr(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Shl => self.gen_shl(ctx, info, id_store, dst, lhs, rhs, loc),
-            BinOp::Cmp(kind) => self.gen_cmp(ctx, info, id_store, dst, kind, lhs, rhs, false, loc),
+            BinOp::Add => self.gen_add(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Sub => self.gen_sub(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Mul => self.gen_mul(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Div => self.gen_div(ctx, info, dst, lhs, rhs, loc),
+            BinOp::BitOr => self.gen_bitor(ctx, info, dst, lhs, rhs, loc),
+            BinOp::BitAnd => self.gen_bitand(ctx, info, dst, lhs, rhs, loc),
+            BinOp::BitXor => self.gen_bitxor(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Shr => self.gen_shr(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
             _ => {
                 return Err(MonorubyErr::unsupported_operator(
                     op,
@@ -510,11 +497,10 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         expr: Node,
     ) -> Result<BcReg> {
         let ret = info.next_reg().into();
-        self.gen_expr(ctx, info, id_store, expr, true, false)?;
+        self.gen_expr(ctx, info, expr, true, false)?;
         Ok(ret)
     }
 
@@ -523,7 +509,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         expr: Node,
         use_value: bool,
         is_ret: bool,
@@ -550,19 +535,19 @@ impl IrContext {
                 self.gen_integer(info, None, i);
             }
             NodeKind::Symbol(sym) => {
-                let sym = id_store.get_ident_id_from_string(sym);
+                let sym = IdentId::get_ident_id_from_string(sym);
                 self.gen_symbol(info, None, sym);
             }
             NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
             NodeKind::Float(f) => self.gen_float(info, None, f),
             NodeKind::String(s) => self.gen_string(info, None, s.into_bytes()),
-            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, id_store, None, nodes, loc)?,
+            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, None, nodes, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
             } => {
                 assert_eq!(1, index.len());
-                self.gen_index(ctx, info, id_store, None, base, index.remove(0), loc)?;
+                self.gen_index(ctx, info, None, base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
@@ -570,14 +555,14 @@ impl IrContext {
                     //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
                     NodeKind::Float(f) => self.gen_float(info, None, -f),
                     _ => {
-                        self.push_expr(ctx, info, id_store, rhs)?;
+                        self.push_expr(ctx, info, rhs)?;
                         self.gen_neg(info, None, loc);
                     }
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = info.is_local(&lhs) {
-                    self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
+                    self.gen_binop(ctx, info, op, lhs, rhs, Some(local), loc)?;
                     if is_ret {
                         self.gen_ret(info, Some(local));
                     } else if use_value {
@@ -588,9 +573,9 @@ impl IrContext {
                 let lhs_loc = lhs.loc;
                 let temp = info.temp;
                 // First, evaluate lvalue.
-                let lhs_kind = self.eval_lvalue(ctx, info, id_store, &lhs)?;
+                let lhs_kind = self.eval_lvalue(ctx, info, &lhs)?;
                 // Evaluate rvalue.
-                let src = self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                let src = self.gen_binop(ctx, info, op, lhs, rhs, None, loc)?;
                 // Assign rvalue to lvalue.
                 self.gen_assign(src, lhs_kind, lhs_loc);
                 info.temp = temp;
@@ -600,13 +585,13 @@ impl IrContext {
                 }
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, info, id_store, op, lhs, rhs, None, loc)?;
+                self.gen_binop(ctx, info, op, lhs, rhs, None, loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(local) = info.is_local(&lhs) {
-                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        self.gen_store_expr(ctx, info, local, rhs)?;
                         if is_ret {
                             self.gen_ret(info, Some(local));
                         } else if use_value {
@@ -615,8 +600,8 @@ impl IrContext {
                         return Ok(());
                     }
                     let temp = info.temp;
-                    let lhs = self.eval_lvalue(ctx, info, id_store, &lhs)?;
-                    let src = self.gen_expr_reg(ctx, info, id_store, rhs)?;
+                    let lhs = self.eval_lvalue(ctx, info, &lhs)?;
+                    let src = self.gen_expr_reg(ctx, info, rhs)?;
                     self.gen_assign(src, lhs, loc);
                     info.temp = temp;
                     let res = info.push().into();
@@ -624,7 +609,7 @@ impl IrContext {
                         self.gen_mov(res, src);
                     }
                 } else {
-                    return self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, use_value, is_ret);
+                    return self.gen_mul_assign(ctx, info, mlhs, mrhs, use_value, is_ret);
                 }
             }
             NodeKind::LocalVar(ident) => {
@@ -642,10 +627,10 @@ impl IrContext {
                 parent: _,
                 prefix,
             } => {
-                self.gen_load_const(info, id_store, None, toplevel, name, prefix, loc);
+                self.gen_load_const(info, None, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = id_store.get_ident_id_from_string(name);
+                let name = IdentId::get_ident_id_from_string(name);
                 self.gen_load_ivar(info, None, name, loc);
             }
             NodeKind::MethodCall {
@@ -659,9 +644,8 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self.gen_method_call(
-                    ctx, info, id_store, method, receiver, arglist, ret, is_ret, loc,
-                );
+                return self
+                    .gen_method_call(ctx, info, method, receiver, arglist, ret, is_ret, loc);
             }
             NodeKind::FuncCall {
                 method,
@@ -673,7 +657,7 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self.gen_func_call(ctx, info, id_store, method, arglist, ret, is_ret, loc);
+                return self.gen_func_call(ctx, info, method, arglist, ret, is_ret, loc);
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
@@ -682,7 +666,7 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self.gen_func_call(ctx, info, id_store, method, arglist, ret, is_ret, loc);
+                return self.gen_func_call(ctx, info, method, arglist, ret, is_ret, loc);
             }
             NodeKind::If {
                 box cond,
@@ -694,14 +678,14 @@ impl IrContext {
                 if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
                     let loc = cond.loc;
                     let cond = info.next_reg().into();
-                    self.gen_cmp(ctx, info, id_store, None, kind, lhs, rhs, true, loc)?;
+                    self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
                     info.pop();
                     self.gen_condnotbr(cond, else_pos, true);
                 } else {
-                    let cond = self.gen_temp_expr(ctx, info, id_store, cond)?;
+                    let cond = self.gen_temp_expr(ctx, info, cond)?;
                     self.gen_condnotbr(cond, else_pos, false);
                 }
-                self.gen_expr(ctx, info, id_store, then_, use_value, is_ret)?;
+                self.gen_expr(ctx, info, then_, use_value, is_ret)?;
                 if !is_ret {
                     self.gen_br(succ_pos);
                     if use_value {
@@ -709,7 +693,7 @@ impl IrContext {
                     }
                 }
                 self.apply_label(else_pos);
-                self.gen_expr(ctx, info, id_store, else_, use_value, is_ret)?;
+                self.gen_expr(ctx, info, else_, use_value, is_ret)?;
                 self.apply_label(succ_pos);
                 return Ok(());
             }
@@ -719,7 +703,7 @@ impl IrContext {
                 cond_op,
             } => {
                 assert!(cond_op);
-                self.gen_while(ctx, info, id_store, cond, body, use_value)?;
+                self.gen_while(ctx, info, cond, body, use_value)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -730,7 +714,7 @@ impl IrContext {
                 box iter,
                 body,
             } => {
-                self.gen_for(ctx, info, id_store, param, iter, body, use_value)?;
+                self.gen_for(ctx, info, param, iter, body, use_value)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -745,7 +729,7 @@ impl IrContext {
                 };
                 match ret_reg {
                     Some(reg) => {
-                        let temp = self.gen_temp_expr(ctx, info, id_store, val)?;
+                        let temp = self.gen_temp_expr(ctx, info, val)?;
                         self.gen_mov(reg, temp)
                     }
                     None => {}
@@ -757,7 +741,7 @@ impl IrContext {
                 if let Some(local) = info.is_local(&expr) {
                     self.gen_ret(info, Some(local));
                 } else {
-                    self.gen_expr(ctx, info, id_store, expr, true, true)?;
+                    self.gen_expr(ctx, info, expr, true, true)?;
                 }
                 if use_value && !is_ret {
                     unreachable!();
@@ -765,7 +749,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::CompStmt(nodes) => {
-                return self.gen_comp_stmts(ctx, info, id_store, nodes, None, use_value, is_ret)
+                return self.gen_comp_stmts(ctx, info, nodes, None, use_value, is_ret)
             }
             NodeKind::Begin {
                 box body,
@@ -774,13 +758,13 @@ impl IrContext {
                 ensure: None,
             } => {
                 assert!(rescue.len() == 0);
-                self.gen_expr(ctx, info, id_store, body, use_value, is_ret)?;
+                self.gen_expr(ctx, info, body, use_value, is_ret)?;
                 return Ok(());
             }
             NodeKind::MethodDef(name, params, box body, _lv) => {
-                self.gen_method_def(ctx, info, id_store, name.clone(), params, body, loc)?;
+                self.gen_method_def(ctx, info, name.clone(), params, body, loc)?;
                 if use_value {
-                    self.gen_symbol(info, None, id_store.get_ident_id_from_string(name));
+                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
                 }
                 if is_ret {
                     self.gen_ret(info, None);
@@ -803,16 +787,7 @@ impl IrContext {
                     None
                 };
                 let superclass = superclass.map(|c| *c);
-                self.gen_class_def(
-                    ctx,
-                    info,
-                    id_store,
-                    name.clone(),
-                    superclass,
-                    body,
-                    ret,
-                    loc,
-                )?;
+                self.gen_class_def(ctx, info, name.clone(), superclass, body, ret, loc)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -822,7 +797,7 @@ impl IrContext {
                 let len = nodes.len();
                 let arg = info.next_reg();
                 for expr in nodes {
-                    self.push_expr(ctx, info, id_store, expr)?;
+                    self.push_expr(ctx, info, expr)?;
                 }
                 info.temp -= len as u16;
                 let ret = match use_value {
@@ -849,7 +824,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         local: BcLocal,
         rhs: Node,
     ) -> Result<()> {
@@ -860,21 +834,19 @@ impl IrContext {
             NodeKind::SelfValue => self.gen_mov(local.into(), BcReg::Self_),
             NodeKind::Integer(i) => self.gen_integer(info, Some(local), i),
             NodeKind::Symbol(sym) => {
-                let sym = id_store.get_ident_id_from_string(sym);
+                let sym = IdentId::get_ident_id_from_string(sym);
                 self.gen_symbol(info, Some(local), sym)
             }
             NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(local), bigint),
             NodeKind::Float(f) => self.gen_float(info, Some(local), f),
             NodeKind::String(s) => self.gen_string(info, Some(local), s.into_bytes()),
-            NodeKind::Array(nodes, _) => {
-                self.gen_array(ctx, info, id_store, Some(local), nodes, loc)?
-            }
+            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, Some(local), nodes, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
             } => {
                 assert_eq!(1, index.len());
-                self.gen_index(ctx, info, id_store, Some(local), base, index.remove(0), loc)?;
+                self.gen_index(ctx, info, Some(local), base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
@@ -882,30 +854,30 @@ impl IrContext {
                     NodeKind::Integer(i) => self.gen_integer(info, Some(local), -i),
                     NodeKind::Float(f) => self.gen_float(info, Some(local), -f),
                     _ => {
-                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        self.gen_store_expr(ctx, info, local, rhs)?;
                         self.gen_neg(info, Some(local), loc);
                     }
                 };
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, info, id_store, op, lhs, rhs, Some(local), loc)?;
+                self.gen_binop(ctx, info, op, lhs, rhs, Some(local), loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(src) = info.is_local(&lhs) {
-                        self.gen_store_expr(ctx, info, id_store, src, rhs)?;
+                        self.gen_store_expr(ctx, info, src, rhs)?;
                         self.gen_mov(local.into(), src.into());
                     } else {
                         let temp = info.temp;
-                        let lhs = self.eval_lvalue(ctx, info, id_store, &lhs)?;
+                        let lhs = self.eval_lvalue(ctx, info, &lhs)?;
                         let src = local.into();
-                        self.gen_store_expr(ctx, info, id_store, local, rhs)?;
+                        self.gen_store_expr(ctx, info, local, rhs)?;
                         self.gen_assign(src, lhs, loc);
                         info.temp = temp;
                     }
                 } else {
-                    self.gen_mul_assign(ctx, info, id_store, mlhs, mrhs, true, false)?;
+                    self.gen_mul_assign(ctx, info, mlhs, mrhs, true, false)?;
                     let temp = info.pop().into();
                     self.gen_mov(local.into(), temp);
                 }
@@ -920,10 +892,10 @@ impl IrContext {
                 parent: _,
                 prefix,
             } => {
-                self.gen_load_const(info, id_store, local.into(), toplevel, name, prefix, loc);
+                self.gen_load_const(info, local.into(), toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = id_store.get_ident_id_from_string(name);
+                let name = IdentId::get_ident_id_from_string(name);
                 self.gen_load_ivar(info, local.into(), name, loc);
             }
             NodeKind::MethodCall {
@@ -933,9 +905,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(local.into());
-                self.gen_method_call(
-                    ctx, info, id_store, method, receiver, arglist, ret, false, loc,
-                )?;
+                self.gen_method_call(ctx, info, method, receiver, arglist, ret, false, loc)?;
             }
             NodeKind::FuncCall {
                 method,
@@ -943,11 +913,11 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(local.into());
-                self.gen_func_call(ctx, info, id_store, method, arglist, ret, false, loc)?;
+                self.gen_func_call(ctx, info, method, arglist, ret, false, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                self.gen_comp_stmts(ctx, info, id_store, nodes, Some(local), false, false)?;
+                self.gen_comp_stmts(ctx, info, nodes, Some(local), false, false)?;
             }
             NodeKind::ClassDef {
                 base,
@@ -961,10 +931,10 @@ impl IrContext {
                 assert!(!is_module);
                 let ret = Some(local.into());
                 let superclass = superclass.map(|c| *c);
-                self.gen_class_def(ctx, info, id_store, name, superclass, body, ret, loc)?;
+                self.gen_class_def(ctx, info, name, superclass, body, ret, loc)?;
             }
             _ => {
-                let ret = self.push_expr(ctx, info, id_store, rhs)?;
+                let ret = self.push_expr(ctx, info, rhs)?;
                 self.gen_mov(local.into(), ret.into());
                 info.pop();
             }
@@ -976,7 +946,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         name: String,
         params: Vec<FormalParam>,
         node: Node,
@@ -1002,7 +971,7 @@ impl IrContext {
             info.sourceinfo.clone(),
             false,
         );
-        let name = id_store.get_ident_id_from_string(name);
+        let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
     }
@@ -1011,7 +980,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         name: String,
         superclass: Option<Node>,
         node: Node,
@@ -1025,9 +993,9 @@ impl IrContext {
             info.sourceinfo.clone(),
             true,
         );
-        let name = id_store.get_ident_id_from_string(name);
+        let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
-            Some(superclass) => Some(self.gen_temp_expr(ctx, info, id_store, superclass)?),
+            Some(superclass) => Some(self.gen_temp_expr(ctx, info, superclass)?),
             None => None,
         };
         self.push(
@@ -1046,12 +1014,11 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<BcTemp> {
         let arg = info.next_reg();
         for arg in args {
-            self.push_expr(ctx, info, id_store, arg)?;
+            self.push_expr(ctx, info, arg)?;
         }
         Ok(arg)
     }
@@ -1060,25 +1027,23 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         arglist: ArgList,
     ) -> Result<(BcTemp, usize)> {
         assert!(arglist.kw_args.len() == 0);
         assert!(arglist.hash_splat.len() == 0);
         assert!(arglist.block.is_none());
         assert!(!arglist.delegate);
-        self.check_fast_call_inner(ctx, info, id_store, arglist.args)
+        self.check_fast_call_inner(ctx, info, arglist.args)
     }
 
     fn check_fast_call_inner(
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         args: Vec<Node>,
     ) -> Result<(BcTemp, usize)> {
         let len = args.len();
-        let arg = self.gen_args(ctx, info, id_store, args)?;
+        let arg = self.gen_args(ctx, info, args)?;
         info.temp -= len as u16;
         Ok((arg, len))
     }
@@ -1101,7 +1066,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         method: String,
         receiver: Node,
         arglist: ArgList,
@@ -1109,13 +1073,13 @@ impl IrContext {
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
-        let method = id_store.get_ident_id_from_string(method);
+        let method = IdentId::get_ident_id_from_string(method);
         let (recv, arg, len) = if receiver.kind == NodeKind::SelfValue {
-            let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
+            let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
             (BcReg::Self_, arg.into(), len)
         } else {
-            self.push_expr(ctx, info, id_store, receiver)?;
-            let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
+            self.push_expr(ctx, info, receiver)?;
+            let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
             let recv = info.pop().into();
             (recv, arg.into(), len)
         };
@@ -1134,15 +1098,14 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         method: String,
         arglist: ArgList,
         ret: Option<BcReg>,
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
-        let (arg, len) = self.check_fast_call(ctx, info, id_store, arglist)?;
-        let method = id_store.get_ident_id_from_string(method);
+        let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
+        let method = IdentId::get_ident_id_from_string(method);
         self.gen_call(BcReg::Self_, method, ret, arg.into(), len, loc);
         if is_ret {
             self.gen_ret(info, None);
@@ -1154,12 +1117,11 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg, BcReg)> {
-        let (lhs, rhs) = self.gen_binary_temp_expr(ctx, info, id_store, lhs, rhs)?;
+        let (lhs, rhs) = self.gen_binary_temp_expr(ctx, info, lhs, rhs)?;
         let dst = match dst {
             None => info.push().into(),
             Some(local) => local.into(),
@@ -1171,11 +1133,10 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         lhs: Node,
     ) -> Result<(BcReg, BcReg)> {
-        let lhs = self.gen_temp_expr(ctx, info, id_store, lhs)?;
+        let lhs = self.gen_temp_expr(ctx, info, lhs)?;
         let dst = match dst {
             None => info.push().into(),
             Some(local) => local.into(),
@@ -1187,7 +1148,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         dst: Option<BcLocal>,
         kind: CmpKind,
         lhs: Node,
@@ -1196,11 +1156,11 @@ impl IrContext {
         loc: Loc,
     ) -> Result<BcReg> {
         if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(ctx, info, id_store, dst, lhs)?;
+            let (dst, lhs) = self.gen_singular(ctx, info, dst, lhs)?;
             self.push(BcIr::Cmpri(kind, dst, lhs, i, optimizable), loc);
             Ok(dst)
         } else {
-            let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
+            let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
             self.push(BcIr::Cmp(kind, dst, lhs, rhs, optimizable), loc);
             Ok(dst)
         }
@@ -1215,7 +1175,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         mlhs: Vec<Node>,
         mrhs: Vec<Node>,
         use_value: bool,
@@ -1230,14 +1189,14 @@ impl IrContext {
         // At first, we evaluate lvalues and save their info(LhsKind).
         let mut lhs_kind: Vec<LvalueKind> = vec![];
         for lhs in &mlhs {
-            lhs_kind.push(self.eval_lvalue(ctx, info, id_store, lhs)?);
+            lhs_kind.push(self.eval_lvalue(ctx, info, lhs)?);
         }
 
         // Next, we evaluate rvalues and save them in temporory registers which start from temp_reg.
         let rhs_reg = info.next_reg();
         let mut temp_reg = rhs_reg;
         for rhs in mrhs {
-            self.push_expr(ctx, info, id_store, rhs)?;
+            self.push_expr(ctx, info, rhs)?;
         }
 
         // Finally, assign rvalues to lvalue.
@@ -1268,7 +1227,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         param: Vec<String>,
         iter: Node,
         body: BlockInfo,
@@ -1295,8 +1253,8 @@ impl IrContext {
         {
             let loop_entry = self.new_label();
             let loop_exit = self.new_label();
-            self.gen_store_expr(ctx, info, id_store, counter, start)?;
-            let end = self.push_expr(ctx, info, id_store, end)?;
+            self.gen_store_expr(ctx, info, counter, start)?;
+            let end = self.push_expr(ctx, info, end)?;
 
             self.apply_label(loop_entry);
             self.push(BcIr::LoopStart, loc);
@@ -1305,7 +1263,7 @@ impl IrContext {
             self.gen_condbr(dst, loop_exit, true);
             info.pop();
 
-            self.gen_expr(ctx, info, id_store, *body.body, false, false)?;
+            self.gen_expr(ctx, info, *body.body, false, false)?;
 
             self.push(
                 BcIr::BinOpRi(BinOpK::Add, counter.into(), counter.into(), 1),
@@ -1332,7 +1290,6 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
-        id_store: &mut IdentifierTable,
         cond: Node,
         body: Node,
         use_value: bool,
@@ -1354,14 +1311,14 @@ impl IrContext {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
             let cond = info.next_reg().into();
-            self.gen_cmp(ctx, info, id_store, None, kind, lhs, rhs, true, loc)?;
+            self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
             info.pop();
             self.gen_condnotbr(cond, succ_pos, true);
         } else {
-            let cond = self.gen_temp_expr(ctx, info, id_store, cond)?;
+            let cond = self.gen_temp_expr(ctx, info, cond)?;
             self.gen_condnotbr(cond, succ_pos, false);
         }
-        self.gen_expr(ctx, info, id_store, body, false, false)?;
+        self.gen_expr(ctx, info, body, false, false)?;
         self.gen_br(cond_pos);
         self.apply_label(succ_pos);
 
@@ -1383,13 +1340,12 @@ macro_rules! gen_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 info: &mut RubyFuncInfo,
-                id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
             ) -> Result<BcReg> {
-                let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
+                let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
                 self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
                 Ok(dst)
             }
@@ -1408,22 +1364,21 @@ macro_rules! gen_ri_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 info: &mut RubyFuncInfo,
-                id_store: &mut IdentifierTable,
                 dst: Option<BcLocal>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
             ) -> Result<BcReg> {
                 if let Some(i) = is_smi(&rhs) {
-                    let (dst, lhs) = self.gen_singular(ctx, info, id_store, dst, lhs)?;
+                    let (dst, lhs) = self.gen_singular(ctx, info, dst, lhs)?;
                     self.push(BcIr::BinOpRi(BinOpK::$inst, dst, lhs, i), loc);
                     Ok(dst)
                 } else if let Some(i) = is_smi(&lhs) {
-                    let (dst, rhs) = self.gen_singular(ctx, info, id_store, dst, rhs)?;
+                    let (dst, rhs) = self.gen_singular(ctx, info, dst, rhs)?;
                     self.push(BcIr::BinOpIr(BinOpK::$inst, dst, i, rhs), loc);
                     Ok(dst)
                 } else {
-                    let (dst, lhs, rhs) = self.gen_binary(ctx, info, id_store, dst, lhs, rhs)?;
+                    let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
                     self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
                     Ok(dst)
                 }

@@ -1,5 +1,5 @@
 prelude: |
-  class C < Array
+  class C
     attr_reader :a, :b
     def initialize
       @a = nil
