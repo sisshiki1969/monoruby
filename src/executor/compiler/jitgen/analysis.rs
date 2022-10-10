@@ -337,10 +337,10 @@ impl LoopAnalysis {
                         pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::StoreIvar(src, _name) => {
+                BcOp::StoreIvar(src, ..) => {
                     reg_info.use_non_float(src);
                 }
-                BcOp::LoadIvar(dst, _name) => {
+                BcOp::LoadIvar(dst, ..) => {
                     reg_info.def_as(dst, false);
                 }
                 BcOp::Neg(dst, src) => {

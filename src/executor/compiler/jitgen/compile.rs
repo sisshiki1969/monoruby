@@ -264,13 +264,13 @@ impl Codegen {
                     ctx.read_slot(self, src);
                     self.jit_store_constant(id, src, &ctx);
                 }
-                BcOp::LoadIvar(ret, id) => {
+                BcOp::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);
-                    self.jit_load_ivar(id, ret, &ctx);
+                    self.jit_load_ivar(id, ret, &ctx, cached_class, cached_ivarid);
                 }
-                BcOp::StoreIvar(src, id) => {
+                BcOp::StoreIvar(src, id, cached_class, cached_ivarid) => {
                     ctx.read_slot(self, src);
-                    self.jit_store_ivar(id, src, &ctx, pc);
+                    self.jit_store_ivar(id, src, &ctx, pc, cached_class, cached_ivarid);
                 }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
@@ -573,6 +573,9 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// generate JIT code for a method call which was cached.
+    ///
     fn gen_method_call_cached(
         &mut self,
         globals: &Globals,
@@ -596,7 +599,16 @@ impl Codegen {
         match globals.func[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
-                self.jit_attr_reader(&ctx, ivar_name, ret);
+                if cached.class_id.is_always_frozen() {
+                    if !ret.is_zero() {
+                        monoasm!(self.jit,
+                            movq rax, (NIL_VALUE);
+                        );
+                        self.store_rax(ret);
+                    }
+                } else {
+                    self.jit_attr_reader(&ctx, ivar_name, ret);
+                }
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
@@ -612,12 +624,27 @@ impl Codegen {
     }
 
     fn jit_attr_reader(&mut self, ctx: &BBContext, ivar_name: IdentId, ret: SlotId) {
+        let exit = self.jit.label();
+        let slow_path = self.jit.label();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rsi, (ivar_name.get()); // name: IdentId
-            movq rax, (get_instance_var);
+            movl rsi, [rip + cached_ivarid];
+            cmpl rsi, (-1);
+            jeq  slow_path;
+            movq rax, (RValue::get_ivar);
             call rax;
+            jmp exit;
+        slow_path:
+            movq rsi, (ivar_name.get()); // IvarId
+            movq rdx, r12; // &mut Globals
+            lea  rcx, [rip + cached_class];
+            lea  r8, [rip + cached_ivarid];
+            movq rax, (vm_get_instance_var);
+            call rax;
+        exit:
         );
         self.xmm_restore(&xmm_using);
         if !ret.is_zero() {
@@ -633,15 +660,31 @@ impl Codegen {
         args: SlotId,
         pc: BcPc,
     ) {
+        let exit = self.jit.label();
+        let slow_path = self.jit.label();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
+            movl rsi, [rip + cached_ivarid];
+            cmpl rsi, (-1);
+            jeq  slow_path;
+            movq rdx, [rbp - (conv(args))];  //val: Value
+            movq rax, (RValue::set_ivar);
+            call rax;
+            movq rax, (NIL_VALUE);
+            jmp exit;
+        slow_path:
             movq rsi, rdi;  // recv: Value
-            movq rdi, r12; //&mut Globals
             movq rdx, (ivar_name.get()); // name: IdentId
             movq rcx, [rbp - (conv(args))];  //val: Value
-            movq rax, (set_instance_var);
+            movq rdi, r12; //&mut Globals
+            lea  r8, [rip + cached_class];
+            lea  r9, [rip + cached_ivarid];
+            movq rax, (vm_set_instance_var);
             call rax;
+        exit:
         );
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
@@ -745,6 +788,9 @@ impl Codegen {
         }
     }
 
+    ///
+    /// generate JIT code for a method call which was not cached.
+    ///
     fn jit_method_call(
         &mut self,
         recv: SlotId,

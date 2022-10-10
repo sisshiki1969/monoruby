@@ -155,29 +155,18 @@ extern "C" fn set_index(
     interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
-extern "C" fn get_instance_var(base: Value, id: IdentId) -> Value {
-    match base.try_rvalue() {
-        Some(rv) => rv.get_var(id).unwrap_or_default(),
-        None => Value::nil(),
-    }
+extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
+    globals.get_ivar(base, name).unwrap_or_default()
 }
 
 extern "C" fn set_instance_var(
     globals: &mut Globals,
-    mut base: Value,
-    id: IdentId,
+    base: Value,
+    name: IdentId,
     val: Value,
 ) -> Option<Value> {
-    match base.try_rvalue_mut() {
-        Some(rv) => {
-            rv.set_var(id, val);
-            Some(val)
-        }
-        None => {
-            globals.err_cant_modify_frozen(base);
-            None
-        }
-    }
+    globals.set_ivar(base, name, val)?;
+    Some(val)
 }
 
 extern "C" fn define_class(
@@ -1062,13 +1051,18 @@ impl Codegen {
     /// ~~~
     fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, [rsp - 0x18];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
-            movq rax, (get_instance_var);
-            pushq rbp;
+            movq rdx, r12; // &mut Globals
+            lea  rcx, [rip + cached_class];
+            lea  r8, [rip + cached_ivarid];
+            movq rax, (vm_get_instance_var);
+            subq rsp, 8;
             call rax;
-            popq rbp;
+            addq rsp, 8;
             ret;
         );
         label
@@ -1093,12 +1087,16 @@ impl Codegen {
     /// ~~~
     fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, r12; //&mut Globals
             movq rsi, [rsp - 0x18];  // self: Value
             movq rdx, (ivar_name.get()); // name: IdentId
             movq rcx, [rsp - 0x20];  //val: Value
-            movq rax, (set_instance_var);
+            lea  r8, [rip + cached_class];
+            lea  r9, [rip + cached_ivarid];
+            movq rax, (vm_set_instance_var);
             subq rsp, 8;
             call rax;
             addq rsp, 8;

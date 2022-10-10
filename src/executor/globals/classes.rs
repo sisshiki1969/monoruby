@@ -2,11 +2,11 @@ use super::*;
 
 impl Globals {
     pub fn get_class_obj(&self, class_id: ClassId) -> Value {
-        self.class[class_id].get_obj()
+        self.class[class_id].object.unwrap()
     }
 
     pub fn get_super_class(&self, class_id: ClassId) -> Option<ClassId> {
-        self.class[class_id].super_class()
+        self.class[class_id].super_class_id
     }
 
     pub fn define_class_under_obj(&mut self, name: &str) -> Value {
@@ -31,8 +31,8 @@ impl Globals {
     ) -> Value {
         let id = self.class.add_class(super_class.into());
         let class_obj = Value::new_empty_class(id);
-        self.class[id].set_class_obj(class_obj);
-        self.class[id].set_name(name_id);
+        self.class[id].object = Some(class_obj);
+        self.class[id].name = Some(name_id);
         self.set_constant(parent, name_id, class_obj);
         class_obj
     }
@@ -65,7 +65,7 @@ impl Globals {
     }
 
     pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) -> Option<Value> {
-        self.class.set_constant(class_id, name, val)
+        self.class[class_id].constants.insert(name, val)
     }
 
     ///
@@ -74,11 +74,11 @@ impl Globals {
     /// If not found, simply return None with no error.
     ///
     pub fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
-        self.class.get_constant(class_id, name)
+        self.class[class_id].constants.get(&name).cloned()
     }
 
     pub fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.class.get_constant_names(class_id)
+        self.class[class_id].constants.keys().cloned().collect()
     }
 
     ///
@@ -123,16 +123,130 @@ impl Globals {
     }
 
     pub fn add_method(&mut self, class_id: ClassId, name: IdentId, func: FuncId) {
-        self.class.add_method(class_id, name, func)
+        self.class[class_id].methods.insert(name, func);
     }
 
     pub fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        self.class.get_method(class_id, name)
+        self.class[class_id].methods.get(&name).cloned()
     }
 
     pub fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.class.get_method_names(class_id)
+        self.class[class_id].methods.keys().cloned().collect()
     }
+
+    fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
+        let table = &mut self.class[class_id].ivar_names;
+        match table.get(&ivar_name) {
+            Some(id) => *id,
+            None => {
+                let id = IvarId(table.len() as u32);
+                table.insert(ivar_name, id);
+                id
+            }
+        }
+    }
+
+    pub fn get_ivar(&self, mut val: Value, name: IdentId) -> Option<Value> {
+        let class_id = val.class_id();
+        let rval = val.try_rvalue_mut()?;
+        let id = self.class[class_id].ivar_names.get(&name)?;
+        Some(rval.get_var(*id))
+    }
+
+    pub fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
+        let class_id = val.class_id();
+        let rval = match val.try_rvalue_mut() {
+            Some(rval) => rval,
+            None => return vec![],
+        };
+        self.class[class_id]
+            .ivar_names
+            .iter()
+            .map(|(name, id)| {
+                let val = rval.get_var(*id);
+                (*name, val)
+            })
+            .collect()
+    }
+
+    pub fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Option<()> {
+        let class_id = base.class_id();
+        let rval = match base.try_rvalue_mut() {
+            Some(rval) => rval,
+            None => {
+                self.err_cant_modify_frozen(base);
+                return None;
+            }
+        };
+        let id = self.get_ivar_id(class_id, name);
+        rval.set_var(id, val);
+        Some(())
+    }
+}
+
+pub(crate) extern "C" fn vm_get_instance_var(
+    mut base: Value,
+    name: IdentId,
+    globals: &mut Globals,
+    cache_class: &mut ClassId,
+    cache_ivarid: &mut IvarId,
+) -> Value {
+    let class_id = base.class_id();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => return Value::nil(),
+    };
+    if class_id == *cache_class {
+        return rval.get_var(*cache_ivarid);
+    }
+    let ivar_id = match globals.class[class_id].ivar_names.get(&name) {
+        Some(id) => *id,
+        None => return Value::nil(),
+    };
+    *cache_class = class_id;
+    *cache_ivarid = ivar_id;
+    rval.get_var(ivar_id)
+}
+
+pub(crate) extern "C" fn vm_set_instance_var(
+    globals: &mut Globals,
+    mut base: Value,
+    name: IdentId,
+    val: Value,
+    cache_class: &mut ClassId,
+    cache_ivarid: &mut IvarId,
+) -> Option<Value> {
+    let class_id = base.class_id();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => {
+            globals.err_cant_modify_frozen(base);
+            return None;
+        }
+    };
+    if class_id == *cache_class {
+        rval.set_var(*cache_ivarid, val);
+        return Some(Value::nil());
+    }
+    let ivar_id = globals.get_ivar_id(class_id, name);
+    *cache_class = class_id;
+    *cache_ivarid = ivar_id;
+    rval.set_var(ivar_id, val);
+    Some(Value::nil())
+}
+
+#[test]
+fn test_ivar() {
+    let mut globals = Globals::new(0, false);
+    let obj = Value::new_object(OBJECT_CLASS);
+    assert_eq!(None, globals.get_ivar(obj, IdentId::INITIALIZE));
+    assert!(globals
+        .set_ivar(obj, IdentId::INITIALIZE, Value::fixnum(42))
+        .is_some());
+    assert_eq!(
+        Some(Value::fixnum(42)),
+        globals.get_ivar(obj, IdentId::INITIALIZE)
+    );
 }
 
 impl Globals {
@@ -143,7 +257,7 @@ impl Globals {
     ) -> (Value, ClassId) {
         let id = self.class.add_singleton_class(super_class.into(), base);
         let class_obj = Value::new_empty_class(id);
-        self.class[id].set_class_obj(class_obj);
+        self.class[id].object = Some(class_obj);
         (class_obj, id)
     }
 
@@ -194,6 +308,15 @@ impl ClassId {
     pub fn get(&self) -> u32 {
         self.0
     }
+
+    pub fn is_always_frozen(&self) -> bool {
+        match *self {
+            NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Debug for ClassId {
@@ -243,13 +366,31 @@ impl ClassId {
             return "<INVALID>".to_string();
         }
         let val = self.get_obj(globals);
-        match globals.class[self].get_name() {
+        match globals.class[self].name {
             Some(id) => IdentId::get_name(id),
             None => match globals.class[self].is_singleton {
                 None => format!("#<Class:{:016x}>", val.get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
             },
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct IvarId(u32);
+
+impl IvarId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    pub fn to_usize(&self) -> usize {
+        self.0 as usize
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0
     }
 }
 
@@ -267,6 +408,8 @@ pub(super) struct ClassInfo {
     methods: HashMap<IdentId, FuncId>,
     /// constants table.
     constants: HashMap<IdentId, Value>,
+    /// instance variable table.
+    ivar_names: HashMap<IdentId, IvarId>,
 }
 
 impl ClassInfo {
@@ -278,6 +421,7 @@ impl ClassInfo {
             is_singleton: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            ivar_names: HashMap::default(),
         }
     }
 
@@ -289,27 +433,8 @@ impl ClassInfo {
             is_singleton: Some(base),
             methods: HashMap::default(),
             constants: HashMap::default(),
+            ivar_names: HashMap::default(),
         }
-    }
-
-    fn set_class_obj(&mut self, class_obj: Value) {
-        self.object = Some(class_obj);
-    }
-
-    fn get_obj(&self) -> Value {
-        self.object.unwrap()
-    }
-
-    fn set_name(&mut self, name: IdentId) {
-        self.name = Some(name);
-    }
-
-    fn get_name(&self) -> Option<IdentId> {
-        self.name
-    }
-
-    fn super_class(&self) -> Option<ClassId> {
-        self.super_class_id
     }
 
     fn is_singleton(&self) -> bool {
@@ -356,35 +481,11 @@ impl ClassStore {
         ClassId(id as u32)
     }
 
-    fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) -> Option<Value> {
-        self[class_id].constants.insert(name, val)
-    }
-
-    fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
-        self[class_id].constants.get(&name).cloned()
-    }
-
-    fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id].constants.keys().cloned().collect()
-    }
-
-    fn add_method(&mut self, class_id: ClassId, name: IdentId, func: FuncId) {
-        self[class_id].methods.insert(name, func);
-    }
-
-    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        self[class_id].methods.get(&name).cloned()
-    }
-
-    fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self[class_id].methods.keys().cloned().collect()
-    }
-
     fn get_real_class_obj(&self, val: Value) -> Value {
         let mut id = val.class_id();
         while self[id].is_singleton() {
-            id = self[id].get_obj().class_id();
+            id = self[id].object.unwrap().class_id();
         }
-        self[id].get_obj()
+        self[id].object.unwrap()
     }
 }

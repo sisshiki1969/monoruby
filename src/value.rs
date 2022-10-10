@@ -210,11 +210,13 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
-    pub fn main_object() -> Self {
+    pub fn main_object(globals: &mut Globals) -> Self {
         let main_object = Value::new_object(OBJECT_CLASS);
-        main_object
-            .rvalue_mut()
-            .set_var(IdentId::_NAME, Value::new_string("main".bytes().collect()));
+        globals.set_ivar(
+            main_object,
+            IdentId::_NAME,
+            Value::new_string("main".bytes().collect()),
+        );
         main_object
     }
 

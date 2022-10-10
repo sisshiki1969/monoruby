@@ -830,29 +830,70 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
-    fn jit_load_ivar(&mut self, id: IdentId, ret: SlotId, ctx: &BBContext) {
+    fn jit_load_ivar(
+        &mut self,
+        id: IdentId,
+        ret: SlotId,
+        ctx: &BBContext,
+        cached_class: ClassId,
+        cached_ivarid: IvarId,
+    ) {
+        let slow_path = self.jit.label();
+        let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdi, [rbp - 16];  // base: Value
+            movq rdi, [rbp - 16];  // base: Value
+        );
+        self.guard_class(cached_class, slow_path);
+        monoasm!(self.jit,
+          movl rsi, (cached_ivarid.get());
+          movq rax, (RValue::get_ivar);
+          call rax;
+          jmp exit;
+        slow_path:
           movq rsi, (id.get());  // id: IdentId
+          movq rdx, r12; // &mut Globals
           movq rax, (get_instance_var);
           call rax;
+        exit:
         );
         self.xmm_restore(&xmm_using);
         self.store_rax(ret);
     }
 
-    fn jit_store_ivar(&mut self, id: IdentId, src: SlotId, ctx: &BBContext, pc: BcPc) {
+    fn jit_store_ivar(
+        &mut self,
+        id: IdentId,
+        src: SlotId,
+        ctx: &BBContext,
+        pc: BcPc,
+        cached_class: ClassId,
+        cached_ivarid: IvarId,
+    ) {
+        let slow_path = self.jit.label();
+        let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-          movq rdi, r12; //&mut Globals
-          movq rsi, [rbp - 16];  // base: Value
-          movq rdx, (id.get());  // id: IdentId
-          movq rcx, [rbp - (conv(src))];   // val: Value
-          movq rax, (set_instance_var);
-          call rax;
+            movq rdi, [rbp - 16];  // base: Value
+        );
+        self.guard_class(cached_class, slow_path);
+        monoasm!(self.jit,
+            movl rsi, (cached_ivarid.get());
+            movq rdx, [rbp - (conv(src))];   // val: Value
+            movq rax, (RValue::set_ivar);
+            call rax;
+            movq rax, (NIL_VALUE);
+            jmp exit;
+        slow_path:
+            movq rsi, rdi;  // base: Value
+            movq rdx, (id.get());  // id: IdentId
+            movq rcx, [rbp - (conv(src))];   // val: Value
+            movq rdi, r12; //&mut Globals
+            movq rax, (set_instance_var);
+            call rax;
+        exit:
         );
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);

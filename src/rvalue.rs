@@ -2,8 +2,6 @@ use crate::*;
 use num::BigInt;
 use smallvec::SmallVec;
 
-pub type ValueTable = HashMap<IdentId, Value>;
-
 /// Heap-allocated objects.
 #[derive(Clone)]
 #[repr(C)]
@@ -11,7 +9,7 @@ pub struct RValue {
     /// flags. 8 bytes
     flags: RVFlag,
     /// instance variable table. 8 bytes
-    var_table: Option<Box<ValueTable>>,
+    var_table: Option<Box<Vec<Value>>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
 }
@@ -33,9 +31,8 @@ impl GC<RValue> for RValue {
         if alloc.gc_check_and_mark(self) {
             return;
         }
-        match &self.var_table {
-            Some(table) => table.values().for_each(|v| v.mark(alloc)),
-            None => {}
+        if let Some(v) = &self.var_table {
+            v.iter().for_each(|v| v.mark(alloc));
         }
     }
 }
@@ -79,31 +76,42 @@ impl RValue {
         self.flags.change_class(new_class_id);
     }
 
-    pub(crate) fn get_var(&self, id: IdentId) -> Option<Value> {
-        match &self.var_table {
-            Some(table) => table.get(&id).cloned(),
-            None => None,
+    pub(crate) fn get_var(&mut self, id: IvarId) -> Value {
+        if let Some(v) = &mut self.var_table {
+            let i = id.to_usize();
+            if v.len() > i {
+                v[i]
+            } else {
+                Value::nil()
+            }
+        } else {
+            Value::nil()
         }
     }
 
-    pub(crate) fn get_varmap(&self) -> Option<&HashMap<IdentId, Value>> {
-        match &self.var_table {
-            Some(box table) => Some(table),
-            None => None,
-        }
+    pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
+        base.get_var(id)
     }
 
-    pub(crate) fn set_var(&mut self, id: IdentId, val: Value) {
+    pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
+        let i = id.to_usize();
         match &mut self.var_table {
-            Some(table) => {
-                table.insert(id, val);
+            Some(v) => {
+                if v.len() <= i {
+                    v.resize(i + 1, Value::nil());
+                }
+                v[i] = val;
             }
             None => {
-                let mut map = HashMap::default();
-                map.insert(id, val);
-                self.var_table = Some(Box::new(map));
+                let mut v = vec![Value::nil(); i + 1];
+                v[i] = val;
+                self.var_table = Some(Box::new(v));
             }
         }
+    }
+
+    pub(crate) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+        base.set_var(id, val)
     }
 }
 

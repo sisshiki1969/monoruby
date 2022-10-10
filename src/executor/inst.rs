@@ -168,11 +168,23 @@ impl BcPc {
             BcOp::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
-            BcOp::LoadIvar(reg, id) => {
-                format!("{:?} = {}", reg, IdentId::get_name(id))
+            BcOp::LoadIvar(reg, id, class_id, ivar_id) => {
+                format!(
+                    "{:?} = {}: {}[{:?}]",
+                    reg,
+                    IdentId::get_name(id),
+                    class_id.get_name(globals),
+                    ivar_id,
+                )
             }
-            BcOp::StoreIvar(reg, id) => {
-                format!("{} = {:?}", IdentId::get_name(id), reg)
+            BcOp::StoreIvar(reg, id, class_id, ivar_id) => {
+                format!(
+                    "{}: {}[{:?}] = {:?}",
+                    IdentId::get_name(id),
+                    class_id.get_name(globals),
+                    ivar_id,
+                    reg
+                )
             }
             BcOp::Nil(reg) => format!("{:?} = nil", reg),
             BcOp::Neg(dst, src) => {
@@ -571,10 +583,10 @@ impl std::fmt::Debug for Bc {
             BcOp::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
-            BcOp::LoadIvar(reg, id) => {
+            BcOp::LoadIvar(reg, id, ..) => {
                 write!(f, "{:?} = @[{:?}]", reg, id)
             }
-            BcOp::StoreIvar(reg, id) => {
+            BcOp::StoreIvar(reg, id, ..) => {
                 write!(f, "@[{:?}] = {:?}", id, reg)
             }
             BcOp::Nil(reg) => write!(f, "{:?} = nil", reg),
@@ -694,8 +706,8 @@ pub(super) enum BcOp {
     IndexAssign(SlotId, SlotId, SlotId),
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
-    LoadIvar(SlotId, IdentId),  // ret, id  - %ret = @id
-    StoreIvar(SlotId, IdentId), // src, id  - @id = %src
+    LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
+    StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     /// nil(%reg)
     Nil(SlotId),
     /// negate(%ret, %src)
@@ -810,8 +822,24 @@ impl BcOp {
                 ),
                 14 => Self::LoopStart(op2),
                 15 => Self::LoopEnd,
-                16 => Self::LoadIvar(SlotId::new(op1), IdentId::from(op2)),
-                17 => Self::StoreIvar(SlotId::new(op1), IdentId::from(op2)),
+                16 => {
+                    let (class, ivar) = pc.class_version();
+                    Self::LoadIvar(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        class,
+                        IvarId::new(ivar),
+                    )
+                }
+                17 => {
+                    let (class, ivar) = pc.class_version();
+                    Self::StoreIvar(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        class,
+                        IvarId::new(ivar),
+                    )
+                }
                 18 => Self::ClassDef {
                     ret: SlotId::new(op1),
                     superclass: SlotId::new(op2 as u16),
