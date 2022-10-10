@@ -89,6 +89,10 @@ impl RValue {
         }
     }
 
+    pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
+        base.get_var(id)
+    }
+
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
         let i = id.to_usize();
         match &mut self.var_table {
@@ -104,6 +108,10 @@ impl RValue {
                 self.var_table = Some(Box::new(v));
             }
         }
+    }
+
+    pub(crate) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
+        base.set_var(id, val)
     }
 }
 

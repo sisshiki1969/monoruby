@@ -1051,14 +1051,18 @@ impl Codegen {
     /// ~~~
     fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, [rsp - 0x18];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
-            movq rax, (get_instance_var);
-            pushq rbp;
+            lea  rcx, [rip + cached_class];
+            lea  r8, [rip + cached_ivarid];
+            movq rax, (vm_get_instance_var);
+            subq rsp, 8;
             call rax;
-            popq rbp;
+            addq rsp, 8;
             ret;
         );
         label
@@ -1083,12 +1087,16 @@ impl Codegen {
     /// ~~~
     fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
+        let cached_class = self.jit.const_i32(0);
+        let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, r12; //&mut Globals
             movq rsi, [rsp - 0x18];  // self: Value
             movq rdx, (ivar_name.get()); // name: IdentId
             movq rcx, [rsp - 0x20];  //val: Value
-            movq rax, (set_instance_var);
+            lea  r8, [rip + cached_class];
+            lea  r9, [rip + cached_ivarid];
+            movq rax, (vm_set_instance_var);
             subq rsp, 8;
             call rax;
             addq rsp, 8;

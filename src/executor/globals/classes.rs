@@ -184,6 +184,57 @@ impl Globals {
     }
 }
 
+pub(crate) extern "C" fn vm_get_instance_var(
+    mut base: Value,
+    name: IdentId,
+    globals: &mut Globals,
+    cache_class: &mut ClassId,
+    cache_ivarid: &mut IvarId,
+) -> Value {
+    let class_id = base.class_id();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => return Value::nil(),
+    };
+    if class_id == *cache_class {
+        return rval.get_var(*cache_ivarid);
+    }
+    let ivar_id = match globals.class[class_id].ivar_names.get(&name) {
+        Some(id) => *id,
+        None => return Value::nil(),
+    };
+    *cache_class = class_id;
+    *cache_ivarid = ivar_id;
+    rval.get_var(ivar_id)
+}
+
+pub(crate) extern "C" fn vm_set_instance_var(
+    globals: &mut Globals,
+    mut base: Value,
+    name: IdentId,
+    val: Value,
+    cache_class: &mut ClassId,
+    cache_ivarid: &mut IvarId,
+) -> Option<Value> {
+    let class_id = base.class_id();
+    let rval = match base.try_rvalue_mut() {
+        Some(rval) => rval,
+        None => {
+            globals.err_cant_modify_frozen(base);
+            return None;
+        }
+    };
+    if class_id == *cache_class {
+        rval.set_var(*cache_ivarid, val);
+        return Some(Value::nil());
+    }
+    let ivar_id = globals.get_ivar_id(class_id, name);
+    *cache_class = class_id;
+    *cache_ivarid = ivar_id;
+    rval.set_var(ivar_id, val);
+    Some(Value::nil())
+}
+
 #[test]
 fn test_ivar() {
     let mut globals = Globals::new(0, false);
@@ -257,6 +308,15 @@ impl ClassId {
     pub fn get(&self) -> u32 {
         self.0
     }
+
+    pub fn is_always_frozen(&self) -> bool {
+        match *self {
+            NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Debug for ClassId {
@@ -321,8 +381,16 @@ impl ClassId {
 pub struct IvarId(u32);
 
 impl IvarId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+
     pub fn to_usize(&self) -> usize {
         self.0 as usize
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0
     }
 }
 

@@ -870,7 +870,7 @@ impl Codegen {
 
     //
     // +---+---+---+---++---+---+---+---+
-    // | op|dst|identId||ClassId|       |
+    // | op|dst|identId||ClassId| IvarId|
     // +---+---+---+---++---+---+---+---+
     //
     fn vm_load_ivar(&mut self) -> CodePtr {
@@ -880,7 +880,9 @@ impl Codegen {
             movq rsi, rdi; // name: IdentId
             movq rdi, [rbp - 16];  // base: Value
             movq rdx, r12; // &mut Globals
-            movq rax, (get_instance_var);
+            lea rcx, [r13 - 8]; // &mut ClassId
+            lea r8, [r13 - 4]; // &mut IvarId
+            movq rax, (vm_get_instance_var);
             call rax;
         };
         self.vm_store_r15();
@@ -888,6 +890,11 @@ impl Codegen {
         label
     }
 
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|src|identId||ClassId| IvarId|
+    // +---+---+---+---++---+---+---+---+
+    //
     fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let entry_return = self.vm_return;
@@ -897,7 +904,9 @@ impl Codegen {
             movq rdi, r12; //&mut Globals
             movq rsi, [rbp - 16];  // base: Value
             movq rcx, [r15];     // val: Value
-            movq rax, (set_instance_var);
+            lea r8, [r13 - 8]; // &mut ClassId
+            lea r9, [r13 - 4]; // &mut IvarId
+            movq rax, (vm_set_instance_var);
             call rax;
             testq rax, rax;
             jeq  entry_return;
