@@ -836,6 +836,7 @@ impl Codegen {
         monoasm!(self.jit,
           movq rdi, [rbp - 16];  // base: Value
           movq rsi, (id.get());  // id: IdentId
+          movq rdx, r12; // &mut Globals
           movq rax, (get_instance_var);
           call rax;
         );

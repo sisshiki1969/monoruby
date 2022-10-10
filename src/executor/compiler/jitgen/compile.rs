@@ -616,6 +616,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rsi, (ivar_name.get()); // name: IdentId
+            movq rdx, r12; // &mut Globals
             movq rax, (get_instance_var);
             call rax;
         );

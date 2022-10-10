@@ -89,7 +89,7 @@ impl Globals {
     }
 
     fn object_tos(&self, val: Value) -> String {
-        if let Some(name) = val.rvalue().get_var(IdentId::_NAME) {
+        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
             self.val_tos(name)
         } else {
             format!(
@@ -101,20 +101,15 @@ impl Globals {
     }
 
     fn object_inspect(&self, val: Value) -> String {
-        if let Some(name) = val.rvalue().get_var(IdentId::_NAME) {
+        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
             self.val_tos(name)
         } else {
-            let mut ivars = String::new();
-            match val.rvalue().get_varmap() {
-                Some(vars) => {
-                    for (id, v) in vars.iter() {
-                        ivars += &format!(" {}={}", IdentId::get_name(*id), v.to_s(self));
-                    }
-                }
-                None => {}
-            };
+            let mut s = String::new();
+            for (id, v) in self.get_ivars(val).into_iter() {
+                s += &format!(" {}={}", IdentId::get_name(id), v.to_s(self));
+            }
             format!(
-                "#<{}:0x{:016x}{ivars}>",
+                "#<{}:0x{:016x}{s}>",
                 val.class_id().get_name(self),
                 val.rvalue().id()
             )

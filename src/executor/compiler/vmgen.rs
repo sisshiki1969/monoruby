@@ -868,12 +868,18 @@ impl Codegen {
         label
     }
 
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|dst|identId||ClassId|       |
+    // +---+---+---+---++---+---+---+---+
+    //
     fn vm_load_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rsi, rdi; // name: IdentId
             movq rdi, [rbp - 16];  // base: Value
+            movq rdx, r12; // &mut Globals
             movq rax, (get_instance_var);
             call rax;
         };

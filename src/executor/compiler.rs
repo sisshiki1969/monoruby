@@ -155,29 +155,18 @@ extern "C" fn set_index(
     interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
-extern "C" fn get_instance_var(base: Value, id: IdentId) -> Value {
-    match base.try_rvalue() {
-        Some(rv) => rv.get_var(id).unwrap_or_default(),
-        None => Value::nil(),
-    }
+extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
+    globals.get_ivar(base, name).unwrap_or_default()
 }
 
 extern "C" fn set_instance_var(
     globals: &mut Globals,
-    mut base: Value,
-    id: IdentId,
+    base: Value,
+    name: IdentId,
     val: Value,
 ) -> Option<Value> {
-    match base.try_rvalue_mut() {
-        Some(rv) => {
-            rv.set_var(id, val);
-            Some(val)
-        }
-        None => {
-            globals.err_cant_modify_frozen(base);
-            None
-        }
-    }
+    globals.set_ivar(base, name, val)?;
+    Some(val)
 }
 
 extern "C" fn define_class(
@@ -1065,6 +1054,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [rsp - 0x18];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
+            movq rdx, r12; // &mut Globals
             movq rax, (get_instance_var);
             pushq rbp;
             call rax;

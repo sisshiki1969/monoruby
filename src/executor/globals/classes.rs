@@ -133,6 +133,69 @@ impl Globals {
     pub fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
         self.class[class_id].methods.keys().cloned().collect()
     }
+
+    fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
+        let table = &mut self.class[class_id].ivar_names;
+        match table.get(&ivar_name) {
+            Some(id) => *id,
+            None => {
+                let id = IvarId(table.len() as u32);
+                table.insert(ivar_name, id);
+                id
+            }
+        }
+    }
+
+    pub fn get_ivar(&self, mut val: Value, name: IdentId) -> Option<Value> {
+        let class_id = val.class_id();
+        let rval = val.try_rvalue_mut()?;
+        let id = self.class[class_id].ivar_names.get(&name)?;
+        Some(rval.get_var(*id))
+    }
+
+    pub fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
+        let class_id = val.class_id();
+        let rval = match val.try_rvalue_mut() {
+            Some(rval) => rval,
+            None => return vec![],
+        };
+        self.class[class_id]
+            .ivar_names
+            .iter()
+            .map(|(name, id)| {
+                let val = rval.get_var(*id);
+                (*name, val)
+            })
+            .collect()
+    }
+
+    pub fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Option<()> {
+        let class_id = base.class_id();
+        let rval = match base.try_rvalue_mut() {
+            Some(rval) => rval,
+            None => {
+                self.err_cant_modify_frozen(base);
+                return None;
+            }
+        };
+        let id = self.get_ivar_id(class_id, name);
+        rval.set_var(id, val);
+        Some(())
+    }
+}
+
+#[test]
+fn test_ivar() {
+    let mut globals = Globals::new(0, false);
+    let obj = Value::new_object(OBJECT_CLASS);
+    assert_eq!(None, globals.get_ivar(obj, IdentId::INITIALIZE));
+    assert!(globals
+        .set_ivar(obj, IdentId::INITIALIZE, Value::fixnum(42))
+        .is_some());
+    assert_eq!(
+        Some(Value::fixnum(42)),
+        globals.get_ivar(obj, IdentId::INITIALIZE)
+    );
 }
 
 impl Globals {
@@ -253,6 +316,16 @@ impl ClassId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct IvarId(u32);
+
+impl IvarId {
+    pub fn to_usize(&self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ClassInfo {
     /// the constant name which this class object is bound.
@@ -267,6 +340,8 @@ pub(super) struct ClassInfo {
     methods: HashMap<IdentId, FuncId>,
     /// constants table.
     constants: HashMap<IdentId, Value>,
+    /// instance variable table.
+    ivar_names: HashMap<IdentId, IvarId>,
 }
 
 impl ClassInfo {
@@ -278,6 +353,7 @@ impl ClassInfo {
             is_singleton: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
+            ivar_names: HashMap::default(),
         }
     }
 
@@ -289,6 +365,7 @@ impl ClassInfo {
             is_singleton: Some(base),
             methods: HashMap::default(),
             constants: HashMap::default(),
+            ivar_names: HashMap::default(),
         }
     }
 
