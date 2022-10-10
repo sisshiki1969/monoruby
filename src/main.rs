@@ -156,24 +156,10 @@ fn main() {
 fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
     let mut globals = Globals::new(warning, no_jit_flag);
     globals.exec_startup();
-    let main_fid = match globals.compile_script(code.to_string(), path) {
-        Ok(func_id) => func_id,
-        Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
-            err.show_loc();
-            return;
-        }
-    };
-
-    match Interp::eval_toplevel(&mut globals, main_fid) {
-        Ok(_val) => {
-            #[cfg(debug_assertions)]
-            eprintln!("=> {:?}", _val)
-        }
-        Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
-            err.show_loc();
-        }
+    let res = compile_and_run(&mut globals, code, path);
+    if let Ok(_val) = res {
+        #[cfg(debug_assertions)]
+        eprintln!("=> {:?}", _val)
     };
 }
 
@@ -212,44 +198,43 @@ pub fn run_test_no_result_check(code: &str) -> Value {
 pub fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = Instant::now();
-    let (mut globals, fid) = new_globals(code);
-    let jit_val = match Interp::eval_toplevel(&mut globals, fid) {
-        Ok(val) => val,
-        Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
-            err.show_loc();
-            panic!();
-        }
-    };
-    let jit_str = jit_val.to_s(&globals);
+    let mut globals = Globals::new(1, false);
+    let res = compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap();
+    let jit_str = res.to_s(&globals);
     #[cfg(not(debug_assertions))]
     eprintln!("jit: {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
     eprintln!("jit: {jit_str}");
 
-    (jit_val, globals)
+    (res, globals)
 }
 
 pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
-    let (mut globals, fid) = new_globals(code);
-    let jit_val = Interp::eval_toplevel(&mut globals, fid);
-    let err = jit_val.unwrap_err();
-    eprintln!("{}", err.get_error_message(&globals));
-    err.show_loc();
+    let mut globals = Globals::new(1, false);
+    compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap_err();
 }
 
-fn new_globals(code: &str) -> (Globals, FuncId) {
-    let mut globals = Globals::new(1, false);
-    let fid = match globals.compile_script(code.to_string(), std::path::Path::new("")) {
+fn compile_and_run(
+    globals: &mut Globals,
+    code: &str,
+    path: &std::path::Path,
+) -> Result<Value, MonorubyErr> {
+    let fid = match globals.compile_script(code.to_string(), path) {
         Ok(fid) => fid,
         Err(err) => {
+            eprintln!("{}", err.get_error_message(&globals));
             err.show_all_loc();
-            panic!("Error in compiling AST. {:?}", err);
+            return Err(err);
         }
     };
-    (globals, fid)
+    let res = Interp::eval_toplevel(globals, fid);
+    if let Err(err) = &res {
+        eprintln!("{}", err.get_error_message(&globals));
+        err.show_all_loc();
+    }
+    res
 }
 
 fn run_ruby(code: &str, globals: &mut Globals) -> Value {
@@ -339,6 +324,28 @@ mod test {
             a
         "#,
         );
+        run_test_error(
+            r#"
+            class Integer
+              attr_accessor :a
+            end
+            4.a = 100
+        "#,
+        );
+        run_test_error(
+            r#"
+            class Float
+              def f
+                @a = 42
+              end
+            end
+            4.0.f
+        "#,
+        );
+        run_test_error("break");
+        run_test_error("joke");
+        run_test_error("Joke");
+        run_test_error("91552338.chr");
     }
 
     #[test]
