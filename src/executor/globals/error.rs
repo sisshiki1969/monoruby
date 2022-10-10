@@ -1,5 +1,111 @@
 use super::*;
 
+//
+// error handlers
+//
+impl Globals {
+    fn set_error(&mut self, err: MonorubyErr) {
+        self.error = Some(err);
+    }
+
+    pub fn err_method_not_found(&mut self, name: IdentId, class: ClassId) {
+        self.set_error(MonorubyErr::method_not_found(name, class))
+    }
+
+    pub fn err_divide_by_zero(&mut self) {
+        self.set_error(MonorubyErr::divide_by_zero());
+    }
+
+    pub fn err_uninitialized_constant(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::uninitialized_constant(name));
+    }
+
+    ///
+    /// Set RangeError with message "*val* out of char range".
+    ///
+    pub fn err_char_out_of_range(&mut self, val: Value) {
+        self.set_error(MonorubyErr::range(format!(
+            "{} out of char range",
+            self.val_tos(val)
+        )));
+    }
+
+    ///
+    /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
+    ///
+    pub fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into {}",
+            actual.get_name(self),
+            expect.get_name(self),
+        )));
+    }
+
+    ///
+    /// Set TypeError with message "*name* is not a class".
+    ///
+    pub fn err_is_not_class(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "{} is not a class",
+            IdentId::get_name(name)
+        )));
+    }
+
+    ///
+    /// Set TypeError with message "superclass mismatch for class *name*".
+    ///
+    pub fn err_superclass_mismatch(&mut self, name: IdentId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "superclass mismatch for class {}",
+            IdentId::get_name(name)
+        )));
+    }
+
+    ///
+    /// Set TypeError with message "*name* is not a class".
+    ///
+    pub fn err_is_not_symbol_nor_string(&mut self, val: Value) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "{} is not a symbol nor a string",
+            self.val_tos(val)
+        )));
+    }
+
+    ///
+    /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
+    ///
+    pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
+        self.set_error(MonorubyErr::indexerr(format!(
+            "index {} too small for array; minimum: {}",
+            actual, minimum,
+        )));
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub fn err_cant_modify_frozen(&mut self, val: Value) {
+        self.set_error(MonorubyErr::indexerr(format!(
+            "can't modify frozen {}: {}",
+            val.class_id().get_name(self),
+            self.val_tos(val),
+        )));
+    }
+
+    pub fn take_error(&mut self) -> Option<MonorubyErr> {
+        std::mem::take(&mut self.error)
+    }
+
+    pub fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        match &mut self.error {
+            Some(err) => {
+                err.loc.push((loc, sourceinfo));
+            }
+            None => unreachable!(),
+        };
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
     pub kind: MonorubyErrKind,
@@ -49,7 +155,30 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self, globals: &Globals) -> String {
-        globals.get_error_message(self)
+        match &self.kind {
+            MonorubyErrKind::UndefinedLocal(ident) => {
+                format!("undefined local variable or method `{}'", ident)
+            }
+            MonorubyErrKind::MethodNotFound(name, class) => {
+                format!(
+                    "undefined method `{}' for {}",
+                    IdentId::get_name(*name),
+                    class.get_name(globals)
+                )
+            }
+            MonorubyErrKind::WrongArguments(name) => name.to_string(),
+            MonorubyErrKind::Syntax(kind) => format!("{:?}", kind),
+            MonorubyErrKind::Syntax2(msg) => msg.to_string(),
+            MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
+            MonorubyErrKind::UninitConst(name) => {
+                format!("uninitialized constant {}", IdentId::get_name(*name))
+            }
+            MonorubyErrKind::DivideByZero => format!("divided by 0"),
+            MonorubyErrKind::Range(msg) => msg.to_string(),
+            MonorubyErrKind::Type(msg) => msg.to_string(),
+            MonorubyErrKind::Index(msg) => msg.to_string(),
+            MonorubyErrKind::Frozen(msg) => msg.to_string(),
+        }
     }
 }
 

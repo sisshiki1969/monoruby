@@ -336,8 +336,7 @@ pub extern "C" fn vm_get_constant(
     if *cached_version == const_version {
         return *val;
     };
-    let current = interp.class_context_stack();
-    let res = globals.find_constant(site_id, current);
+    let res = interp.find_constant(globals, site_id);
     if res.is_some() {
         globals.func[site_id].cache = (const_version, res)
     }
@@ -354,8 +353,7 @@ pub extern "C" fn get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    let current = interp.class_context_stack();
-    globals.find_constant(site_id, current)
+    interp.find_constant(globals, site_id)
 }
 
 pub extern "C" fn set_constant(
@@ -364,13 +362,7 @@ pub extern "C" fn set_constant(
     name: IdentId,
     val: Value,
 ) {
-    let parent = interp.get_class_context();
-    if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
-        eprintln!(
-            "warning: already initialized constant {}",
-            IdentId::get_name(name)
-        )
-    }
+    interp.set_constant(globals, name, val)
 }
 
 pub extern "C" fn define_method(
@@ -380,7 +372,7 @@ pub extern "C" fn define_method(
     func: FuncId,
 ) {
     let parent = interp.get_class_context();
-    globals.class.add_method(parent, name, func);
+    globals.add_method(parent, name, func);
 }
 
 pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {

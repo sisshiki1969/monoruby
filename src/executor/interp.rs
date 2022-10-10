@@ -60,6 +60,26 @@ impl Interp {
 
 impl Interp {
     ///
+    /// Find Constant in current class context.
+    ///
+    pub fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
+        let current = self.class_context_stack();
+        globals.find_constant(site_id, current)
+    }
+
+    pub fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
+        let parent = self.get_class_context();
+        if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
+            eprintln!(
+                "warning: already initialized constant {}",
+                IdentId::get_name(name)
+            )
+        }
+    }
+}
+
+impl Interp {
+    ///
     /// Invoke method for *receiver* and *method* from native function.
     ///
     pub fn invoke_method(
@@ -70,7 +90,7 @@ impl Interp {
         args: &[Value],
     ) -> Option<Value> {
         let len = args.len();
-        let func_id = globals.get_method(receiver.class_id(), method, len)?;
+        let func_id = globals.find_method_checked(receiver.class_id(), method, len)?;
         self.invoke_func(globals, func_id, receiver, args)
     }
 

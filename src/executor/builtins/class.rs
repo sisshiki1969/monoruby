@@ -125,7 +125,7 @@ extern "C" fn instance_methods(
 ) -> Option<Value> {
     let class_id = self_val.as_class();
     let v = globals
-        .get_instance_method_names(class_id)
+        .get_method_names(class_id)
         .into_iter()
         .map(|name| Value::new_symbol(name))
         .collect();
