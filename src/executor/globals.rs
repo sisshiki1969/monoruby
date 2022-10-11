@@ -132,7 +132,7 @@ impl Globals {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
                 ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object => self.object_tos(val),
+                ObjKind::Object(_) => self.object_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -162,7 +162,7 @@ impl Globals {
                 ObjKind::Class(class_id) => class_id.get_name(self),
                 ObjKind::Time(time) => time.to_string(),
                 ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object => self.object_inspect(val),
+                ObjKind::Object(_) => self.object_inspect(val),
                 _ => unreachable!(),
             },
         }

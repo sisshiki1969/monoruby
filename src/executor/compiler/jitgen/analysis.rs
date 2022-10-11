@@ -22,7 +22,7 @@ impl RegInfo {
             .collect()
     }
 
-    pub(super) fn get_unused(&self) -> Vec<SlotId> {
+    fn get_unused(&self) -> Vec<SlotId> {
         self.info
             .iter()
             .enumerate()
@@ -185,53 +185,6 @@ pub(super) struct LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    fn new(func: &RubyFuncInfo) -> Self {
-        Self {
-            branch_map: HashMap::default(),
-            bb_info: func.get_bb_info(),
-            loop_level: 0,
-            backedge_info: None,
-            return_info: None,
-            pc: BcPc::default(),
-        }
-    }
-
-    fn add_branch(&mut self, src_idx: usize, reg_info: RegInfo, dest_idx: usize) {
-        match self.branch_map.get_mut(&dest_idx) {
-            Some(entry) => {
-                entry.push((src_idx, reg_info));
-            }
-            None => {
-                self.branch_map.insert(dest_idx, vec![(src_idx, reg_info)]);
-            }
-        }
-    }
-
-    fn get_branches(&self, dest_idx: usize) -> Vec<(usize, RegInfo)> {
-        match self.branch_map.get(&dest_idx) {
-            Some(v) => v.clone(),
-            None => vec![],
-        }
-    }
-
-    fn add_backedge(&mut self, incoming_info: &RegInfo) {
-        if let Some(info) = &mut self.backedge_info {
-            info.merge(incoming_info);
-        } else {
-            self.backedge_info = Some(incoming_info.clone());
-        }
-    }
-
-    fn add_return(&mut self, incoming_info: &RegInfo) {
-        if let Some(info) = &mut self.return_info {
-            info.merge(incoming_info);
-        } else {
-            self.return_info = Some(incoming_info.clone());
-        }
-    }
-}
-
-impl LoopAnalysis {
     pub(super) fn analyse(func: &RubyFuncInfo, bb_pos: usize) -> (RegInfo, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
@@ -289,6 +242,53 @@ impl LoopAnalysis {
         );
 
         (info, exit_info.get_unused())
+    }
+}
+
+impl LoopAnalysis {
+    fn new(func: &RubyFuncInfo) -> Self {
+        Self {
+            branch_map: HashMap::default(),
+            bb_info: func.get_bb_info(),
+            loop_level: 0,
+            backedge_info: None,
+            return_info: None,
+            pc: BcPc::default(),
+        }
+    }
+
+    fn add_branch(&mut self, src_idx: usize, reg_info: RegInfo, dest_idx: usize) {
+        match self.branch_map.get_mut(&dest_idx) {
+            Some(entry) => {
+                entry.push((src_idx, reg_info));
+            }
+            None => {
+                self.branch_map.insert(dest_idx, vec![(src_idx, reg_info)]);
+            }
+        }
+    }
+
+    fn get_branches(&self, dest_idx: usize) -> Vec<(usize, RegInfo)> {
+        match self.branch_map.get(&dest_idx) {
+            Some(v) => v.clone(),
+            None => vec![],
+        }
+    }
+
+    fn add_backedge(&mut self, incoming_info: &RegInfo) {
+        if let Some(info) = &mut self.backedge_info {
+            info.merge(incoming_info);
+        } else {
+            self.backedge_info = Some(incoming_info.clone());
+        }
+    }
+
+    fn add_return(&mut self, incoming_info: &RegInfo) {
+        if let Some(info) = &mut self.return_info {
+            info.merge(incoming_info);
+        } else {
+            self.return_info = Some(incoming_info.clone());
+        }
     }
 
     fn scan_bb(

@@ -2,6 +2,8 @@ use crate::*;
 use num::BigInt;
 use smallvec::SmallVec;
 
+const OBJECT_INLINE_IVAR: usize = 5;
+
 /// Heap-allocated objects.
 #[derive(Clone)]
 #[repr(C)]
@@ -9,7 +11,7 @@ pub struct RValue {
     /// flags. 8 bytes
     flags: RVFlag,
     /// instance variable table. 8 bytes
-    var_table: Option<Box<Vec<Value>>>,
+    var_table: Option<Box<Vec<Option<Value>>>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
 }
@@ -32,7 +34,11 @@ impl GC<RValue> for RValue {
             return;
         }
         if let Some(v) = &self.var_table {
-            v.iter().for_each(|v| v.mark(alloc));
+            v.iter().for_each(|v| {
+                if let Some(v) = v {
+                    v.mark(alloc)
+                }
+            });
         }
     }
 }
@@ -77,16 +83,26 @@ impl RValue {
     }
 
     pub(crate) fn get_var(&mut self, id: IvarId) -> Value {
-        if let Some(v) = &mut self.var_table {
-            let i = id.to_usize();
-            if v.len() > i {
-                v[i]
+        let mut i = id.to_usize();
+        if let ObjKind::Object(ary) = self.kind {
+            if i < OBJECT_INLINE_IVAR {
+                match ary[i] {
+                    Some(v) => return v,
+                    None => return Value::nil(),
+                }
             } else {
-                Value::nil()
+                i -= OBJECT_INLINE_IVAR;
             }
-        } else {
-            Value::nil()
         }
+        if let Some(v) = &mut self.var_table {
+            if v.len() > i {
+                match v[i] {
+                    Some(v) => return v,
+                    None => {}
+                }
+            }
+        }
+        Value::nil()
     }
 
     pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
@@ -94,17 +110,25 @@ impl RValue {
     }
 
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
-        let i = id.to_usize();
+        let mut i = id.to_usize();
+        if let ObjKind::Object(ary) = &mut self.kind {
+            if i < OBJECT_INLINE_IVAR {
+                ary[i] = Some(val);
+                return;
+            } else {
+                i -= OBJECT_INLINE_IVAR;
+            }
+        }
         match &mut self.var_table {
             Some(v) => {
                 if v.len() <= i {
-                    v.resize(i + 1, Value::nil());
+                    v.resize(i + 1, None);
                 }
-                v[i] = val;
+                v[i] = Some(val);
             }
             None => {
-                let mut v = vec![Value::nil(); i + 1];
-                v[i] = val;
+                let mut v = vec![None; i + 1];
+                v[i] = Some(val);
                 self.var_table = Some(Box::new(v));
             }
         }
@@ -152,7 +176,7 @@ impl RValue {
     pub(crate) fn new_object(class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id),
-            kind: ObjKind::Object,
+            kind: ObjKind::Object([None; 5]),
             var_table: None,
         }
     }
@@ -250,7 +274,7 @@ impl RVFlag {
 #[derive(Debug, Clone)]
 pub enum ObjKind {
     Class(ClassId),
-    Object,
+    Object([Option<Value>; OBJECT_INLINE_IVAR]),
     Bignum(BigInt),
     Float(f64),
     Bytes(SmallVec<[u8; 31]>),
