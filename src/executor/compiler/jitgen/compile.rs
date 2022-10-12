@@ -253,12 +253,7 @@ impl Codegen {
                 }
                 BcOp::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    if pc.value().is_none() || pc.value().unwrap().class_id() != FLOAT_CLASS {
-                        self.load_constant(dst, id, pc, &ctx);
-                    } else {
-                        let fdst = ctx.alloc_xmm_read(dst);
-                        self.load_float_constant(dst, fdst, id, pc, &ctx);
-                    }
+                    self.jit_load_constant(&mut ctx, dst, id, pc);
                 }
                 BcOp::StoreConst(src, id) => {
                     ctx.read_slot(self, src);
