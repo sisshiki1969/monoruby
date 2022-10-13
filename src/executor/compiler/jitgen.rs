@@ -585,9 +585,9 @@ impl Codegen {
 
     fn jit_load_ivar(
         &mut self,
+        ctx: &BBContext,
         id: IdentId,
         ret: SlotId,
-        ctx: &BBContext,
         cached_class: ClassId,
         cached_ivarid: IvarId,
     ) {
@@ -597,7 +597,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rdi, [rbp - 16];  // base: Value
+            movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
         self.guard_class(cached_class, slow_path);
         monoasm!(self.jit,
@@ -618,9 +618,9 @@ impl Codegen {
 
     fn jit_store_ivar(
         &mut self,
+        ctx: &BBContext,
         id: IdentId,
         src: SlotId,
-        ctx: &BBContext,
         pc: BcPc,
         cached_class: ClassId,
         cached_ivarid: IvarId,
@@ -631,7 +631,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rdi, [rbp - 16];  // base: Value
+            movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
         self.guard_class(cached_class, slow_path);
         monoasm!(self.jit,
@@ -882,7 +882,7 @@ impl Codegen {
             movq r8, rdi; // the Value which caused this deopt.
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - 8];
+            movq rdx, [rbp - (OFFSET_META)];
             movq rcx, r13;
             movq rax, (log_deoptimize);
             call rax;
@@ -1045,7 +1045,7 @@ impl Codegen {
     }
 
     fn prologue(&mut self, regs: usize, args: usize) {
-        let offset = (regs + regs % 2) * 8 + 16;
+        let offset = (regs + regs % 2) * 8 + OFFSET_SELF as usize;
         let clear_len = regs - args;
         monoasm!(self.jit,
             pushq rbp;
@@ -1076,13 +1076,13 @@ impl Codegen {
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((args + i) as i32 * 8 + 16)], rax;
+                    movq [rbp - ((args + i) as i32 * 8 + (OFFSET_SELF))], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((args + i) as i32 * 8 + 16)], (NIL_VALUE);
+                    movq [rbp - ((args + i) as i32 * 8 + (OFFSET_SELF))], (NIL_VALUE);
                 );
             }
         }

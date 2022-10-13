@@ -73,7 +73,7 @@ impl Codegen {
             movq r12, rsi;  // rsi: &mut Globals
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
-            movq [rsp - 0x18], rax;
+            movq [rsp - (16 + OFFSET_META)], rax;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -93,7 +93,7 @@ impl Codegen {
             //
             // set self
             movq rax, (main_object.get());
-            movq [rsp - 0x20], rax;
+            movq [rsp - (16 + OFFSET_SELF)], rax;
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
@@ -133,16 +133,15 @@ impl Codegen {
         entry:
             pushq rbp;
             movq rbp, rsp;
-            //movb [rbp - 0x02], 0;       // kind
-            movzxw rax, [rbp - 0x04];   // reg_num
+            movzxw rax, [rbp - (OFFSET_REGNUM)];   // reg_num
             movq rdx, rax;  // rdx = reg_num
 
             subq rdx, rdi;
-            subq rdx, 1;    // rax = reg_num - 1 - args_len
+            subq rdx, 1;    // rdx = reg_num - 1 - args_len
             jeq  loop_exit;
             movq rdi, rax;
             negq rdi;
-            lea  rcx, [rsp + rdi * 8 - 16];
+            lea  rcx, [rsp + rdi * 8 - (OFFSET_SELF)];
         loop_:
             movq [rcx + rdx * 8], (NIL_VALUE);
             subq rdx, 1;
@@ -318,7 +317,7 @@ impl Codegen {
     fn vm_get_addr_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            lea rdi, [rbp + rdi * 8 - 16];
+            lea rdi, [rbp + rdi * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -332,7 +331,7 @@ impl Codegen {
     fn vm_get_addr_rcx(&mut self) {
         monoasm! { self.jit,
             negq rcx;
-            lea rcx, [rbp + rcx * 8 - 16];
+            lea rcx, [rbp + rcx * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -346,7 +345,7 @@ impl Codegen {
     fn vm_get_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            movq rdi, [rbp + rdi * 8 - 16];
+            movq rdi, [rbp + rdi * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -360,7 +359,7 @@ impl Codegen {
     fn vm_get_rsi(&mut self) {
         monoasm! { self.jit,
             negq rsi;
-            movq rsi, [rbp + rsi * 8 - 16];
+            movq rsi, [rbp + rsi * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -374,7 +373,7 @@ impl Codegen {
     fn vm_get_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            movq r15, [rbp + r15 * 8 - 16];
+            movq r15, [rbp + r15 * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -404,7 +403,7 @@ impl Codegen {
     fn vm_get_addr_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            lea r15, [rbp + r15 * 8 - 16];
+            lea r15, [rbp + r15 * 8 - (OFFSET_SELF)];
         };
     }
 
@@ -701,7 +700,7 @@ impl Codegen {
             compile:
                 movq rdi, rbx;
                 movq rsi, r12;
-                movl rdx, [rbp - 8];
+                movl rdx, [rbp - (OFFSET_FUNCID)];
                 lea rcx, [r13 - 16];
                 movq rax, (Self::exec_jit_partial_compile);
                 call rax;
@@ -878,7 +877,7 @@ impl Codegen {
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rsi, rdi; // name: IdentId
-            movq rdi, [rbp - 16];  // base: Value
+            movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
             movq rdx, r12; // &mut Globals
             lea rcx, [r13 - 8]; // &mut ClassId
             lea r8, [r13 - 4]; // &mut IvarId
@@ -902,7 +901,7 @@ impl Codegen {
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
             movq rdi, r12; //&mut Globals
-            movq rsi, [rbp - 16];  // base: Value
+            movq rsi, [rbp - (OFFSET_SELF)];  // base: Value
             movq rcx, [r15];     // val: Value
             lea r8, [r13 - 8]; // &mut ClassId
             lea r9, [r13 - 4]; // &mut IvarId

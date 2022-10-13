@@ -261,11 +261,11 @@ impl Codegen {
                 }
                 BcOp::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);
-                    self.jit_load_ivar(id, ret, &ctx, cached_class, cached_ivarid);
+                    self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
                 }
                 BcOp::StoreIvar(src, id, cached_class, cached_ivarid) => {
                     ctx.read_slot(self, src);
-                    self.jit_store_ivar(id, src, &ctx, pc, cached_class, cached_ivarid);
+                    self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);

@@ -21,6 +21,12 @@ pub type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
+pub(self) const OFFSET_REGNUM: i64 = 4;
+pub(self) const OFFSET_FUNCID: i64 = 8;
+pub(self) const OFFSET_META: i64 = 8;
+pub(self) const OFFSET_SELF: i64 = 16;
+pub(self) const OFFSET_ARG0: i64 = 24;
+
 ///
 /// Bytecode compiler
 ///
@@ -47,7 +53,7 @@ pub struct Codegen {
 }
 
 fn conv(reg: SlotId) -> i64 {
-    reg.0 as i64 * 8 + 16
+    reg.0 as i64 * 8 + OFFSET_SELF
 }
 
 //
@@ -277,15 +283,10 @@ impl Codegen {
             movq rax, (find_method);
             jmp  rax;
         vm_return:
-            // check call_kind.
-            //movl r15, [rbp - 8];
-            //testq r15, r15;
-            //jne  jit_return;
-            // save return value
             movq r15, rax;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - 8];
+            movq rdx, [rbp - (OFFSET_META)];
             movq rcx, r13;
             subq rcx, 8;
             movq rax, (get_error_location);
@@ -368,9 +369,9 @@ impl Codegen {
             movq r12, rsi;
             // set meta/func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - 0x18], rax;
+            movq [rsp - (16 + OFFSET_META)], rax;
             // set self (= receiver)
-            movq [rsp - 0x20], rcx;
+            movq [rsp - (16 + OFFSET_SELF)], rcx;
 
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
@@ -400,7 +401,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - 0x20], rax;
+            movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
             subq r10, 1;
             addq r9, 1;
             jne  loop_;
@@ -443,9 +444,9 @@ impl Codegen {
             movq r12, rsi;
             // set meta/func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - 0x18], rax;
+            movq [rsp - (16 + OFFSET_META)], rax;
             // set self (= receiver)
-            movq [rsp - 0x20], rcx;
+            movq [rsp - (16 + OFFSET_SELF)], rcx;
 
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
@@ -474,7 +475,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - 0x20], rax;
+            movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
             addq r9, 1;
             jne  loop_;
         loop_exit:
@@ -937,12 +938,11 @@ impl Codegen {
         entry:
             subl [rip + counter], 1;
             jne vm_entry;
-            movl rax, [rsp - 16];
+            movl rdx, [rsp - (8 + OFFSET_FUNCID)];
             subq rsp, 1024;
             pushq rdi;
             movq rdi, rbx;
             movq rsi, r12;
-            movl rdx, rax;
             movq rax, (Self::exec_jit_compile);
             call rax;
             movw [rip + entry], 0xe9;
@@ -1012,10 +1012,10 @@ impl Codegen {
         );
         self.calc_offset();
         monoasm!(self.jit,
-            lea  rcx, [rsp - 0x20];     // rcx <- *const arg[0]
-            movq  rdx, [rsp - 0x18];    // rdx <- self
+            lea  rcx, [rsp - (8 + OFFSET_ARG0)];     // rcx <- *const arg[0]
+            movq  rdx, [rsp - (8 + OFFSET_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [rsp - 0x0c], rdi;
+            movw [rsp - (8 + OFFSET_REGNUM)], rdi;
             pushq rbp;
             movq rbp, rsp;
 
@@ -1052,7 +1052,7 @@ impl Codegen {
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
-            movq rdi, [rsp - 0x18];  // self: Value
+            movq rdi, [rsp - (8 + OFFSET_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
@@ -1089,9 +1089,9 @@ impl Codegen {
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, r12; //&mut Globals
-            movq rsi, [rsp - 0x18];  // self: Value
+            movq rsi, [rsp - (8 + OFFSET_SELF)];  // self: Value
             movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rsp - 0x20];  //val: Value
+            movq rcx, [rsp - (8 + OFFSET_ARG0)];  //val: Value
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
             movq rax, (vm_set_instance_var);
