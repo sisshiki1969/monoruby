@@ -34,12 +34,12 @@ impl Interp {
     }
 
     /// Execute top level method.
-    pub fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+    pub(crate) fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let mut eval = Self::new(globals, globals.no_jit);
         eval.eval(globals, func_id)
     }
 
-    pub fn class_version_inc(&mut self) {
+    pub(crate) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
     }
 
@@ -62,12 +62,16 @@ impl Interp {
     ///
     /// Find Constant in current class context.
     ///
-    pub fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
+    pub(crate) fn find_constant(
+        &self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+    ) -> Option<Value> {
         let current = self.class_context_stack();
         globals.find_constant(site_id, current)
     }
 
-    pub fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
+    pub(crate) fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.get_class_context();
         if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
             eprintln!(
@@ -82,7 +86,7 @@ impl Interp {
     ///
     /// Invoke method for *receiver* and *method* from native function.
     ///
-    pub fn invoke_method(
+    pub(crate) fn invoke_method(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
@@ -94,7 +98,7 @@ impl Interp {
         self.invoke_func(globals, func_id, receiver, args)
     }
 
-    pub fn invoke_func(
+    pub(crate) fn invoke_func(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
@@ -105,7 +109,7 @@ impl Interp {
         (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 
-    pub fn invoke_func2(
+    pub(crate) fn invoke_func2(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
@@ -117,7 +121,11 @@ impl Interp {
         (self.codegen.invoker2)(self, globals, data, receiver, args.as_ptr(), len)
     }
 
-    pub fn get_func_data<'a>(&mut self, globals: &'a mut Globals, func_id: FuncId) -> &'a FuncData {
+    pub(crate) fn get_func_data<'a>(
+        &mut self,
+        globals: &'a mut Globals,
+        func_id: FuncId,
+    ) -> &'a FuncData {
         self.codegen.compile_on_demand(globals, func_id);
         &globals.func[func_id].data
     }

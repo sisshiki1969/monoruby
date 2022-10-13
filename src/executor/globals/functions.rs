@@ -101,18 +101,6 @@ pub struct ConstSiteInfo {
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);
 
-impl ConstSiteId {
-    pub fn get(&self) -> u32 {
-        self.0
-    }
-}
-
-/*#[derive(Debug, Clone, Default, PartialEq)]
-pub struct MethodDefInfo {
-    pub name: IdentId,
-    pub func: FuncId,
-}*/
-
 #[derive(Clone, PartialEq)]
 pub struct FnStore {
     functions: Funcs,
@@ -147,27 +135,20 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
 }
 
 impl FnStore {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             functions: Funcs::new(SourceInfoRef::default(), false),
             constsite_info: vec![],
         }
     }
 
-    pub fn functions(&self) -> &Vec<FuncInfo> {
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn functions(&self) -> &Vec<FuncInfo> {
         &self.functions.0
-    }
-
-    pub fn functions_mut(&mut self) -> &mut Vec<FuncInfo> {
-        &mut self.functions.0
     }
 
     fn len(&self) -> usize {
         self.functions.0.len()
-    }
-
-    pub fn funcs_mut(&mut self) -> &mut Vec<FuncInfo> {
-        &mut self.functions.0
     }
 
     pub(crate) fn add_ruby_func(
@@ -257,7 +238,8 @@ pub const FUNCDATA_OFFSET_META: u64 = 16;
 
 ///
 /// Metadata.
-///~~~
+///
+/// ~~~text
 ///   7   6   5   4    3   2    1    0
 /// +-------+-------+---------+----+----+
 /// |    FuncId     | reg_num |kind|mode|
@@ -269,10 +251,11 @@ pub const FUNCDATA_OFFSET_META: u64 = 16;
 ///
 /// mode:   0 method
 ///         1 class def
-///~~~
+/// ~~~
+///
 #[derive(Clone, Copy, PartialEq, Default)]
 #[repr(transparent)]
-pub struct Meta(u64);
+pub struct Meta(pub u64);
 
 impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -297,49 +280,45 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    pub fn new(meta: u64) -> Self {
+    pub(crate) fn new(meta: u64) -> Self {
         Self(meta)
     }
 
-    pub fn get(&self) -> u64 {
-        self.0
-    }
-
-    pub fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
+    pub(crate) fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = method
         Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
     }
 
-    pub fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
+    pub(crate) fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = classdef
         Self((1 << 56) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
     }
 
-    pub fn native(func_id: FuncId, reg_num: i64) -> Self {
+    pub(crate) fn native(func_id: FuncId, reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
         Self((2 << 48) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
     }
 
-    pub fn func_id(&self) -> FuncId {
+    pub(crate) fn func_id(&self) -> FuncId {
         FuncId(self.0 as u32)
     }
 
-    pub fn reg_num(&self) -> i64 {
+    pub(crate) fn reg_num(&self) -> i64 {
         (self.0 >> 32) as u16 as i16 as i64
     }
 
-    pub fn kind(&self) -> u8 {
+    pub(crate) fn kind(&self) -> u8 {
         (self.0 >> 48) as u8
     }
 
-    pub fn mode(&self) -> u8 {
+    pub(crate) fn mode(&self) -> u8 {
         (self.0 >> 56) as u8
     }
 
     ///
     /// Set JIT flag in Meta.
     ///
-    pub fn set_jit(&mut self) {
+    pub(crate) fn set_jit(&mut self) {
         let meta = (self.0 & 0xff00_ffff_ffff_ffff) | (1 << 48);
         self.0 = meta;
     }
@@ -347,7 +326,7 @@ impl Meta {
     ///
     /// Set the number of registers in Meta.
     ///
-    pub fn set_reg_num(&mut self, reg_num: i64) {
+    pub(crate) fn set_reg_num(&mut self, reg_num: i64) {
         let meta = (self.0 & 0xffff_0000_ffff_ffff) | ((reg_num as i16 as u16 as u64) << 32);
         self.0 = meta;
     }

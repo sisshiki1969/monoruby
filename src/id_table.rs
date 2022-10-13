@@ -85,7 +85,7 @@ impl IdentId {
 }
 
 impl IdentId {
-    pub fn get(&self) -> u32 {
+    pub(crate) fn get(&self) -> u32 {
         self.0.get()
     }
 
@@ -95,15 +95,15 @@ impl IdentId {
 }
 
 impl IdentId {
-    pub fn get_ident_id(name: &str) -> IdentId {
+    pub(crate) fn get_ident_id(name: &str) -> IdentId {
         ID.write().unwrap().get_ident_id(name)
     }
 
-    pub fn get_ident_id_from_string(name: String) -> IdentId {
+    pub(crate) fn get_ident_id_from_string(name: String) -> IdentId {
         ID.write().unwrap().get_ident_id_from_string(name)
     }
 
-    pub fn get_name(id: IdentId) -> String {
+    pub(crate) fn get_name(id: IdentId) -> String {
         ID.read().unwrap().get_name(id).to_string()
     }
 
@@ -112,7 +112,7 @@ impl IdentId {
     ///
     /// ex) "var" -> "@var"
     ///
-    pub fn add_ivar_prefix(id: IdentId) -> IdentId {
+    pub(crate) fn add_ivar_prefix(id: IdentId) -> IdentId {
         ID.write().unwrap().add_ivar_prefix(id)
     }
 
@@ -121,7 +121,7 @@ impl IdentId {
     ///
     /// ex) "var" -> "var="
     ///
-    pub fn add_assign_postfix(id: IdentId) -> IdentId {
+    pub(crate) fn add_assign_postfix(id: IdentId) -> IdentId {
         ID.write().unwrap().add_assign_postfix(id)
     }
 }
@@ -133,7 +133,7 @@ pub struct IdentifierTable {
 }
 
 impl IdentifierTable {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
             table: vec![String::new(); 40],

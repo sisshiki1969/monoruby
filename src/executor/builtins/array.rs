@@ -46,8 +46,8 @@ extern "C" fn add(
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let mut lhs = self_val.as_array().unwrap().clone();
-    let rhs = match arg[0].as_array() {
+    let mut lhs = self_val.is_array().unwrap().clone();
+    let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
             globals.err_no_implict_conv(arg[0].class_id(), ARRAY_CLASS);
@@ -115,7 +115,7 @@ extern "C" fn index_assign(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn test_array_new() {

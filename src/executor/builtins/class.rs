@@ -199,7 +199,7 @@ extern "C" fn attr_accessor(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn test_class() {

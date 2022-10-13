@@ -387,7 +387,7 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, qword (cached.meta.get());
+            movq rax, qword (cached.meta.0);
             movq [rsp - 0x18], rax;
 
             movq r13, qword (cached.pc.get_u64());

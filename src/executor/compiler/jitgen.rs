@@ -534,7 +534,7 @@ impl Codegen {
             testq rdi, 0b111;
             jnz side_exit;
             movl rax, [rdi + 4];    // rdi <- ClassId
-            cmpl rax, (class_id.get());
+            cmpl rax, (class_id.0);
             jne side_exit;
         )
     }

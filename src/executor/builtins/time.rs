@@ -40,12 +40,14 @@ extern "C" fn sub(
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let lhs = match &self_val.try_rvalue().unwrap().kind {
-        ObjKind::Time(time) => time.clone(),
+    let lhs_rv = self_val.try_rvalue().unwrap();
+    let lhs = match lhs_rv.kind() {
+        ObjKind::TIME => lhs_rv.as_time().clone(),
         _ => unreachable!(),
     };
-    let rhs = match &arg[0].try_rvalue().unwrap().kind {
-        ObjKind::Time(time) => time.clone(),
+    let rhs_rv = arg[0].try_rvalue().unwrap();
+    let rhs = match rhs_rv.kind() {
+        ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
             globals.err_method_not_found(IdentId::_SUB, self_val.class_id());
             return None;
@@ -84,7 +86,7 @@ impl std::fmt::Display for TimeInfo {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn test_time() {

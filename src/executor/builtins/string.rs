@@ -26,7 +26,7 @@ extern "C" fn add(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn test_string() {

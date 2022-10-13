@@ -95,24 +95,22 @@ extern "C" fn get_index(
     base: Value,
     index: Value,
 ) -> Option<Value> {
-    match base.unpack() {
-        RV::Object(rv) => match &rv.kind {
-            ObjKind::Array(v) => {
-                if let Some(idx) = index.try_fixnum() {
-                    return Some(if idx >= 0 {
-                        v.get(idx as usize).cloned().unwrap_or_default()
+    match base.class_id() {
+        ARRAY_CLASS => {
+            if let Some(idx) = index.try_fixnum() {
+                let v = base.as_array_mut();
+                return Some(if idx >= 0 {
+                    v.get(idx as usize).cloned().unwrap_or_default()
+                } else {
+                    let idx = v.len() as i64 + idx;
+                    if idx < 0 {
+                        Value::nil()
                     } else {
-                        let idx = v.len() as i64 + idx;
-                        if idx < 0 {
-                            Value::nil()
-                        } else {
-                            v.get(idx as usize).cloned().unwrap_or_default()
-                        }
-                    });
-                }
+                        v.get(idx as usize).cloned().unwrap_or_default()
+                    }
+                });
             }
-            _ => {}
-        },
+        }
         _ => {}
     }
     interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
@@ -246,7 +244,7 @@ extern "C" fn get_error_location(
 }
 
 impl Codegen {
-    pub fn new(no_jit: bool, main_object: Value) -> Self {
+    pub(crate) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         jit.add_page();
         jit.add_page();
@@ -905,7 +903,7 @@ impl Codegen {
     ///  - (old rbp) is to be set by callee.
     ///
 
-    pub fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
+    pub(crate) fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
         let func = &mut globals.func[func_id];
         if func.data.codeptr.is_none() {
             let codeptr = match func.kind {

@@ -38,18 +38,19 @@ impl GC<RValue> for Value {
 }
 
 impl Value {
-    pub fn eq(lhs: Self, rhs: Self) -> bool {
+    pub(crate) fn eq(lhs: Self, rhs: Self) -> bool {
         if lhs == rhs {
             return true;
         }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
-            (Some(lhs), Some(rhs)) => match (&lhs.kind, &rhs.kind) {
-                (ObjKind::Bignum(lhs), ObjKind::Bignum(rhs)) => lhs == rhs,
-                (ObjKind::Float(lhs), ObjKind::Float(rhs)) => lhs == rhs,
-                (ObjKind::Bytes(lhs), ObjKind::Bytes(rhs)) => lhs == rhs,
-                (ObjKind::Array(lhs), ObjKind::Array(rhs)) => lhs
+            (Some(lhs), Some(rhs)) => match (lhs.kind(), rhs.kind()) {
+                (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+                (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
+                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_string() == rhs.as_string(),
+                (ObjKind::ARRAY, ObjKind::ARRAY) => lhs
+                    .as_array()
                     .iter()
-                    .zip(rhs.iter())
+                    .zip(rhs.as_array().iter())
                     .all(|(lhs, rhs)| Value::eq(*lhs, *rhs)),
                 _ => false,
             },
@@ -59,7 +60,7 @@ impl Value {
 }
 
 impl Value {
-    pub fn from(id: u64) -> Self {
+    pub(crate) fn from(id: u64) -> Self {
         Value(std::num::NonZeroU64::new(id).unwrap())
     }
 
@@ -67,13 +68,13 @@ impl Value {
         Value::from(ptr as u64)
     }
 
-    pub fn class_id(&self) -> ClassId {
+    pub(crate) fn class_id(&self) -> ClassId {
         if self.is_fixnum() {
             INTEGER_CLASS
         } else if self.is_flonum() {
             FLOAT_CLASS
-        } else if !self.is_packed_value() {
-            self.rvalue().class()
+        } else if let Some(rv) = self.try_rvalue() {
+            rv.class()
         } else if self.is_packed_symbol() {
             SYMBOL_CLASS
         } else {
@@ -86,21 +87,21 @@ impl Value {
         }
     }
 
-    pub fn change_class(&mut self, new_class_id: ClassId) {
-        if !self.is_packed_value() {
-            self.rvalue_mut().change_class(new_class_id);
+    pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.change_class(new_class_id);
         } else {
             unreachable!("the class of primitive class can not be changed.");
         }
     }
 
-    pub fn get_singleton(self, globals: &mut Globals) -> Value {
+    pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         let original_id = self.as_class();
         let singleton = globals.get_singleton_id(original_id);
         globals.get_class_obj(singleton)
     }
 
-    pub fn get_real_class_obj(self, globals: &Globals) -> Value {
+    pub(crate) fn get_real_class_obj(self, globals: &Globals) -> Value {
         globals.get_real_class_obj(self)
     }
 
@@ -108,7 +109,7 @@ impl Value {
         globals.val_tos(self)
     }
 
-    pub fn to_bytes(self, globals: &Globals) -> Vec<u8> {
+    pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
         globals.val_tobytes(self)
     }
 
@@ -120,21 +121,15 @@ impl Value {
         val.class_id()
     }
 
-    pub(crate) extern "C" fn dup(val: Value) -> Self {
-        if val.is_packed_value() {
-            val
+    pub(crate) extern "C" fn deep_copy(val: Value) -> Self {
+        if let Some(rv) = val.try_rvalue() {
+            rv.deep_copy().pack()
         } else {
-            let rval = val.rvalue().clone();
-            rval.pack()
+            val
         }
     }
 
-    /*#[inline(always)]
-    pub fn from_unchecked(id: u64) -> Self {
-        unsafe { Value(std::num::NonZeroU64::new_unchecked(id)) }
-    }*/
-
-    pub fn get(&self) -> u64 {
+    pub(crate) fn get(&self) -> u64 {
         self.0.get()
     }
 
@@ -142,17 +137,7 @@ impl Value {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }
 
-    /*#[inline(always)]
-    const fn true_val() -> Self {
-        Value(unsafe { std::num::NonZeroU64::new_unchecked(TRUE_VALUE) })
-    }
-
-    #[inline(always)]
-    const fn false_val() -> Self {
-        Value(unsafe { std::num::NonZeroU64::new_unchecked(FALSE_VALUE) })
-    }*/
-
-    pub fn bool(b: bool) -> Self {
+    pub(crate) fn bool(b: bool) -> Self {
         if b {
             Value::from(TRUE_VALUE)
         } else {
@@ -160,7 +145,7 @@ impl Value {
         }
     }
 
-    pub fn fixnum(num: i64) -> Self {
+    pub(crate) fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
     }
 
@@ -169,11 +154,11 @@ impl Value {
         top & 0b1 == 0
     }
 
-    pub fn int32(num: i32) -> Self {
+    pub(crate) fn int32(num: i32) -> Self {
         Value::fixnum(num as i64)
     }
 
-    pub fn new_integer(num: i64) -> Self {
+    pub(crate) fn new_integer(num: i64) -> Self {
         if Self::is_i63(num) {
             Value::fixnum(num)
         } else {
@@ -194,7 +179,7 @@ impl Value {
         }
     }
 
-    pub fn new_bigint(bigint: BigInt) -> Self {
+    pub(crate) fn new_bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::new_integer(i)
         } else {
@@ -202,15 +187,15 @@ impl Value {
         }
     }
 
-    pub fn new_empty_class(id: ClassId) -> Self {
+    pub(crate) fn new_empty_class(id: ClassId) -> Self {
         RValue::new_class(id).pack()
     }
 
-    pub fn new_object(class_id: ClassId) -> Self {
+    pub(crate) fn new_object(class_id: ClassId) -> Self {
         RValue::new_object(class_id).pack()
     }
 
-    pub fn main_object(globals: &mut Globals) -> Self {
+    pub(crate) fn main_object(globals: &mut Globals) -> Self {
         let main_object = Value::new_object(OBJECT_CLASS);
         globals.set_ivar(
             main_object,
@@ -220,46 +205,45 @@ impl Value {
         main_object
     }
 
-    pub fn new_string(b: Vec<u8>) -> Self {
+    pub(crate) fn new_string(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
     }
 
-    pub fn new_string_from_smallvec(b: SmallVec<[u8; 31]>) -> Self {
+    pub(crate) fn new_string_from_smallvec(b: SmallVec<[u8; 31]>) -> Self {
         RValue::new_bytes_from_smallvec(b).pack()
     }
 
-    pub fn new_string_from_slice(b: &[u8]) -> Self {
+    pub(crate) fn new_string_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
     }
 
-    pub fn new_array(v: Vec<Value>) -> Self {
+    pub(crate) fn new_array(v: Vec<Value>) -> Self {
         RValue::new_array(v).pack()
     }
 
-    pub fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+    pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue::new_array_with_class(v, class_id).pack()
     }
 
-    pub fn new_symbol(id: IdentId) -> Self {
+    pub(crate) fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
-    pub fn new_time(time: TimeInfo) -> Self {
+    pub(crate) fn new_time(time: TimeInfo) -> Self {
         RValue::new_time(time).pack()
     }
 
-    pub fn unpack(&self) -> RV {
+    pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Integer(i)
         } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
-        } else if !self.is_packed_value() {
-            let rvalue = self.rvalue();
-            match &rvalue.kind {
-                ObjKind::Bignum(num) => RV::BigInt(num),
-                ObjKind::Float(num) => RV::Float(*num),
-                ObjKind::Bytes(b) => RV::String(b),
-                _ => RV::Object(rvalue),
+        } else if let Some(rv) = self.try_rvalue() {
+            match rv.kind() {
+                ObjKind::BIGNUM => RV::BigInt(rv.as_bignum()),
+                ObjKind::FLOAT => RV::Float(rv.as_float()),
+                ObjKind::BYTES => RV::String(rv.as_string()),
+                _ => RV::Object(rv),
             }
         } else if self.is_packed_symbol() {
             RV::Symbol(self.as_packed_symbol())
@@ -270,42 +254,6 @@ impl Value {
                 FALSE_VALUE => RV::Bool(false),
                 _ => unreachable!("Illegal packed value. 0x{:016x}", self.0),
             }
-        }
-    }
-
-    pub fn from_ast(node: &Node, globals: &mut Globals) -> Value {
-        match &node.kind {
-            NodeKind::CompStmt(stmts) => {
-                assert_eq!(1, stmts.len());
-                Self::from_ast(&stmts[0], globals)
-            }
-            NodeKind::Integer(num) => Value::new_integer(*num),
-            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
-            NodeKind::Float(num) => Value::new_float(*num),
-            NodeKind::Bool(b) => Value::bool(*b),
-            NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
-            NodeKind::String(s) => Value::new_string(s.as_bytes().to_vec()),
-            NodeKind::Array(v, _) => {
-                let v = v
-                    .iter()
-                    .map(|node| Value::from_ast(node, globals))
-                    .collect();
-                Value::new_array(v)
-            }
-            NodeKind::Const {
-                toplevel,
-                parent,
-                prefix,
-                name,
-            } => {
-                assert_eq!(false, *toplevel);
-                assert_eq!(None, *parent);
-                assert_eq!(0, prefix.len());
-                let constant = IdentId::get_ident_id(name);
-                globals.get_constant(OBJECT_CLASS, constant).unwrap()
-            }
-            _ => unimplemented!(),
         }
     }
 }
@@ -328,7 +276,7 @@ impl Value {
         self.0.get() == NIL_VALUE
     }*/
 
-    /*pub fn to_bool(&self) -> bool {
+    /*pub(crate) fn to_bool(&self) -> bool {
         let v = self.0.get();
         (v | 0x10) != 0x14
     }*/
@@ -350,30 +298,30 @@ impl Value {
         }
     }
 
-    pub extern "C" fn binary_flonum(lhs: Value, rhs: Value) -> F2 {
+    /*pub extern "C" fn binary_flonum(lhs: Value, rhs: Value) -> F2 {
         F2 {
             f1: lhs.as_flonum(),
             f2: rhs.as_flonum(),
         }
-    }
+    }*/
 
-    pub fn is_packed_value(&self) -> bool {
+    pub(crate) fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
     }
 
-    pub fn as_fixnnum(&self) -> i64 {
+    pub(crate) fn as_fixnnum(&self) -> i64 {
         (self.0.get() as i64) >> 1
     }
 
-    pub fn is_fixnum(&self) -> bool {
+    pub(crate) fn is_fixnum(&self) -> bool {
         self.0.get() & 0b1 == 1
     }
 
-    pub fn is_flonum(&self) -> bool {
+    pub(crate) fn is_flonum(&self) -> bool {
         self.0.get() & 0b11 == 2
     }
 
-    pub fn try_fixnum(&self) -> Option<i64> {
+    pub(crate) fn try_fixnum(&self) -> Option<i64> {
         if self.is_fixnum() {
             Some(self.as_fixnnum())
         } else {
@@ -446,40 +394,29 @@ impl Value {
     }*/
 
     pub(crate) fn as_array_mut(&self) -> &mut Vec<Value> {
-        match &mut self.rvalue_mut().kind {
-            ObjKind::Array(v) => v,
-            _ => unreachable!(),
-        }
+        assert_eq!(ObjKind::ARRAY, self.rvalue().kind());
+        self.rvalue_mut().as_array_mut()
     }
 
-    pub(crate) fn as_array(&self) -> Option<&Vec<Value>> {
-        match self.try_rvalue() {
-            None => None,
-            Some(rvalue) => match &rvalue.kind {
-                ObjKind::Array(v) => Some(v),
-                _ => None,
-            },
+    pub(crate) fn is_array(&self) -> Option<&Vec<Value>> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::ARRAY => Some(rv.as_array()),
+            _ => None,
         }
     }
 
     pub(crate) fn is_class(&self) -> Option<ClassId> {
-        match self.unpack() {
-            RV::Object(rv) => match rv.kind {
-                ObjKind::Class(id) => Some(id),
-                _ => None,
-            },
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::CLASS => Some(rv.as_class()),
             _ => None,
         }
     }
 
     pub(crate) fn as_class(&self) -> ClassId {
-        match self.unpack() {
-            RV::Object(rv) => match rv.kind {
-                ObjKind::Class(id) => id,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
+        assert_eq!(ObjKind::CLASS, self.rvalue().kind());
+        self.rvalue().as_class()
     }
 
     pub(crate) fn expect_class(&self, name: IdentId, globals: &mut Globals) -> Option<ClassId> {
@@ -505,24 +442,10 @@ impl Value {
         None
     }
 
-    /*pub(crate) fn is_string(&self) -> Option<&SmallVec<[u8; 31]>> {
-        match self.unpack() {
-            RV::String(b) => Some(b),
-            _ => None,
-        }
-    }*/
-
     pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
-        match self.unpack() {
-            RV::String(b) => b,
-            _ => unreachable!(),
-        }
+        assert_eq!(ObjKind::BYTES, self.rvalue().kind());
+        self.rvalue().as_string()
     }
-
-    /*#[inline(always)]
-    fn is_packed_num(&self) -> bool {
-        self.0.get() & 0b11 != 0
-    }*/
 }
 
 #[derive(Clone, PartialEq)]

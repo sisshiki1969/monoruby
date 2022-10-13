@@ -108,7 +108,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rdx, (id.get());  // name: ConstSiteId
+            movq rdx, (id.0);  // name: ConstSiteId
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (get_constant);

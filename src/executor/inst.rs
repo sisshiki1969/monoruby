@@ -359,7 +359,7 @@ impl BinOpK {
         }
     }
 
-    pub fn generic_func(
+    pub(crate) fn generic_func(
         &self,
     ) -> extern "C" fn(&mut Interp, &mut Globals, Value, Value) -> Option<Value> {
         match self {
@@ -786,7 +786,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl BcOp {
-    pub fn from_bc(pc: BcPc) -> Self {
+    pub(crate) fn from_bc(pc: BcPc) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {

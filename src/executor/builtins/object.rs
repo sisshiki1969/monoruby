@@ -54,7 +54,7 @@ extern "C" fn puts(
     len: usize,
 ) -> Option<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
-        match val.as_array() {
+        match val.is_array() {
             Some(ary) => {
                 ary.iter().for_each(|v| decompose(collector, *v));
             }
@@ -243,7 +243,7 @@ extern "C" fn instance_variable_get(
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn test_builtin() {

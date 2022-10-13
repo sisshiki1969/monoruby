@@ -8,22 +8,22 @@ impl Globals {
         self.error = Some(err);
     }
 
-    pub fn err_method_not_found(&mut self, name: IdentId, class: ClassId) {
+    pub(crate) fn err_method_not_found(&mut self, name: IdentId, class: ClassId) {
         self.set_error(MonorubyErr::method_not_found(name, class))
     }
 
-    pub fn err_divide_by_zero(&mut self) {
+    pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    pub fn err_uninitialized_constant(&mut self, name: IdentId) {
+    pub(crate) fn err_uninitialized_constant(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::uninitialized_constant(name));
     }
 
     ///
     /// Set RangeError with message "*val* out of char range".
     ///
-    pub fn err_char_out_of_range(&mut self, val: Value) {
+    pub(crate) fn err_char_out_of_range(&mut self, val: Value) {
         self.set_error(MonorubyErr::range(format!(
             "{} out of char range",
             self.val_tos(val)
@@ -33,7 +33,7 @@ impl Globals {
     ///
     /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
     ///
-    pub fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
+    pub(crate) fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
             actual.get_name(self),
@@ -44,7 +44,7 @@ impl Globals {
     ///
     /// Set TypeError with message "*name* is not a class".
     ///
-    pub fn err_is_not_class(&mut self, name: IdentId) {
+    pub(crate) fn err_is_not_class(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "{} is not a class",
             IdentId::get_name(name)
@@ -54,7 +54,7 @@ impl Globals {
     ///
     /// Set TypeError with message "superclass mismatch for class *name*".
     ///
-    pub fn err_superclass_mismatch(&mut self, name: IdentId) {
+    pub(crate) fn err_superclass_mismatch(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "superclass mismatch for class {}",
             IdentId::get_name(name)
@@ -64,7 +64,7 @@ impl Globals {
     ///
     /// Set TypeError with message "*name* is not a class".
     ///
-    pub fn err_is_not_symbol_nor_string(&mut self, val: Value) {
+    pub(crate) fn err_is_not_symbol_nor_string(&mut self, val: Value) {
         self.set_error(MonorubyErr::typeerr(format!(
             "{} is not a symbol nor a string",
             self.val_tos(val)
@@ -74,7 +74,7 @@ impl Globals {
     ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///
-    pub fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
+    pub(crate) fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
         self.set_error(MonorubyErr::indexerr(format!(
             "index {} too small for array; minimum: {}",
             actual, minimum,
@@ -84,19 +84,19 @@ impl Globals {
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
-    pub fn err_cant_modify_frozen(&mut self, val: Value) {
-        self.set_error(MonorubyErr::indexerr(format!(
+    pub(crate) fn err_cant_modify_frozen(&mut self, val: Value) {
+        self.set_error(MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
             val.class_id().get_name(self),
             self.val_tos(val),
         )));
     }
 
-    pub fn take_error(&mut self) -> Option<MonorubyErr> {
+    pub(crate) fn take_error(&mut self) -> Option<MonorubyErr> {
         std::mem::take(&mut self.error)
     }
 
-    pub fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
         match &mut self.error {
             Some(err) => {
                 err.loc.push((loc, sourceinfo));
@@ -114,7 +114,7 @@ pub struct MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    UndefinedLocal(String),
+    //UndefinedLocal(String),
     MethodNotFound(IdentId, ClassId),
     WrongArguments(String),
     Syntax(ParseErrKind),
@@ -140,13 +140,17 @@ impl MonorubyErr {
         }
     }
 
+    pub fn is_eof(&self) -> bool {
+        self.kind == MonorubyErrKind::Syntax(ParseErrKind::UnexpectedEOF)
+    }
+
     pub fn show_all_loc(&self) {
         for (loc, sourceinfo) in &self.loc {
             sourceinfo.show_loc(loc);
         }
     }
 
-    pub fn show_loc(&self) {
+    pub(crate) fn show_loc(&self) {
         if let Some((loc, sourceinfo)) = self.loc.first() {
             sourceinfo.show_loc(loc);
         } else {
@@ -156,9 +160,9 @@ impl MonorubyErr {
 
     pub fn get_error_message(&self, globals: &Globals) -> String {
         match &self.kind {
-            MonorubyErrKind::UndefinedLocal(ident) => {
+            /*MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
-            }
+            }*/
             MonorubyErrKind::MethodNotFound(name, class) => {
                 format!(
                     "undefined method `{}' for {}",
@@ -184,7 +188,7 @@ impl MonorubyErr {
 
 // Parser level errors.
 impl MonorubyErr {
-    pub fn parse(error: ParseErr) -> MonorubyErr {
+    pub(crate) fn parse(error: ParseErr) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax(error.kind),
             error.loc,
@@ -195,7 +199,7 @@ impl MonorubyErr {
 
 // Bytecode compiler level errors.
 impl MonorubyErr {
-    pub fn unsupported_parameter_kind(
+    pub(crate) fn unsupported_parameter_kind(
         param: ParamKind,
         loc: Loc,
         sourceinfo: SourceInfoRef,
@@ -207,7 +211,11 @@ impl MonorubyErr {
         )
     }
 
-    pub fn unsupported_operator(op: BinOp, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn unsupported_operator(
+        op: BinOp,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported operator {:?}", op)),
             loc,
@@ -215,7 +223,7 @@ impl MonorubyErr {
         )
     }
 
-    pub fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),
             lhs.loc,
@@ -223,7 +231,7 @@ impl MonorubyErr {
         )
     }
 
-    pub fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported nodekind {:?}", expr.kind)),
             expr.loc,
@@ -231,7 +239,7 @@ impl MonorubyErr {
         )
     }
 
-    pub fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
             loc,
@@ -239,45 +247,49 @@ impl MonorubyErr {
         )
     }
 
-    pub fn undefined_local(ident: String, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    /*pub(crate) fn undefined_local(
+        ident: String,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
         MonorubyErr::new_with_loc(MonorubyErrKind::UndefinedLocal(ident), loc, sourceinfo)
-    }
+    }*/
 }
 
 // Executor level errors.
 impl MonorubyErr {
-    pub fn method_not_found(name: IdentId, class: ClassId) -> MonorubyErr {
+    pub(crate) fn method_not_found(name: IdentId, class: ClassId) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, class))
     }
 
-    pub fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
+    pub(crate) fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::WrongArguments(format!(
             "number of arguments mismatch. expected:{} actual:{}",
             expected, actual
         )))
     }
 
-    pub fn divide_by_zero() -> MonorubyErr {
+    pub(crate) fn divide_by_zero() -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::DivideByZero)
     }
 
-    pub fn range(msg: String) -> MonorubyErr {
+    pub(crate) fn range(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Range(msg))
     }
 
-    pub fn uninitialized_constant(name: IdentId) -> MonorubyErr {
+    pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::UninitConst(name))
     }
 
-    pub fn typeerr(msg: String) -> MonorubyErr {
+    pub(crate) fn typeerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type(msg))
     }
 
-    pub fn indexerr(msg: String) -> MonorubyErr {
+    pub(crate) fn indexerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index(msg))
     }
 
-    pub fn frozenerr(msg: String) -> MonorubyErr {
+    pub(crate) fn frozenerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Frozen(msg))
     }
 }

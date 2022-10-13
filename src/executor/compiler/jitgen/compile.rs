@@ -220,7 +220,7 @@ impl Codegen {
                             self.xmm_save(&xmm_using);
                             monoasm!(self.jit,
                               movq rdi, (val.get());
-                              movq rax, (Value::dup);
+                              movq rax, (Value::deep_copy);
                               call rax;
                             );
                             self.xmm_restore(&xmm_using);
@@ -643,7 +643,7 @@ impl Codegen {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::tests::*;
 
     #[test]
     fn raise_method_recv_class() {

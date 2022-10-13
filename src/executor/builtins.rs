@@ -14,7 +14,7 @@ pub use time::TimeInfo;
 // Builtin methods.
 //
 
-pub fn init_builtins(globals: &mut Globals) {
+pub(crate) fn init_builtins(globals: &mut Globals) {
     assert_eq!(
         OBJECT_CLASS,
         globals
@@ -78,7 +78,7 @@ pub fn init_builtins(globals: &mut Globals) {
 pub struct Arg(*const Value);
 
 impl Arg {
-    pub fn as_ptr(&self) -> *const Value {
+    pub(crate) fn as_ptr(&self) -> *const Value {
         self.0
     }
 }

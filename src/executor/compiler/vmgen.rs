@@ -284,7 +284,7 @@ impl Codegen {
     /// ### registers destroyed
     /// - r8, r9
     ///
-    pub fn fetch_and_dispatch(&mut self) {
+    pub(crate) fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
             movq rax, [r13]; // rax <- :0:1:2:3

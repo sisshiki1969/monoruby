@@ -81,7 +81,7 @@ pub struct Allocator<T> {
 }
 
 impl<T: GCBox> Allocator<T> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
         let ptr = PageRef::alloc_page();
@@ -103,7 +103,7 @@ impl<T: GCBox> Allocator<T> {
 
     #[cfg(not(feature = "gc-stress"))]
     #[inline(always)]
-    pub fn is_allocated(&self) -> bool {
+    pub(crate) fn is_allocated(&self) -> bool {
         self.alloc_flag
     }
 
@@ -111,6 +111,7 @@ impl<T: GCBox> Allocator<T> {
     /// Returns a number of objects in the free list.
     /// (sweeped objects in the previous GC cycle.)
     ///
+    #[allow(unused)]
     pub fn free_count(&self) -> usize {
         self.free_list_count
     }
@@ -118,6 +119,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of live objects in the previous GC cycle.
     ///
+    #[allow(unused)]
     pub fn live_count(&self) -> usize {
         self.mark_counter
     }
@@ -125,6 +127,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total allocated objects.
     ///
+    #[allow(unused)]
     pub fn total_allocated(&self) -> usize {
         self.allocated
     }
@@ -132,6 +135,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a total count of GC execution.
     ///
+    #[allow(unused)]
     pub fn count(&self) -> usize {
         self.count
     }
@@ -139,6 +143,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns total active pages.
     ///
+    #[allow(unused)]
     pub fn pages_len(&self) -> usize {
         self.pages.len() + 1
     }
@@ -146,7 +151,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Allocate object.
     ///
-    pub fn alloc(&mut self, data: T) -> *mut T {
+    pub(crate) fn alloc(&mut self, data: T) -> *mut T {
         self.allocated += 1;
 
         if let Some(gcbox) = self.free {
@@ -187,13 +192,14 @@ impl<T: GCBox> Allocator<T> {
         gcbox
     }
 
+    #[allow(unused)]
     pub fn gc_mark_only(&mut self, root: &impl GC<T>) {
         self.clear_mark();
         root.mark(self);
         self.print_mark();
     }
 
-    #[inline(always)]
+    #[allow(unused)]
     pub fn check_gc(&mut self, root: &impl GCRoot<T>) {
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         #[cfg(not(feature = "gc-stress"))]
@@ -207,7 +213,7 @@ impl<T: GCBox> Allocator<T> {
         self.gc(root);
     }
 
-    pub fn gc(&mut self, root: &impl GCRoot<T>) {
+    pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
             return;
         }
@@ -235,7 +241,7 @@ impl<T: GCBox> Allocator<T> {
             eprintln!("free list: {}", self.free_list_count);
         }
         self.alloc_flag = false;
-        self.count += 1;
+        //self.count += 1;
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         self.malloc_threshold = malloced + MALLOC_THRESHOLD;
         #[cfg(any(feature = "trace", feature = "gc-debug"))]
@@ -247,7 +253,7 @@ impl<T: GCBox> Allocator<T> {
     /// Mark object.
     /// If object is already marked, return true.
     /// If not yet, mark it and return false.
-    pub fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
+    pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
         let ptr = ptr as *const T as *mut T;
         #[cfg(feature = "gc-debug")]
         self.check_ptr(ptr);

@@ -125,7 +125,7 @@ impl IrContext {
     }
 }
 
-pub fn is_smi(node: &Node) -> Option<i16> {
+pub(crate) fn is_smi(node: &Node) -> Option<i16> {
     if let NodeKind::Integer(i) = &node.kind {
         if *i == *i as i16 as i64 {
             return Some(*i as i16);
@@ -144,7 +144,7 @@ enum LvalueKind {
 }
 
 impl IrContext {
-    pub fn compile_ast(info: &mut RubyFuncInfo, ctx: &mut FnStore) -> Result<IrContext> {
+    pub(crate) fn compile_ast(info: &mut RubyFuncInfo, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
         ir.gen_expr(ctx, info, ast, true, true)?;
@@ -1491,7 +1491,7 @@ impl IrContext {
                 BcIr::LoadConst(reg, toplevel, prefix, name) => {
                     let op1 = info.get_index(reg);
                     let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
-                    Bc::from(enc_wl(10, op1.0, op2.get()))
+                    Bc::from(enc_wl(10, op1.0, op2.0))
                 }
                 BcIr::StoreConst(reg, name) => {
                     let op1 = info.get_index(reg);

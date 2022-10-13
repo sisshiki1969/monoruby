@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::io::{stdout, BufWriter, Stdout};
 use std::path::PathBuf;
 
@@ -41,11 +42,11 @@ impl Globals {
         globals
     }
 
-    pub fn flush_stdout(&mut self) {
+    pub(crate) fn flush_stdout(&mut self) {
         self.stdout.flush().unwrap();
     }
 
-    pub fn write_stdout(&mut self, bytes: &[u8]) {
+    pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
         self.stdout.write(bytes).unwrap();
     }
 
@@ -55,7 +56,7 @@ impl Globals {
         let startup_fid = match self.compile_script(code, path) {
             Ok(func_id) => func_id,
             Err(err) => {
-                eprintln!("error occured in startup.rb");
+                eprintln!("error occured in compiling startup.rb.");
                 eprintln!("{}", err.get_error_message(&self));
                 err.show_loc();
                 return;
@@ -64,7 +65,7 @@ impl Globals {
         match Interp::eval_toplevel(self, startup_fid) {
             Ok(_) => {}
             Err(err) => {
-                eprintln!("error occured in startup.rb");
+                eprintln!("error occured in executing startup.rb.");
                 eprintln!("{}", err.get_error_message(self));
                 err.show_loc();
             }
@@ -116,7 +117,7 @@ impl Globals {
         }
     }
 
-    pub fn val_tos(&self, val: Value) -> String {
+    pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
             RV::Bool(b) => format!("{:?}", b),
@@ -128,17 +129,17 @@ impl Globals {
                 Ok(s) => s,
                 Err(_) => format!("{:?}", s),
             },
-            RV::Object(rvalue) => match &rvalue.kind {
-                ObjKind::Class(class_id) => class_id.get_name(self),
-                ObjKind::Time(time) => time.to_string(),
-                ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object(_) => self.object_tos(val),
+            RV::Object(rvalue) => match rvalue.kind() {
+                ObjKind::CLASS => rvalue.as_class().get_name(self),
+                ObjKind::TIME => rvalue.as_time().to_string(),
+                ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
+                ObjKind::OBJECT => self.object_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
     }
 
-    pub fn val_tobytes(&self, val: Value) -> Vec<u8> {
+    pub(crate) fn val_tobytes(&self, val: Value) -> Vec<u8> {
         match val.unpack() {
             RV::String(s) => return s.to_vec(),
             _ => {}
@@ -146,7 +147,7 @@ impl Globals {
         self.val_tos(val).into_bytes()
     }
 
-    pub fn val_inspect(&self, val: Value) -> String {
+    pub(crate) fn val_inspect(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => format!("nil"),
             RV::Bool(b) => format!("{:?}", b),
@@ -158,17 +159,17 @@ impl Globals {
                 Ok(s) => format!("\"{}\"", escape_string::escape(&s)),
                 Err(_) => format!("{:?}", s),
             },
-            RV::Object(rvalue) => match &rvalue.kind {
-                ObjKind::Class(class_id) => class_id.get_name(self),
-                ObjKind::Time(time) => time.to_string(),
-                ObjKind::Array(v) => self.array_tos(v),
-                ObjKind::Object(_) => self.object_inspect(val),
+            RV::Object(rvalue) => match rvalue.kind() {
+                ObjKind::CLASS => rvalue.as_class().get_name(self),
+                ObjKind::TIME => rvalue.as_time().to_string(),
+                ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
+                ObjKind::OBJECT => self.object_inspect(val),
                 _ => unreachable!(),
             },
         }
     }
 
-    pub fn find_method(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    pub(crate) fn find_method(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -181,7 +182,7 @@ impl Globals {
         None
     }
 
-    pub fn find_method_checked(
+    pub(crate) fn find_method_checked(
         &mut self,
         class_id: ClassId,
         func_name: IdentId,
@@ -198,7 +199,7 @@ impl Globals {
         Some(func_id)
     }
 
-    pub fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
+    pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
         let arity = self.func[func_id].arity();
         if arity != -1 && (arity as usize) != args_len {
             self.error = Some(MonorubyErr::wrong_arguments(arity as usize, args_len));
@@ -207,7 +208,7 @@ impl Globals {
         Some(())
     }
 
-    pub fn define_builtin_func(
+    pub(crate) fn define_builtin_func(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -220,7 +221,7 @@ impl Globals {
         func_id
     }
 
-    pub fn define_builtin_singleton_func(
+    pub(crate) fn define_builtin_singleton_func(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -237,7 +238,7 @@ impl Globals {
     ///
     /// Define attribute reader for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_reader(
+    pub(crate) fn define_attr_reader(
         &mut self,
         interp: &mut Interp,
         class_id: ClassId,
@@ -254,7 +255,7 @@ impl Globals {
     ///
     /// Define attribute writer for *class_id* and *ivar_name*.
     ///
-    pub fn define_attr_writer(
+    pub(crate) fn define_attr_writer(
         &mut self,
         interp: &mut Interp,
         class_id: ClassId,
@@ -269,7 +270,11 @@ impl Globals {
         method_name
     }
 
-    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
+    pub(crate) fn compile_script(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+    ) -> Result<FuncId> {
         let res = match Parser::parse_program(code, path.into()) {
             Ok(res) => self.func.compile_script(res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
