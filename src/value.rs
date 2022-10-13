@@ -1,6 +1,5 @@
 use crate::*;
 use num::{BigInt, ToPrimitive};
-use smallvec::SmallVec;
 
 use crate::alloc::{Allocator, GC};
 
@@ -209,7 +208,7 @@ impl Value {
         RValue::new_bytes(b).pack()
     }
 
-    pub(crate) fn new_string_from_smallvec(b: SmallVec<[u8; 31]>) -> Self {
+    pub(crate) fn new_string_from_smallvec(b: InnerVec) -> Self {
         RValue::new_bytes_from_smallvec(b).pack()
     }
 
@@ -442,7 +441,7 @@ impl Value {
         None
     }
 
-    pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
+    pub(crate) fn as_string(&self) -> &InnerVec {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_string()
     }
@@ -456,7 +455,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    String(&'a SmallVec<[u8; 31]>),
+    String(&'a InnerVec),
     Object(&'a RValue),
 }
 

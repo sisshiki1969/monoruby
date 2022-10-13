@@ -3,7 +3,7 @@ use num::BigInt;
 use smallvec::SmallVec;
 use std::mem::ManuallyDrop;
 
-const OBJECT_INLINE_IVAR: usize = 6;
+pub const OBJECT_INLINE_IVAR: usize = 6;
 
 /// Heap-allocated objects.
 //#[derive(Clone)]
@@ -210,7 +210,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_bytes_from_smallvec(bytes: SmallVec<[u8; 31]>) -> Self {
+    pub(crate) fn new_bytes_from_smallvec(bytes: InnerVec) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes(bytes),
@@ -320,7 +320,7 @@ pub union ObjKind {
     pub object: [Option<Value>; OBJECT_INLINE_IVAR],
     pub bignum: ManuallyDrop<BigInt>,
     pub float: f64,
-    pub bytes: ManuallyDrop<SmallVec<[u8; 31]>>,
+    pub bytes: ManuallyDrop<InnerVec>,
     pub time: ManuallyDrop<TimeInfo>,
     pub array: ManuallyDrop<Vec<Value>>,
 }
@@ -362,7 +362,7 @@ impl ObjKind {
         Self { float }
     }
 
-    fn bytes(b: SmallVec<[u8; 31]>) -> Self {
+    fn bytes(b: InnerVec) -> Self {
         Self {
             bytes: ManuallyDrop::new(b),
         }
@@ -402,11 +402,11 @@ impl RValue {
         unsafe { &*self.kind.bignum }
     }
 
-    pub(crate) fn as_string(&self) -> &SmallVec<[u8; 31]> {
+    pub(crate) fn as_string(&self) -> &InnerVec {
         unsafe { &*self.kind.bytes }
     }
 
-    /*pub(crate) fn as_string_mut(&mut self) -> &mut SmallVec<[u8; 31]> {
+    /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
         unsafe { &mut *self.kind.bytes }
     }*/
 

@@ -331,6 +331,48 @@ mod test {
         run_test("@a=42; b = @a * 2; b");
         run_test("@a=42; c = b = @a * 2; c");
         run_test("@a = 10; @a += 15; @a");
+        run_test(
+            r###"
+        class C
+          def initialize
+            @a = 1
+            @b = 2
+            @c = 3
+            @d = 4
+            @e = 5
+            @f = 6
+            @g = 7
+            @h = 8
+          end
+          def ivar
+            [@a, @b, @c, @d, @e, @f, @g, @h]
+          end
+        end
+        x = C.new
+        x.ivar
+        "###,
+        );
+        run_test(
+            r###"
+        class C < Array
+          def initialize
+            @a = 1
+            @b = 2
+            @c = 3
+            @d = 4
+            @e = 5
+            @f = 6
+            @g = 7
+            @h = 8
+          end
+          def ivar
+            [@a, @b, @c, @d, @e, @f, @g, @h]
+          end
+        end
+        x = C.new
+        x.ivar
+        "###,
+        );
     }
 
     #[test]
