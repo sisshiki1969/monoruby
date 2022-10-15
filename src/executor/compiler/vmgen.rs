@@ -591,12 +591,12 @@ impl Codegen {
         exec:
             // set meta
             movq rdi, [r13 + 16];
-            movq [rsp - 0x18], rdi;
+            movq [rsp -(16 + OFFSET_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
             movq rax, [rsp];
-            movq [rsp - 0x20], rax;
+            movq [rsp - (16 + OFFSET_SELF)], rax;
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
@@ -625,7 +625,7 @@ impl Codegen {
             negq r8;
         loop_:
             movq rax, [rcx + r8 * 8 + 8];
-            movq [rsp + r8 * 8 - 0x20], rax;
+            movq [rsp + r8 * 8 - (16 + OFFSET_SELF)], rax;
             addq r8, 1;
             jne  loop_;
         loop_exit:
@@ -1140,8 +1140,8 @@ impl Codegen {
             //       |             |
             //
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [rsp - 0x18], rdi;
-            movq [rsp - 0x20], r15;
+            movq [rsp - (16 + OFFSET_META)], rdi;
+            movq [rsp - (16 + OFFSET_SELF)], r15;
             movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;

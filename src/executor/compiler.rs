@@ -21,11 +21,11 @@ pub type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
-pub(self) const OFFSET_REGNUM: i64 = 4;
-pub(self) const OFFSET_FUNCID: i64 = 8;
 pub(self) const OFFSET_META: i64 = 8;
+pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;
+pub(self) const OFFSET_FUNCID: i64 = OFFSET_META;
 pub(self) const OFFSET_SELF: i64 = 16;
-pub(self) const OFFSET_ARG0: i64 = 24;
+pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 
 ///
 /// Bytecode compiler

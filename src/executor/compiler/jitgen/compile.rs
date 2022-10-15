@@ -616,8 +616,8 @@ impl Codegen {
             //       |             |
             //
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [rsp - 0x18], rdi;
-            movq [rsp - 0x20], r15;
+            movq [rsp - (16 + OFFSET_META)], rdi;
+            movq [rsp - (16 + OFFSET_SELF)], r15;
             movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;

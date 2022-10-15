@@ -152,28 +152,16 @@ impl Codegen {
         method_resolved:
         );
 
-        // set self
-        monoasm!(self.jit,
-            movq rax, [rbp - (conv(recv))];
-            movq [rsp - 0x20], rax;
-        );
-        // set arguments
-        for i in 0..len {
-            let reg = args + i;
-            monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - ((0x28 + i * 8) as i64)], rax;
-            );
-        }
+        self.set_self_and_args(recv, args, len);
 
         monoasm!(self.jit,
             // set meta.
             movq rax, qword (0);
-            patch_meta:
-            movq [rsp - 0x18], rax;
+        patch_meta:
+            movq [rsp - (16 + OFFSET_META)], rax;
 
             movq r13, qword (0);
-            patch_pc:
+        patch_pc:
             movq rdi, (len);
             // patch point
             call entry_panic;
@@ -370,25 +358,14 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
 
-        // set self
-        monoasm!(self.jit,
-        method_resolved:
-            movq rax, [rbp - (conv(recv))];
-            movq [rsp - 0x20], rax;
-        );
-        // set arguments
-        for i in 0..len {
-            let reg = args + i;
-            monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - ((0x28 + i * 8) as i64)], rax;
-            );
-        }
+        self.jit.bind_label(method_resolved);
+
+        self.set_self_and_args(recv, args, len);
 
         monoasm!(self.jit,
             // set meta.
             movq rax, qword (cached.meta.0);
-            movq [rsp - 0x18], rax;
+            movq [rsp - (16 + OFFSET_META)], rax;
 
             movq r13, qword (cached.pc.get_u64());
             movq rdi, (len);
@@ -413,5 +390,21 @@ impl Codegen {
             cmpl rax, (cached_version);
             jne side_exit;
         );
+    }
+
+    fn set_self_and_args(&mut self, recv: SlotId, args: SlotId, len: u16) {
+        // set self
+        monoasm!(self.jit,
+            movq rax, [rbp - (conv(recv))];
+            movq [rsp - (16 + OFFSET_SELF)], rax;
+        );
+        // set arguments
+        for i in 0..len {
+            let reg = args + i;
+            monoasm!(self.jit,
+                movq rax, [rbp - (conv(reg))];
+                movq [rsp - (16 + OFFSET_ARG0 as i32 + i as i32 * 8)], rax;
+            );
+        }
     }
 }
