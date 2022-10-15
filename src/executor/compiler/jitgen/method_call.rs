@@ -233,24 +233,34 @@ impl Codegen {
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        // rdi: base: Value
         monoasm!(self.jit,
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
+        );
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
             movq rax, (RValue::get_ivar);
             call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        monoasm!(self.jit,
             jmp exit;
-        slow_path:
+        );
+
+        self.jit.bind_label(slow_path);
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
             movq rsi, (ivar_name.get()); // IvarId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
             lea  r8, [rip + cached_ivarid];
             movq rax, (vm_get_instance_var);
             call rax;
-        exit:
         );
         self.xmm_restore(&xmm_using);
+        self.jit.bind_label(exit);
         if !ret.is_zero() {
             self.store_rax(ret);
         }
@@ -269,17 +279,26 @@ impl Codegen {
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
+        // rdi: base: Value
         monoasm!(self.jit,
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
+        );
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
             movq rdx, [rbp - (conv(args))];  //val: Value
             movq rax, (RValue::set_ivar);
             call rax;
-            movq rax, (NIL_VALUE);
+        );
+        self.xmm_restore(&xmm_using);
+        monoasm!(self.jit,
             jmp exit;
-        slow_path:
+        );
+
+        self.jit.bind_label(slow_path);
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
             movq rsi, rdi;  // recv: Value
             movq rdx, (ivar_name.get()); // name: IdentId
             movq rcx, [rbp - (conv(args))];  //val: Value
@@ -288,10 +307,10 @@ impl Codegen {
             lea  r9, [rip + cached_ivarid];
             movq rax, (vm_set_instance_var);
             call rax;
-        exit:
         );
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
+        self.jit.bind_label(exit);
         if !ret.is_zero() {
             self.store_rax(ret);
         }
