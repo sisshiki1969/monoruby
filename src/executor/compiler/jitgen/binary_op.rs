@@ -598,12 +598,9 @@ impl Codegen {
 
     fn generic_binop(&mut self, ret: SlotId, func: u64, xmm_using: UsingXmm, pc: BcPc) {
         self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq r13, ((pc + 1).get_u64());
-        );
         self.call_binop(func);
-        self.check_return();
         self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
         self.store_rax(ret);
     }
 

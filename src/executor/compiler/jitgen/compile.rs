@@ -285,11 +285,14 @@ impl Codegen {
                     } else {
                         ctx.read_slot(self, src);
                         ctx.dealloc_xmm(dst);
+                        let xmm_using = ctx.get_xmm_using();
+                        self.xmm_save(&xmm_using);
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(src))];
                         );
                         self.call_unop(neg_value as _);
-                        self.check_return();
+                        self.xmm_restore(&xmm_using);
+                        self.handle_error(pc);
                         self.store_rax(dst);
                     }
                 }
