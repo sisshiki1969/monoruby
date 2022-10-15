@@ -533,8 +533,7 @@ impl Codegen {
         monoasm!(self.jit,
             testq rdi, 0b111;
             jnz side_exit;
-            movl rax, [rdi + 4];    // rdi <- ClassId
-            cmpl rax, (class_id.0);
+            cmpl [rdi + 4], (class_id.0);
             jne side_exit;
         )
     }
@@ -603,7 +602,7 @@ impl Codegen {
             let no_inline = self.jit.label();
             monoasm!(self.jit,
                 xorq rax, rax;
-                movw rax, [rdi + 2];
+                movw rax, [rdi + 2];    // ObjKind
                 cmpq rax, (ObjKind::OBJECT);
                 jne  no_inline;
                 movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
@@ -1028,55 +1027,7 @@ impl Codegen {
         //#[cfg(feature = "emit-tir")]
         //eprintln!("{:?}", cc.tir);
         #[cfg(any(feature = "emit-asm"))]
-        {
-            let (start, code_end, end) = self.jit.code_block.last().unwrap();
-            eprintln!(
-                "offset:{:?} code: {} bytes  data: {} bytes",
-                start,
-                *code_end - *start,
-                *end - *code_end
-            );
-            self.jit.select_page(0);
-            let dump: Vec<(usize, String)> = self
-                .jit
-                .dump_code()
-                .unwrap()
-                .split('\n')
-                .filter(|s| s.len() >= 29)
-                .map(|x| {
-                    (
-                        usize::from_str_radix(&x[0..4].trim(), 16).unwrap(),
-                        x[28..].to_string(),
-                    )
-                })
-                .collect();
-            for (i, text) in dump {
-                cc.sourcemap
-                    .iter()
-                    .filter_map(
-                        |(bc_pos, code_pos)| {
-                            if *code_pos == i {
-                                Some(*bc_pos)
-                            } else {
-                                None
-                            }
-                        },
-                    )
-                    .for_each(|bc_pos| {
-                        let pc = BcPc::from(&func.bytecode()[bc_pos]);
-                        eprintln!(
-                            ":{:05} {}",
-                            bc_pos,
-                            match pc.format(globals, bc_pos) {
-                                Some(s) => s,
-                                None => "".to_string(),
-                            }
-                        );
-                    });
-
-                eprintln!("  {:05x}: {}", i, text);
-            }
-        }
+        self.dump_disas(globals, &cc, func);
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         eprintln!("    finished compile. elapsed:{:?}", elapsed);
         #[cfg(feature = "emit-tir")]
@@ -1086,7 +1037,7 @@ impl Codegen {
     }
 
     fn prologue(&mut self, regs: usize, args: usize) {
-        let offset = (regs + regs % 2) * 8 + OFFSET_SELF as usize;
+        let offset = (regs * 8 + OFFSET_SELF as usize + 15) & !0xf;
         let clear_len = regs - args;
         monoasm!(self.jit,
             pushq rbp;
@@ -1173,5 +1124,58 @@ impl Codegen {
         monoasm!(self.jit,
             addq rsp, (sp_offset);
         );
+    }
+}
+
+#[cfg(any(feature = "emit-asm"))]
+impl Codegen {
+    fn dump_disas(&mut self, globals: &Globals, cc: &CompileContext, func: &RubyFuncInfo) {
+        let (start, code_end, end) = self.jit.code_block.last().unwrap();
+        eprintln!(
+            "offset:{:?} code: {} bytes  data: {} bytes",
+            start,
+            *code_end - *start,
+            *end - *code_end
+        );
+        self.jit.select_page(0);
+        let dump: Vec<(usize, String)> = self
+            .jit
+            .dump_code()
+            .unwrap()
+            .split('\n')
+            .filter(|s| s.len() >= 29)
+            .map(|x| {
+                (
+                    usize::from_str_radix(&x[0..4].trim(), 16).unwrap(),
+                    x[28..].to_string(),
+                )
+            })
+            .collect();
+        for (i, text) in dump {
+            cc.sourcemap
+                .iter()
+                .filter_map(
+                    |(bc_pos, code_pos)| {
+                        if *code_pos == i {
+                            Some(*bc_pos)
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .for_each(|bc_pos| {
+                    let pc = BcPc::from(&func.bytecode()[bc_pos]);
+                    eprintln!(
+                        ":{:05} {}",
+                        bc_pos,
+                        match pc.format(globals, bc_pos) {
+                            Some(s) => s,
+                            None => "".to_string(),
+                        }
+                    );
+                });
+
+            eprintln!("  {:05x}: {}", i, text);
+        }
     }
 }

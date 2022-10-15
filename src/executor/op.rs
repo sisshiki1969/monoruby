@@ -403,7 +403,7 @@ pub extern "C" fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, 
     );
     eprint!("    ");
     for r in 0..meta.reg_num() as usize {
-        let v = unsafe { Value::from(*bp.sub(2 + r)) };
+        let v = unsafe { Value::from(*bp.sub(OFFSET_SELF as usize / 8 + r)) };
         eprint!(
             "%{}{}:[{}] ",
             r,

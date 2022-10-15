@@ -289,6 +289,7 @@ impl Codegen {
                             movq rdi, [rbp - (conv(src))];
                         );
                         self.call_unop(neg_value as _);
+                        self.check_return();
                         self.store_rax(dst);
                     }
                 }
@@ -418,26 +419,8 @@ impl Codegen {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);
 
-                    if let BcOp::MethodCall(ret, name, cached_class_id, cached_version) =
-                        (pc - 1).op1()
-                    {
-                        ctx.dealloc_xmm(ret);
-                        self.gen_method_call(
-                            globals,
-                            &ctx,
-                            name,
-                            recv,
-                            args,
-                            len,
-                            ret,
-                            pc,
-                            callee_codeptr,
-                            cached_class_id,
-                            cached_version,
-                        );
-                    } else {
-                        unreachable!()
-                    }
+                    self.gen_method_call(globals, &mut ctx, recv, args, len, pc, callee_codeptr);
+
                     skip = true;
                 }
                 BcOp::MethodDef(name, func) => {

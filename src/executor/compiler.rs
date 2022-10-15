@@ -21,12 +21,6 @@ pub type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
-pub(self) const OFFSET_META: i64 = 8;
-pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;
-pub(self) const OFFSET_FUNCID: i64 = OFFSET_META;
-pub(self) const OFFSET_SELF: i64 = 16;
-pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
-
 ///
 /// Bytecode compiler
 ///
@@ -536,8 +530,16 @@ impl Codegen {
             addq rax, 1;
             andq rax, (-2);
             shlq rax, 3;
-            addq rax, 16;
+            addq rax, 32;
         );
+    }
+
+    fn check_return(&mut self) {
+        let entry_return = self.vm_return;
+        monoasm! { self.jit,
+            testq rax, rax;
+            jeq  entry_return;
+        };
     }
 
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
@@ -826,20 +828,16 @@ impl Codegen {
     }
 
     fn call_unop(&mut self, func: u64) {
-        let entry_return = self.vm_return;
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (func);
             call rax;
-            testq rax, rax;
-            jeq entry_return;
         );
     }
 
     fn call_binop(&mut self, func: u64) {
-        let entry_return = self.vm_return;
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;
@@ -847,8 +845,6 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (func);
             call rax;
-            testq rax, rax;
-            jeq entry_return;
         );
     }
 
@@ -945,7 +941,7 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (Self::exec_jit_compile);
             call rax;
-            movw [rip + entry], 0xe9;
+            movw [rip + entry], 0xe9;   // jmp
             lea rdi, [rip + entry];
             addq rdi, 5;
             subq rax, rdi;

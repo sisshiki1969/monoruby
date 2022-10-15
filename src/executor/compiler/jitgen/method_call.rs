@@ -12,30 +12,31 @@ impl Codegen {
     pub(super) fn gen_method_call(
         &mut self,
         globals: &Globals,
-        ctx: &BBContext,
-        name: IdentId,
+        ctx: &mut BBContext,
         recv: SlotId,
         args: SlotId,
         len: u16,
-        ret: SlotId,
         pc: BcPc,
         codeptr: Option<CodePtr>,
-        class_id: ClassId,
-        version: u32,
     ) {
-        if let Some(codeptr) = codeptr {
-            let meta = (pc + 1).meta();
-            let callee_pc = (pc + 1).pc();
-            let cached = Cached {
-                codeptr,
-                meta,
-                class_id,
-                version,
-                pc: callee_pc,
-            };
-            self.gen_method_call_cached(globals, &ctx, recv, args, len, ret, cached, pc);
+        if let BcOp::MethodCall(ret, name, class_id, version) = (pc - 1).op1() {
+            ctx.dealloc_xmm(ret);
+            if let Some(codeptr) = codeptr {
+                let meta = (pc + 1).meta();
+                let callee_pc = (pc + 1).pc();
+                let cached = Cached {
+                    codeptr,
+                    meta,
+                    class_id,
+                    version,
+                    pc: callee_pc,
+                };
+                self.gen_method_call_cached(globals, &ctx, recv, args, len, ret, cached, pc);
+            } else {
+                self.gen_method_call_not_cached(&ctx, recv, name, args, len, ret, pc);
+            }
         } else {
-            self.gen_method_call_not_cached(&ctx, recv, name, args, len, ret, pc);
+            unreachable!()
         }
     }
 
@@ -405,8 +406,7 @@ impl Codegen {
     fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
         let global_class_version = self.class_version;
         monoasm!(self.jit,
-            movl rax, [rip + global_class_version];
-            cmpl rax, (cached_version);
+            cmpl [rip + global_class_version], (cached_version);
             jne side_exit;
         );
     }

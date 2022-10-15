@@ -217,7 +217,7 @@ mod test {
 
         def bar
           @a << :bar
-          end
+        end
 
         foo[0] = bar
         a = foo[0] = bar

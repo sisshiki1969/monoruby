@@ -505,6 +505,7 @@ impl Codegen {
         self.jit.bind_label(generic);
         self.vm_save_lhs_class();
         self.call_unop(func);
+        self.check_return();
         self.vm_store_r15();
         self.fetch_and_dispatch();
     }
@@ -513,6 +514,7 @@ impl Codegen {
         self.jit.bind_label(generic);
         self.vm_save_binary_class();
         self.call_binop(func);
+        self.check_return();
         self.vm_store_r15();
         monoasm! { self.jit,
             jmp exit;
@@ -779,7 +781,6 @@ impl Codegen {
 
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let entry_return = self.vm_return;
         self.vm_get_addr_r15();
         self.vm_get_rdi();
         self.vm_get_rsi();
@@ -790,9 +791,8 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq rax, (get_index);
             call rax;
-            testq rax, rax;
-            jeq  entry_return;
         };
+        self.check_return();
         self.vm_store_r15();
         self.fetch_and_dispatch();
         label
@@ -800,7 +800,6 @@ impl Codegen {
 
     fn vm_index_assign(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let entry_return = self.vm_return;
         self.vm_get_r15();
         self.vm_get_rdi();
         self.vm_get_rsi();
@@ -812,9 +811,8 @@ impl Codegen {
             movq rsi, r12; // &mut Globals
             movq rax, (set_index);
             call rax;
-            testq rax, rax;
-            jeq  entry_return;
         };
+        self.check_return();
         self.fetch_and_dispatch();
         label
     }
@@ -826,7 +824,6 @@ impl Codegen {
     //
     fn vm_load_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let entry_return = self.vm_return;
         let const_version = self.const_version;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
@@ -836,8 +833,9 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (vm_get_constant);
             call rax;
-            testq rax, rax;
-            jeq  entry_return;
+        };
+        self.check_return();
+        monoasm! { self.jit,
             movq [r13 - 8], rax;
         };
         self.vm_store_r15();
@@ -896,7 +894,6 @@ impl Codegen {
     //
     fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let entry_return = self.vm_return;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
@@ -907,9 +904,8 @@ impl Codegen {
             lea r9, [r13 - 4]; // &mut IvarId
             movq rax, (vm_set_instance_var);
             call rax;
-            testq rax, rax;
-            jeq  entry_return;
         };
+        self.check_return();
         self.fetch_and_dispatch();
         label
     }
@@ -992,6 +988,7 @@ impl Codegen {
         self.jit.bind_label(common);
         self.vm_save_binary_class();
         self.call_binop(func);
+        self.check_return();
         self.vm_store_r15();
         self.fetch_and_dispatch();
 

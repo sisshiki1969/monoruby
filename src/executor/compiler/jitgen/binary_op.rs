@@ -602,6 +602,7 @@ impl Codegen {
             movq r13, ((pc + 1).get_u64());
         );
         self.call_binop(func);
+        self.check_return();
         self.xmm_restore(&xmm_using);
         self.store_rax(ret);
     }
