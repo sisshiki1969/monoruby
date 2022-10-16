@@ -307,6 +307,14 @@ impl Codegen {
         };
     }
 
+    fn vm_handle_error(&mut self) {
+        let entry_return = self.vm_return;
+        monoasm! { self.jit,
+            testq rax, rax;
+            jeq  entry_return;
+        };
+    }
+
     ///
     /// Get absolute address of the register.
     /// #### args
@@ -505,7 +513,7 @@ impl Codegen {
         self.jit.bind_label(generic);
         self.vm_save_lhs_class();
         self.call_unop(func);
-        self.check_return();
+        self.vm_handle_error();
         self.vm_store_r15();
         self.fetch_and_dispatch();
     }
@@ -514,7 +522,7 @@ impl Codegen {
         self.jit.bind_label(generic);
         self.vm_save_binary_class();
         self.call_binop(func);
-        self.check_return();
+        self.vm_handle_error();
         self.vm_store_r15();
         monoasm! { self.jit,
             jmp exit;
@@ -792,7 +800,7 @@ impl Codegen {
             movq rax, (get_index);
             call rax;
         };
-        self.check_return();
+        self.vm_handle_error();
         self.vm_store_r15();
         self.fetch_and_dispatch();
         label
@@ -812,7 +820,7 @@ impl Codegen {
             movq rax, (set_index);
             call rax;
         };
-        self.check_return();
+        self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }
@@ -834,7 +842,7 @@ impl Codegen {
             movq rax, (vm_get_constant);
             call rax;
         };
-        self.check_return();
+        self.vm_handle_error();
         monoasm! { self.jit,
             movq [r13 - 8], rax;
         };
@@ -905,7 +913,7 @@ impl Codegen {
             movq rax, (vm_set_instance_var);
             call rax;
         };
-        self.check_return();
+        self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }
@@ -988,7 +996,7 @@ impl Codegen {
         self.jit.bind_label(common);
         self.vm_save_binary_class();
         self.call_binop(func);
-        self.check_return();
+        self.vm_handle_error();
         self.vm_store_r15();
         self.fetch_and_dispatch();
 

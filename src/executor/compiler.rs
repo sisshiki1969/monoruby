@@ -534,14 +534,6 @@ impl Codegen {
         );
     }
 
-    fn check_return(&mut self) {
-        let entry_return = self.vm_return;
-        monoasm! { self.jit,
-            testq rax, rax;
-            jeq  entry_return;
-        };
-    }
-
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
         self.guard_rdi_fixnum(generic);
         self.guard_rsi_fixnum(generic);
