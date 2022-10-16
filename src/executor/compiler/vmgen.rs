@@ -887,7 +887,7 @@ impl Codegen {
             movq rdx, r12; // &mut Globals
             lea rcx, [r13 - 8]; // &mut ClassId
             lea r8, [r13 - 4]; // &mut IvarId
-            movq rax, (vm_get_instance_var);
+            movq rax, (get_instance_var_with_cache);
             call rax;
         };
         self.vm_store_r15();
@@ -910,7 +910,7 @@ impl Codegen {
             movq rcx, [r15];     // val: Value
             lea r8, [r13 - 8]; // &mut ClassId
             lea r9, [r13 - 4]; // &mut IvarId
-            movq rax, (vm_set_instance_var);
+            movq rax, (set_instance_var_with_cache);
             call rax;
         };
         self.vm_handle_error();

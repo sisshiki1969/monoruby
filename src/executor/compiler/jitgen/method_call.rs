@@ -257,7 +257,7 @@ impl Codegen {
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
             lea  r8, [rip + cached_ivarid];
-            movq rax, (vm_get_instance_var);
+            movq rax, (get_instance_var_with_cache);
             call rax;
         );
         self.xmm_restore(&xmm_using);
@@ -306,7 +306,7 @@ impl Codegen {
             movq rdi, r12; //&mut Globals
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
-            movq rax, (vm_set_instance_var);
+            movq rax, (set_instance_var_with_cache);
             call rax;
         );
         self.xmm_restore(&xmm_using);

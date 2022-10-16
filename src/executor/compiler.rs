@@ -1045,7 +1045,7 @@ impl Codegen {
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
             lea  r8, [rip + cached_ivarid];
-            movq rax, (vm_get_instance_var);
+            movq rax, (get_instance_var_with_cache);
             subq rsp, 8;
             call rax;
             addq rsp, 8;
@@ -1082,7 +1082,7 @@ impl Codegen {
             movq rcx, [rsp - (8 + OFFSET_ARG0)];  //val: Value
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
-            movq rax, (vm_set_instance_var);
+            movq rax, (set_instance_var_with_cache);
             subq rsp, 8;
             call rax;
             addq rsp, 8;

@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use super::*;
 
-mod classes;
+mod class;
 mod error;
 mod functions;
-pub use classes::*;
+pub use class::*;
 pub use error::*;
 pub use functions::*;
 
