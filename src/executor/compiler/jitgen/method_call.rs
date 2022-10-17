@@ -231,6 +231,7 @@ impl Codegen {
     fn attr_reader(&mut self, ctx: &BBContext, ivar_name: IdentId, ret: SlotId) {
         let exit = self.jit.label();
         let slow_path = self.jit.label();
+        let no_inline = self.jit.label();
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
@@ -239,6 +240,15 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
+            cmpl rsi, (OBJECT_INLINE_IVAR);
+            jge no_inline;
+            xorq rax, rax;
+            movw rax, [rdi + 2];    // ObjKind
+            cmpq rax, (ObjKind::OBJECT);
+            jne  no_inline;
+            movq rax, [rdi + rsi * 8 + 16];
+            jmp exit;
+        no_inline:
         );
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -277,6 +287,7 @@ impl Codegen {
     ) {
         let exit = self.jit.label();
         let slow_path = self.jit.label();
+        let no_inline = self.jit.label();
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(-1);
         let xmm_using = ctx.get_xmm_using();
@@ -285,6 +296,16 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
+            cmpl rsi, (OBJECT_INLINE_IVAR);
+            jge no_inline;
+            xorq rax, rax;
+            movw rax, [rdi + 2];    // ObjKind
+            cmpq rax, (ObjKind::OBJECT);
+            jne  no_inline;
+            movq rax, [rbp - (conv(args))];  //val: Value
+            movq [rdi + rsi * 8 + 16], rax;
+            jmp exit;
+        no_inline:
         );
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,

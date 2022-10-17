@@ -168,7 +168,7 @@ impl Globals {
     ///   
     /// If not found, simply return None with no error.
     ///
-    pub(crate) fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    pub(super) fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         self.class[class_id].methods.get(&name).cloned()
     }
 
