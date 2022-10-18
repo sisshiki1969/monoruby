@@ -140,12 +140,8 @@ impl Globals {
         super_class: impl Into<Option<ClassId>>,
         parent: ClassId,
     ) -> Value {
-        let id = self.class.add_class(super_class.into());
-        let class_obj = Value::new_empty_class(id);
-        self.class[id].object = Some(class_obj);
-        self.class[id].name = Some(name_id);
-        self.set_constant(parent, name_id, class_obj);
-        class_obj
+        let class_id = self.class.add_class(super_class.into());
+        self.generate_class_obj(name_id, class_id, parent)
     }
 
     fn define_builtin_class_by_ident_id(
@@ -156,6 +152,15 @@ impl Globals {
         parent: ClassId,
     ) -> Value {
         self.class.def_builtin_class(class_id, super_class.into());
+        self.generate_class_obj(name_id, class_id, parent)
+    }
+
+    fn generate_class_obj(
+        &mut self,
+        name_id: IdentId,
+        class_id: ClassId,
+        parent: ClassId,
+    ) -> Value {
         let class_obj = Value::new_empty_class(class_id);
         self.class[class_id].object = Some(class_obj);
         self.class[class_id].name = Some(name_id);

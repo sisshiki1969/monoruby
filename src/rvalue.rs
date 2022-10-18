@@ -6,7 +6,6 @@ use std::mem::ManuallyDrop;
 pub const OBJECT_INLINE_IVAR: usize = 6;
 
 /// Heap-allocated objects.
-//#[derive(Clone)]
 #[repr(C)]
 pub struct RValue {
     /// flags. 8 bytes
@@ -19,7 +18,39 @@ pub struct RValue {
 
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.kind())
+        let flag = unsafe { self.flags.flag };
+        assert_eq!(1, flag.flag & 0b1);
+        write!(
+            f,
+            "RValue {{ ClassId:{:?} {} {} }}",
+            flag.class,
+            match flag.kind {
+                0 => "INVALID",
+                1 => "CLASS",
+                2 => "MODULE",
+                3 => "OBJECT",
+                4 => "BIGNUM",
+                5 => "FLOAT",
+                6 => "STRING",
+                7 => "TIME",
+                8 => "ARRAY",
+                _ => unreachable!(),
+            },
+            unsafe {
+                match flag.kind {
+                    0 => "<INVALID>".to_string(),
+                    1 => format!("{:?}", self.kind.class),
+                    2 => format!("{:?}", self.kind.class),
+                    3 => format!("{:?}", self.kind.object),
+                    4 => format!("{:?}", self.kind.bignum),
+                    5 => format!("{:?}", self.kind.float),
+                    6 => format!("{:?}", String::from_utf8_lossy(self.kind.bytes.as_ref())),
+                    7 => format!("{:?}", self.kind.time),
+                    8 => format!("{:?}", self.kind.array),
+                    _ => unreachable!(),
+                }
+            },
+        )
     }
 }
 

@@ -5,7 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
+    //globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
@@ -38,9 +38,20 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-extern "C" fn new(_: &mut Interp, _: &mut Globals, _: Value, _: Arg, _: usize) -> Option<Value> {
-    let res = Value::new_object(OBJECT_CLASS);
-    Some(res)
+extern "C" fn new(
+    vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    let class = self_val.as_class();
+    let obj = Value::new_object(class);
+    if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
+        globals.check_arg(func_id, len)?;
+        vm.invoke_func2(globals, func_id, obj, arg, len)?;
+    };
+    Some(obj)
 }
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
