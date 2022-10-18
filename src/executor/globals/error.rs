@@ -8,8 +8,8 @@ impl Globals {
         self.error = Some(err);
     }
 
-    pub(crate) fn err_method_not_found(&mut self, name: IdentId, class: ClassId) {
-        self.set_error(MonorubyErr::method_not_found(name, class))
+    pub(crate) fn err_method_not_found(&mut self, name: IdentId, obj: Value) {
+        self.set_error(MonorubyErr::method_not_found(name, obj))
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {
@@ -33,7 +33,8 @@ impl Globals {
     ///
     /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
     ///
-    pub(crate) fn err_no_implict_conv(&mut self, actual: ClassId, expect: ClassId) {
+    pub(crate) fn err_no_implict_conv(&mut self, actual: Value, expect: ClassId) {
+        let actual = actual.get_real_class_id(self);
         self.set_error(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
             actual.get_name(self),
@@ -87,7 +88,7 @@ impl Globals {
     pub(crate) fn err_cant_modify_frozen(&mut self, val: Value) {
         self.set_error(MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
-            val.class_id().get_name(self),
+            val.get_real_class_id(self).get_name(self),
             self.val_tos(val),
         )));
     }
@@ -115,7 +116,7 @@ pub struct MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     //UndefinedLocal(String),
-    MethodNotFound(IdentId, ClassId),
+    MethodNotFound(IdentId, Value),
     WrongArguments(String),
     Syntax(ParseErrKind),
     Syntax2(String),
@@ -163,11 +164,12 @@ impl MonorubyErr {
             /*MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
             }*/
-            MonorubyErrKind::MethodNotFound(name, class) => {
+            MonorubyErrKind::MethodNotFound(name, obj) => {
                 format!(
-                    "undefined method `{}' for {}",
+                    "undefined method `{}' for {}:{}",
                     IdentId::get_name(*name),
-                    class.get_name(globals)
+                    obj.to_s(globals),
+                    globals.get_real_class_id(*obj).get_name(globals)
                 )
             }
             MonorubyErrKind::WrongArguments(name) => name.to_string(),
@@ -258,8 +260,8 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
-    pub(crate) fn method_not_found(name: IdentId, class: ClassId) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, class))
+    pub(crate) fn method_not_found(name: IdentId, obj: Value) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, obj))
     }
 
     pub(crate) fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {

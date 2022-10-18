@@ -49,7 +49,7 @@ extern "C" fn sub(
     let rhs = match rhs_rv.kind() {
         ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
-            globals.err_method_not_found(IdentId::_SUB, self_val.class_id());
+            globals.err_method_not_found(IdentId::_SUB, self_val);
             return None;
         }
     };

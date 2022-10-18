@@ -169,7 +169,8 @@ impl Globals {
         }
     }
 
-    pub(crate) fn find_method(&self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
+        let mut class_id = obj.class_id();
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -184,14 +185,14 @@ impl Globals {
 
     pub(crate) fn find_method_checked(
         &mut self,
-        class_id: ClassId,
+        obj: Value,
         func_name: IdentId,
         args_len: usize,
     ) -> Option<FuncId> {
-        let func_id = match self.find_method(class_id, func_name) {
+        let func_id = match self.find_method(obj, func_name) {
             Some(id) => id,
             None => {
-                self.err_method_not_found(func_name, class_id);
+                self.err_method_not_found(func_name, obj);
                 return None;
             }
         };

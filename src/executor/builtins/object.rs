@@ -136,13 +136,12 @@ extern "C" fn respond_to(
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let class_id = self_val.class_id();
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
-    Some(Value::bool(globals.find_method(class_id, name).is_some()))
+    Some(Value::bool(globals.find_method(self_val, name).is_some()))
 }
 
 /// ### Object#inspect
@@ -171,7 +170,7 @@ extern "C" fn class(
     _: Arg,
     _len: usize,
 ) -> Option<Value> {
-    Some(self_val.get_real_class_obj(globals))
+    Some(self_val.get_real_class_id(globals).get_obj(globals))
 }
 
 /// ### Object#singleton_class

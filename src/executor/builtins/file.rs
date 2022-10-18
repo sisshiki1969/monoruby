@@ -24,7 +24,7 @@ extern "C" fn write(
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
-            globals.err_no_implict_conv(arg[0].class_id(), STRING_CLASS);
+            globals.err_no_implict_conv(arg[0], STRING_CLASS);
             return None;
         }
     };

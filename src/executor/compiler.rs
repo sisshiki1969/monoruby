@@ -66,7 +66,7 @@ extern "C" fn find_method<'a>(
     args_len: usize,
     receiver: Value,
 ) -> Option<&'a FuncData> {
-    let func_id = globals.find_method_checked(receiver.class_id(), func_name, args_len)?;
+    let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
     let data = interp.get_func_data(globals, func_id);
     Some(data)
 }

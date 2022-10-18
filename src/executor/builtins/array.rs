@@ -28,7 +28,7 @@ extern "C" fn new(
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_array_with_class(vec![], class);
-    if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
+    if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
@@ -50,7 +50,7 @@ extern "C" fn add(
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
-            globals.err_no_implict_conv(arg[0].class_id(), ARRAY_CLASS);
+            globals.err_no_implict_conv(arg[0], ARRAY_CLASS);
             return None;
         }
     };

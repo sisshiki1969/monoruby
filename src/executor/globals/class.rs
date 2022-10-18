@@ -105,6 +105,14 @@ impl Globals {
         self.define_class(name, Some(OBJECT_CLASS), OBJECT_CLASS)
     }
 
+    pub(in crate::executor) fn define_builtin_class_under_obj(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+    ) -> Value {
+        self.define_builtin_class(name, class_id, Some(OBJECT_CLASS), OBJECT_CLASS)
+    }
+
     pub(crate) fn define_class(
         &mut self,
         name: &str,
@@ -113,6 +121,17 @@ impl Globals {
     ) -> Value {
         let name_id = IdentId::get_ident_id(name);
         self.define_class_by_ident_id(name_id, super_class, parent)
+    }
+
+    pub(in crate::executor) fn define_builtin_class(
+        &mut self,
+        name: &str,
+        class_id: ClassId,
+        super_class: impl Into<Option<ClassId>>,
+        parent: ClassId,
+    ) -> Value {
+        let name_id = IdentId::get_ident_id(name);
+        self.define_builtin_class_by_ident_id(name_id, class_id, super_class, parent)
     }
 
     pub(crate) fn define_class_by_ident_id(
@@ -129,8 +148,24 @@ impl Globals {
         class_obj
     }
 
-    pub(crate) fn get_real_class_obj(&self, val: Value) -> Value {
-        self.class.get_real_class_obj(val)
+    fn define_builtin_class_by_ident_id(
+        &mut self,
+        name_id: IdentId,
+        class_id: ClassId,
+        super_class: impl Into<Option<ClassId>>,
+        parent: ClassId,
+    ) -> Value {
+        self.class.def_builtin_class(class_id, super_class.into());
+        let class_obj = Value::new_empty_class(class_id);
+        self.class[class_id].object = Some(class_obj);
+        self.class[class_id].name = Some(name_id);
+        self.set_constant(parent, name_id, class_obj);
+        self.get_singleton_id(class_id);
+        class_obj
+    }
+
+    pub(crate) fn get_real_class_id(&self, val: Value) -> ClassId {
+        self.class.get_real_class_id(val)
     }
 
     pub(crate) fn get_singleton_id(&mut self, original_id: ClassId) -> ClassId {
@@ -263,7 +298,7 @@ impl std::ops::IndexMut<ClassId> for ClassStore {
 impl ClassStore {
     pub(crate) fn new() -> Self {
         Self {
-            classes: vec![ClassInfo::new(None)],
+            classes: vec![ClassInfo::new(None); 20],
         }
     }
 
@@ -273,6 +308,10 @@ impl ClassStore {
         ClassId(id as u32)
     }
 
+    fn def_builtin_class(&mut self, class: ClassId, super_class: Option<ClassId>) {
+        self[class] = ClassInfo::new(super_class);
+    }
+
     fn add_singleton_class(&mut self, super_class: Option<ClassId>, base: Value) -> ClassId {
         let id = self.classes.len();
         self.classes
@@ -280,11 +319,11 @@ impl ClassStore {
         ClassId(id as u32)
     }
 
-    fn get_real_class_obj(&self, val: Value) -> Value {
+    fn get_real_class_id(&self, val: Value) -> ClassId {
         let mut id = val.class_id();
         while self[id].is_singleton() {
             id = self[id].object.unwrap().class_id();
         }
-        self[id].object.unwrap()
+        id
     }
 }

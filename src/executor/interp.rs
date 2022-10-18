@@ -94,7 +94,7 @@ impl Interp {
         args: &[Value],
     ) -> Option<Value> {
         let len = args.len();
-        let func_id = globals.find_method_checked(receiver.class_id(), method, len)?;
+        let func_id = globals.find_method_checked(receiver, method, len)?;
         self.invoke_func(globals, func_id, receiver, args)
     }
 

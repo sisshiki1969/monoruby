@@ -30,7 +30,7 @@ extern "C" fn new(
     len: usize,
 ) -> Option<Value> {
     let obj = allocate(vm, globals, self_val, arg, 0)?;
-    if let Some(func_id) = globals.find_method(obj.class_id(), IdentId::INITIALIZE) {
+    if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };

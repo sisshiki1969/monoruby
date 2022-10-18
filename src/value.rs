@@ -100,8 +100,8 @@ impl Value {
         globals.get_class_obj(singleton)
     }
 
-    pub(crate) fn get_real_class_obj(self, globals: &Globals) -> Value {
-        globals.get_real_class_obj(self)
+    pub(crate) fn get_real_class_id(self, globals: &Globals) -> ClassId {
+        globals.get_real_class_id(self)
     }
 
     pub fn to_s(self, globals: &Globals) -> String {
