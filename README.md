@@ -9,7 +9,7 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 - register-based bytecode.
 - bytecode executer (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
-- a compact and fast JIT compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
+- a compact and fast just-in-time compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
 
 ## Status of this project
 
@@ -18,21 +18,33 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - classes: Integer, Float, String, Symbol, Class
 - superclass and singleton class and methods
 - local variables
+- instance variables & accessor
 - if-then-elsif-end statement
 - for-in statement
 - while statement
 - method definition
+- class definition
 
 ## Benchmark
 
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
 - measurements are shown in iteration/sec (the higher, the better).
 
-|   impl \ bench    |  app_fib  | so_mandelbrot  |  tarai  | quicksort |
-|:-----------------:|----------:|---------------:|--------:|:---------:|
-|  monoruby         |  25.423   |    15.049      |  17.696 |  884.824k |
-|  ruby(3.2.0-dev)  |   3.590   |     0.647      |   2.979 |  185.218k |
-|  ruby --yjit      |  14.548   |     0.865      |  12.800 |  288.096k |
+|  impl \ bench   | app_fib | so_mandelbrot |  tarai | quicksort |
+| :-------------: | ------: | ------------: | -----: | :-------: |
+|    monoruby     |  23.137 |        14.695 | 15.195 | 408.580k  |
+| ruby(3.2.0-dev) |   3.305 |         0.528 |  2.742 |  65.608k  |
+|   ruby --yjit   |  13.250 |         0.702 | 11.398 | 108.308k  |
+
+|    bench \ impl     | 3.2.0-dev |  --yjit  | monoruby |
+| :-----------------: | :-------: | :------: | :------: |
+|       vm_ivar       | 209.106M  | 143.486M | 860.795M |
+|     vm_ivar_get     |  12.703   |  25.456  |  65.388  |
+|     vm_ivar_set     | 145.923M  | 139.298M | 401.092M |
+| vm_ivar_generic_get |  16.950M  | 15.658M  | 191.712M |
+| vm_ivar_generic_set |  7.496M   |  9.636M  | 180.772M |
+|    vm_attr_ivar     |  60.527M  | 58.644M  | 277.252M |
+|  vm_attr_ivar_set   |  53.804M  | 57.584M  | 183.506M |
 
 ## How to run
 
