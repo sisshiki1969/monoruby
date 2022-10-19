@@ -164,9 +164,20 @@ impl Globals {
         let class_obj = Value::new_empty_class(class_id);
         self.class[class_id].object = Some(class_obj);
         self.class[class_id].name = Some(name_id);
-        self.set_constant(parent, name_id, class_obj);
         self.get_singleton_id(class_id);
+        self.set_constant(parent, name_id, class_obj);
         class_obj
+    }
+
+    fn new_singleton_class(
+        &mut self,
+        super_class: impl Into<Option<ClassId>>,
+        base: Value,
+    ) -> (Value, ClassId) {
+        let id = self.class.add_singleton_class(super_class.into(), base);
+        let class_obj = Value::new_empty_class(id);
+        self.class[id].object = Some(class_obj);
+        (class_obj, id)
     }
 
     pub(crate) fn get_real_class_id(&self, val: Value) -> ClassId {
@@ -217,19 +228,6 @@ impl Globals {
     ///  
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
         self.class[class_id].methods.keys().cloned().collect()
-    }
-}
-
-impl Globals {
-    fn new_singleton_class(
-        &mut self,
-        super_class: impl Into<Option<ClassId>>,
-        base: Value,
-    ) -> (Value, ClassId) {
-        let id = self.class.add_singleton_class(super_class.into(), base);
-        let class_obj = Value::new_empty_class(id);
-        self.class[id].object = Some(class_obj);
-        (class_obj, id)
     }
 }
 

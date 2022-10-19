@@ -123,7 +123,6 @@ mod test {
             r##"
         class A < Array
         end
-        A.singleton_class  # TODO: currently, this is neccesary.
         a = A.new
         a << 4
         a[2] = 5
@@ -137,15 +136,26 @@ mod test {
         run_test(r##"[1,2,3] + [4]"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; a"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; b"##);
+        run_test(r##"a = [1,2,3]; b = [4]; a.+(b); b"##);
     }
 
     #[test]
     fn test_array_shl() {
         run_test(r##"a = [1,2,3]; a << 10; a"##);
+        run_test(r##"a = [1,2,3]; a.<<(10); a"##);
     }
 
     #[test]
     fn test_array_index() {
+        run_test(
+            r##"
+        a = [1,2,3];
+        a[2] = 42;
+        a[4] = 99;
+        a[-1] = 14;
+        a
+        "##,
+        );
         run_test(
             r##"
         a = [1,2,3];

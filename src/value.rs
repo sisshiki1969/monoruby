@@ -104,8 +104,8 @@ impl Value {
         globals.get_real_class_id(self)
     }
 
-    pub fn to_s(self, globals: &Globals) -> String {
-        globals.val_tos(self)
+    pub fn to_s(&self, globals: &Globals) -> String {
+        globals.val_tos(*self)
     }
 
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {

@@ -22,34 +22,26 @@ impl std::fmt::Debug for RValue {
         assert_eq!(1, flag.flag & 0b1);
         write!(
             f,
-            "RValue {{ ClassId:{:?} {} {} }}",
+            "RValue {{ class:{:?} {} {:016x}}}",
             flag.class,
-            match flag.kind {
-                0 => "INVALID",
-                1 => "CLASS",
-                2 => "MODULE",
-                3 => "OBJECT",
-                4 => "BIGNUM",
-                5 => "FLOAT",
-                6 => "STRING",
-                7 => "TIME",
-                8 => "ARRAY",
-                _ => unreachable!(),
-            },
             unsafe {
                 match flag.kind {
                     0 => "<INVALID>".to_string(),
-                    1 => format!("{:?}", self.kind.class),
-                    2 => format!("{:?}", self.kind.class),
-                    3 => format!("{:?}", self.kind.object),
-                    4 => format!("{:?}", self.kind.bignum),
-                    5 => format!("{:?}", self.kind.float),
-                    6 => format!("{:?}", String::from_utf8_lossy(self.kind.bytes.as_ref())),
-                    7 => format!("{:?}", self.kind.time),
-                    8 => format!("{:?}", self.kind.array),
+                    1 => format!("CLASS({:?})", self.kind.class),
+                    2 => format!("MODULE({:?})", self.kind.class),
+                    3 => format!("OBJECT({:?})", self.kind.object),
+                    4 => format!("BIGNUM({:?})", self.kind.bignum),
+                    5 => format!("FLOAT({:?})", self.kind.float),
+                    6 => format!(
+                        "STRING({:?})",
+                        String::from_utf8_lossy(self.kind.bytes.as_ref())
+                    ),
+                    7 => format!("TIME({:?})", self.kind.time),
+                    8 => format!("ARRAY({:?})", self.kind.array),
                     _ => unreachable!(),
                 }
             },
+            self as *const RValue as u64
         )
     }
 }
@@ -142,31 +134,25 @@ impl RValue {
         }
     }
 
-    pub(crate) fn get_var(&mut self, id: IvarId) -> Value {
+    pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
         let mut i = id.to_usize();
         if self.kind() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
-                match self.as_object()[i] {
-                    Some(v) => return v,
-                    None => return Value::nil(),
-                }
+                return self.as_object()[i];
             } else {
                 i -= OBJECT_INLINE_IVAR;
             }
         }
         if let Some(v) = &mut self.var_table {
             if v.len() > i {
-                match v[i] {
-                    Some(v) => return v,
-                    None => {}
-                }
+                return v[i];
             }
         }
-        Value::nil()
+        None
     }
 
     pub(crate) extern "C" fn get_ivar(base: &mut RValue, id: IvarId) -> Value {
-        base.get_var(id)
+        base.get_var(id).unwrap_or_default()
     }
 
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {

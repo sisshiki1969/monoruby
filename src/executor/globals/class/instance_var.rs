@@ -38,7 +38,7 @@ impl Globals {
         let class_id = self.get_real_class_id(val);
         let rval = val.try_rvalue_mut()?;
         let id = self.class[class_id].ivar_names.get(&name)?;
-        Some(rval.get_var(*id))
+        rval.get_var(*id)
     }
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
@@ -50,10 +50,7 @@ impl Globals {
         self.class[class_id]
             .ivar_names
             .iter()
-            .map(|(name, id)| {
-                let val = rval.get_var(*id);
-                (*name, val)
-            })
+            .filter_map(|(name, id)| rval.get_var(*id).map(|v| (*name, v)))
             .collect()
     }
 
@@ -88,7 +85,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
         None => return Value::nil(),
     };
     if class_id == *cache_class {
-        return rval.get_var(*cache_ivarid);
+        return rval.get_var(*cache_ivarid).unwrap_or_default();
     }
     let ivar_id = match globals.class[class_id].ivar_names.get(&name) {
         Some(id) => *id,
@@ -96,7 +93,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     };
     *cache_class = class_id;
     *cache_ivarid = ivar_id;
-    rval.get_var(ivar_id)
+    rval.get_var(ivar_id).unwrap_or_default()
 }
 
 pub(crate) extern "C" fn set_instance_var_with_cache(
