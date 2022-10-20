@@ -6,6 +6,8 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(ARRAY_CLASS, "new", new, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
@@ -33,6 +35,22 @@ extern "C" fn new(
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
+}
+
+/// ### Array#length
+/// - length -> Integer
+/// - size -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
+extern "C" fn size(
+    _vm: &mut Interp,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let len = self_val.as_array_mut().len();
+    Some(Value::new_integer(len as i64))
 }
 
 /// ### Array#+
@@ -127,6 +145,24 @@ mod test {
         a << 4
         a[2] = 5
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn test_array_size() {
+        run_test(r##"[].size"##);
+        run_test(r##"[].length"##);
+        run_test(r##"[1,2,3].size"##);
+        run_test(
+            r##"
+        class A < Array
+        end
+        a = A.new
+        a << 100
+        a << 42
+        a << 2
+        a.size
         "##,
         );
     }

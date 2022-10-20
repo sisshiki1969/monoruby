@@ -4,6 +4,7 @@ mod array;
 mod class;
 mod file;
 mod integer;
+mod math;
 mod object;
 mod string;
 mod time;
@@ -81,7 +82,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Array", ARRAY_CLASS)
             .as_class()
     );
-    //globals.define_class_under_obj("Process");
+    let math_class = globals.define_class_under_obj("Math").as_class();
     let file_class = globals.define_class_under_obj("File").as_class();
 
     object::init(globals);
@@ -91,6 +92,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     array::init(globals);
     time::init(globals);
     file::init(globals, file_class);
+    math::init(globals, math_class);
 }
 
 #[derive(Debug, Clone, Copy)]

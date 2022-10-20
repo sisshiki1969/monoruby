@@ -34,10 +34,10 @@ impl Globals {
     /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
     ///
     pub(crate) fn err_no_implict_conv(&mut self, actual: Value, expect: ClassId) {
-        let actual = actual.get_real_class_id(self);
+        let actual = actual.get_real_class_name(self);
         self.set_error(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
-            actual.get_name(self),
+            actual,
             expect.get_name(self),
         )));
     }
@@ -73,6 +73,16 @@ impl Globals {
     }
 
     ///
+    /// Set TypeError with message "can't convert *class of val* into Float".
+    ///
+    pub(crate) fn err_cant_conert_into_float(&mut self, val: Value) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "can't convert {} into Float",
+            val.get_real_class_name(self)
+        )));
+    }
+
+    ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///
     pub(crate) fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
@@ -88,7 +98,7 @@ impl Globals {
     pub(crate) fn err_cant_modify_frozen(&mut self, val: Value) {
         self.set_error(MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
-            val.get_real_class_id(self).get_name(self),
+            val.get_real_class_name(self),
             self.val_tos(val),
         )));
     }

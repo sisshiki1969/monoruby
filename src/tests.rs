@@ -513,12 +513,11 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn bench_while2() {
         run_test2(
             r#"
             i = 0
-            while i < 1000000000
+            while i < 1000
               i = i + 1
             end
             i
@@ -527,12 +526,38 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn bench_for() {
         run_test2(
             r#"
             j = 0
-            for i in 0..1000000000
+            for i in 0..1000
+              j = j + 1
+            end
+            j
+            "#,
+        );
+        run_test2(
+            r#"
+            j = 0
+            for i in 0..0
+              j = j + 1
+            end
+            j
+            "#,
+        );
+        run_test2(
+            r#"
+            j = 0
+            for i in 0...1000
+              j = j + 1
+            end
+            j
+            "#,
+        );
+        run_test2(
+            r#"
+            j = 0
+            for i in 0...0
               j = j + 1
             end
             j

@@ -38,7 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-extern "C" fn new(
+/*extern "C" fn new(
     vm: &mut Interp,
     globals: &mut Globals,
     self_val: Value,
@@ -52,7 +52,8 @@ extern "C" fn new(
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
-}
+}*/
+
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
 ///

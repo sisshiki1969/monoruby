@@ -1247,7 +1247,7 @@ impl IrContext {
         if let NodeKind::Range {
             box start,
             box end,
-            exclude_end: false,
+            exclude_end,
             ..
         } = iter.kind
         {
@@ -1259,7 +1259,20 @@ impl IrContext {
             self.apply_label(loop_entry);
             self.push(BcIr::LoopStart, loc);
             let dst = info.push().into();
-            self.push(BcIr::Cmp(CmpKind::Gt, dst, counter.into(), end, true), loc);
+            self.push(
+                BcIr::Cmp(
+                    if exclude_end {
+                        CmpKind::Ge
+                    } else {
+                        CmpKind::Gt
+                    },
+                    dst,
+                    counter.into(),
+                    end,
+                    true,
+                ),
+                loc,
+            );
             self.gen_condbr(dst, loop_exit, true);
             info.pop();
 

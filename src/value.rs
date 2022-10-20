@@ -104,6 +104,10 @@ impl Value {
         globals.get_real_class_id(self)
     }
 
+    pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
+        globals.get_real_class_id(self).get_name(globals)
+    }
+
     pub fn to_s(&self, globals: &Globals) -> String {
         globals.val_tos(*self)
     }
@@ -308,7 +312,7 @@ impl Value {
         self.0.get() & 0b0111 != 0
     }
 
-    pub(crate) fn as_fixnnum(&self) -> i64 {
+    pub(crate) fn as_fixnum(&self) -> i64 {
         (self.0.get() as i64) >> 1
     }
 
@@ -322,7 +326,7 @@ impl Value {
 
     pub(crate) fn try_fixnum(&self) -> Option<i64> {
         if self.is_fixnum() {
-            Some(self.as_fixnnum())
+            Some(self.as_fixnum())
         } else {
             None
         }
@@ -338,7 +342,7 @@ impl Value {
         f64::from_bits(num)
     }
 
-    fn try_flonum(&self) -> Option<f64> {
+    pub(crate) fn try_flonum(&self) -> Option<f64> {
         let u = self.0.get();
         if u & 0b11 == 2 {
             Some(Self::as_flonum(self))
