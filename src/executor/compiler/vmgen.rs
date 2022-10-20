@@ -247,15 +247,17 @@ impl Codegen {
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
 
-        self.dispatch[170] = add_rr;
-        self.dispatch[171] = sub_rr;
-        self.dispatch[172] = mul_rr;
-        self.dispatch[173] = div_rr;
-        self.dispatch[174] = self.vm_bitorrr();
-        self.dispatch[175] = self.vm_bitandrr();
-        self.dispatch[176] = self.vm_bitxorrr();
-        self.dispatch[177] = shr;
-        self.dispatch[178] = shl;
+        self.dispatch[200] = add_rr;
+        self.dispatch[201] = sub_rr;
+        self.dispatch[202] = mul_rr;
+        self.dispatch[203] = div_rr;
+        self.dispatch[204] = self.vm_bitorrr();
+        self.dispatch[205] = self.vm_bitandrr();
+        self.dispatch[206] = self.vm_bitxorrr();
+        self.dispatch[207] = shr;
+        self.dispatch[208] = shl;
+        self.dispatch[209] = self.vm_remrr();
+        self.dispatch[210] = self.vm_powrr();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -1009,6 +1011,33 @@ impl Codegen {
         monoasm!(self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
+    }
+
+    // TODO: result in not correct when lhs < 0 or rhs < 0.
+    fn vm_remrr(&mut self) -> CodePtr {
+        let common = self.jit.label();
+        let ptr_rr = self.jit.get_current_address();
+        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+        self.jit.bind_label(common);
+        self.vm_save_binary_class();
+        self.call_binop(rem_values as _);
+        self.vm_handle_error();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        ptr_rr
+    }
+
+    fn vm_powrr(&mut self) -> CodePtr {
+        let common = self.jit.label();
+        let ptr_rr = self.jit.get_current_address();
+        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+        self.jit.bind_label(common);
+        self.vm_save_binary_class();
+        self.call_binop(pow_values as _);
+        self.vm_handle_error();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        ptr_rr
     }
 
     fn vm_bitorrr(&mut self) -> CodePtr {

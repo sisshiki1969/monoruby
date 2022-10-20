@@ -323,6 +323,8 @@ pub(super) enum BinOpK {
     BitXor = 6,
     Shr = 7,
     Shl = 8,
+    Rem = 9,
+    Exp = 10,
 }
 
 use std::fmt;
@@ -338,6 +340,8 @@ impl fmt::Display for BinOpK {
             BinOpK::BitXor => "^",
             BinOpK::Shr => ">>",
             BinOpK::Shl => "<<",
+            BinOpK::Rem => "%",
+            BinOpK::Exp => "**",
         };
         write!(f, "{}", s)
     }
@@ -355,6 +359,8 @@ impl BinOpK {
             6 => BinOpK::BitXor,
             7 => BinOpK::Shr,
             8 => BinOpK::Shl,
+            9 => BinOpK::Rem,
+            10 => BinOpK::Exp,
             _ => unreachable!(),
         }
     }
@@ -372,6 +378,8 @@ impl BinOpK {
             BinOpK::BitXor => bitxor_values,
             BinOpK::Shr => shr_values,
             BinOpK::Shl => shl_values,
+            BinOpK::Rem => rem_values,
+            BinOpK::Exp => pow_values,
         }
     }
 }
@@ -887,12 +895,6 @@ impl BcOp {
                     op3 as i16,
                     true,
                 ),
-                170..=178 => Self::BinOp(
-                    BinOpK::from(opcode - 170),
-                    SlotId::new(op1),
-                    SlotId::new(op2),
-                    SlotId::new(op3),
-                ),
                 180..=188 => Self::BinOpIr(
                     BinOpK::from(opcode - 180),
                     SlotId::new(op1),
@@ -904,6 +906,12 @@ impl BcOp {
                     SlotId::new(op1),
                     SlotId::new(op2),
                     op3 as i16,
+                ),
+                200..=219 => Self::BinOp(
+                    BinOpK::from(opcode - 200),
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    SlotId::new(op3),
                 ),
                 _ => unreachable!("{:016x}", op),
             }

@@ -7,7 +7,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       res = ({0})
-      for __i in 0..15 do
+      for __i in 0..8 do
           res2 = ({0})
           __assert(res, res2)
       end
@@ -242,6 +242,13 @@ mod test {
             "234234645",
             "2352354645657876868978696835652452546462456245646",
         ];
+        /*for lhs in lhs_integer.iter().chain(&["234.2345"]) {
+            for rhs in rhs_integer.iter().chain(&["169.5333"]) {
+                for op in ["%"] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                }
+            }
+        }*/
         for lhs in lhs_integer {
             for rhs in rhs_integer {
                 for op in ["&", "|", "^"] {

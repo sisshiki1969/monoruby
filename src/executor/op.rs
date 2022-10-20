@@ -2,7 +2,7 @@ use super::*;
 
 use num::{BigInt, Integer, ToPrimitive, Zero};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Shl, Shr, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
 
 //
 // Generic operations.
@@ -46,10 +46,64 @@ macro_rules! binop_values {
     };
 }
 
+// TODO: support rhs < 0.
+pub(super) extern "C" fn pow_values(
+    interp: &mut Interp,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let v = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => {
+            if let Ok(rhs) = rhs.try_into() {
+                match lhs.checked_pow(rhs) {
+                    Some(res) => Value::new_integer(res),
+                    None => Value::new_bigint(BigInt::from(lhs).pow(rhs)),
+                }
+            } else {
+                Value::new_float(f64::INFINITY)
+            }
+        }
+        (RV::BigInt(lhs), RV::Integer(rhs)) => {
+            if let Ok(rhs) = rhs.try_into() {
+                Value::new_bigint(lhs.pow(rhs))
+            } else {
+                Value::new_float(f64::INFINITY)
+            }
+        }
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.powf(rhs as f64)),
+
+        (RV::Integer(lhs), RV::BigInt(rhs)) => {
+            if let Ok(rhs) = rhs.try_into() {
+                Value::new_bigint(BigInt::from(lhs).pow(rhs))
+            } else {
+                Value::new_float(f64::INFINITY)
+            }
+        }
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => {
+            if let Ok(rhs) = rhs.try_into() {
+                Value::new_bigint(lhs.pow(rhs))
+            } else {
+                Value::new_float(f64::INFINITY)
+            }
+        }
+        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.powf(rhs.to_f64().unwrap())),
+
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).powf(rhs)),
+        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().powf(rhs)),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.powf(rhs)),
+        _ => {
+            return interp.invoke_method(globals, IdentId::_POW, lhs, &[rhs]);
+        }
+    };
+    Some(v)
+}
+
 binop_values!(
     (add, IdentId::_ADD),
     (sub, IdentId::_SUB),
-    (mul, IdentId::_MUL)
+    (mul, IdentId::_MUL),
+    (rem, IdentId::_REM)
 );
 
 pub(super) extern "C" fn div_values(

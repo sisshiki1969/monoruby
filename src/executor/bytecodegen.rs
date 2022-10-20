@@ -477,6 +477,8 @@ impl IrContext {
             BinOp::Sub => self.gen_sub(ctx, info, dst, lhs, rhs, loc),
             BinOp::Mul => self.gen_mul(ctx, info, dst, lhs, rhs, loc),
             BinOp::Div => self.gen_div(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Rem => self.gen_rem(ctx, info, dst, lhs, rhs, loc),
+            BinOp::Exp => self.gen_exp(ctx, info, dst, lhs, rhs, loc),
             BinOp::BitOr => self.gen_bitor(ctx, info, dst, lhs, rhs, loc),
             BinOp::BitAnd => self.gen_bitand(ctx, info, dst, lhs, rhs, loc),
             BinOp::BitXor => self.gen_bitxor(ctx, info, dst, lhs, rhs, loc),
@@ -1407,6 +1409,8 @@ macro_rules! gen_ri_ops {
 impl IrContext {
     gen_ri_ops!((add, Add), (sub, Sub), (mul, Mul), (div, Div));
     gen_ops!(
+        (rem, Rem),
+        (exp, Exp),
         (bitor, BitOr),
         (bitand, BitAnd),
         (bitxor, BitXor),
@@ -1527,12 +1531,6 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
-                BcIr::BinOp(kind, dst, lhs, rhs) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    let op3 = info.get_index(rhs);
-                    Bc::from_with_class2(enc_www(170 + *kind as u16, op1.0, op2.0, op3.0))
-                }
                 BcIr::BinOpRi(kind, dst, lhs, rhs) => {
                     let op1 = info.get_index(dst);
                     let op2 = info.get_index(lhs);
@@ -1542,6 +1540,12 @@ impl IrContext {
                     let op1 = info.get_index(dst);
                     let op3 = info.get_index(rhs);
                     Bc::from_with_class2(enc_wsww(180 + *kind as u16, op1.0, *lhs, op3.0))
+                }
+                BcIr::BinOp(kind, dst, lhs, rhs) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    let op3 = info.get_index(rhs);
+                    Bc::from_with_class2(enc_www(200 + *kind as u16, op1.0, op2.0, op3.0))
                 }
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let op1 = info.get_index(dst);

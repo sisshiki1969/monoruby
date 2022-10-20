@@ -194,6 +194,14 @@ impl Codegen {
                 self.load_binary_args_with_mode(&mode);
                 self.generic_binop(ret, div_values as _, xmm_using, pc);
             }
+            BinOpK::Rem => {
+                self.load_binary_args_with_mode(&mode);
+                self.generic_binop(ret, rem_values as _, xmm_using, pc);
+            }
+            BinOpK::Exp => {
+                self.load_binary_args_with_mode(&mode);
+                self.generic_binop(ret, pow_values as _, xmm_using, pc);
+            }
             _ => {
                 let generic = self.jit.label();
                 self.load_binary_args_with_mode(&mode);
