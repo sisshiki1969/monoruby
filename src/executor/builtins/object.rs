@@ -169,7 +169,7 @@ extern "C" fn inspect(
     _len: usize,
 ) -> Option<Value> {
     let s = self_val.inspect(globals);
-    Some(Value::new_string(s.into_bytes()))
+    Some(Value::new_string(s))
 }
 
 /// ### Object#class

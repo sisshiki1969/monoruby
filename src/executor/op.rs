@@ -391,10 +391,10 @@ pub(super) extern "C" fn neg_value(
 }
 
 pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: usize) -> Value {
-    let mut res = vec![];
+    let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res.extend(v.to_s(globals).bytes());
+        res += &v.to_s(globals);
     }
     Value::new_string(res)
 }

@@ -23,7 +23,6 @@ use rvalue::*;
 use value::*;
 
 pub const ARRAY_INLINE_ELEM: usize = 39;
-pub type InnerVec = smallvec::SmallVec<[u8; ARRAY_INLINE_ELEM]>;
 
 pub fn compile_and_run(
     globals: &mut Globals,

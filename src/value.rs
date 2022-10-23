@@ -45,7 +45,7 @@ impl Value {
             (Some(lhs), Some(rhs)) => match (lhs.kind(), rhs.kind()) {
                 (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
                 (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
-                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_string() == rhs.as_string(),
+                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
                 (ObjKind::ARRAY, ObjKind::ARRAY) => lhs
                     .as_array()
                     .iter()
@@ -203,17 +203,21 @@ impl Value {
         globals.set_ivar(
             main_object,
             IdentId::_NAME,
-            Value::new_string("main".bytes().collect()),
+            Value::new_string_from_str("main"),
         );
         main_object
     }
 
-    pub(crate) fn new_string(b: Vec<u8>) -> Self {
+    /*pub(crate) fn new_bytes(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
+    }*/
+
+    pub(crate) fn new_string(s: String) -> Self {
+        RValue::new_string(s).pack()
     }
 
-    pub(crate) fn new_string_from_smallvec(b: InnerVec) -> Self {
-        RValue::new_bytes_from_smallvec(b).pack()
+    pub(crate) fn new_string_from_str(b: &str) -> Self {
+        RValue::new_bytes_from_slice(b.as_bytes()).pack()
     }
 
     pub(crate) fn new_string_from_slice(b: &[u8]) -> Self {
@@ -245,7 +249,7 @@ impl Value {
             match rv.kind() {
                 ObjKind::BIGNUM => RV::BigInt(rv.as_bignum()),
                 ObjKind::FLOAT => RV::Float(rv.as_float()),
-                ObjKind::BYTES => RV::String(rv.as_string()),
+                ObjKind::BYTES => RV::String(rv.as_bytes()),
                 _ => RV::Object(rv),
             }
         } else if self.is_packed_symbol() {
@@ -275,15 +279,6 @@ pub struct ValTofResult {
 }
 
 impl Value {
-    /*fn is_nil(&self) -> bool {
-        self.0.get() == NIL_VALUE
-    }*/
-
-    /*pub(crate) fn to_bool(&self) -> bool {
-        let v = self.0.get();
-        (v | 0x10) != 0x14
-    }*/
-
     pub extern "C" fn val_tof(v: Value) -> ValTofResult {
         ValTofResult {
             result: match v.unpack() {
@@ -300,13 +295,6 @@ impl Value {
             code: 1,
         }
     }
-
-    /*pub extern "C" fn binary_flonum(lhs: Value, rhs: Value) -> F2 {
-        F2 {
-            f1: lhs.as_flonum(),
-            f2: rhs.as_flonum(),
-        }
-    }*/
 
     pub(crate) fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
@@ -445,7 +433,12 @@ impl Value {
         None
     }
 
-    pub(crate) fn as_string(&self) -> &InnerVec {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        assert_eq!(ObjKind::BYTES, self.rvalue().kind());
+        self.rvalue().as_bytes()
+    }
+
+    pub(crate) fn as_string(&self) -> String {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_string()
     }
@@ -459,7 +452,7 @@ pub enum RV<'a> {
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
-    String(&'a InnerVec),
+    String(&'a [u8]),
     Object(&'a RValue),
 }
 

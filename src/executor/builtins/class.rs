@@ -84,7 +84,7 @@ extern "C" fn tos(
     _len: usize,
 ) -> Option<Value> {
     let class_name = self_val.as_class().get_name(globals);
-    let res = Value::new_string(class_name.into_bytes());
+    let res = Value::new_string(class_name);
     Some(res)
 }
 

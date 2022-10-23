@@ -47,11 +47,11 @@ fn run_test_main(code: &str) -> (Value, Globals) {
     let now = Instant::now();
     let mut globals = Globals::new(1, false);
     let res = compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap();
-    let jit_str = res.to_s(&globals);
+    let jit_str = res.inspect(&globals);
     #[cfg(not(debug_assertions))]
-    eprintln!("jit: {jit_str} elapsed:{:?}", now.elapsed());
+    eprintln!("jit:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
-    eprintln!("jit: {jit_str}");
+    eprintln!("jit:  {jit_str}");
 
     (res, globals)
 }
@@ -110,7 +110,7 @@ fn from_ast(node: &Node, globals: &mut Globals) -> Value {
         NodeKind::Bool(b) => Value::bool(*b),
         NodeKind::Nil => Value::nil(),
         NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
-        NodeKind::String(s) => Value::new_string(s.as_bytes().to_vec()),
+        NodeKind::String(s) => Value::new_string_from_str(s),
         NodeKind::Array(v, _) => {
             let v = v.iter().map(|node| from_ast(node, globals)).collect();
             Value::new_array(v)

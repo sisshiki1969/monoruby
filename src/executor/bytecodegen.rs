@@ -219,8 +219,8 @@ impl IrContext {
         self.push(BcIr::Symbol(reg, sym), Loc::default());
     }
 
-    fn gen_string(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, b: Vec<u8>) {
-        self.gen_literal(info, dst, Value::new_string(b));
+    fn gen_string(&mut self, info: &mut RubyFuncInfo, dst: Option<BcLocal>, s: String) {
+        self.gen_literal(info, dst, Value::new_string(s));
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
@@ -542,7 +542,7 @@ impl IrContext {
             }
             NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
             NodeKind::Float(f) => self.gen_float(info, None, f),
-            NodeKind::String(s) => self.gen_string(info, None, s.into_bytes()),
+            NodeKind::String(s) => self.gen_string(info, None, s),
             NodeKind::Array(nodes, _) => self.gen_array(ctx, info, None, nodes, loc)?,
             NodeKind::Index {
                 box base,
@@ -841,7 +841,7 @@ impl IrContext {
             }
             NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(local), bigint),
             NodeKind::Float(f) => self.gen_float(info, Some(local), f),
-            NodeKind::String(s) => self.gen_string(info, Some(local), s.into_bytes()),
+            NodeKind::String(s) => self.gen_string(info, Some(local), s),
             NodeKind::Array(nodes, _) => self.gen_array(ctx, info, Some(local), nodes, loc)?,
             NodeKind::Index {
                 box base,

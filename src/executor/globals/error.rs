@@ -82,6 +82,10 @@ impl Globals {
         )));
     }
 
+    pub(crate) fn err_argument(&mut self, msg: &str) {
+        self.set_error(MonorubyErr::argumenterr(msg.to_string()));
+    }
+
     ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///
@@ -295,6 +299,10 @@ impl MonorubyErr {
 
     pub(crate) fn typeerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type(msg))
+    }
+
+    pub(crate) fn argumenterr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::WrongArguments(msg))
     }
 
     pub(crate) fn indexerr(msg: String) -> MonorubyErr {

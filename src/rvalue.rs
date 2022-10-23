@@ -34,7 +34,7 @@ impl std::fmt::Debug for RValue {
                     5 => format!("FLOAT({:?})", self.kind.float),
                     6 => format!(
                         "STRING({:?})",
-                        String::from_utf8_lossy(self.kind.bytes.as_ref())
+                        String::from_utf8_lossy(self.kind.string.0.as_ref())
                     ),
                     7 => format!("TIME({:?})", self.kind.time),
                     8 => format!("ARRAY({:?})", self.kind.array),
@@ -121,7 +121,7 @@ impl RValue {
                 ObjKind::FLOAT => ObjKind {
                     float: self.as_float(),
                 },
-                ObjKind::BYTES => ObjKind::bytes(self.as_string().clone()),
+                ObjKind::BYTES => ObjKind::bytes(InnerVec::from_slice(self.as_bytes())),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                 ObjKind::ARRAY => ObjKind::array(
                     self.as_array()
@@ -227,12 +227,8 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_bytes_from_smallvec(bytes: InnerVec) -> Self {
-        RValue {
-            flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes(bytes),
-            var_table: None,
-        }
+    pub(crate) fn new_string(s: String) -> Self {
+        Self::new_bytes(s.into_bytes())
     }
 
     pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
@@ -337,7 +333,7 @@ pub union ObjKind {
     pub object: [Option<Value>; OBJECT_INLINE_IVAR],
     pub bignum: ManuallyDrop<BigInt>,
     pub float: f64,
-    pub bytes: ManuallyDrop<InnerVec>,
+    pub string: ManuallyDrop<StringInner>,
     pub time: ManuallyDrop<TimeInfo>,
     pub array: ManuallyDrop<Vec<Value>>,
 }
@@ -353,6 +349,12 @@ impl ObjKind {
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
 }
+
+pub type InnerVec = smallvec::SmallVec<[u8; ARRAY_INLINE_ELEM]>;
+
+#[derive(Clone)]
+#[repr(transparent)]
+pub struct StringInner(InnerVec);
 
 impl ObjKind {
     fn invalid() -> Self {
@@ -381,7 +383,7 @@ impl ObjKind {
 
     fn bytes(b: InnerVec) -> Self {
         Self {
-            bytes: ManuallyDrop::new(b),
+            string: ManuallyDrop::new(StringInner(b)),
         }
     }
 
@@ -419,8 +421,12 @@ impl RValue {
         unsafe { &*self.kind.bignum }
     }
 
-    pub(crate) fn as_string(&self) -> &InnerVec {
-        unsafe { &*self.kind.bytes }
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        unsafe { self.kind.string.0.as_ref() }
+    }
+
+    pub(crate) fn as_string(&self) -> String {
+        unsafe { String::from_utf8_lossy(&self.kind.string.0).to_string() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {

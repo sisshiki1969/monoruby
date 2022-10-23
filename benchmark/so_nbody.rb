@@ -8,9 +8,6 @@
 SOLAR_MASS = 4 * Math::PI**2
 DAYS_PER_YEAR = 365.24
 
-def _puts *args
-end
-
 class Planet
   attr_accessor :x, :y, :z, :vx, :vy, :vz, :mass
 
@@ -68,7 +65,8 @@ end
 def offset_momentum(bodies)
   px, py, pz = 0.0, 0.0, 0.0
 
-  for b in bodies
+  for i in 0 ... bodies.size
+    b = bodies[i]
     m = b.mass
     px += b.vx * m
     py += b.vy * m
@@ -127,7 +125,6 @@ BODIES = [
 ]
 
 init = 200_000 # ARGV[0]
-n = Integer(init)
 
 offset_momentum(BODIES)
 
@@ -136,7 +133,7 @@ puts "%.9f" % energy(BODIES)
 nbodies = BODIES.size
 dt = 0.01
 
-n.times do
+for x in 0...init
   i = 0
   while i < nbodies
     b = BODIES[i]
