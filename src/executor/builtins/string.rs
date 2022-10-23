@@ -1,3 +1,5 @@
+use num::BigInt;
+
 use crate::*;
 
 //
@@ -36,16 +38,29 @@ fn expect_char(globals: &mut Globals, chars: &mut std::str::Chars) -> Option<cha
     Some(ch)
 }
 
-fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<i64> {
+enum Integer {
+    Fixnum(i64),
+    BigInt(BigInt),
+}
+
+fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<Integer> {
     match val.unpack() {
-        RV::Integer(i) => Some(i),
-        RV::Float(f) => Some(f.trunc() as i64),
-        _ => {
-            let s = val.to_s(globals);
-            globals.err_argument(&format!("invalid value for Integer(): {}", s));
-            None
-        }
+        RV::Integer(i) => return Some(Integer::Fixnum(i)),
+        RV::String(s) => match String::from_utf8(s.to_vec()) {
+            Ok(s) => match s.parse::<i64>() {
+                Ok(i) => return Some(Integer::Fixnum(i)),
+                Err(_) => match s.parse::<BigInt>() {
+                    Ok(b) => return Some(Integer::BigInt(b)),
+                    Err(_) => {}
+                },
+            },
+            Err(_) => {}
+        },
+        _ => {}
     }
+    let s = val.to_s(globals);
+    globals.err_argument(&format!("invalid value for Integer(): {}", s));
+    None
 }
 
 fn coerce_to_float(globals: &mut Globals, val: Value) -> Option<f64> {
@@ -192,33 +207,57 @@ extern "C" fn rem(
             'd' | 'i' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
-                    format!("{:0w$.p$}", val, w = width, p = precision)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:0w$.p$}", val, w = width, p = precision),
+                        Integer::BigInt(val) => format!("{:0w$.p$}", val, w = width, p = precision),
+                    }
                 } else {
-                    format!("{:w$.p$}", val, w = width, p = precision)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:w$.p$}", val, w = width, p = precision),
+                        Integer::BigInt(val) => format!("{:w$.p$}", val, w = width, p = precision),
+                    }
                 }
             }
             'b' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
-                    format!("{:0w$b}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:0w$b}", val, w = width),
+                        Integer::BigInt(val) => format!("{:0w$b}", val, w = width),
+                    }
                 } else {
-                    format!("{:w$b}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:w$b}", val, w = width),
+                        Integer::BigInt(val) => format!("{:w$b}", val, w = width),
+                    }
                 }
             }
             'x' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
-                    format!("{:0w$x}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:0w$x}", val, w = width),
+                        Integer::BigInt(val) => format!("{:0w$x}", val, w = width),
+                    }
                 } else {
-                    format!("{:w$x}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:w$x}", val, w = width),
+                        Integer::BigInt(val) => format!("{:w$x}", val, w = width),
+                    }
                 }
             }
             'X' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {
-                    format!("{:0w$X}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:0w$X}", val, w = width),
+                        Integer::BigInt(val) => format!("{:0w$X}", val, w = width),
+                    }
                 } else {
-                    format!("{:w$X}", val, w = width)
+                    match val {
+                        Integer::Fixnum(val) => format!("{:w$X}", val, w = width),
+                        Integer::BigInt(val) => format!("{:w$X}", val, w = width),
+                    }
                 }
             }
             'f' => {
@@ -281,6 +320,8 @@ mod test {
         run_test2(r###""-%b-" % 9"###);
         run_test2(r###""-%6b-" % 9"###);
         run_test2(r###""-%06b-" % 9"###);
+        run_test2(r###""%40i"%"1257765464656546546546546546546546546""###);
+        run_test2(r###""%40b"%"1257765464656546546546546546546546546""###);
         run_test2(r###""%08.5f" % 12.575824562"###);
         run_test2(r###""%08.3f" % 12.57"###);
         run_test2(r###""%08.f" % 12.57"###);
