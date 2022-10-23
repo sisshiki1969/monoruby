@@ -113,6 +113,7 @@ extern "C" fn assert(
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
+    eprintln!("assert {:?} {:?}", expected, actual);
     assert!(Value::eq(expected, actual));
     Some(Value::nil())
 }

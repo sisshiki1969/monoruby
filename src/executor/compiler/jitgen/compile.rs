@@ -305,13 +305,13 @@ impl Codegen {
                     } else if pc.is_binary_float() {
                         let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        self.gen_binop_float(kind, fret, flhs, frhs);
+                        self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
                     } else {
                         ctx.read_slot(self, lhs);
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
                         self.load_binary_args(lhs, rhs);
-                        self.gen_binop_kind(&ctx, pc, kind, ret);
+                        self.gen_generic_binop(&ctx, pc, kind, ret);
                     }
                 }
 
@@ -323,7 +323,7 @@ impl Codegen {
                     } else if pc.is_float1() {
                         let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        self.gen_binop_float_ri(kind, fret, flhs, rhs);
+                        self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
                     } else {
                         ctx.read_slot(self, lhs);
                         ctx.dealloc_xmm(ret);
@@ -331,7 +331,7 @@ impl Codegen {
                             movq rdi, [rbp - (conv(lhs))];
                             movq rsi, (Value::int32(rhs as i32).get());
                         );
-                        self.gen_binop_kind(&ctx, pc, kind, ret);
+                        self.gen_generic_binop(&ctx, pc, kind, ret);
                     }
                 }
 
@@ -343,7 +343,7 @@ impl Codegen {
                     } else if pc.is_float2() {
                         let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
                         let fret = ctx.xmm_write(ret);
-                        self.gen_binop_float_ir(kind, fret, lhs, frhs);
+                        self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
                     } else {
                         ctx.read_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
@@ -351,7 +351,7 @@ impl Codegen {
                             movq rdi, (Value::int32(lhs as i32).get());
                             movq rsi, [rbp - (conv(rhs))];
                         );
-                        self.gen_binop_kind(&ctx, pc, kind, ret);
+                        self.gen_generic_binop(&ctx, pc, kind, ret);
                     }
                 }
 

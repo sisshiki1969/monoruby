@@ -1407,10 +1407,9 @@ macro_rules! gen_ri_ops {
 }
 
 impl IrContext {
-    gen_ri_ops!((add, Add), (sub, Sub), (mul, Mul), (div, Div));
+    gen_ri_ops!((add, Add), (sub, Sub), (mul, Mul), (div, Div), (exp, Exp));
     gen_ops!(
         (rem, Rem),
-        (exp, Exp),
         (bitor, BitOr),
         (bitand, BitAnd),
         (bitxor, BitXor),
@@ -1531,11 +1530,6 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
-                BcIr::BinOpRi(kind, dst, lhs, rhs) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    Bc::from_with_class2(enc_wwsw(190 + *kind as u16, op1.0, op2.0, *rhs))
-                }
                 BcIr::BinOpIr(kind, dst, lhs, rhs) => {
                     let op1 = info.get_index(dst);
                     let op3 = info.get_index(rhs);
@@ -1546,6 +1540,11 @@ impl IrContext {
                     let op2 = info.get_index(lhs);
                     let op3 = info.get_index(rhs);
                     Bc::from_with_class2(enc_www(200 + *kind as u16, op1.0, op2.0, op3.0))
+                }
+                BcIr::BinOpRi(kind, dst, lhs, rhs) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(lhs);
+                    Bc::from_with_class2(enc_wwsw(220 + *kind as u16, op1.0, op2.0, *rhs))
                 }
                 BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
                     let op1 = info.get_index(dst);

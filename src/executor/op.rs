@@ -46,6 +46,29 @@ macro_rules! binop_values {
     };
 }
 
+pub(super) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
+    if let Ok(rhs) = i32::try_from(rhs) {
+        if rhs < 0 {
+            unimplemented!("a**b: b<0 in not supported yet.")
+        }
+        let rhs = rhs as u32;
+        match lhs.checked_pow(rhs) {
+            Some(res) => Value::new_integer(res),
+            None => Value::new_bigint(BigInt::from(lhs).pow(rhs)),
+        }
+    } else {
+        Value::new_float(f64::INFINITY)
+    }
+}
+
+fn pow_ff(lhs: f64, rhs: f64) -> Value {
+    Value::new_float(lhs.powf(rhs))
+}
+
+pub(super) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
+    lhs.powf(rhs)
+}
+
 // TODO: support rhs < 0.
 pub(super) extern "C" fn pow_values(
     interp: &mut Interp,
@@ -54,28 +77,19 @@ pub(super) extern "C" fn pow_values(
     rhs: Value,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Integer(lhs), RV::Integer(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                match lhs.checked_pow(rhs) {
-                    Some(res) => Value::new_integer(res),
-                    None => Value::new_bigint(BigInt::from(lhs).pow(rhs)),
-                }
-            } else {
-                Value::new_float(f64::INFINITY)
-            }
-        }
-        (RV::BigInt(lhs), RV::Integer(rhs)) => {
-            if let Ok(rhs) = rhs.try_into() {
-                Value::new_bigint(lhs.pow(rhs))
-            } else {
-                Value::new_float(f64::INFINITY)
-            }
-        }
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.powf(rhs as f64)),
-
+        (RV::Integer(lhs), RV::Integer(rhs)) => pow_ii(lhs, rhs),
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if let Ok(rhs) = rhs.try_into() {
                 Value::new_bigint(BigInt::from(lhs).pow(rhs))
+            } else {
+                Value::new_float(f64::INFINITY)
+            }
+        }
+        (RV::Integer(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
+        (RV::BigInt(lhs), RV::Integer(rhs)) => {
+            if let Ok(rhs) = i32::try_from(rhs) {
+                let rhs = rhs as u32;
+                Value::new_bigint(lhs.pow(rhs))
             } else {
                 Value::new_float(f64::INFINITY)
             }
@@ -87,11 +101,16 @@ pub(super) extern "C" fn pow_values(
                 Value::new_float(f64::INFINITY)
             }
         }
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.powf(rhs.to_f64().unwrap())),
-
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).powf(rhs)),
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().powf(rhs)),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.powf(rhs)),
+        (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
+        (RV::Float(lhs), RV::Integer(rhs)) => {
+            //if let Ok(rhs) = i32::try_from(rhs) {
+            pow_ff(lhs, rhs as f64)
+            //} else {
+            //    Value::new_float(lhs.powf(rhs as f64))
+            //}
+        }
+        (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
+        (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         _ => {
             return interp.invoke_method(globals, IdentId::_POW, lhs, &[rhs]);
         }

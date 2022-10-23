@@ -363,6 +363,7 @@ impl CompileContext {
     }
 }
 
+#[derive(PartialEq)]
 enum BinOpMode {
     RR(SlotId, SlotId),
     RI(SlotId, i16),

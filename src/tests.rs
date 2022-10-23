@@ -228,10 +228,36 @@ mod test {
     }
 
     #[test]
+    fn test_exp() {
+        run_test("3.78**432");
+        run_test("3.78**-432");
+        run_test("-3.78**432");
+        run_test("-3.78**-432");
+
+        run_test("39**3");
+        run_test("39**3431");
+        run_test("392909**3431");
+        run_test("392909**4");
+        run_test("-392909**3431");
+        run_test("-392909**3432");
+
+        run_test("378**4.32");
+        run_test("378**-4.32");
+        run_test("-378**4.32");
+        run_test("-378**-4.32");
+        run_test("378258461125841513588485555**-4.32");
+
+        run_test("90.78**43.2");
+        run_test("90.78**-43.2");
+        run_test("-90.78**43.2");
+        run_test("-90.78**-43.2");
+    }
+
+    #[test]
     fn test_numbers() {
         let lhs_integer = [
             "0",
-            "53785",
+            "5375",
             "690426",
             "24829482958347598570210950349530597028472983429873",
         ];
@@ -242,13 +268,14 @@ mod test {
             "234234645",
             "2352354645657876868978696835652452546462456245646",
         ];
-        /*for lhs in lhs_integer.iter().chain(&["234.2345"]) {
-            for rhs in rhs_integer.iter().chain(&["169.5333"]) {
+        for lhs in lhs_integer.iter() {
+            for rhs in rhs_integer.iter() {
                 for op in ["%"] {
                     run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
                 }
             }
-        }*/
+        }
         for lhs in lhs_integer {
             for rhs in rhs_integer {
                 for op in ["&", "|", "^"] {

@@ -190,6 +190,7 @@ impl Codegen {
         let (sub_rr, sub_ri, sub_ir) = self.vm_binops_opt(Self::int_sub, sub_values as _);
         let (div_rr, div_ri, div_ir) = self.vm_binops(div_values as _);
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
+        let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
         self.vm_entry = entry;
         self.dispatch[1] = self.vm_method_call();
@@ -247,6 +248,12 @@ impl Codegen {
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
 
+        self.dispatch[180] = add_ir;
+        self.dispatch[181] = sub_ir;
+        self.dispatch[182] = mul_ir;
+        self.dispatch[183] = div_ir;
+        self.dispatch[190] = pow_ir;
+
         self.dispatch[200] = add_rr;
         self.dispatch[201] = sub_rr;
         self.dispatch[202] = mul_rr;
@@ -257,17 +264,13 @@ impl Codegen {
         self.dispatch[207] = shr;
         self.dispatch[208] = shl;
         self.dispatch[209] = self.vm_remrr();
-        self.dispatch[210] = self.vm_powrr();
+        self.dispatch[210] = pow_rr;
 
-        self.dispatch[180] = add_ir;
-        self.dispatch[181] = sub_ir;
-        self.dispatch[182] = mul_ir;
-        self.dispatch[183] = div_ir;
-
-        self.dispatch[190] = add_ri;
-        self.dispatch[191] = sub_ri;
-        self.dispatch[192] = mul_ri;
-        self.dispatch[193] = div_ri;
+        self.dispatch[220] = add_ri;
+        self.dispatch[221] = sub_ri;
+        self.dispatch[222] = mul_ri;
+        self.dispatch[223] = div_ri;
+        self.dispatch[230] = pow_ri;
     }
 
     ///
@@ -1021,19 +1024,6 @@ impl Codegen {
         self.jit.bind_label(common);
         self.vm_save_binary_class();
         self.call_binop(rem_values as _);
-        self.vm_handle_error();
-        self.vm_store_r15();
-        self.fetch_and_dispatch();
-        ptr_rr
-    }
-
-    fn vm_powrr(&mut self) -> CodePtr {
-        let common = self.jit.label();
-        let ptr_rr = self.jit.get_current_address();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.jit.bind_label(common);
-        self.vm_save_binary_class();
-        self.call_binop(pow_values as _);
         self.vm_handle_error();
         self.vm_store_r15();
         self.fetch_and_dispatch();

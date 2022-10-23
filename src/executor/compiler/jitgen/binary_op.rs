@@ -199,8 +199,36 @@ impl Codegen {
                 self.generic_binop(ret, rem_values as _, xmm_using, pc);
             }
             BinOpK::Exp => {
-                self.load_binary_args_with_mode(&mode);
-                self.generic_binop(ret, pow_values as _, xmm_using, pc);
+                self.xmm_save(&xmm_using);
+                match mode {
+                    BinOpMode::RR(lhs, rhs) => {
+                        self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                        monoasm!(self.jit,
+                            sarq rdi, 1;
+                            sarq rsi, 1;
+                        );
+                    }
+                    BinOpMode::RI(lhs, rhs) => {
+                        self.load_guard_rdi_fixnum(lhs, deopt);
+                        monoasm!(self.jit,
+                            sarq rdi, 1;
+                            movq rsi, (rhs);
+                        );
+                    }
+                    BinOpMode::IR(lhs, rhs) => {
+                        self.load_guard_rsi_fixnum(rhs, deopt);
+                        monoasm!(self.jit,
+                            movq rdi, (lhs);
+                            sarq rsi, 1;
+                        );
+                    }
+                }
+                monoasm!(self.jit,
+                    movq rax, (pow_ii as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                self.store_rax(ret);
             }
             _ => {
                 let generic = self.jit.label();
@@ -218,24 +246,59 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_binop_float(&mut self, kind: BinOpK, fret: u16, flhs: u16, frhs: u16) {
-        if fret == frhs {
-            let lhs = flhs as u64 + 2;
-            let ret = fret as u64 + 2;
-            match kind {
-                BinOpK::Add => monoasm!(self.jit,
-                    addsd xmm(ret), xmm(lhs);
-                ),
-                BinOpK::Sub => monoasm!(self.jit,
-                    movq  xmm0, xmm(lhs);
-                    subsd xmm0, xmm(ret);
-                    movq  xmm(ret), xmm0;
-                ),
-                BinOpK::Mul => monoasm!(self.jit,
-                    mulsd xmm(ret), xmm(lhs);
-                ),
-                BinOpK::Div => {
-                    let div_by_zero = self.div_by_zero;
+    pub(super) fn gen_binop_float(
+        &mut self,
+        kind: BinOpK,
+        ctx: &BBContext,
+        fret: u16,
+        flhs: u16,
+        frhs: u16,
+    ) {
+        let lhs = flhs as u64 + 2;
+        let rhs = frhs as u64 + 2;
+        let ret = fret as u64 + 2;
+        match kind {
+            BinOpK::Add => {
+                if ret == rhs {
+                    monoasm!(self.jit,
+                        addsd xmm(ret), xmm(lhs);
+                    );
+                } else {
+                    self.xmm_mov(flhs, fret);
+                    monoasm!(self.jit,
+                        addsd xmm(ret), xmm(rhs);
+                    );
+                }
+            }
+            BinOpK::Sub => {
+                if ret == rhs {
+                    monoasm!(self.jit,
+                        movq  xmm0, xmm(lhs);
+                        subsd xmm0, xmm(ret);
+                        movq  xmm(ret), xmm0;
+                    );
+                } else {
+                    self.xmm_mov(flhs, fret);
+                    monoasm!(self.jit,
+                        subsd xmm(ret), xmm(rhs);
+                    );
+                }
+            }
+            BinOpK::Mul => {
+                if ret == rhs {
+                    monoasm!(self.jit,
+                        mulsd xmm(ret), xmm(lhs);
+                    );
+                } else {
+                    self.xmm_mov(flhs, fret);
+                    monoasm!(self.jit,
+                        mulsd xmm(ret), xmm(rhs);
+                    );
+                }
+            }
+            BinOpK::Div => {
+                let div_by_zero = self.div_by_zero;
+                if ret == rhs {
                     monoasm!(self.jit,
                         movq  rax, xmm(ret);
                         testq  rax, rax;
@@ -243,51 +306,64 @@ impl Codegen {
                         movq  xmm0, xmm(lhs);
                         divsd xmm0, xmm(ret);
                         movq  xmm(ret), xmm0;
-                    )
-                }
-                _ => unimplemented!(),
-            }
-        } else {
-            let rhs = frhs as u64 + 2;
-            let ret = fret as u64 + 2;
-            self.xmm_mov(flhs, fret);
-            match kind {
-                BinOpK::Add => monoasm!(self.jit,
-                    addsd xmm(ret), xmm(rhs);
-                ),
-                BinOpK::Sub => monoasm!(self.jit,
-                    subsd xmm(ret), xmm(rhs);
-                ),
-                BinOpK::Mul => monoasm!(self.jit,
-                    mulsd xmm(ret), xmm(rhs);
-                ),
-                BinOpK::Div => {
-                    let div_by_zero = self.div_by_zero;
+                    );
+                } else {
+                    self.xmm_mov(flhs, fret);
                     monoasm!(self.jit,
-                        movq  rax, xmm(frhs as u64 + 2);
+                        movq  rax, xmm(rhs);
                         testq rax, rax;
                         jz    div_by_zero;
-                        divsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
-                    )
+                        divsd xmm(ret), xmm(rhs);
+                    );
                 }
-                _ => unimplemented!(),
             }
+            BinOpK::Exp => {
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm0, xmm(lhs);
+                    movq xmm1, xmm(rhs);
+                    movq rax, (pow_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm(ret), xmm0;
+                );
+            }
+            _ => unimplemented!(),
         }
     }
 
-    pub(super) fn gen_binop_float_ri(&mut self, kind: BinOpK, fret: u16, flhs: u16, rhs: i16) {
-        let imm = self.jit.const_f64(rhs as f64);
-        self.xmm_mov(flhs, fret);
+    pub(super) fn gen_binop_float_ri(
+        &mut self,
+        kind: BinOpK,
+        ctx: &BBContext,
+        fret: u16,
+        flhs: u16,
+        rhs: i16,
+    ) {
+        let rhs_label = self.jit.const_f64(rhs as f64);
+        let ret = fret as u64 + 2;
         match kind {
-            BinOpK::Add => monoasm!(self.jit,
-                addsd xmm(fret as u64 + 2), [rip + imm];
-            ),
-            BinOpK::Sub => monoasm!(self.jit,
-                subsd xmm(fret as u64 + 2), [rip + imm];
-            ),
-            BinOpK::Mul => monoasm!(self.jit,
-                mulsd xmm(fret as u64 + 2), [rip + imm];
-            ),
+            BinOpK::Add => {
+                self.xmm_mov(flhs, fret);
+                monoasm!(self.jit,
+                    addsd xmm(ret), [rip + rhs_label];
+                );
+            }
+            BinOpK::Sub => {
+                self.xmm_mov(flhs, fret);
+                monoasm!(self.jit,
+                    subsd xmm(ret), [rip + rhs_label];
+                );
+            }
+            BinOpK::Mul => {
+                self.xmm_mov(flhs, fret);
+                monoasm!(self.jit,
+                    mulsd xmm(ret), [rip + rhs_label];
+                );
+            }
             BinOpK::Div => {
                 if rhs == 0 {
                     let div_by_zero = self.div_by_zero;
@@ -295,72 +371,127 @@ impl Codegen {
                         jmp   div_by_zero;
                     )
                 } else {
+                    self.xmm_mov(flhs, fret);
                     monoasm!(self.jit,
-                        divsd xmm(fret as u64 + 2), [rip + imm];
+                        divsd xmm(ret), [rip + rhs_label];
                     )
                 }
+            }
+            BinOpK::Exp => {
+                let lhs = flhs as u64 + 2;
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm0, xmm(lhs);
+                    movq xmm1, [rip + rhs_label];
+                    movq rax, (pow_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm(ret), xmm0;
+                );
             }
             _ => unimplemented!(),
         }
     }
 
-    pub(super) fn gen_binop_float_ir(&mut self, kind: BinOpK, fret: u16, lhs: i16, frhs: u16) {
-        let imm0 = self.jit.const_f64(lhs as f64);
-        if fret != frhs {
-            monoasm!(self.jit,
-                movq xmm(fret as u64 + 2), [rip + imm0];
-            );
-            match kind {
-                BinOpK::Add => monoasm!(self.jit,
-                    addsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
-                ),
-                BinOpK::Sub => monoasm!(self.jit,
-                    subsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
-                ),
-                BinOpK::Mul => monoasm!(self.jit,
-                    mulsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
-                ),
-                BinOpK::Div => {
-                    let div_by_zero = self.div_by_zero;
+    pub(super) fn gen_binop_float_ir(
+        &mut self,
+        kind: BinOpK,
+        ctx: &BBContext,
+        fret: u16,
+        lhs: i16,
+        frhs: u16,
+    ) {
+        let lhs = self.jit.const_f64(lhs as f64);
+        let rhs = frhs as u64 + 2;
+        let ret = fret as u64 + 2;
+        match kind {
+            BinOpK::Add => {
+                if ret != rhs {
                     monoasm!(self.jit,
-                        movq  rax, xmm(frhs as u64 + 2);
-                        testq rax, rax;
-                        jeq   div_by_zero;
-                        divsd xmm(fret as u64 + 2), xmm(frhs as u64 + 2);
-                    )
-                }
-                _ => unimplemented!(),
-            }
-        } else {
-            match kind {
-                BinOpK::Add => monoasm!(self.jit,
-                    addsd xmm(fret as u64 + 2), [rip + imm0];
-                ),
-                BinOpK::Sub => monoasm!(self.jit,
-                    movq  xmm0, xmm(frhs as u64 + 2);
-                    movq  xmm(fret as u64 + 2), [rip + imm0];
-                    subsd xmm(fret as u64 + 2), xmm0;
-                ),
-                BinOpK::Mul => monoasm!(self.jit,
-                    mulsd xmm(fret as u64 + 2), [rip + imm0];
-                ),
-                BinOpK::Div => {
-                    let div_by_zero = self.div_by_zero;
+                        movq  xmm(ret), [rip + lhs];
+                        addsd xmm(ret), xmm(rhs);
+                    );
+                } else {
                     monoasm!(self.jit,
-                        movq  rax, xmm(frhs as u64 + 2);
-                        testq rax, rax;
-                        jeq   div_by_zero;
-                        movq  xmm(fret as u64 + 2), [rip + imm0];
-                        movq  xmm0, rax;
-                        divsd xmm(fret as u64 + 2), xmm0;
+                        addsd xmm(ret), [rip + lhs];
                     );
                 }
-                _ => unimplemented!(),
             }
+            BinOpK::Sub => {
+                if ret != rhs {
+                    monoasm!(self.jit,
+                        movq  xmm(ret), [rip + lhs];
+                        subsd xmm(ret), xmm(rhs);
+                    );
+                } else {
+                    monoasm!(self.jit,
+                        movq  xmm0, xmm(rhs);
+                        movq  xmm(ret), [rip + lhs];
+                        subsd xmm(ret), xmm0;
+                    );
+                }
+            }
+            BinOpK::Mul => {
+                if ret != rhs {
+                    monoasm!(self.jit,
+                        movq  xmm(ret), [rip + lhs];
+                        mulsd xmm(ret), xmm(rhs);
+                    );
+                } else {
+                    monoasm!(self.jit,
+                        mulsd xmm(ret), [rip + lhs];
+                    );
+                }
+            }
+            BinOpK::Div => {
+                let div_by_zero = self.div_by_zero;
+                if ret != rhs {
+                    monoasm!(self.jit,
+                        movq  xmm(ret), [rip + lhs];
+                        movq  rax, xmm(rhs);
+                        testq rax, rax;
+                        jeq   div_by_zero;
+                        divsd xmm(ret), xmm(rhs);
+                    );
+                } else {
+                    monoasm!(self.jit,
+                        movq  rax, xmm(ret);
+                        testq rax, rax;
+                        jeq   div_by_zero;
+                        movq  xmm(ret), [rip + lhs];
+                        movq  xmm0, rax;
+                        divsd xmm(ret), xmm0;
+                    );
+                }
+            }
+            BinOpK::Exp => {
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm0, [rip + lhs];
+                    movq xmm1, xmm(rhs);
+                    movq rax, (pow_ff_f as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm(ret), xmm0;
+                );
+            }
+            _ => unimplemented!(),
         }
     }
 
-    pub(super) fn gen_binop_kind(&mut self, ctx: &BBContext, pc: BcPc, kind: BinOpK, ret: SlotId) {
+    pub(super) fn gen_generic_binop(
+        &mut self,
+        ctx: &BBContext,
+        pc: BcPc,
+        kind: BinOpK,
+        ret: SlotId,
+    ) {
         let xmm_using = ctx.get_xmm_using();
         self.generic_binop(ret, kind.generic_func() as _, xmm_using, pc);
     }

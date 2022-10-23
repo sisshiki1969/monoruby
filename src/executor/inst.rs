@@ -895,23 +895,23 @@ impl BcOp {
                     op3 as i16,
                     true,
                 ),
-                180..=188 => Self::BinOpIr(
+                180..=199 => Self::BinOpIr(
                     BinOpK::from(opcode - 180),
                     SlotId::new(op1),
                     op2 as i16,
                     SlotId::new(op3),
-                ),
-                190..=198 => Self::BinOpRi(
-                    BinOpK::from(opcode - 190),
-                    SlotId::new(op1),
-                    SlotId::new(op2),
-                    op3 as i16,
                 ),
                 200..=219 => Self::BinOp(
                     BinOpK::from(opcode - 200),
                     SlotId::new(op1),
                     SlotId::new(op2),
                     SlotId::new(op3),
+                ),
+                220..=239 => Self::BinOpRi(
+                    BinOpK::from(opcode - 220),
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3 as i16,
                 ),
                 _ => unreachable!("{:016x}", op),
             }
