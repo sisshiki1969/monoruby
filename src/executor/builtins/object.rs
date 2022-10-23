@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(
         OBJECT_CLASS,
         "instance_variable_defined?",
@@ -253,6 +254,39 @@ extern "C" fn instance_variable_get(
     Some(v)
 }
 
+/// ### Kernel.#Integer
+/// - Integer(arg, base = 0, exception: true) -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
+extern "C" fn kernel_integer(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let arg0 = arg[0];
+    match arg0.unpack() {
+        RV::Integer(num) => return Some(Value::new_integer(num)),
+        RV::BigInt(num) => return Some(Value::new_bigint(num.clone())),
+        RV::Float(num) => return Some(Value::new_integer(num.trunc() as i64)),
+        RV::String(b) => match String::from_utf8(b.to_vec()) {
+            Ok(s) => match s.parse::<i64>() {
+                Ok(num) => return Some(Value::new_integer(num)),
+                Err(_) => {
+                    let s = arg0.to_s(globals);
+                    globals.err_argument(&format!("invalid value for Integer(): {}", s));
+                    return None;
+                }
+            },
+            Err(_) => {}
+        },
+        _ => {}
+    };
+    globals.err_no_implict_conv(arg0, INTEGER_CLASS);
+    None
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -281,5 +315,15 @@ mod test {
         run_test(
             r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
         );
+    }
+
+    #[test]
+    fn kernel_integer() {
+        run_test(r#"Integer(-2435)"#);
+        run_test(r#"Integer("2435")"#);
+        run_test_error(r#"Integer("2435.78")"#);
+        run_test_error(r#"Integer([4])"#);
+        run_test(r#"Integer(-2435766756886769978978435)"#);
+        run_test(r#"Integer(2435.4556787)"#);
     }
 }

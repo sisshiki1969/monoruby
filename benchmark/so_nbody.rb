@@ -125,6 +125,7 @@ BODIES = [
 ]
 
 init = 200_000 # ARGV[0]
+n = Integer(init)
 
 offset_momentum(BODIES)
 
@@ -133,7 +134,7 @@ puts "%.9f" % energy(BODIES)
 nbodies = BODIES.size
 dt = 0.01
 
-for x in 0...init
+for x in 0...n
   i = 0
   while i < nbodies
     b = BODIES[i]
