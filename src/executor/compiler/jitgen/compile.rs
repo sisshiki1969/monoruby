@@ -595,14 +595,17 @@ impl Codegen {
             //       +-------------+
             // -0x18 |    meta     |
             //       +-------------+
-            // -0x20 |     %0      |
+            // -0x20 |    block    |
             //       +-------------+
-            // -0x28 | %1(1st arg) | <- rdx
+            // -0x28 |     %0      |
+            //       +-------------+
+            // -0x30 | %1(1st arg) | <- rdx
             //       +-------------+
             //       |             |
             //
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rdi;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq [rsp - (16 + OFFSET_SELF)], r15;
             movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];

@@ -74,6 +74,7 @@ impl Codegen {
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -85,9 +86,11 @@ impl Codegen {
             //       +-------------+
             // -0x18 |    meta     |
             //       +-------------+
-            // -0x20 |     %0      |
+            // -0x20 |    block    |
             //       +-------------+
-            // -0x28 | %1(1st arg) |
+            // -0x28 |     %0      |
+            //       +-------------+
+            // -0x30 | %1(1st arg) |
             //       +-------------+
             //       |             |
             //
@@ -607,6 +610,7 @@ impl Codegen {
             // set meta
             movq rdi, [r13 + 16];
             movq [rsp -(16 + OFFSET_META)], rdi;
+            movq [rsp -(16 + OFFSET_BLOCK)], 0;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
@@ -628,9 +632,11 @@ impl Codegen {
             //       +-------------+
             // -0x18 |    meta     |
             //       +-------------+
-            // -0x20 |     %0      |
+            // -0x20 |    block    |
             //       +-------------+
-            // -0x28 | %1(1st arg) | <- rdx
+            // -0x28 |     %0      |
+            //       +-------------+
+            // -0x30 | %1(1st arg) | <- rdx
             //       +-------------+
             //       |             |
             //
@@ -1157,14 +1163,17 @@ impl Codegen {
             //       +-------------+
             // -0x18 |    meta     |
             //       +-------------+
-            // -0x20 |     %0      |
+            // -0x20 |    block    |
             //       +-------------+
-            // -0x28 | %1(1st arg) | <- rdx
+            // -0x28 |     %0      |
+            //       +-------------+
+            // -0x30 | %1(1st arg) | <- rdx
             //       +-------------+
             //       |             |
             //
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rdi;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq [rsp - (16 + OFFSET_SELF)], r15;
             movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];

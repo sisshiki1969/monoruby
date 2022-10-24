@@ -365,6 +365,7 @@ impl Codegen {
             // set meta/func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             // set self (= receiver)
             movq [rsp - (16 + OFFSET_SELF)], rcx;
 
@@ -381,9 +382,11 @@ impl Codegen {
             //       +-------------+
             // -0x18 |    meta     | func_id
             //       +-------------+
-            // -0x20 |     %0      | receiver
+            // -0x20 |    block    |
             //       +-------------+
-            // -0x28 | %1(1st arg) |
+            // -0x28 |     %0      | receiver
+            //       +-------------+
+            // -0x30 | %1(1st arg) |
             //       +-------------+
             //       |             |
             //
@@ -440,6 +443,7 @@ impl Codegen {
             // set meta/func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             // set self (= receiver)
             movq [rsp - (16 + OFFSET_SELF)], rcx;
 

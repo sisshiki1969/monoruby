@@ -21,6 +21,7 @@ pub type BuiltinFn = extern "C" fn(&mut Interp, &mut Globals, Value, Arg, usize)
 pub(self) const OFFSET_META: i64 = 8;
 pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;
 pub(self) const OFFSET_FUNCID: i64 = OFFSET_META;
+pub(self) const OFFSET_BLOCK: i64 = 16;
 pub(self) const OFFSET_SELF: i64 = 24;
 pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 

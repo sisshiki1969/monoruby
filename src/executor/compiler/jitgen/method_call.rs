@@ -114,9 +114,11 @@ impl Codegen {
         //       +-------------+
         // -0x18 |    meta     |
         //       +-------------+
-        // -0x20 |     %0      |
+        // -0x20 |    block    |
         //       +-------------+
-        // -0x28 | %1(1st arg) |
+        // -0x28 |     %0      |
+        //       +-------------+
+        // -0x30 | %1(1st arg) |
         //       +-------------+
         //       |             |
         //
@@ -157,11 +159,12 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, qword (0);
+            movq rax, qword 0;
         patch_meta:
             movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
 
-            movq r13, qword (0);
+            movq r13, qword 0;
         patch_pc:
             movq rdi, (len);
             // patch point
@@ -386,9 +389,11 @@ impl Codegen {
         //       +-------------+
         // -0x18 |    meta     |
         //       +-------------+
-        // -0x20 |     %0      |
+        // -0x20 | blk  |      |
         //       +-------------+
-        // -0x28 | %1(1st arg) |
+        // -0x28 |     %0      |
+        //       +-------------+
+        // -0x30 | %1(1st arg) |
         //       +-------------+
         //       |             |
         //
@@ -407,6 +412,7 @@ impl Codegen {
             // set meta.
             movq rax, qword (cached.meta.0);
             movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
 
             movq r13, qword (cached.pc.get_u64());
             movq rdi, (len);
