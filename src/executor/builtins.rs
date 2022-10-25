@@ -99,12 +99,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 #[repr(transparent)]
 pub struct Arg(*const Value);
 
-impl Arg {
-    pub(crate) fn as_ptr(&self) -> *const Value {
-        self.0
-    }
-}
-
 impl std::ops::Index<usize> for Arg {
     type Output = Value;
     fn index(&self, index: usize) -> &Value {

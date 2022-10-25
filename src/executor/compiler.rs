@@ -21,6 +21,9 @@ pub type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
+pub type Invoker2 =
+    extern "C" fn(&mut Interp, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
+
 ///
 /// Bytecode compiler
 ///
@@ -43,7 +46,7 @@ pub struct Codegen {
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub invoker: Invoker,
-    pub invoker2: Invoker,
+    pub invoker2: Invoker2,
 }
 
 fn conv(reg: SlotId) -> i64 {
@@ -337,6 +340,57 @@ impl Codegen {
             ret;
         );
 
+        fn gen_invoker_prologue(mut jit: &mut JitMemory) {
+            monoasm! { jit,
+                pushq rbx;
+                pushq r12;
+                pushq r13;
+                pushq r14;
+                pushq r15;
+                movq rbx, rdi;
+                movq r12, rsi;
+                // set meta/func_id
+                movq rax, [rdx + (FUNCDATA_OFFSET_META)];
+                movq [rsp - (16 + OFFSET_META)], rax;
+                movq [rsp - (16 + OFFSET_BLOCK)], 0;
+                // set self (= receiver)
+                movq [rsp - (16 + OFFSET_SELF)], rcx;
+
+                movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+                //
+                //       +-------------+
+                // +0x08 |             |
+                //       +-------------+
+                //  0x00 |             | <- rsp
+                //       +-------------+
+                // -0x08 | return addr |
+                //       +-------------+
+                // -0x10 |   old rbp   |
+                //       +-------------+
+                // -0x18 |    meta     | func_id
+                //       +-------------+
+                // -0x20 |     %0      | receiver
+                //       +-------------+
+                // -0x28 | %1(1st arg) |
+                //       +-------------+
+                //       |             |
+                //
+            };
+        }
+
+        fn gen_invoker_epilogue(mut jit: &mut JitMemory) {
+            monoasm! { jit,
+                movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+                call rax;
+                popq r15;
+                popq r14;
+                popq r13;
+                popq r12;
+                popq rbx;
+                ret;
+            };
+        }
+
         // method invoker.
         let invoker: extern "C" fn(
             &mut Interp,
@@ -354,42 +408,9 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
-        monoasm! { &mut jit,
-            pushq rbx;
-            pushq r12;
-            pushq r13;
-            pushq r14;
-            pushq r15;
-            movq rbx, rdi;
-            movq r12, rsi;
-            // set meta/func_id
-            movq rax, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + OFFSET_META)], rax;
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
-            // set self (= receiver)
-            movq [rsp - (16 + OFFSET_SELF)], rcx;
 
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            //
-            //       +-------------+
-            // +0x08 |             |
-            //       +-------------+
-            //  0x00 |             | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     | func_id
-            //       +-------------+
-            // -0x20 |    block    |
-            //       +-------------+
-            // -0x28 |     %0      | receiver
-            //       +-------------+
-            // -0x30 | %1(1st arg) |
-            //       +-------------+
-            //       |             |
-            //
+        gen_invoker_prologue(&mut jit);
+        monoasm! { &mut jit,
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;
@@ -404,16 +425,8 @@ impl Codegen {
             addq r9, 1;
             jne  loop_;
         loop_exit:
-
-            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
-            call rax;
-            popq r15;
-            popq r14;
-            popq r13;
-            popq r12;
-            popq rbx;
-            ret;
         };
+        gen_invoker_epilogue(&mut jit);
 
         // method invoker.
         let invoker2: extern "C" fn(
@@ -421,7 +434,7 @@ impl Codegen {
             &mut Globals,
             *const FuncData,
             Value,
-            *const Value,
+            Arg,
             usize,
         ) -> Option<Value> = unsafe { std::mem::transmute(jit.get_current_address().as_ptr()) };
         let loop_exit = jit.label();
@@ -430,42 +443,11 @@ impl Codegen {
         // rsi: &mut Globals
         // rdx: *const FuncData
         // rcx: receiver: Value
-        // r8:  *args: *const Value
+        // r8:  args: Arg
         // r9:  len: usize
-        monoasm! { &mut jit,
-            pushq rbx;
-            pushq r12;
-            pushq r13;
-            pushq r14;
-            pushq r15;
-            movq rbx, rdi;
-            movq r12, rsi;
-            // set meta/func_id
-            movq rax, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + OFFSET_META)], rax;
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
-            // set self (= receiver)
-            movq [rsp - (16 + OFFSET_SELF)], rcx;
 
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            //
-            //       +-------------+
-            // +0x08 |             |
-            //       +-------------+
-            //  0x00 |             | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     | func_id
-            //       +-------------+
-            // -0x20 |     %0      | receiver
-            //       +-------------+
-            // -0x28 | %1(1st arg) |
-            //       +-------------+
-            //       |             |
-            //
+        gen_invoker_prologue(&mut jit);
+        monoasm! { &mut jit,
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;
@@ -478,16 +460,8 @@ impl Codegen {
             addq r9, 1;
             jne  loop_;
         loop_exit:
-
-            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
-            call rax;
-            popq r15;
-            popq r14;
-            popq r13;
-            popq r12;
-            popq rbx;
-            ret;
         };
+        gen_invoker_epilogue(&mut jit);
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
