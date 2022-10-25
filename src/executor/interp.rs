@@ -98,6 +98,9 @@ impl Interp {
         self.invoke_func(globals, func_id, receiver, args)
     }
 
+    ///
+    /// Invoke func with *args*: &\[Value\].
+    ///
     pub(crate) fn invoke_func(
         &mut self,
         globals: &mut Globals,
@@ -109,6 +112,9 @@ impl Interp {
         (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 
+    ///
+    /// Invoke func with *args*: Args.
+    ///
     pub(crate) fn invoke_func2(
         &mut self,
         globals: &mut Globals,
@@ -118,7 +124,7 @@ impl Interp {
         len: usize,
     ) -> Option<Value> {
         let data = self.get_func_data(globals, func_id) as *const _;
-        (self.codegen.invoker2)(self, globals, data, receiver, args.as_ptr(), len)
+        (self.codegen.invoker2)(self, globals, data, receiver, args, len)
     }
 
     pub(crate) fn get_func_data<'a>(
