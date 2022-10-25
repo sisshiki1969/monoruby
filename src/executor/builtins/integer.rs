@@ -6,6 +6,33 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
+}
+
+/// ### Integer#times
+/// - times {|n| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
+extern "C" fn times(
+    _vm: &mut Interp,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _: usize,
+) -> Option<Value> {
+    let i = match self_val.try_fixnum() {
+        Some(i) => i,
+        None => unimplemented!(),
+    };
+    eprint!(
+        "{}",
+        match arg.block() {
+            Some(v) => v.to_s(globals),
+            None => "".to_string(),
+        }
+    );
+
+    return Some(self_val);
 }
 
 /// ### Integer#chr

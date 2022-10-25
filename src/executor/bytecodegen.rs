@@ -1033,17 +1033,9 @@ impl IrContext {
     ) -> Result<(BcTemp, usize)> {
         assert!(arglist.kw_args.len() == 0);
         assert!(arglist.hash_splat.len() == 0);
-        assert!(arglist.block.is_none());
-        assert!(!arglist.delegate);
-        self.check_fast_call_inner(ctx, info, arglist.args)
-    }
 
-    fn check_fast_call_inner(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut RubyFuncInfo,
-        args: Vec<Node>,
-    ) -> Result<(BcTemp, usize)> {
+        assert!(!arglist.delegate);
+        let args = arglist.args;
         let len = args.len();
         let arg = self.gen_args(ctx, info, args)?;
         info.temp -= len as u16;
