@@ -105,3 +105,14 @@ impl std::ops::Index<usize> for Arg {
         unsafe { &*self.0.sub(index) }
     }
 }
+
+impl Arg {
+    pub fn block(&self) -> Option<Value> {
+        let v = unsafe { (*self.0.add((OFFSET_ARG0 - OFFSET_BLOCK) as usize / 8)).get() };
+        if v == 0 {
+            None
+        } else {
+            Some(Value::from(v))
+        }
+    }
+}
