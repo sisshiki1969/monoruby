@@ -155,12 +155,12 @@ impl FnStore {
         &mut self,
         name: Option<String>,
         args: Vec<String>,
-        ast: Node,
+        body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> FuncId {
         self.functions
-            .add_ruby_func(name, args, ast, sourceinfo, is_classdef)
+            .add_ruby_func(name, args, body, sourceinfo, is_classdef)
     }
 }
 

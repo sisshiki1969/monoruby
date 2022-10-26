@@ -763,8 +763,8 @@ impl IrContext {
                 self.gen_expr(ctx, info, body, use_value, is_ret)?;
                 return Ok(());
             }
-            NodeKind::MethodDef(name, params, box body, _lv) => {
-                self.gen_method_def(ctx, info, name.clone(), params, body, loc)?;
+            NodeKind::MethodDef(name, block) => {
+                self.gen_method_def(ctx, info, name.clone(), block, loc)?;
                 if use_value {
                     self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
                 }
@@ -777,8 +777,7 @@ impl IrContext {
                 base,
                 name,
                 superclass,
-                box body,
-                lvar: _,
+                info: block_info,
                 is_module,
             } => {
                 assert!(base.is_none());
@@ -789,7 +788,15 @@ impl IrContext {
                     None
                 };
                 let superclass = superclass.map(|c| *c);
-                self.gen_class_def(ctx, info, name.clone(), superclass, body, ret, loc)?;
+                self.gen_class_def(
+                    ctx,
+                    info,
+                    name.clone(),
+                    superclass,
+                    *block_info.body,
+                    ret,
+                    loc,
+                )?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -925,15 +932,14 @@ impl IrContext {
                 base,
                 name,
                 superclass,
-                box body,
-                lvar: _,
+                info: block_info,
                 is_module,
             } => {
                 assert!(base.is_none());
                 assert!(!is_module);
                 let ret = Some(local.into());
                 let superclass = superclass.map(|c| *c);
-                self.gen_class_def(ctx, info, name, superclass, body, ret, loc)?;
+                self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
@@ -949,12 +955,11 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
         name: String,
-        params: Vec<FormalParam>,
-        node: Node,
+        block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
         let mut args = vec![];
-        for param in params {
+        for param in block.params {
             match param.kind {
                 ParamKind::Param(name) => args.push(name),
                 _ => {
@@ -969,7 +974,7 @@ impl IrContext {
         let func_id = ctx.add_ruby_func(
             Some(name.clone()),
             args,
-            node,
+            *block.body,
             info.sourceinfo.clone(),
             false,
         );
