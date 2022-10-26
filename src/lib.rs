@@ -22,7 +22,7 @@ use ruruby_parse::{
 use rvalue::*;
 use value::*;
 
-pub const ARRAY_INLINE_ELEM: usize = 39;
+pub const STRING_INLINE_CAP: usize = 39;
 
 pub fn compile_and_run(
     globals: &mut Globals,

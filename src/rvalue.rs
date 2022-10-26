@@ -121,7 +121,7 @@ impl RValue {
                 ObjKind::FLOAT => ObjKind {
                     float: self.as_float(),
                 },
-                ObjKind::BYTES => ObjKind::bytes(InnerVec::from_slice(self.as_bytes())),
+                ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                 ObjKind::ARRAY => ObjKind::array(
                     self.as_array()
@@ -231,20 +231,18 @@ impl RValue {
         Self::new_bytes(s.into_bytes())
     }
 
-    pub(crate) fn new_bytes(bytes: Vec<u8>) -> Self {
-        let v = SmallVec::from_vec(bytes);
+    pub(crate) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes(v),
+            kind: ObjKind::bytes_from_vec(v),
             var_table: None,
         }
     }
 
-    pub(crate) fn new_bytes_from_slice(bytes: &[u8]) -> Self {
-        let v = SmallVec::from_slice(bytes);
+    pub(crate) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes(v),
+            kind: ObjKind::bytes(slice),
             var_table: None,
         }
     }
@@ -350,11 +348,9 @@ impl ObjKind {
     pub const ARRAY: u8 = 8;
 }
 
-pub type InnerVec = smallvec::SmallVec<[u8; ARRAY_INLINE_ELEM]>;
-
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct StringInner(InnerVec);
+pub struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
 impl ObjKind {
     fn invalid() -> Self {
@@ -381,9 +377,15 @@ impl ObjKind {
         Self { float }
     }
 
-    fn bytes(b: InnerVec) -> Self {
+    fn bytes(slice: &[u8]) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner(b)),
+            string: ManuallyDrop::new(StringInner(SmallVec::from_slice(slice))),
+        }
+    }
+
+    fn bytes_from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            string: ManuallyDrop::new(StringInner(SmallVec::from_vec(vec))),
         }
     }
 
