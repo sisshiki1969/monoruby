@@ -404,6 +404,7 @@ pub extern "C" fn vm_get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let (cached_version, val) = &globals.func[site_id].cache;
     if *cached_version == const_version {

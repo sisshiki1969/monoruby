@@ -646,8 +646,16 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self
-                    .gen_method_call(ctx, info, method, receiver, arglist, ret, is_ret, loc);
+                return self.gen_method_call(
+                    ctx,
+                    info,
+                    method,
+                    Some(receiver),
+                    arglist,
+                    ret,
+                    is_ret,
+                    loc,
+                );
             }
             NodeKind::FuncCall {
                 method,
@@ -659,7 +667,7 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self.gen_func_call(ctx, info, method, arglist, ret, is_ret, loc);
+                return self.gen_method_call(ctx, info, method, None, arglist, ret, is_ret, loc);
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
@@ -668,7 +676,7 @@ impl IrContext {
                 } else {
                     None
                 };
-                return self.gen_func_call(ctx, info, method, arglist, ret, is_ret, loc);
+                return self.gen_method_call(ctx, info, method, None, arglist, ret, is_ret, loc);
             }
             NodeKind::If {
                 box cond,
@@ -914,7 +922,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(local.into());
-                self.gen_method_call(ctx, info, method, receiver, arglist, ret, false, loc)?;
+                self.gen_method_call(ctx, info, method, Some(receiver), arglist, ret, false, loc)?;
             }
             NodeKind::FuncCall {
                 method,
@@ -922,7 +930,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(local.into());
-                self.gen_func_call(ctx, info, method, arglist, ret, false, loc)?;
+                self.gen_method_call(ctx, info, method, None, arglist, ret, false, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
@@ -958,26 +966,7 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let mut args = vec![];
-        for param in block.params {
-            match param.kind {
-                ParamKind::Param(name) => args.push(name),
-                _ => {
-                    return Err(MonorubyErr::unsupported_parameter_kind(
-                        param.kind,
-                        param.loc,
-                        info.sourceinfo.clone(),
-                    ))
-                }
-            }
-        }
-        let func_id = ctx.add_ruby_func(
-            Some(name.clone()),
-            args,
-            *block.body,
-            info.sourceinfo.clone(),
-            false,
-        );
+        let func_id = ctx.add_ruby_func(Some(name.clone()), block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
@@ -989,17 +978,11 @@ impl IrContext {
         info: &mut RubyFuncInfo,
         name: String,
         superclass: Option<Node>,
-        node: Node,
+        body: Node,
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_ruby_func(
-            Some(name.clone()),
-            vec![],
-            node,
-            info.sourceinfo.clone(),
-            true,
-        );
+        let func_id = ctx.add_ruby_classdef(Some(name.clone()), body, info.sourceinfo.clone());
         let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, superclass)?),
@@ -1030,23 +1013,6 @@ impl IrContext {
         Ok(arg)
     }
 
-    fn check_fast_call(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut RubyFuncInfo,
-        arglist: ArgList,
-    ) -> Result<(BcTemp, usize)> {
-        assert!(arglist.kw_args.len() == 0);
-        assert!(arglist.hash_splat.len() == 0);
-
-        assert!(!arglist.delegate);
-        let args = arglist.args;
-        let len = args.len();
-        let arg = self.gen_args(ctx, info, args)?;
-        info.temp -= len as u16;
-        Ok((arg, len))
-    }
-
     fn gen_call(
         &mut self,
         recv: BcReg,
@@ -1054,9 +1020,14 @@ impl IrContext {
         ret: Option<BcReg>,
         arg: BcReg,
         len: usize,
+        block: bool,
         loc: Loc,
     ) {
-        self.push(BcIr::MethodCall(ret, method), loc);
+        if block {
+            self.push(BcIr::MethodCallBlock(ret, method), loc)
+        } else {
+            self.push(BcIr::MethodCall(ret, method), loc)
+        };
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
         self.push(BcIr::InlineCache, loc);
     }
@@ -1066,23 +1037,50 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut RubyFuncInfo,
         method: String,
-        receiver: Node,
+        receiver: Option<Node>,
         arglist: ArgList,
         ret: Option<BcReg>,
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
         let method = IdentId::get_ident_id_from_string(method);
-        let (recv, arg, len) = if receiver.kind == NodeKind::SelfValue {
-            let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
-            (BcReg::Self_, arg.into(), len)
-        } else {
-            self.push_expr(ctx, info, receiver)?;
-            let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
-            let recv = info.pop().into();
-            (recv, arg.into(), len)
+        let self_flag = match receiver {
+            Some(receiver) if receiver.kind == NodeKind::SelfValue => true,
+            Some(receiver) => {
+                self.push_expr(ctx, info, receiver)?;
+                false
+            }
+            None => true,
         };
-        self.gen_call(recv, method, ret, arg, len, loc);
+
+        assert!(arglist.kw_args.len() == 0);
+        assert!(arglist.hash_splat.len() == 0);
+        assert!(!arglist.delegate);
+        let mut has_block = false;
+        let old_temp = info.temp;
+        let arg = info.next_reg();
+        if let Some(box block) = arglist.block {
+            has_block = true;
+
+            match block.kind {
+                NodeKind::Lambda(block) => {
+                    let func_id = ctx.add_ruby_func(None, block, info.sourceinfo.clone())?;
+                    self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
+                }
+                _ => unimplemented!(),
+            }
+        }
+        let args = arglist.args;
+        let len = args.len();
+        self.gen_args(ctx, info, args)?;
+        info.temp = old_temp;
+
+        let recv = if self_flag {
+            BcReg::Self_
+        } else {
+            info.pop().into()
+        };
+        self.gen_call(recv, method, ret, arg.into(), len, has_block, loc);
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1090,26 +1088,7 @@ impl IrContext {
     }
 
     fn gen_method_assign(&mut self, method: IdentId, receiver: BcReg, val: BcReg, loc: Loc) {
-        self.gen_call(receiver, method, None, val, 1, loc);
-    }
-
-    fn gen_func_call(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut RubyFuncInfo,
-        method: String,
-        arglist: ArgList,
-        ret: Option<BcReg>,
-        is_ret: bool,
-        loc: Loc,
-    ) -> Result<()> {
-        let (arg, len) = self.check_fast_call(ctx, info, arglist)?;
-        let method = IdentId::get_ident_id_from_string(method);
-        self.gen_call(BcReg::Self_, method, ret, arg.into(), len, loc);
-        if is_ret {
-            self.gen_ret(info, None);
-        }
-        return Ok(());
+        self.gen_call(receiver, method, None, val, 1, false, loc);
     }
 
     fn gen_binary(
@@ -1580,6 +1559,17 @@ impl IrContext {
                     };
                     Bc::from_with_class_and_version(
                         enc_wl(1, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
+                }
+                BcIr::MethodCallBlock(ret, name) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(19, op1.0, name.get()),
                         ClassId::new(0),
                         -1i32 as u32,
                     )

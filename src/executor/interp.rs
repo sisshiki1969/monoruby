@@ -47,12 +47,12 @@ impl Interp {
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let main_data = self.get_func_data(globals, func_id) as *const _;
 
+        #[cfg(feature = "emit-bc")]
+        globals.dump_bc();
+
         let entry_point = self.codegen.entry_point;
         let res = entry_point(self, globals, main_data);
         globals.flush_stdout();
-
-        #[cfg(feature = "emit-bc")]
-        globals.dump_bc();
 
         res.ok_or_else(|| globals.take_error().unwrap())
     }
@@ -108,6 +108,21 @@ impl Interp {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
+        let data = self.get_func_data(globals, func_id) as *const _;
+        (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
+    }
+
+    pub(crate) fn invoke_block(
+        &mut self,
+        globals: &mut Globals,
+        block: Value,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        let func_id = match block.unpack() {
+            RV::Integer(id) => FuncId(id as u32),
+            _ => unimplemented!(),
+        };
         let data = self.get_func_data(globals, func_id) as *const _;
         (self.codegen.invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }

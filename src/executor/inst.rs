@@ -253,14 +253,40 @@ impl BcPc {
                     _ => unreachable!(),
                 };
                 let name = IdentId::get_name(name);
-                let op1 = format!(
-                    "{} = {:?}.call {}({:?}; {})",
-                    ret.ret_str(),
-                    recv,
-                    name,
-                    args,
-                    len,
-                );
+                let op1 = if len == 0 {
+                    format!("{} = {:?}.call {}()", ret.ret_str(), recv, name,)
+                } else {
+                    format!(
+                        "{} = {:?}.call {}({:?}; {})",
+                        ret.ret_str(),
+                        recv,
+                        name,
+                        args,
+                        len,
+                    )
+                };
+                format!("{:36} [{}]", op1, class_id.get_name(globals))
+            }
+            BcOp::MethodCallBlock(ret, name, class_id, _) => {
+                let args_pc = *self + 1;
+                let (recv, args, len) = match args_pc.op1() {
+                    BcOp::MethodArgs(recv, args, len, _) => (recv, args, len),
+                    _ => unreachable!(),
+                };
+                let name = IdentId::get_name(name);
+                let op1 = if len == 0 {
+                    format!("{} = {:?}.call {}(&{:?})", ret.ret_str(), recv, name, args)
+                } else {
+                    format!(
+                        "{} = {:?}.call {}({:?}; {} &{:?})",
+                        ret.ret_str(),
+                        recv,
+                        name,
+                        args + 1,
+                        len,
+                        args,
+                    )
+                };
                 format!("{:36} [{}]", op1, class_id.get_name(globals))
             }
             BcOp::MethodArgs(..) => return None,
@@ -409,9 +435,10 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Ret(BcReg),
-    Mov(BcReg, BcReg),                  // dst, offset
-    MethodCall(Option<BcReg>, IdentId), // (ret, id)
-    MethodArgs(BcReg, BcReg, usize),    // (recv, args, args_len)
+    Mov(BcReg, BcReg),                       // dst, offset
+    MethodCall(Option<BcReg>, IdentId),      // (ret, id)
+    MethodCallBlock(Option<BcReg>, IdentId), // (ret, id)
+    MethodArgs(BcReg, BcReg, usize),         // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
     ClassDef {
@@ -643,6 +670,10 @@ impl std::fmt::Debug for Bc {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
                 write!(f, "{:28} {:?}", op1, class_id)
             }
+            BcOp::MethodCallBlock(ret, name, class_id, _) => {
+                let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
+                write!(f, "{:28} {:?}", op1, class_id)
+            }
             BcOp::MethodArgs(recv, args, len, _) => {
                 write!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
             }
@@ -744,6 +775,7 @@ pub(super) enum BcOp {
     //                +-------+-------+-------+-------+
     /// func call(%ret, name)
     MethodCall(SlotId, IdentId, ClassId, u32),
+    MethodCallBlock(SlotId, IdentId, ClassId, u32),
     /// func call 2nd opecode(%recv, %args, len)
     MethodArgs(SlotId, SlotId, u16, Option<CodePtr>),
     /// method definition(method_name, func_id)
@@ -854,6 +886,15 @@ impl BcOp {
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
+                19 => {
+                    let class_version = pc.class_version();
+                    Self::MethodCallBlock(
+                        SlotId::new(op1),
+                        IdentId::from(op2),
+                        class_version.0,
+                        class_version.1,
+                    )
+                }
                 _ => unreachable!("{:016x}", op),
             }
         } else {

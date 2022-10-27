@@ -385,15 +385,24 @@ impl LoopAnalysis {
                     reg_info.def_as(dst, false);
                 }
                 BcOp::MethodCall(..) => {}
+                BcOp::MethodCallBlock(..) => {}
                 BcOp::MethodArgs(recv, args, len, _) => {
-                    if let BcOp::MethodCall(ret, _, class, _) = (self.pc - 1).op1() {
-                        reg_info.use_as(recv, class == FLOAT_CLASS, class);
-                        for i in 0..len {
-                            reg_info.use_non_float(args + i);
+                    match (self.pc - 1).op1() {
+                        BcOp::MethodCall(ret, _, class, _) => {
+                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                            for i in 0..len {
+                                reg_info.use_non_float(args + i);
+                            }
+                            reg_info.def_as(ret, false);
                         }
-                        reg_info.def_as(ret, false);
-                    } else {
-                        unreachable!()
+                        BcOp::MethodCallBlock(ret, _, class, _) => {
+                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                            for i in 0..len + 1 {
+                                reg_info.use_non_float(args + i);
+                            }
+                            reg_info.def_as(ret, false);
+                        }
+                        _ => unreachable!(),
                     };
                     skip = true;
                 }

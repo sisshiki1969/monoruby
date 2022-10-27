@@ -23,6 +23,7 @@ extern "C" fn now(
     _self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east(9 * 3600));
     let time_info = TimeInfo::Local(t);
@@ -39,6 +40,7 @@ extern "C" fn sub(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let lhs_rv = self_val.try_rvalue().unwrap();
     let lhs = match lhs_rv.kind() {

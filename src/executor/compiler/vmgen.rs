@@ -196,7 +196,7 @@ impl Codegen {
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
         self.vm_entry = entry;
-        self.dispatch[1] = self.vm_method_call();
+        self.dispatch[1] = self.vm_method_call(false);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
         self.dispatch[4] = self.vm_condbr(branch);
@@ -214,6 +214,7 @@ impl Codegen {
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
+        self.dispatch[19] = self.vm_method_call(true);
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -553,7 +554,7 @@ impl Codegen {
         label
     }
 
-    fn vm_method_call(&mut self) -> CodePtr {
+    fn vm_method_call(&mut self, has_block: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let loop_ = self.jit.label();
@@ -640,12 +641,21 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
+        };
+        if has_block {
+            // set block
+            monoasm! { self.jit,
+                movq rax, [rcx];
+                movq [rsp - (16 + OFFSET_BLOCK)], rax;
+            };
+        }
+        monoasm! { self.jit,
             movq r8, rdi;
             testq r8, r8;
             jeq  loop_exit;
             negq r8;
         loop_:
-            movq rax, [rcx + r8 * 8 + 8];
+            movq rax, [rcx + r8 * 8 + (if has_block {0} else {8})];
             movq [rsp + r8 * 8 - (16 + OFFSET_SELF)], rax;
             addq r8, 1;
             jne  loop_;

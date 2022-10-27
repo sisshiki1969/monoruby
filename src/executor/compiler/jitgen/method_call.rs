@@ -19,36 +19,65 @@ impl Codegen {
         pc: BcPc,
         codeptr: Option<CodePtr>,
     ) {
-        if let BcOp::MethodCall(ret, name, class_id, version) = (pc - 1).op1() {
-            ctx.dealloc_xmm(ret);
-            if let Some(codeptr) = codeptr {
-                let meta = (pc + 1).meta();
-                let callee_pc = (pc + 1).pc();
-                let cached = Cached {
-                    codeptr,
-                    meta,
-                    class_id,
-                    version,
-                    pc: callee_pc,
-                };
-                self.gen_method_call_cached(globals, &ctx, recv, args, len, ret, cached, pc);
-            } else {
-                self.gen_method_call_not_cached(&ctx, recv, name, args, len, ret, pc);
+        match (pc - 1).op1() {
+            BcOp::MethodCall(ret, name, class_id, version) => {
+                ctx.dealloc_xmm(ret);
+                if let Some(codeptr) = codeptr {
+                    let meta = (pc + 1).meta();
+                    let callee_pc = (pc + 1).pc();
+                    let cached = Cached {
+                        codeptr,
+                        meta,
+                        class_id,
+                        version,
+                        pc: callee_pc,
+                    };
+                    self.gen_call_cached(globals, &ctx, recv, args, None, len, ret, cached, pc);
+                } else {
+                    self.gen_call_not_cached(&ctx, recv, name, args, None, len, ret, pc);
+                }
             }
-        } else {
-            unreachable!()
+            BcOp::MethodCallBlock(ret, name, class_id, version) => {
+                ctx.dealloc_xmm(ret);
+                if let Some(codeptr) = codeptr {
+                    let meta = (pc + 1).meta();
+                    let callee_pc = (pc + 1).pc();
+                    let cached = Cached {
+                        codeptr,
+                        meta,
+                        class_id,
+                        version,
+                        pc: callee_pc,
+                    };
+                    self.gen_call_cached(
+                        globals,
+                        &ctx,
+                        recv,
+                        args + 1,
+                        Some(args),
+                        len,
+                        ret,
+                        cached,
+                        pc,
+                    );
+                } else {
+                    self.gen_call_not_cached(&ctx, recv, name, args + 1, Some(args), len, ret, pc);
+                }
+            }
+            _ => unreachable!(),
         }
     }
 
     ///
     /// generate JIT code for a method call which was cached.
     ///
-    fn gen_method_call_cached(
+    fn gen_call_cached(
         &mut self,
         globals: &Globals,
         ctx: &BBContext,
         recv: SlotId,
         args: SlotId,
+        block: Option<SlotId>,
         len: u16,
         ret: SlotId,
         cached: Cached,
@@ -82,10 +111,10 @@ impl Codegen {
                 self.attr_writer(&ctx, ivar_name, ret, args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                self.native_call(&ctx, ret, args, len, abs_address, pc);
+                self.native_call(&ctx, ret, args, block, len, abs_address, pc);
             }
             FuncKind::Normal(_) => {
-                self.method_call_cached(recv, ret, args, len, &ctx, cached, pc);
+                self.method_call_cached(recv, ret, args, block, len, &ctx, cached, pc);
             }
         };
     }
@@ -93,12 +122,13 @@ impl Codegen {
     ///
     /// generate JIT code for a method call which was not cached.
     ///
-    fn gen_method_call_not_cached(
+    fn gen_call_not_cached(
         &mut self,
         ctx: &BBContext,
         recv: SlotId,
         name: IdentId,
         args: SlotId,
+        block: Option<SlotId>,
         len: u16,
         ret: SlotId,
         pc: BcPc,
@@ -155,14 +185,13 @@ impl Codegen {
         method_resolved:
         );
 
-        self.set_self_and_args(recv, args, len);
+        self.set_self_and_args(recv, args, block, len);
 
         monoasm!(self.jit,
             // set meta.
             movq rax, qword 0;
         patch_meta:
             movq [rsp - (16 + OFFSET_META)], rax;
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
 
             movq r13, qword 0;
         patch_pc:
@@ -346,12 +375,25 @@ impl Codegen {
         ctx: &BBContext,
         ret: SlotId,
         args: SlotId,
+        block: Option<SlotId>,
         len: u16,
         abs_address: u64,
         pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
+        match block {
+            Some(block) => {
+                monoasm!(self.jit,
+                    movq r9, [rbp - (conv(block))];
+                );
+            }
+            None => {
+                monoasm!(self.jit,
+                    movq r9, 0;
+                );
+            }
+        }
         monoasm!(self.jit,
             movq rdx, rdi;  // self: Value
             movq rdi, rbx;  // &mut Interp
@@ -373,6 +415,7 @@ impl Codegen {
         recv: SlotId,
         ret: SlotId,
         args: SlotId,
+        block: Option<SlotId>,
         len: u16,
         ctx: &BBContext,
         cached: Cached,
@@ -406,13 +449,12 @@ impl Codegen {
 
         self.jit.bind_label(method_resolved);
 
-        self.set_self_and_args(recv, args, len);
+        self.set_self_and_args(recv, args, block, len);
 
         monoasm!(self.jit,
             // set meta.
             movq rax, qword (cached.meta.0);
             movq [rsp - (16 + OFFSET_META)], rax;
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
 
             movq r13, qword (cached.pc.get_u64());
             movq rdi, (len);
@@ -438,7 +480,7 @@ impl Codegen {
         );
     }
 
-    fn set_self_and_args(&mut self, recv: SlotId, args: SlotId, len: u16) {
+    fn set_self_and_args(&mut self, recv: SlotId, args: SlotId, block: Option<SlotId>, len: u16) {
         // set self
         monoasm!(self.jit,
             movq rax, [rbp - (conv(recv))];
@@ -451,6 +493,20 @@ impl Codegen {
                 movq rax, [rbp - (conv(reg))];
                 movq [rsp - (16 + OFFSET_ARG0 as i32 + i as i32 * 8)], rax;
             );
+        }
+        // set block
+        match block {
+            Some(block) => {
+                monoasm!(self.jit,
+                    movq rax, [rbp - (conv(block))];
+                    movq [rsp - (16 + OFFSET_BLOCK)], rax;
+                );
+            }
+            None => {
+                monoasm!(self.jit,
+                    movq [rsp - (16 + OFFSET_BLOCK)], 0;
+                );
+            }
         }
     }
 }

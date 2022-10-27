@@ -28,8 +28,9 @@ extern "C" fn new(
     self_val: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
-    let obj = allocate(vm, globals, self_val, arg, 0)?;
+    let obj = allocate(vm, globals, self_val, arg, 0, None)?;
     if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
@@ -47,6 +48,7 @@ extern "C" fn superclass(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let class_id = self_val.as_class();
     let res = match class_id.super_class(globals) {
@@ -66,6 +68,7 @@ extern "C" fn allocate(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let class_id = self_val.as_class();
     let obj = Value::new_object(class_id);
@@ -82,6 +85,7 @@ extern "C" fn tos(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let class_name = self_val.as_class().get_name(globals);
     let res = Value::new_string(class_name);
@@ -98,6 +102,7 @@ extern "C" fn constants(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let class_id = self_val.as_class();
     let v = globals
@@ -122,6 +127,7 @@ extern "C" fn instance_methods(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let class_id = self_val.as_class();
     let v = globals
@@ -142,6 +148,7 @@ extern "C" fn attr_reader(
     self_val: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class();
@@ -163,6 +170,7 @@ extern "C" fn attr_writer(
     self_val: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class();
@@ -184,6 +192,7 @@ extern "C" fn attr_accessor(
     self_val: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class();

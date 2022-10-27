@@ -1,3 +1,6 @@
-3.times do
-  puts 100
+10.times do |y|
+  puts y
+  10.times do |x|
+    puts x
+  end
 end

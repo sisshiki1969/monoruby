@@ -20,6 +20,7 @@ extern "C" fn sqrt(
     _self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {

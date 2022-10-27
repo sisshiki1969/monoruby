@@ -980,6 +980,7 @@ impl Codegen {
         self.calc_offset();
         monoasm!(self.jit,
             lea  rcx, [rsp - (8 + OFFSET_ARG0)];     // rcx <- *const arg[0]
+            movq  r9, [rsp - (8 + OFFSET_BLOCK)];     // rcx <- *const arg[0]
             movq  rdx, [rsp - (8 + OFFSET_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
             movw [rsp - (8 + OFFSET_REGNUM)], rdi;
@@ -990,7 +991,7 @@ impl Codegen {
             movq rsi, r12;
             subq rsp, rax;
             movq rax, (abs_address);
-            // fn(&mut Interp, &mut Globals, Value, *const Value, len:usize)
+            // fn(&mut Interp, &mut Globals, Value, *const Value, len:usize, block:Option<Value>)
             call rax;
 
             leave;

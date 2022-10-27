@@ -418,6 +418,7 @@ impl Codegen {
                     }
                 }
                 BcOp::MethodCall(..) => {}
+                BcOp::MethodCallBlock(..) => {}
                 BcOp::MethodArgs(recv, args, len, callee_codeptr) => {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);

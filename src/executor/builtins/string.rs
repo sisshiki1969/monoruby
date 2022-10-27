@@ -21,6 +21,7 @@ extern "C" fn add(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let mut b = self_val.as_bytes().to_vec();
     b.extend_from_slice(arg[0].as_bytes());
@@ -135,6 +136,7 @@ extern "C" fn rem(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let arguments = match arg[0].is_array() {
         Some(ary) => ary.clone(),

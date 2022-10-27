@@ -16,7 +16,8 @@ pub use interp::*;
 use op::*;
 
 type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Interp, &mut Globals, Value, Arg, usize) -> Option<Value>;
+pub type BuiltinFn =
+    extern "C" fn(&mut Interp, &mut Globals, Value, Arg, usize, Option<Value>) -> Option<Value>;
 
 pub(self) const OFFSET_META: i64 = 8;
 pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;

@@ -45,6 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
     self_val: Value,
     arg: Arg,
     len: usize,
+_: Option<Value>,
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_object(class);
@@ -65,6 +66,7 @@ extern "C" fn puts(
     _: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.is_array() {
@@ -98,6 +100,7 @@ extern "C" fn print(
     _: Value,
     arg: Arg,
     len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     for offset in 0..len {
         globals.write_stdout(&arg[offset].to_bytes(globals));
@@ -111,6 +114,7 @@ extern "C" fn assert(
     _: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
@@ -127,6 +131,7 @@ extern "C" fn dump(
     _: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let mut bp: u64;
     unsafe {
@@ -149,6 +154,7 @@ extern "C" fn respond_to(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
@@ -168,6 +174,7 @@ extern "C" fn inspect(
     self_val: Value,
     _: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let s = self_val.inspect(globals);
     Some(Value::new_string(s))
@@ -183,6 +190,7 @@ extern "C" fn class(
     self_val: Value,
     _: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     Some(self_val.get_real_class_id(globals).get_obj(globals))
 }
@@ -197,6 +205,7 @@ extern "C" fn singleton_class(
     self_val: Value,
     _: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     Some(self_val.get_singleton(globals))
 }
@@ -211,6 +220,7 @@ extern "C" fn instance_variable_defined(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
@@ -231,6 +241,7 @@ extern "C" fn instance_variable_set(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let val = arg[1];
@@ -248,6 +259,7 @@ extern "C" fn instance_variable_get(
     self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let v = globals.get_ivar(self_val, id).unwrap_or_default();
@@ -264,6 +276,7 @@ extern "C" fn kernel_integer(
     _: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {

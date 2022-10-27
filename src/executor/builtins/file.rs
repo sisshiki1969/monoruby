@@ -20,6 +20,7 @@ extern "C" fn write(
     _self_val: Value,
     arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),

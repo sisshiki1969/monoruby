@@ -154,13 +154,35 @@ impl FnStore {
     pub(crate) fn add_ruby_func(
         &mut self,
         name: Option<String>,
-        args: Vec<String>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let mut args = vec![];
+        for param in info.params {
+            match param.kind {
+                ParamKind::Param(name) => args.push(name),
+                _ => {
+                    return Err(MonorubyErr::unsupported_parameter_kind(
+                        param.kind,
+                        param.loc,
+                        sourceinfo.clone(),
+                    ))
+                }
+            }
+        }
+        Ok(self
+            .functions
+            .add_ruby_func(name, args, *info.body, sourceinfo, false))
+    }
+
+    pub(crate) fn add_ruby_classdef(
+        &mut self,
+        name: Option<String>,
         body: Node,
         sourceinfo: SourceInfoRef,
-        is_classdef: bool,
     ) -> FuncId {
         self.functions
-            .add_ruby_func(name, args, body, sourceinfo, is_classdef)
+            .add_ruby_func(name, vec![], body, sourceinfo, true)
     }
 }
 

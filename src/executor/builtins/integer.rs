@@ -11,26 +11,28 @@ pub(super) fn init(globals: &mut Globals) {
 
 /// ### Integer#times
 /// - times {|n| ... } -> self
+/// - [TODO] times -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 extern "C" fn times(
-    _vm: &mut Interp,
+    vm: &mut Interp,
     globals: &mut Globals,
     self_val: Value,
-    arg: Arg,
+    _: Arg,
     _: usize,
+    block: Option<Value>,
 ) -> Option<Value> {
-    let i = match self_val.try_fixnum() {
+    let count = match self_val.try_fixnum() {
         Some(i) => i,
         None => unimplemented!(),
     };
-    eprint!(
-        "{}",
-        match arg.block() {
-            Some(v) => v.to_s(globals),
-            None => "".to_string(),
+    if let Some(block) = block {
+        for i in 0..count {
+            vm.invoke_block(globals, block, self_val, &[Value::new_integer(i)])?;
         }
-    );
+    } else {
+        unimplemented!("needs block.")
+    };
 
     return Some(self_val);
 }
@@ -46,6 +48,7 @@ extern "C" fn chr(
     self_val: Value,
     _arg: Arg,
     _len: usize,
+    _: Option<Value>,
 ) -> Option<Value> {
     match self_val.try_fixnum() {
         Some(i) => {
