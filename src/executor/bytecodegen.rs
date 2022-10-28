@@ -417,7 +417,7 @@ impl IrContext {
         info: &mut RubyFuncInfo,
         expr: Node,
     ) -> Result<BcReg> {
-        Ok(match info.is_local(&expr) {
+        Ok(match info.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
             None => self.push_expr(ctx, info, expr)?,
         })
@@ -430,7 +430,7 @@ impl IrContext {
         info: &mut RubyFuncInfo,
         expr: Node,
     ) -> Result<BcReg> {
-        Ok(match info.is_local(&expr) {
+        Ok(match info.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
             None => {
                 self.push_expr(ctx, info, expr)?;
@@ -446,7 +446,7 @@ impl IrContext {
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg)> {
-        match (info.is_local(&lhs), info.is_local(&rhs)) {
+        match (info.is_refer_local(&lhs), info.is_refer_local(&rhs)) {
             (None, None) => {
                 let lhs = self.push_expr(ctx, info, lhs)?;
                 let rhs = self.push_expr(ctx, info, rhs)?;
@@ -563,7 +563,7 @@ impl IrContext {
                 };
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                if let Some(local) = info.is_local(&lhs) {
+                if let Some(local) = info.is_refer_local(&lhs) {
                     self.gen_binop(ctx, info, op, lhs, rhs, Some(local), loc)?;
                     if is_ret {
                         self.gen_ret(info, Some(local));
@@ -592,7 +592,7 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let Some(local) = info.is_local(&lhs) {
+                    if let Some(local) = info.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, local, rhs)?;
                         if is_ret {
                             self.gen_ret(info, Some(local));
@@ -615,7 +615,7 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local = info.find_local(&ident);
+                let local = info.refer_local(&ident);
                 if is_ret {
                     self.gen_ret(info, Some(local));
                 } else if use_value {
@@ -748,7 +748,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
-                if let Some(local) = info.is_local(&expr) {
+                if let Some(local) = info.is_refer_local(&expr) {
                     self.gen_ret(info, Some(local));
                 } else {
                     self.gen_expr(ctx, info, expr, true, true)?;
@@ -882,7 +882,7 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let Some(src) = info.is_local(&lhs) {
+                    if let Some(src) = info.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, src, rhs)?;
                         self.gen_mov(local.into(), src.into());
                     } else {
@@ -900,7 +900,7 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(ident) => {
-                let local2 = info.find_local(&ident);
+                let local2 = info.refer_local(&ident);
                 self.gen_mov(local.into(), local2.into());
             }
             NodeKind::Const {
@@ -1179,7 +1179,7 @@ impl IrContext {
 
         // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
-            if let Some(local) = info.is_local(&lhs) {
+            if let Some(local) = info.is_assign_local(&lhs) {
                 assert_eq!(LvalueKind::Other, kind);
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
@@ -1211,7 +1211,7 @@ impl IrContext {
         use_value: bool,
     ) -> Result<()> {
         assert_eq!(1, param.len());
-        let counter = info.find_local(&param[0]);
+        let counter = info.assign_local(&param[0]);
         let break_pos = self.new_label();
         self.loops.push((
             LoopKind::For,

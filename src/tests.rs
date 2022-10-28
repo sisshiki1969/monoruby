@@ -7,7 +7,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       res = ({0})
-      for __i in 0..8 do
+      for __i in 0..5 do
           res2 = ({0})
           __assert(res, res2)
       end
@@ -254,7 +254,7 @@ mod test {
     }
 
     #[test]
-    fn test_numbers() {
+    fn test_numbers1() {
         let lhs_integer = [
             "0",
             "5375",
@@ -286,9 +286,28 @@ mod test {
                 }
             }
         }
-        for lhs in lhs_integer.iter().chain(&["234.2345"]) {
-            for rhs in rhs_integer.iter().chain(&["169.5333"]) {
-                for op in ["+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="] {
+    }
+
+    #[test]
+    fn test_numbers2() {
+        let lhs_integer = [
+            "0",
+            "5375",
+            "690426",
+            "24829482958347598570210950349530597028472983429873",
+            "234.2345",
+        ];
+        let rhs_integer = [
+            "17",
+            "3454",
+            "25084",
+            "234234645",
+            "2352354645657876868978696835652452546462456245646",
+            "169.5333",
+        ];
+        for lhs in lhs_integer.iter() {
+            for rhs in rhs_integer.iter() {
+                for op in ["+", "-", "*", "/"] {
                     run_test(&format!("{} {} {}", lhs, op, rhs));
                     run_test(&format!("{} {} (-{})", lhs, op, rhs));
                     run_test(&format!("-{} {} {}", lhs, op, rhs));
@@ -299,9 +318,66 @@ mod test {
     }
 
     #[test]
-    //#[ignore]
+    fn test_numbers3() {
+        let lhs_integer = [
+            "0",
+            "5375",
+            "690426",
+            "24829482958347598570210950349530597028472983429873",
+            "234.2345",
+        ];
+        let rhs_integer = [
+            "17",
+            "3454",
+            "25084",
+            "234234645",
+            "2352354645657876868978696835652452546462456245646",
+            "169.5333",
+        ];
+        for lhs in lhs_integer.iter() {
+            for rhs in rhs_integer.iter() {
+                for op in ["==", "!=", "<"] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
+                    run_test(&format!("-{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_numbers4() {
+        let lhs_integer = [
+            "0",
+            "5375",
+            "690426",
+            "24829482958347598570210950349530597028472983429873",
+            "234.2345",
+        ];
+        let rhs_integer = [
+            "17",
+            "3454",
+            "25084",
+            "234234645",
+            "2352354645657876868978696835652452546462456245646",
+            "169.5333",
+        ];
+        for lhs in lhs_integer.iter() {
+            for rhs in rhs_integer.iter() {
+                for op in ["<=", ">", ">="] {
+                    run_test(&format!("{} {} {}", lhs, op, rhs));
+                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
+                    run_test(&format!("-{} {} {}", lhs, op, rhs));
+                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_call() {
-        run_test("print 1"); // max number of 63bit signed int.
+        run_test("print 1");
     }
 
     #[test]

@@ -660,23 +660,38 @@ impl RubyFuncInfo {
         self.temp -= len as u16;
     }
 
-    pub(crate) fn find_local(&mut self, ident: &str) -> BcLocal {
+    pub(crate) fn assign_local(&mut self, ident: &str) -> BcLocal {
         match self.locals.get(ident) {
             Some(local) => BcLocal(*local),
             None => self.add_local(ident.to_owned()),
         }
     }
 
+    pub(crate) fn refer_local(&mut self, ident: &str) -> BcLocal {
+        match self.locals.get(ident) {
+            Some(local) => BcLocal(*local),
+            None => panic!("undefined local var `{}`", ident),
+        }
+    }
+
     /// Add a variable identifier without checking duplicates.
-    pub(crate) fn add_local(&mut self, ident: String) -> BcLocal {
+    fn add_local(&mut self, ident: String) -> BcLocal {
         let local = self.locals.len() as u16;
         assert!(self.locals.insert(ident, local).is_none());
         BcLocal(local)
     }
 
-    pub(crate) fn is_local(&mut self, node: &Node) -> Option<BcLocal> {
+    pub(crate) fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {
         if let NodeKind::LocalVar(name) = &node.kind {
-            Some(self.find_local(name))
+            Some(self.assign_local(name))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_refer_local(&mut self, node: &Node) -> Option<BcLocal> {
+        if let NodeKind::LocalVar(name) = &node.kind {
+            Some(self.refer_local(name))
         } else {
             None
         }

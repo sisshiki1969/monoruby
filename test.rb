@@ -1,6 +1,5 @@
 10.times do |y|
-  puts y
   10.times do |x|
-    puts x
+    puts y,x
   end
 end
