@@ -308,7 +308,7 @@ impl Globals {
             .iter()
             .skip(1)
             .for_each(|info| match &info.kind {
-                FuncKind::Normal(_) => info.dump_bc(self),
+                FuncKind::ISeq(_) => info.dump_bc(self),
                 _ => {}
             });
     }

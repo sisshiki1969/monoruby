@@ -185,7 +185,7 @@ pub(super) struct LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    pub(super) fn analyse(func: &RubyFuncInfo, bb_pos: usize) -> (RegInfo, Vec<SlotId>) {
+    pub(super) fn analyse(func: &ISeqInfo, bb_pos: usize) -> (RegInfo, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx
@@ -246,7 +246,7 @@ impl LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    fn new(func: &RubyFuncInfo) -> Self {
+    fn new(func: &ISeqInfo) -> Self {
         Self {
             branch_map: HashMap::default(),
             bb_info: func.get_bb_info(),
@@ -293,7 +293,7 @@ impl LoopAnalysis {
 
     fn scan_bb(
         &mut self,
-        func: &RubyFuncInfo,
+        func: &ISeqInfo,
         mut reg_info: RegInfo,
         bb_pos: usize,
     ) -> Option<RegInfo> {

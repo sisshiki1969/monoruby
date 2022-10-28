@@ -22,7 +22,7 @@ impl std::ops::Add<InstId> for BcPcBase {
 }
 
 impl BcPcBase {
-    pub(super) fn new(func: &RubyFuncInfo) -> Self {
+    pub(super) fn new(func: &ISeqInfo) -> Self {
         BcPcBase(func.bytecode_top())
     }
 }

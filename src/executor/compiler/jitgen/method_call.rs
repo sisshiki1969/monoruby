@@ -113,7 +113,7 @@ impl Codegen {
             FuncKind::Builtin { abs_address } => {
                 self.native_call(&ctx, ret, args, block, len, abs_address, pc);
             }
-            FuncKind::Normal(_) => {
+            FuncKind::ISeq(_) => {
                 self.method_call_cached(recv, ret, args, block, len, &ctx, cached, pc);
             }
         };

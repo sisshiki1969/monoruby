@@ -237,7 +237,7 @@ extern "C" fn get_error_location(
     let func_info = &globals.func[meta.func_id()];
     let bc_base = func_info.data.pc;
     let normal_info = match &func_info.kind {
-        FuncKind::Normal(info) => info,
+        FuncKind::ISeq(info) => info,
         FuncKind::Builtin { .. } => return,
         FuncKind::AttrReader { .. } => return,
         FuncKind::AttrWriter { .. } => return,
@@ -875,7 +875,7 @@ impl Codegen {
         let func = &mut globals.func[func_id];
         if func.data.codeptr.is_none() {
             let codeptr = match func.kind {
-                FuncKind::Normal(_) => {
+                FuncKind::ISeq(_) => {
                     let codeptr = if !globals.no_jit {
                         self.gen_jit_stub()
                     } else {

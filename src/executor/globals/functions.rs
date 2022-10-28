@@ -50,7 +50,7 @@ impl Funcs {
         &mut self,
         name: Option<String>,
         args: Vec<String>,
-        ast: Node,
+        body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> FuncId {
@@ -59,7 +59,7 @@ impl Funcs {
             name,
             fid,
             args,
-            ast,
+            body,
             sourceinfo,
             is_classdef,
         ));
@@ -212,7 +212,7 @@ impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        let mut ir = IrContext::compile_ast(&mut info, self)?;
+        let mut ir = IrContext::compile(&mut info, self)?;
         ir.ir_to_bytecode(&mut info, self);
 
         let regs = info.total_reg_num();
@@ -242,7 +242,7 @@ impl FnStore {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FuncKind {
-    Normal(RubyFuncInfo),
+    ISeq(ISeqInfo),
     Builtin { abs_address: u64 },
     AttrReader { ivar_name: IdentId },
     AttrWriter { ivar_name: IdentId },
@@ -410,11 +410,11 @@ impl FuncInfo {
         name: Option<String>,
         func_id: FuncId,
         args: Vec<String>,
-        ast: Node,
+        body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> Self {
-        let info = RubyFuncInfo::new(func_id, name.clone(), args, ast, sourceinfo);
+        let info = ISeqInfo::new(func_id, name.clone(), args, body, sourceinfo);
         Self {
             name,
             arity: info.args.len() as i32,
@@ -427,7 +427,7 @@ impl FuncInfo {
                     Meta::vm_method(info.id, 0)
                 },
             },
-            kind: FuncKind::Normal(info),
+            kind: FuncKind::ISeq(info),
         }
     }
 
@@ -481,16 +481,16 @@ impl FuncInfo {
         self.arity
     }
 
-    pub(crate) fn as_ruby_func(&self) -> &RubyFuncInfo {
+    pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {
-            FuncKind::Normal(info) => info,
+            FuncKind::ISeq(info) => info,
             _ => unreachable!(),
         }
     }
 
-    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut RubyFuncInfo {
+    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
         match &mut self.kind {
-            FuncKind::Normal(info) => info,
+            FuncKind::ISeq(info) => info,
             _ => unreachable!(),
         }
     }
@@ -535,7 +535,7 @@ impl FuncInfo {
 }
 
 #[derive(Clone, Default, PartialEq)]
-pub(crate) struct RubyFuncInfo {
+pub(crate) struct ISeqInfo {
     /// ID of this function.
     pub(crate) id: FuncId,
     name: Option<String>,
@@ -556,7 +556,7 @@ pub(crate) struct RubyFuncInfo {
     pub sourceinfo: SourceInfoRef,
 }
 
-impl std::fmt::Debug for RubyFuncInfo {
+impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -566,15 +566,15 @@ impl std::fmt::Debug for RubyFuncInfo {
     }
 }
 
-impl RubyFuncInfo {
+impl ISeqInfo {
     pub(crate) fn new(
         id: FuncId,
         name: Option<String>,
         args: Vec<String>,
-        ast: Node,
+        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let mut info = RubyFuncInfo {
+        let mut info = ISeqInfo {
             id,
             name,
             bytecode: None,
@@ -583,7 +583,7 @@ impl RubyFuncInfo {
             locals: HashMap::default(),
             temp: 0,
             temp_num: 0,
-            ast: Some(ast),
+            ast: Some(body),
             sourceinfo,
         };
         args.into_iter().for_each(|name| {
@@ -768,7 +768,7 @@ impl RubyFuncInfo {
     }
 }
 
-impl RubyFuncInfo {
+impl ISeqInfo {
     pub(crate) fn get_index(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,

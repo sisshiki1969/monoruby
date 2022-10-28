@@ -4,7 +4,7 @@ use super::*;
 impl Codegen {
     fn gen_merging_branches_loop(
         &mut self,
-        func: &RubyFuncInfo,
+        func: &ISeqInfo,
         cc: &mut CompileContext,
         bb_pos: usize,
     ) -> BBContext {
@@ -69,7 +69,7 @@ impl Codegen {
 
     fn gen_merging_branches(
         &mut self,
-        func: &RubyFuncInfo,
+        func: &ISeqInfo,
         cc: &mut CompileContext,
         bb_pos: usize,
     ) -> BBContext {
@@ -122,7 +122,7 @@ impl Codegen {
     pub(super) fn gen_backedge_branch(
         &mut self,
         cc: &mut CompileContext,
-        func: &RubyFuncInfo,
+        func: &ISeqInfo,
         bb_pos: usize,
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
@@ -152,7 +152,7 @@ impl Codegen {
     pub(super) fn compile_bb(
         &mut self,
         globals: &Globals,
-        func: &RubyFuncInfo,
+        func: &ISeqInfo,
         cc: &mut CompileContext,
     ) -> bool {
         let mut skip = false;

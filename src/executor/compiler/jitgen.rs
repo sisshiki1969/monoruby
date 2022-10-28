@@ -317,7 +317,7 @@ struct CompileContext {
 }
 
 impl CompileContext {
-    fn new(func: &RubyFuncInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
+    fn new(func: &ISeqInfo, codegen: &mut Codegen, start_pos: usize, is_loop: bool) -> Self {
         let bb_info = func.get_bb_info();
         let mut labels = HashMap::default();
         bb_info.into_iter().enumerate().for_each(|(idx, elem)| {
@@ -1132,7 +1132,7 @@ impl Codegen {
 
 #[cfg(any(feature = "emit-asm"))]
 impl Codegen {
-    fn dump_disas(&mut self, globals: &Globals, cc: &CompileContext, func: &RubyFuncInfo) {
+    fn dump_disas(&mut self, globals: &Globals, cc: &CompileContext, func: &ISeqInfo) {
         let (start, code_end, end) = self.jit.code_block.last().unwrap();
         eprintln!(
             "offset:{:?} code: {} bytes  data: {} bytes",
