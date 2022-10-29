@@ -31,10 +31,11 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 }
 
 impl Funcs {
-    fn new(sourceinfo: SourceInfoRef, is_classdef: bool) -> Self {
-        Self(vec![FuncInfo::new_ruby(
+    fn new(outer: Option<FuncId>, sourceinfo: SourceInfoRef, is_classdef: bool) -> Self {
+        Self(vec![FuncInfo::new_iseq(
             None,
             FuncId(0),
+            outer,
             vec![],
             Node::new_nil(Loc(0, 0)),
             sourceinfo,
@@ -46,24 +47,26 @@ impl Funcs {
         FuncId(self.0.len() as u32)
     }
 
-    fn add_ruby_func(
+    fn add_iseq(
         &mut self,
+        outer: Option<FuncId>,
         name: Option<String>,
         args: Vec<String>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> FuncId {
-        let fid = self.next_func_id();
-        self.0.push(FuncInfo::new_ruby(
+        let func_id = self.next_func_id();
+        self.0.push(FuncInfo::new_iseq(
             name,
-            fid,
+            func_id,
+            outer,
             args,
             body,
             sourceinfo,
             is_classdef,
         ));
-        fid
+        func_id
     }
 
     fn add_native_func(&mut self, name: String, address: BuiltinFn, arity: i32) -> FuncId {
@@ -137,7 +140,7 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
 impl FnStore {
     pub(crate) fn new() -> Self {
         Self {
-            functions: Funcs::new(SourceInfoRef::default(), false),
+            functions: Funcs::new(None, SourceInfoRef::default(), false),
             constsite_info: vec![],
         }
     }
@@ -151,9 +154,10 @@ impl FnStore {
         self.functions.0.len()
     }
 
-    pub(crate) fn add_ruby_func(
+    pub(crate) fn add_iseq(
         &mut self,
         name: Option<String>,
+        outer: Option<FuncId>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -172,17 +176,17 @@ impl FnStore {
         }
         Ok(self
             .functions
-            .add_ruby_func(name, args, *info.body, sourceinfo, false))
+            .add_iseq(outer, name, args, *info.body, sourceinfo, false))
     }
 
-    pub(crate) fn add_ruby_classdef(
+    pub(crate) fn add_classdef(
         &mut self,
         name: Option<String>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         self.functions
-            .add_ruby_func(name, vec![], body, sourceinfo, true)
+            .add_iseq(None, name, vec![], body, sourceinfo, true)
     }
 }
 
@@ -192,7 +196,8 @@ impl FnStore {
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let main_fid = self.functions.add_ruby_func(
+        let main_fid = self.functions.add_iseq(
+            None,
             Some("/main".to_string()),
             vec![],
             ast,
@@ -406,15 +411,16 @@ pub struct FuncInfo {
 }
 
 impl FuncInfo {
-    fn new_ruby(
+    fn new_iseq(
         name: Option<String>,
         func_id: FuncId,
+        outer: Option<FuncId>,
         args: Vec<String>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> Self {
-        let info = ISeqInfo::new(func_id, name.clone(), args, body, sourceinfo);
+        let info = ISeqInfo::new(func_id, outer, name.clone(), args, body, sourceinfo);
         Self {
             name,
             arity: info.args.len() as i32,
@@ -534,10 +540,14 @@ impl FuncInfo {
     }
 }
 
+///
+/// Information of instruction sequences.
+///
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ISeqInfo {
     /// ID of this function.
     pub(crate) id: FuncId,
+    outer: Option<FuncId>,
     name: Option<String>,
     /// Bytecode.
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
@@ -569,6 +579,7 @@ impl std::fmt::Debug for ISeqInfo {
 impl ISeqInfo {
     pub(crate) fn new(
         id: FuncId,
+        outer: Option<FuncId>,
         name: Option<String>,
         args: Vec<String>,
         body: Node,
@@ -576,6 +587,7 @@ impl ISeqInfo {
     ) -> Self {
         let mut info = ISeqInfo {
             id,
+            outer,
             name,
             bytecode: None,
             sourcemap: vec![],

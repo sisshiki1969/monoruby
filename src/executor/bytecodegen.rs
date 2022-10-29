@@ -961,7 +961,7 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_ruby_func(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_iseq(Some(name.clone()), None, block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
@@ -977,7 +977,7 @@ impl IrContext {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_ruby_classdef(Some(name.clone()), body, info.sourceinfo.clone());
+        let func_id = ctx.add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
         let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, superclass)?),
@@ -1059,7 +1059,8 @@ impl IrContext {
 
             match block.kind {
                 NodeKind::Lambda(block) => {
-                    let func_id = ctx.add_ruby_func(None, block, info.sourceinfo.clone())?;
+                    let func_id =
+                        ctx.add_iseq(None, Some(info.id), block, info.sourceinfo.clone())?;
                     self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
                 }
                 _ => unimplemented!(),
