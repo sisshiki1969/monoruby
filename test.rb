@@ -1,5 +1,5 @@
-10.times do |y|
-  10.times do |x|
-    puts y,x
-  end
+a = 42
+8.times do
+  puts a
+  __dump
 end

@@ -31,15 +31,15 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 }
 
 impl Funcs {
-    fn new(outer: Option<FuncId>, sourceinfo: SourceInfoRef, is_classdef: bool) -> Self {
+    fn default() -> Self {
         Self(vec![FuncInfo::new_iseq(
             None,
             FuncId(0),
-            outer,
+            None,
             vec![],
             Node::new_nil(Loc(0, 0)),
-            sourceinfo,
-            is_classdef,
+            SourceInfoRef::default(),
+            false,
         )])
     }
 
@@ -49,7 +49,7 @@ impl Funcs {
 
     fn add_iseq(
         &mut self,
-        outer: Option<FuncId>,
+        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         name: Option<String>,
         args: Vec<String>,
         body: Node,
@@ -140,7 +140,7 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
 impl FnStore {
     pub(crate) fn new() -> Self {
         Self {
-            functions: Funcs::new(None, SourceInfoRef::default(), false),
+            functions: Funcs::default(),
             constsite_info: vec![],
         }
     }
@@ -157,7 +157,7 @@ impl FnStore {
     pub(crate) fn add_iseq(
         &mut self,
         name: Option<String>,
-        outer: Option<FuncId>,
+        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -414,13 +414,25 @@ impl FuncInfo {
     fn new_iseq(
         name: Option<String>,
         func_id: FuncId,
-        outer: Option<FuncId>,
+        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         args: Vec<String>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> Self {
-        let info = ISeqInfo::new(func_id, outer, name.clone(), args, body, sourceinfo);
+        let info = if let Some(outer) = outer {
+            ISeqInfo::new(
+                func_id,
+                Some(outer.0),
+                outer.1,
+                name.clone(),
+                args,
+                body,
+                sourceinfo,
+            )
+        } else {
+            ISeqInfo::new(func_id, None, vec![], name.clone(), args, body, sourceinfo)
+        };
         Self {
             name,
             arity: info.args.len() as i32,
@@ -557,6 +569,8 @@ pub(crate) struct ISeqInfo {
     args: Vec<String>,
     /// local variables.
     locals: HashMap<String, u16>,
+    /// outer local variables.
+    outer_locals: Vec<HashMap<String, u16>>,
     /// The current register id.
     pub temp: u16,
     /// The number of temporary registers.
@@ -580,6 +594,7 @@ impl ISeqInfo {
     pub(crate) fn new(
         id: FuncId,
         outer: Option<FuncId>,
+        outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
         args: Vec<String>,
         body: Node,
@@ -593,6 +608,7 @@ impl ISeqInfo {
             sourcemap: vec![],
             args: args.clone(),
             locals: HashMap::default(),
+            outer_locals,
             temp: 0,
             temp_num: 0,
             ast: Some(body),
@@ -649,6 +665,12 @@ impl ISeqInfo {
         self.bytecode().as_ptr()
     }
 
+    pub(crate) fn get_locals(&self) -> Vec<HashMap<String, u16>> {
+        let mut locals = vec![self.locals.clone()];
+        locals.extend_from_slice(&self.outer_locals);
+        locals
+    }
+
     /// get the next register id.
     pub(crate) fn next_reg(&self) -> BcTemp {
         BcTemp(self.temp)
@@ -684,6 +706,10 @@ impl ISeqInfo {
             Some(local) => BcLocal(*local),
             None => panic!("undefined local var `{}`", ident),
         }
+    }
+
+    pub(crate) fn refer_dynamic_local(&self, outer: usize, ident: &str) -> u16 {
+        *self.outer_locals[outer - 1].get(ident).unwrap()
     }
 
     /// Add a variable identifier without checking duplicates.

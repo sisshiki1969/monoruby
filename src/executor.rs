@@ -19,11 +19,12 @@ type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn =
     extern "C" fn(&mut Interp, &mut Globals, Value, Arg, usize, Option<Value>) -> Option<Value>;
 
-pub(self) const OFFSET_META: i64 = 8;
+pub(self) const OFFSET_OUTER: i64 = 8;
+pub(self) const OFFSET_META: i64 = 16;
 pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;
 pub(self) const OFFSET_FUNCID: i64 = OFFSET_META;
-pub(self) const OFFSET_BLOCK: i64 = 16;
-pub(self) const OFFSET_SELF: i64 = 24;
+pub(self) const OFFSET_BLOCK: i64 = 24;
+pub(self) const OFFSET_SELF: i64 = 32;
 pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]

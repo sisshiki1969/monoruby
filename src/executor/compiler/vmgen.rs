@@ -74,7 +74,9 @@ impl Codegen {
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - (16 + OFFSET_META)], rax;
+            // set block
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -237,6 +239,7 @@ impl Codegen {
         self.dispatch[148] = ret;
         self.dispatch[149] = mov;
 
+        self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[155] = self.vm_concat();
 
         self.dispatch[156] = self.vm_eqrr();
@@ -554,6 +557,28 @@ impl Codegen {
         label
     }
 
+    fn vm_load_dvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { self.jit,
+            movq rax, [rbp - (OFFSET_OUTER)];
+        loop_:
+            subq rsi, 1;
+            jz   loop_exit;
+            movq rax, [rax];
+            jmp  loop_;
+        loop_exit:
+            lea  rax, [rax + (OFFSET_OUTER)];
+            negq rdi;
+            movq rax, [rax + rdi * 8 - (OFFSET_SELF)];
+        };
+        self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_method_call(&mut self, has_block: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
@@ -608,10 +633,10 @@ impl Codegen {
             jne  slowpath;
 
         exec:
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
             // set meta
             movq rdi, [r13 + 16];
             movq [rsp -(16 + OFFSET_META)], rdi;
-            movq [rsp -(16 + OFFSET_BLOCK)], 0;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
@@ -620,33 +645,38 @@ impl Codegen {
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        monoasm! { self.jit,
-            //
-            //       +-------------+
-            // +0x08 |     pc      |
-            //       +-------------+
-            //  0x00 |   ret reg   | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     |
-            //       +-------------+
-            // -0x20 |    block    |
-            //       +-------------+
-            // -0x28 |     %0      |
-            //       +-------------+
-            // -0x30 | %1(1st arg) | <- rdx
-            //       +-------------+
-            //       |             |
-            //
-        };
+        //
+        //       +-------------+
+        // +0x08 |     pc      |
+        //       +-------------+
+        //  0x00 |   ret reg   | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |   old rbp   |
+        //       +-------------+
+        // -0x18 |    outer    |
+        //       +-------------+
+        // -0x20 |    meta     |
+        //       +-------------+
+        // -0x28 |    block    |
+        //       +-------------+
+        // -0x30 |     %0      |
+        //       +-------------+
+        // -0x38 | %1(1st arg) | <- rdx
+        //       +-------------+
+        //       |             |
+        //
         if has_block {
             // set block
             monoasm! { self.jit,
                 movq rax, [rcx];
                 movq [rsp - (16 + OFFSET_BLOCK)], rax;
+                subq rcx, 8;
+            };
+        } else {
+            monoasm! { self.jit,
+                movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
         }
         monoasm! { self.jit,
@@ -655,7 +685,7 @@ impl Codegen {
             jeq  loop_exit;
             negq r8;
         loop_:
-            movq rax, [rcx + r8 * 8 + (if has_block {0} else {8})];
+            movq rax, [rcx + r8 * 8 + 8];
             movq [rsp + r8 * 8 - (16 + OFFSET_SELF)], rax;
             addq r8, 1;
             jne  loop_;
@@ -1184,6 +1214,7 @@ impl Codegen {
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rdi;
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
             movq [rsp - (16 + OFFSET_SELF)], r15;
             movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];

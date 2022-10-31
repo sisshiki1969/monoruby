@@ -466,13 +466,16 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
 }
 
 pub extern "C" fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, bp: *const u64) {
-    let meta = Meta::new(unsafe { *bp.sub(1) });
+    let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) });
+    let outer = unsafe { *bp.sub(OFFSET_OUTER as usize / 8) };
     let func_id = meta.func_id();
     eprintln!(
-        "name:[{}] {:?}",
+        "    name:[{}] bp:{:?} outer:0x{:012x} {:?}",
         globals.func[func_id]
             .name()
             .unwrap_or(&"<unnamed>".to_string()),
+        bp,
+        outer,
         meta,
     );
     eprint!("    ");

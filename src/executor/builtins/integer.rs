@@ -61,3 +61,13 @@ extern "C" fn chr(
     globals.err_char_out_of_range(self_val);
     return None;
 }
+
+#[cfg(test)]
+mod test {
+    use super::tests::*;
+
+    #[test]
+    fn times() {
+        run_test("a = 100; 4.times do puts a; end");
+    }
+}

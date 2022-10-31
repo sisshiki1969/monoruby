@@ -111,7 +111,7 @@ impl Codegen {
                 self.attr_writer(&ctx, ivar_name, ret, args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                self.native_call(&ctx, ret, args, block, len, abs_address, pc);
+                self.native_call(&ctx, func_id, ret, args, block, len, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
                 self.method_call_cached(recv, ret, args, block, len, &ctx, cached, pc);
@@ -373,6 +373,7 @@ impl Codegen {
     fn native_call(
         &mut self,
         ctx: &BBContext,
+        func_id: FuncId,
         ret: SlotId,
         args: SlotId,
         block: Option<SlotId>,
@@ -380,8 +381,51 @@ impl Codegen {
         abs_address: u64,
         pc: BcPc,
     ) {
+        // set arguments to a callee stack.
+        //
+        //       +-------------+
+        //  0x00 |             | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |   old rbp   |
+        //       +-------------+
+        // -0x18 |    meta     |
+        //       +-------------+
+        // -0x20 | blk  |      |
+        //       +-------------+
+        // -0x28 |     %0      |
+        //       +-------------+
+        // -0x30 | %1(1st arg) |
+        //       +-------------+
+        //       |             |
+        //
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
         let xmm_using = ctx.get_xmm_using();
+        let caller = self.jit.label();
+        self.jit.bind_label(caller);
+        monoasm!(self.jit,
+            pushq rbp;
+            movq rbp, rsp;
+            movq [rbp - (OFFSET_OUTER)], 0;
+            movq rax, (Meta::native(func_id, len as _).0);
+            movq [rbp - (OFFSET_META)], rax;
+            movq [rbp - (OFFSET_BLOCK)], r9;
+            subq rsp, (OFFSET_SELF);
+        );
         self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movq rax, (abs_address);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+        monoasm!(self.jit,
+            leave;
+            ret;
+        );
+        self.jit.select_page(0);
+
         match block {
             Some(block) => {
                 monoasm!(self.jit,
@@ -400,10 +444,9 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             lea  rcx, [rbp - (conv(args))];  // args: *const Value
             movq r8, (len);
-            movq rax, (abs_address);
-            call rax;
+            call caller;
         );
-        self.xmm_restore(&xmm_using);
+
         self.handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
@@ -485,6 +528,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rax, [rbp - (conv(recv))];
             movq [rsp - (16 + OFFSET_SELF)], rax;
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
         );
         // set arguments
         for i in 0..len {

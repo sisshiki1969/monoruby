@@ -134,7 +134,7 @@ puts "%.9f" % energy(BODIES)
 nbodies = BODIES.size
 dt = 0.01
 
-for x in 0...n
+n.times do
   i = 0
   while i < nbodies
     b = BODIES[i]

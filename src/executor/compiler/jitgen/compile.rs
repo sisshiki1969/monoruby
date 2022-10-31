@@ -267,6 +267,24 @@ impl Codegen {
                     ctx.read_slot(self, src);
                     self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
+                BcOp::LoadDynVar(ret, src, outer) => {
+                    ctx.dealloc_xmm(ret);
+                    monoasm!(self.jit,
+                        movq rax, [rbp - (OFFSET_OUTER)];
+                    );
+                    for _ in 0..outer - 1 {
+                        monoasm!(self.jit,
+                            movq rax, [rax];
+                        );
+                    }
+                    monoasm!(self.jit,
+                        lea  rax, [rax + (OFFSET_OUTER)];
+                        movq rax, [rax - (conv(src))];
+                    );
+                    if ret.0 != 0 {
+                        self.store_rax(ret);
+                    }
+                }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
@@ -422,6 +440,8 @@ impl Codegen {
                 BcOp::MethodArgs(recv, args, len, callee_codeptr) => {
                     ctx.read_slot(self, recv);
                     ctx.write_back_range(self, args, len);
+                    //let wb = ctx.get_write_back();
+                    //self.gen_write_back(wb);
 
                     self.gen_method_call(globals, &mut ctx, recv, args, len, pc, callee_codeptr);
 
@@ -605,6 +625,7 @@ impl Codegen {
             //       |             |
             //
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
             movq [rsp - (16 + OFFSET_META)], rdi;
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq [rsp - (16 + OFFSET_SELF)], r15;

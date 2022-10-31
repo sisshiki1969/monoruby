@@ -618,6 +618,11 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::DynamicLocalVar(outer, ident) => {
+                let ret = info.push().into();
+                let src = BcLocal(info.refer_dynamic_local(outer, &ident));
+                self.push(BcIr::LoadDynVar(ret, src.into(), outer), loc);
+            }
             NodeKind::Const {
                 toplevel,
                 name,
@@ -1059,8 +1064,13 @@ impl IrContext {
 
             match block.kind {
                 NodeKind::Lambda(block) => {
-                    let func_id =
-                        ctx.add_iseq(None, Some(info.id), block, info.sourceinfo.clone())?;
+                    let outer_locals = info.get_locals();
+                    let func_id = ctx.add_iseq(
+                        None,
+                        Some((info.id, outer_locals)),
+                        block,
+                        info.sourceinfo.clone(),
+                    )?;
                     self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
                 }
                 _ => unimplemented!(),
@@ -1475,6 +1485,12 @@ impl IrContext {
                     let op2 = info.get_index(base);
                     let op3 = info.get_index(idx);
                     Bc::from(enc_www(133, op1.0, op2.0, op3.0))
+                }
+                BcIr::LoadDynVar(ret, src, outer) => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(src);
+                    let op3 = *outer as u16;
+                    Bc::from(enc_www(150, op1.0, op2.0, op3))
                 }
                 BcIr::LoadConst(reg, toplevel, prefix, name) => {
                     let op1 = info.get_index(reg);

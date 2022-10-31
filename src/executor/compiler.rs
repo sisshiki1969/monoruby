@@ -45,8 +45,9 @@ pub struct Codegen {
     pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
-    pub invoker: Invoker,
-    pub invoker2: Invoker2,
+    pub method_invoker: Invoker,
+    pub method_invoker2: Invoker2,
+    pub block_invoker: Invoker,
 }
 
 fn conv(reg: SlotId) -> i64 {
@@ -340,7 +341,7 @@ impl Codegen {
             ret;
         );
 
-        fn gen_invoker_prologue(mut jit: &mut JitMemory) {
+        fn gen_invoker_prologue(mut jit: &mut JitMemory, invoke_block: bool) {
             monoasm! { jit,
                 pushq rbx;
                 pushq r12;
@@ -353,6 +354,19 @@ impl Codegen {
                 movq rax, [rdx + (FUNCDATA_OFFSET_META)];
                 movq [rsp - (16 + OFFSET_META)], rax;
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            };
+            if invoke_block {
+                monoasm! { jit,
+                    movq rax, [rbp];
+                    lea  rax, [rax - (OFFSET_OUTER)];
+                    movq [rsp - (16 + OFFSET_OUTER)], rax;
+                };
+            } else {
+                monoasm! { jit,
+                    movq [rsp - (16 + OFFSET_OUTER)], 0;
+                };
+            }
+            monoasm! { jit,
                 // set self (= receiver)
                 movq [rsp - (16 + OFFSET_SELF)], rcx;
 
@@ -391,8 +405,29 @@ impl Codegen {
             };
         }
 
+        fn gen_invoker_prep(mut jit: &mut JitMemory) {
+            let loop_exit = jit.label();
+            let loop_ = jit.label();
+            monoasm! { &mut jit,
+                // r8 <- *args
+                // r9 <- len
+                movq rdi, r9;
+                testq r9, r9;
+                jeq  loop_exit;
+                movq r10, r9;
+                negq r9;
+            loop_:
+                movq rax, [r8 + r10 * 8 - 8];
+                movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
+                subq r10, 1;
+                addq r9, 1;
+                jne  loop_;
+            loop_exit:
+            };
+        }
+
         // method invoker.
-        let invoker: extern "C" fn(
+        let method_invoker: extern "C" fn(
             &mut Interp,
             &mut Globals,
             *const FuncData,
@@ -400,8 +435,6 @@ impl Codegen {
             *const Value,
             usize,
         ) -> Option<Value> = unsafe { std::mem::transmute(jit.get_current_address().as_ptr()) };
-        let loop_exit = jit.label();
-        let loop_ = jit.label();
         // rdi: &mut Interp
         // rsi: &mut Globals
         // rdx: *const FuncData
@@ -409,27 +442,25 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
 
-        gen_invoker_prologue(&mut jit);
-        monoasm! { &mut jit,
-            // r8 <- *args
-            // r9 <- len
-            movq rdi, r9;
-            testq r9, r9;
-            jeq  loop_exit;
-            movq r10, r9;
-            negq r9;
-        loop_:
-            movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
-            subq r10, 1;
-            addq r9, 1;
-            jne  loop_;
-        loop_exit:
-        };
+        gen_invoker_prologue(&mut jit, false);
+        gen_invoker_prep(&mut jit);
+        gen_invoker_epilogue(&mut jit);
+
+        // block invoker.
+        let block_invoker: extern "C" fn(
+            &mut Interp,
+            &mut Globals,
+            *const FuncData,
+            Value,
+            *const Value,
+            usize,
+        ) -> Option<Value> = unsafe { std::mem::transmute(jit.get_current_address().as_ptr()) };
+        gen_invoker_prologue(&mut jit, true);
+        gen_invoker_prep(&mut jit);
         gen_invoker_epilogue(&mut jit);
 
         // method invoker.
-        let invoker2: extern "C" fn(
+        let method_invoker2: extern "C" fn(
             &mut Interp,
             &mut Globals,
             *const FuncData,
@@ -446,7 +477,7 @@ impl Codegen {
         // r8:  args: Arg
         // r9:  len: usize
 
-        gen_invoker_prologue(&mut jit);
+        gen_invoker_prologue(&mut jit, false);
         monoasm! { &mut jit,
             // r8 <- *args
             // r9 <- len
@@ -492,8 +523,9 @@ impl Codegen {
             heap_to_f64,
             div_by_zero,
             dispatch,
-            invoker,
-            invoker2,
+            method_invoker,
+            method_invoker2,
+            block_invoker,
         };
         codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);
@@ -504,50 +536,66 @@ impl Codegen {
         codegen
     }
 
+    ///
+    /// calculate an offset of stack pointer.
+    ///
     fn calc_offset(&mut self) {
         monoasm!(self.jit,
-            addq rax, 1;
+            addq rax, (OFFSET_ARG0 / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
-            addq rax, 32;
         );
     }
 
+    ///
+    /// check whether lhs and rhs are fixnum.
+    ///
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
         self.guard_rdi_fixnum(generic);
         self.guard_rsi_fixnum(generic);
     }
 
+    ///
+    /// check whether lhs is fixnum.
+    ///
     fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
-            // check whether lhs is fixnum.
             testq rdi, 0x1;
             jz generic;
         );
     }
 
+    ///
+    /// check whether rhs is fixnum.
+    ///
     fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
         monoasm!(self.jit,
-            // check whether rhs is fixnum.
             testq rsi, 0x1;
             jz generic;
         );
     }
 
+    ///
+    /// store rax to *ret*.
+    ///
     fn store_rax(&mut self, ret: SlotId) {
         monoasm!(self.jit,
-            // store the result to return reg.
             movq [rbp - (conv(ret))], rax;
         );
     }
 
+    ///
+    /// store rdi to *ret*.
+    ///
     fn store_rdi(&mut self, ret: SlotId) {
         monoasm!(self.jit,
-            // store the result to return reg.
             movq [rbp - (conv(ret))], rdi;
         );
     }
 
+    ///
+    /// store rsi to *ret*.
+    ///
     fn store_rsi(&mut self, ret: SlotId) {
         monoasm!(self.jit,
             // store the result to return reg.
@@ -555,6 +603,9 @@ impl Codegen {
         );
     }
 
+    ///
+    /// move xmm(*src*) to xmm(*dst*).
+    ///
     fn xmm_mov(&mut self, src: u16, dst: u16) {
         if src != dst {
             monoasm!(self.jit,
@@ -564,7 +615,7 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value in Integer, and convert to f64.
+    /// Assume the Value is Integer, and convert to f64.
     ///
     /// side-exit if not Integer.
     ///
@@ -589,7 +640,7 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value in Float, and convert to f64.
+    /// Assume the Value is Float, and convert to f64.
     ///
     /// side-exit if not Float.
     ///
@@ -974,22 +1025,22 @@ impl Codegen {
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
+            pushq rbp;
+            movq rbp, rsp;
             movq r8, rdi;
             movq rax, rdi;
         );
         self.calc_offset();
         monoasm!(self.jit,
-            lea  rcx, [rsp - (8 + OFFSET_ARG0)];     // rcx <- *const arg[0]
-            movq  r9, [rsp - (8 + OFFSET_BLOCK)];     // rcx <- *const arg[0]
-            movq  rdx, [rsp - (8 + OFFSET_SELF)];    // rdx <- self
+            subq rsp, rax;
+            lea  rcx, [rbp - (OFFSET_ARG0)];     // rcx <- *const arg[0]
+            movq  r9, [rbp - (OFFSET_BLOCK)];     // r9 <- block
+            movq  rdx, [rbp - (OFFSET_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [rsp - (8 + OFFSET_REGNUM)], rdi;
-            pushq rbp;
-            movq rbp, rsp;
+            movw [rbp - (OFFSET_REGNUM)], rdi;
 
             movq rdi, rbx;
             movq rsi, r12;
-            subq rsp, rax;
             movq rax, (abs_address);
             // fn(&mut Interp, &mut Globals, Value, *const Value, len:usize, block:Option<Value>)
             call rax;

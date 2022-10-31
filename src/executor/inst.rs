@@ -168,6 +168,9 @@ impl BcPc {
             BcOp::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
+            BcOp::LoadDynVar(ret, src, outer) => {
+                format!("{:?} = dynvar({outer}, [{:?}])", ret, src)
+            }
             BcOp::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
                     "{:?} = {}: {}[{:?}]",
@@ -425,6 +428,7 @@ pub(super) enum BcIr {
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
     StoreConst(BcReg, IdentId),
+    LoadDynVar(BcReg, BcReg, usize),
     LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
     StoreIvar(BcReg, IdentId), // src, id  - @id = %src
     Nil(BcReg),
@@ -618,6 +622,9 @@ impl std::fmt::Debug for Bc {
             BcOp::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
+            BcOp::LoadDynVar(ret, src, outer) => {
+                write!(f, "{:?} = dynvar({outer}, [{:?}])", ret, src)
+            }
             BcOp::LoadIvar(reg, id, ..) => {
                 write!(f, "{:?} = @[{:?}]", reg, id)
             }
@@ -745,6 +752,7 @@ pub(super) enum BcOp {
     IndexAssign(SlotId, SlotId, SlotId),
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
+    LoadDynVar(SlotId, SlotId, usize),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     /// nil(%reg)
@@ -921,6 +929,7 @@ impl BcOp {
                 ),
                 148 => Self::Ret(SlotId::new(op1)),
                 149 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
+                150 => Self::LoadDynVar(SlotId::new(op1), SlotId::new(op2), op3 as usize),
                 155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 156..=161 => Self::Cmp(
                     CmpKind::from(opcode - 156),
