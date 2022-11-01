@@ -67,6 +67,7 @@ mod test {
     use super::tests::*;
 
     #[test]
+    #[ignore]
     fn times() {
         run_test("a = 100; 4.times do puts a; end");
     }

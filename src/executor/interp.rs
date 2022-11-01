@@ -124,6 +124,7 @@ impl Interp {
             _ => unimplemented!(),
         };
         let data = self.get_func_data(globals, func_id) as *const _;
+        eprint!("");
         (self.codegen.block_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 

@@ -44,7 +44,7 @@ pub fn run_test_error(code: &str) {
 
 fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
-    let now = Instant::now();
+    let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
     let res = compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap();
     let jit_str = res.inspect(&globals);
@@ -540,6 +540,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_stacktrace() {
         run_test_no_result_check(
             r##"

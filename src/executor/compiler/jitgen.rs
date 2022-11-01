@@ -872,7 +872,7 @@ impl Codegen {
         #[cfg(feature = "emit-tir")]
         eprintln!("      src_end:   {:?}", src_ctx.stack_slot);
 
-        let side_exit = self.gen_side_deopt_dest(pc + 1, &src_ctx);
+        let side_exit = self.jit.label();
         for (reg, freg) in conv_list {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(reg))];
@@ -886,6 +886,13 @@ impl Codegen {
         }
         monoasm!(self.jit,
             jmp exit;
+        );
+        self.jit.select_page(0);
+        let side_label = self.gen_side_deopt_dest(pc + 1, &src_ctx);
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        side_exit:
+            jmp side_label;
         );
         self.jit.select_page(0);
     }
@@ -911,9 +918,8 @@ impl Codegen {
     ///
     fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let wb = ctx.get_write_back();
-        let old_p = self.jit.get_page();
-        //assert_eq!(0, old_p);
-        self.jit.select_page(2);
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         if wb.len() != 0 {
@@ -940,7 +946,7 @@ impl Codegen {
         monoasm!(self.jit,
             jmp fetch;
         );
-        self.jit.select_page(old_p);
+        self.jit.select_page(0);
         entry
     }
 

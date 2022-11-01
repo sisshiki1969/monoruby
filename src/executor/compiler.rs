@@ -251,9 +251,6 @@ extern "C" fn get_error_location(
 impl Codegen {
     pub(crate) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
-        jit.add_page();
-        jit.add_page();
-
         let class_version = jit.const_i32(0);
         let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
