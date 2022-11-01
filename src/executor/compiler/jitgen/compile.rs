@@ -49,13 +49,7 @@ impl Codegen {
                 bbctx.remove_unused(&unused);
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  write_back {_src_idx}->{bb_pos} {:?}", bbctx.stack_slot);
-                self.jit.select_page(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back_for_target(bbctx, &ctx, pc + 1);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select_page(0);
+                self.gen_write_back_for_target(bbctx, &ctx, dest_label, cur_label, pc + 1);
             }
 
             cc.new_backedge(cc.bb_pos, cur_label, ctx.stack_slot.clone(), unused);
@@ -101,13 +95,7 @@ impl Codegen {
             {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  write_back {_src_idx}->{bb_pos}",);
-                self.jit.select_page(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back_for_target(bbctx, &target_ctx, pc);
-                monoasm!(self.jit,
-                    jmp cur_label;
-                );
-                self.jit.select_page(0);
+                self.gen_write_back_for_target(bbctx, &target_ctx, dest_label, cur_label, pc);
             }
 
             #[cfg(feature = "emit-tir")]
@@ -138,13 +126,7 @@ impl Codegen {
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
                 let pc = func.get_pc(bb_pos);
-                self.jit.select_page(1);
-                self.jit.bind_label(dest_label);
-                self.gen_write_back_for_target(bbctx, &target_ctx, pc);
-                monoasm!(self.jit,
-                    jmp target_label;
-                );
-                self.jit.select_page(0);
+                self.gen_write_back_for_target(bbctx, &target_ctx, dest_label, target_label, pc);
             }
         }
     }

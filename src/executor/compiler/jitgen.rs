@@ -749,6 +749,8 @@ impl Codegen {
         &mut self,
         mut src_ctx: BBContext,
         target_ctx: &BBContext,
+        entry: DestLabel,
+        exit: DestLabel,
         pc: BcPc,
     ) {
         #[cfg(feature = "emit-tir")]
@@ -758,6 +760,8 @@ impl Codegen {
         }
         let len = src_ctx.stack_slot.0.len();
 
+        self.jit.select_page(1);
+        self.jit.bind_label(entry);
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx.stack_slot[reg] == LinkMode::None {
@@ -880,6 +884,10 @@ impl Codegen {
         for reg in guard_list {
             self.gen_assume_float(reg, side_exit);
         }
+        monoasm!(self.jit,
+            jmp exit;
+        );
+        self.jit.select_page(0);
     }
 
     fn gen_write_back_single(&mut self, freg: u16, v: Vec<SlotId>) {
@@ -904,6 +912,7 @@ impl Codegen {
     fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let wb = ctx.get_write_back();
         let old_p = self.jit.get_page();
+        //assert_eq!(0, old_p);
         self.jit.select_page(2);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
