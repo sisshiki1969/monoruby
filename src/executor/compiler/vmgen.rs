@@ -152,7 +152,6 @@ impl Codegen {
             subq rdx, 1;
             jne  loop_;
         loop_exit:
-            //movq rax, rdx;
         };
         self.calc_offset();
         monoasm! { self.jit,
