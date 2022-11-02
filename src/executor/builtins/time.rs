@@ -59,7 +59,7 @@ extern "C" fn sub(
     Some(Value::new_float(res))
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TimeInfo {
     Local(DateTime<FixedOffset>),
     UTC(DateTime<Utc>),

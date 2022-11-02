@@ -96,7 +96,7 @@ extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
 extern "C" fn get_index(
     interp: &mut Interp,
     globals: &mut Globals,
-    base: Value,
+    mut base: Value,
     index: Value,
 ) -> Option<Value> {
     match base.class_id() {
@@ -123,7 +123,7 @@ extern "C" fn get_index(
 extern "C" fn set_index(
     interp: &mut Interp,
     globals: &mut Globals,
-    base: Value,
+    mut base: Value,
     index: Value,
     src: Value,
 ) -> Option<Value> {
@@ -846,7 +846,7 @@ impl Codegen {
         entry
     }
 
-    fn call_unop(&mut self, func: u64) {
+    fn call_unop(&mut self, func: usize) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
@@ -856,7 +856,7 @@ impl Codegen {
         );
     }
 
-    fn call_binop(&mut self, func: u64) {
+    fn call_binop(&mut self, func: usize) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;

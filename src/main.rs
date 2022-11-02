@@ -49,7 +49,7 @@ fn main() {
                 &code,
                 args.no_jit,
                 args.warning,
-                &std::path::Path::new(&file_name),
+                std::path::Path::new(&file_name),
             );
         }
         None => {

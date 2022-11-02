@@ -50,10 +50,11 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<Integer> {
         RV::String(s) => match String::from_utf8(s.to_vec()) {
             Ok(s) => match s.parse::<i64>() {
                 Ok(i) => return Some(Integer::Fixnum(i)),
-                Err(_) => match s.parse::<BigInt>() {
-                    Ok(b) => return Some(Integer::BigInt(b)),
-                    Err(_) => {}
-                },
+                Err(_) => {
+                    if let Ok(b) = s.parse::<BigInt>() {
+                        return Some(Integer::BigInt(b));
+                    }
+                }
             },
             Err(_) => {}
         },
@@ -178,7 +179,7 @@ extern "C" fn rem(
         }
         // Width
         let mut width = 0usize;
-        while '0' <= ch && ch <= '9' {
+        while ('0'..='9').contains(&ch) {
             width = width * 10 + ch as usize - '0' as usize;
             ch = expect_char(globals, &mut chars)?;
         }
@@ -186,7 +187,7 @@ extern "C" fn rem(
         let mut precision = 0usize;
         if ch == '.' {
             ch = expect_char(globals, &mut chars)?;
-            while '0' <= ch && ch <= '9' {
+            while ('0'..='9').contains(&ch) {
                 precision = precision * 10 + ch as usize - '0' as usize;
                 ch = expect_char(globals, &mut chars)?;
             }

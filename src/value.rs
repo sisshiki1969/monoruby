@@ -29,9 +29,8 @@ impl std::default::Default for Value {
 
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
-        match self.try_rvalue() {
-            Some(rvalue) => rvalue.mark(alloc),
-            None => {}
+        if let Some(rvalue) = self.try_rvalue() {
+            rvalue.mark(alloc)
         }
     }
 }
@@ -108,8 +107,8 @@ impl Value {
         globals.get_real_class_id(self).get_name(globals)
     }
 
-    pub fn to_s(&self, globals: &Globals) -> String {
-        globals.val_tos(*self)
+    pub fn to_s(self, globals: &Globals) -> String {
+        globals.val_tos(self)
     }
 
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
@@ -373,7 +372,7 @@ impl Value {
         unsafe { &*(self.get() as *const RValue) }
     }
 
-    pub(crate) fn rvalue_mut(&self) -> &mut RValue {
+    pub(crate) fn rvalue_mut(&mut self) -> &mut RValue {
         unsafe { &mut *(self.get() as *mut RValue) }
     }
 
@@ -384,7 +383,7 @@ impl Value {
         }
     }*/
 
-    pub(crate) fn as_array_mut(&self) -> &mut Vec<Value> {
+    pub(crate) fn as_array_mut(&mut self) -> &mut Vec<Value> {
         assert_eq!(ObjKind::ARRAY, self.rvalue().kind());
         self.rvalue_mut().as_array_mut()
     }
@@ -463,7 +462,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::Bool(b) => write!(f, "{:?}", b),
             RV::Integer(n) => write!(f, "{}", n),
             RV::BigInt(n) => write!(f, "Bignum({})", n),
-            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n).to_string(),),
+            RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Symbol(id) => write!(f, "Symbol({})", id.get()),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => write!(f, "\"{}\"", s),

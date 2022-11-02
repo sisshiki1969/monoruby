@@ -32,14 +32,14 @@ pub fn compile_and_run(
     let fid = match globals.compile_script(code.to_string(), path) {
         Ok(fid) => fid,
         Err(err) => {
-            eprintln!("{}", err.get_error_message(&globals));
+            eprintln!("{}", err.get_error_message(globals));
             err.show_all_loc();
             return Err(err);
         }
     };
     let res = Interp::eval_toplevel(globals, fid);
     if let Err(err) = &res {
-        eprintln!("{}", err.get_error_message(&globals));
+        eprintln!("{}", err.get_error_message(globals));
         err.show_all_loc();
     }
     res

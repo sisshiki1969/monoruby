@@ -9,7 +9,7 @@ impl IvarId {
         Self(id)
     }
 
-    pub(crate) fn to_usize(&self) -> usize {
+    pub(crate) fn into_usize(self) -> usize {
         self.0 as usize
     }
 

@@ -88,7 +88,7 @@ impl Funcs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
@@ -167,9 +167,7 @@ impl FnStore {
                 ParamKind::Param(name) => args.push(name),
                 _ => {
                     return Err(MonorubyErr::unsupported_parameter_kind(
-                        param.kind,
-                        param.loc,
-                        sourceinfo.clone(),
+                        param.kind, param.loc, sourceinfo,
                     ))
                 }
             }
@@ -201,7 +199,7 @@ impl FnStore {
             Some("/main".to_string()),
             vec![],
             ast,
-            sourceinfo.clone(),
+            sourceinfo,
             false,
         );
         let mut fid = main_fid;
@@ -280,7 +278,7 @@ pub const FUNCDATA_OFFSET_META: u64 = 16;
 ///         1 class def
 /// ~~~
 ///
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub struct Meta(pub u64);
 
@@ -648,7 +646,7 @@ impl ISeqInfo {
 
     /// get bytecode.
     pub(crate) fn bytecode(&self) -> &[Bc] {
-        &self.bytecode.as_ref().unwrap()
+        self.bytecode.as_ref().unwrap()
     }
 
     pub(crate) fn get_pc(&self, idx: usize) -> BcPc {
@@ -759,7 +757,7 @@ impl ISeqInfo {
         let mut bb_info: Vec<_> = info
             .into_iter()
             .map(|e| {
-                if e.len() > 0 {
+                if !e.is_empty() {
                     let id = bb_id;
                     bb_id += 1;
                     Some((id, e))
@@ -777,20 +775,16 @@ impl ISeqInfo {
             match pc.op1() {
                 BcOp::MethodArgs(..) => {
                     skip = true;
-                    match bb_info[idx + 2] {
-                        Some(ref mut elem) => {
-                            elem.1.push(idx);
-                        }
-                        None => {}
+                    if let Some(ref mut elem) = bb_info[idx + 2] {
+                        elem.1.push(idx);
                     }
                 }
                 BcOp::Br(_) | BcOp::Ret(_) => {}
-                _ => match bb_info[idx + 1] {
-                    Some(ref mut elem) => {
+                _ => {
+                    if let Some(ref mut elem) = bb_info[idx + 1] {
                         elem.1.push(idx);
                     }
-                    None => {}
-                },
+                }
             }
         }
         if bb_info[0].is_none() {

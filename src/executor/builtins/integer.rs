@@ -26,6 +26,14 @@ extern "C" fn times(
         Some(i) => i,
         None => unimplemented!(),
     };
+    /*let mut bp: u64;
+    unsafe {
+        std::arch::asm!(
+            "mov {bp}, rbp",
+            bp = out(reg) bp,
+        );
+    }
+    super::op::_dump_stacktrace(vm, globals, bp as *const u64);*/
     if let Some(block) = block {
         for i in 0..count {
             vm.invoke_block(globals, block, self_val, &[Value::new_integer(i)])?;

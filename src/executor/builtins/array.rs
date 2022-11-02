@@ -46,7 +46,7 @@ extern "C" fn new(
 extern "C" fn size(
     _vm: &mut Interp,
     _globals: &mut Globals,
-    self_val: Value,
+    mut self_val: Value,
     _arg: Arg,
     _len: usize,
     _: Option<Value>,
@@ -86,7 +86,7 @@ extern "C" fn add(
 extern "C" fn shl(
     _vm: &mut Interp,
     _globals: &mut Globals,
-    self_val: Value,
+    mut self_val: Value,
     arg: Arg,
     _len: usize,
     _: Option<Value>,
@@ -109,7 +109,7 @@ extern "C" fn index_assign(
 ) -> Option<Value> {
     let i = arg[0];
     let val = arg[1];
-    let self_val = self_val;
+    let mut self_val = self_val;
     let v = self_val.as_array_mut();
     if let Some(idx) = i.try_fixnum() {
         if idx >= 0 {

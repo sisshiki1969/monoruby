@@ -720,7 +720,7 @@ impl Codegen {
         &mut self,
         generic: DestLabel,
         ret: SlotId,
-        func: u64,
+        func: usize,
         xmm_using: UsingXmm,
         pc: BcPc,
     ) {
@@ -735,7 +735,7 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn generic_binop(&mut self, ret: SlotId, func: u64, xmm_using: UsingXmm, pc: BcPc) {
+    fn generic_binop(&mut self, ret: SlotId, func: usize, xmm_using: UsingXmm, pc: BcPc) {
         self.xmm_save(&xmm_using);
         self.call_binop(func);
         self.xmm_restore(&xmm_using);

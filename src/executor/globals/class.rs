@@ -16,7 +16,7 @@ pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
 pub const ARRAY_CLASS: ClassId = ClassId::new(11);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(transparent)]
 pub struct ClassId(pub u32);
 
@@ -50,12 +50,6 @@ impl std::fmt::Debug for ClassId {
             10 => write!(f, "TIME"),
             n => write!(f, "ClassId({})", n),
         }
-    }
-}
-
-impl std::default::Default for ClassId {
-    fn default() -> Self {
-        Self(0)
     }
 }
 

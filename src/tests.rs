@@ -540,7 +540,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_stacktrace() {
         run_test_no_result_check(
             r##"

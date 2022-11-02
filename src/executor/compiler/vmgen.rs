@@ -521,7 +521,7 @@ impl Codegen {
         };
     }
 
-    fn vm_generic_unop(&mut self, generic: DestLabel, func: u64) {
+    fn vm_generic_unop(&mut self, generic: DestLabel, func: usize) {
         self.jit.bind_label(generic);
         self.vm_save_lhs_class();
         self.call_unop(func);
@@ -530,7 +530,7 @@ impl Codegen {
         self.fetch_and_dispatch();
     }
 
-    fn vm_generic_binop(&mut self, generic: DestLabel, exit: DestLabel, func: u64) {
+    fn vm_generic_binop(&mut self, generic: DestLabel, exit: DestLabel, func: usize) {
         self.jit.bind_label(generic);
         self.vm_save_binary_class();
         self.call_binop(func);
@@ -1007,7 +1007,7 @@ impl Codegen {
     fn vm_binops_opt(
         &mut self,
         opt_func: fn(&mut Codegen, DestLabel),
-        generic_func: u64,
+        generic_func: usize,
     ) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
@@ -1040,7 +1040,7 @@ impl Codegen {
         (ptr_rr, ptr_ri, ptr_ir)
     }
 
-    fn vm_binops(&mut self, func: u64) -> (CodePtr, CodePtr, CodePtr) {
+    fn vm_binops(&mut self, func: usize) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr

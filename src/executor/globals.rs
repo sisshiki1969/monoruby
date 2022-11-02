@@ -47,7 +47,7 @@ impl Globals {
     }
 
     pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
-        self.stdout.write(bytes).unwrap();
+        self.stdout.write_all(bytes).unwrap();
     }
 
     pub fn exec_startup(&mut self) {
@@ -57,7 +57,7 @@ impl Globals {
             Ok(func_id) => func_id,
             Err(err) => {
                 eprintln!("error occured in compiling startup.rb.");
-                eprintln!("{}", err.get_error_message(&self));
+                eprintln!("{}", err.get_error_message(self));
                 err.show_loc();
                 return;
             }
@@ -119,7 +119,7 @@ impl Globals {
 
     pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
-            RV::Nil => format!("nil"),
+            RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
@@ -140,16 +140,15 @@ impl Globals {
     }
 
     pub(crate) fn val_tobytes(&self, val: Value) -> Vec<u8> {
-        match val.unpack() {
-            RV::String(s) => return s.to_vec(),
-            _ => {}
-        };
+        if let RV::String(s) = val.unpack() {
+            return s.to_vec();
+        }
         self.val_tos(val).into_bytes()
     }
 
     pub(crate) fn val_inspect(&self, val: Value) -> String {
         match val.unpack() {
-            RV::Nil => format!("nil"),
+            RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
@@ -276,11 +275,10 @@ impl Globals {
         code: String,
         path: impl Into<PathBuf>,
     ) -> Result<FuncId> {
-        let res = match Parser::parse_program(code, path.into()) {
+        match Parser::parse_program(code, path.into()) {
             Ok(res) => self.func.compile_script(res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
-        };
-        res
+        }
     }
 
     pub fn compile_script_with_binding(
@@ -293,7 +291,7 @@ impl Globals {
             Ok(res) => {
                 let collector = res.lvar_collector;
                 let fid = self.func.compile_script(res.node, res.source_info)?;
-                return Ok((fid, collector));
+                Ok((fid, collector))
             }
             Err(err) => Err(MonorubyErr::parse(err)),
         }

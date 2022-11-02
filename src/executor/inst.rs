@@ -10,7 +10,7 @@ pub struct BcPcBase(*const Bc);
 impl std::ops::Add<usize> for BcPcBase {
     type Output = BcPc;
     fn add(self, rhs: usize) -> BcPc {
-        BcPc(unsafe { self.0.offset(rhs as isize) })
+        BcPc(unsafe { self.0.add(rhs) })
     }
 }
 
@@ -318,9 +318,9 @@ impl BcPc {
             BcOp::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
-                self.from_jit_addr()
+                self.into_jit_addr()
             ),
-            BcOp::LoopEnd => format!("loop_end"),
+            BcOp::LoopEnd => "loop_end".to_string(),
         };
         Some(s)
     }
@@ -536,7 +536,7 @@ impl Bc {
         }
     }
 
-    pub(crate) fn from_jit_addr(&self) -> u64 {
+    pub(crate) fn into_jit_addr(self) -> u64 {
         self.op2.0
     }
 
@@ -697,7 +697,7 @@ impl std::fmt::Debug for Bc {
                 f,
                 "loop_start counter={} jit-addr={:016x}",
                 count,
-                self.from_jit_addr()
+                self.into_jit_addr()
             ),
             BcOp::LoopEnd => write!(f, "loop_end"),
         }
@@ -817,7 +817,7 @@ impl BrKind {
         }
     }
 
-    pub(super) fn to_s(&self) -> &'static str {
+    pub(super) fn to_s(self) -> &'static str {
         match self {
             Self::BrIf => "",
             Self::BrIfNot => "not",

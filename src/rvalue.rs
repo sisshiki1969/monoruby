@@ -135,7 +135,7 @@ impl RValue {
     }
 
     pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
-        let mut i = id.to_usize();
+        let mut i = id.into_usize();
         if self.kind() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 return self.as_object()[i];
@@ -156,7 +156,7 @@ impl RValue {
     }
 
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
-        let mut i = id.to_usize();
+        let mut i = id.into_usize();
         if self.kind() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 self.as_object_mut()[i] = Some(val);
@@ -420,7 +420,7 @@ impl RValue {
     }
 
     pub(crate) fn as_bignum(&self) -> &BigInt {
-        unsafe { &*self.kind.bignum }
+        unsafe { &self.kind.bignum }
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -436,15 +436,15 @@ impl RValue {
     }*/
 
     pub(crate) fn as_array(&self) -> &Vec<Value> {
-        unsafe { &*self.kind.array }
+        unsafe { &self.kind.array }
     }
 
     pub(crate) fn as_array_mut(&mut self) -> &mut Vec<Value> {
-        unsafe { &mut *self.kind.array }
+        unsafe { &mut self.kind.array }
     }
 
     pub(crate) fn as_time(&self) -> &TimeInfo {
-        unsafe { &*self.kind.time }
+        unsafe { &self.kind.time }
     }
 
     /*pub(crate) fn as_time_mut(&mut self) -> &mut TimeInfo {

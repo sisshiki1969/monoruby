@@ -193,7 +193,7 @@ impl MonorubyErr {
             MonorubyErrKind::UninitConst(name) => {
                 format!("uninitialized constant {}", IdentId::get_name(*name))
             }
-            MonorubyErrKind::DivideByZero => format!("divided by 0"),
+            MonorubyErrKind::DivideByZero => "divided by 0".to_string(),
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
             MonorubyErrKind::Index(msg) => msg.to_string(),

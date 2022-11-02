@@ -164,7 +164,7 @@ impl IrContext {
         let name = IdentId::get_ident_id_from_string(name);
         let prefix = prefix
             .into_iter()
-            .map(|s| IdentId::get_ident_id_from_string(s))
+            .map(IdentId::get_ident_id_from_string)
             .collect();
         let reg = match dst {
             Some(local) => local.into(),
@@ -485,13 +485,11 @@ impl IrContext {
             BinOp::Shr => self.gen_shr(ctx, info, dst, lhs, rhs, loc),
             BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
             BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
-            _ => {
-                return Err(MonorubyErr::unsupported_operator(
-                    op,
-                    loc,
-                    info.sourceinfo.clone(),
-                ))
-            }
+            _ => Err(MonorubyErr::unsupported_operator(
+                op,
+                loc,
+                info.sourceinfo.clone(),
+            )),
         }
     }
 
@@ -767,7 +765,7 @@ impl IrContext {
                 else_: None,
                 ensure: None,
             } => {
-                assert!(rescue.len() == 0);
+                assert!(rescue.is_empty());
                 self.gen_expr(ctx, info, body, use_value, is_ret)?;
                 return Ok(());
             }
@@ -796,15 +794,7 @@ impl IrContext {
                     None
                 };
                 let superclass = superclass.map(|c| *c);
-                self.gen_class_def(
-                    ctx,
-                    info,
-                    name.clone(),
-                    superclass,
-                    *block_info.body,
-                    ret,
-                    loc,
-                )?;
+                self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -951,7 +941,7 @@ impl IrContext {
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
-                self.gen_mov(local.into(), ret.into());
+                self.gen_mov(local.into(), ret);
                 info.pop();
             }
         };
@@ -1053,8 +1043,8 @@ impl IrContext {
             None => true,
         };
 
-        assert!(arglist.kw_args.len() == 0);
-        assert!(arglist.hash_splat.len() == 0);
+        assert!(arglist.kw_args.is_empty());
+        assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         let mut has_block = false;
         let old_temp = info.temp;
@@ -1090,7 +1080,7 @@ impl IrContext {
         if is_ret {
             self.gen_ret(info, None);
         }
-        return Ok(());
+        Ok(())
     }
 
     fn gen_method_assign(&mut self, method: IdentId, receiver: BcReg, val: BcReg, loc: Loc) {
@@ -1588,7 +1578,7 @@ impl IrContext {
                 }
                 BcIr::MethodArgs(recv, args, len) => {
                     let op1 = info.get_index(recv);
-                    let op2 = info.get_index(&BcReg::from(*args));
+                    let op2 = info.get_index(args);
                     Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
                 }
                 BcIr::InlineCache => Bc::from(0),

@@ -452,10 +452,10 @@ pub extern "C" fn define_method(
 pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
-        eprint!("  [{}]:", i);
-        let prev_bp = unsafe { *bp as *const u64 };
+        eprint!("  [{}]: bp:0x{:?} ", i, bp);
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
+        let prev_bp = unsafe { *bp as *const u64 };
         if interp.codegen.jit.include(ret_addr as _) {
             _dump_frame_info(interp, globals, bp);
         }

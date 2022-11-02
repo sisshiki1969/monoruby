@@ -89,7 +89,7 @@ impl IdentId {
         self.0.get()
     }
 
-    fn to_usize(&self) -> usize {
+    fn to_usize(self) -> usize {
         self.0.get() as usize
     }
 }
@@ -126,7 +126,7 @@ impl IdentId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdentifierTable {
     rev_table: HashMap<String, IdentId>,
     table: Vec<String>,
@@ -182,26 +182,26 @@ impl IdentifierTable {
         self.table[id.to_usize() - 1] = name.to_string();
     }
 
-    fn get_ident_id<'a>(&mut self, name: &str) -> IdentId {
+    fn get_ident_id(&mut self, name: &str) -> IdentId {
         match self.rev_table.get(name) {
-            Some(id) => (*id).into(),
+            Some(id) => *id,
             None => {
                 let id = IdentId::from(self.table.len() as u32 + 1);
                 self.rev_table.insert(name.to_string(), id);
                 self.table.push(name.to_string());
-                id.into()
+                id
             }
         }
     }
 
-    fn get_ident_id_from_string<'a>(&mut self, name: String) -> IdentId {
+    fn get_ident_id_from_string(&mut self, name: String) -> IdentId {
         match self.rev_table.get(&name) {
-            Some(id) => (*id).into(),
+            Some(id) => *id,
             None => {
                 let id = IdentId::from(self.table.len() as u32 + 1);
                 self.rev_table.insert(name.clone(), id);
                 self.table.push(name);
-                id.into()
+                id
             }
         }
     }
