@@ -607,21 +607,21 @@ impl Codegen {
                 cmpq rax, (ObjKind::OBJECT);
                 jne  no_inline;
                 movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
-                jmp exit;
-            no_inline:
             );
+            self.jit.select_page(1);
+            self.jit.bind_label(no_inline);
+            self.get_ivar(cached_ivarid, &xmm_using);
+            monoasm!(self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        } else {
+            self.get_ivar(cached_ivarid, &xmm_using)
         }
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movl rsi, (cached_ivarid.get());
-            movq rax, (RValue::get_ivar);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp exit;
-        );
+        self.jit.bind_label(exit);
+        self.store_rax(ret);
 
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -631,8 +631,20 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.jit.bind_label(exit);
-        self.store_rax(ret);
+        monoasm!(self.jit,
+            jmp exit;
+        );
+        self.jit.select_page(0);
+    }
+
+    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &Vec<usize>) {
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movl rsi, (cached_ivarid.get());
+            movq rax, (RValue::get_ivar);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
     }
 
     fn jit_store_ivar(
@@ -661,25 +673,21 @@ impl Codegen {
                 jne  no_inline;
                 movq rax, [rbp - (conv(src))];   // val: Value
                 movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
-                movq rax, (NIL_VALUE);
-                jmp exit;
-            no_inline:
             );
+            self.jit.select_page(1);
+            self.jit.bind_label(no_inline);
+            self.set_ivar(src, cached_ivarid, &xmm_using);
+            monoasm!(self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        } else {
+            self.set_ivar(src, cached_ivarid, &xmm_using);
         }
 
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movl rsi, (cached_ivarid.get());
-            movq rdx, [rbp - (conv(src))];   // val: Value
-            movq rax, (RValue::set_ivar);
-            call rax;
-            movq rax, (NIL_VALUE);
-        );
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp exit;
-        );
+        self.jit.bind_label(exit);
 
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -691,8 +699,22 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.jit.bind_label(exit);
         self.handle_error(pc);
+        monoasm!(self.jit,
+            jmp exit;
+        );
+        self.jit.select_page(0);
+    }
+
+    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &Vec<usize>) {
+        self.xmm_save(&xmm_using);
+        monoasm!(self.jit,
+            movl rsi, (cached_ivarid.get());
+            movq rdx, [rbp - (conv(src))];   // val: Value
+            movq rax, (RValue::set_ivar);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
     }
 
     fn jit_get_index(&mut self, ret: SlotId, base: SlotId, idx: SlotId, pc: BcPc, ctx: &BBContext) {
@@ -1156,15 +1178,20 @@ impl Codegen {
             *end - *code_end
         );
         self.jit.select_page(0);
-        let dump: Vec<(usize, String)> = self
-            .jit
-            .dump_code()
-            .unwrap()
+        let dump = self.jit.dump_code().unwrap();
+        //eprintln!("{}", dump);
+        let dump: Vec<(usize, String)> = dump
             .split('\n')
             .filter(|s| s.len() >= 29)
             .map(|x| {
+                let i = x.find(':').unwrap();
                 (
-                    usize::from_str_radix(&x[0..4].trim(), 16).unwrap(),
+                    match usize::from_str_radix(&x[0..i].trim(), 16) {
+                        Ok(i) => i,
+                        _ => {
+                            panic!("{}", &x[0..i].trim());
+                        }
+                    },
                     x[28..].to_string(),
                 )
             })

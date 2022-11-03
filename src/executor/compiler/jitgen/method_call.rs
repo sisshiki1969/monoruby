@@ -87,9 +87,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(recv))];
         );
-        if !recv.is_zero() {
-            self.guard_class(cached.class_id, deopt);
-        }
+        self.guard_class(cached.class_id, deopt);
         self.guard_version(cached.version, deopt);
         let func_id = cached.meta.func_id();
         match globals.func[func_id].kind {
@@ -288,10 +286,12 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp exit;
-        );
+        self.jit.bind_label(exit);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
 
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -303,10 +303,10 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.jit.bind_label(exit);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
+        monoasm!(self.jit,
+            jmp exit;
+        );
+        self.jit.select_page(0);
     }
 
     fn attr_writer(
@@ -346,10 +346,13 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp exit;
-        );
+        self.handle_error(pc);
+        self.jit.bind_label(exit);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
 
+        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -363,11 +366,10 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
-        self.jit.bind_label(exit);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
+        monoasm!(self.jit,
+            jmp exit;
+        );
+        self.jit.select_page(0);
     }
 
     fn native_call(
