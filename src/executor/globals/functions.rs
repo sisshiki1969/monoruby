@@ -150,7 +150,7 @@ impl FnStore {
         &self.functions.0
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.functions.0.len()
     }
 

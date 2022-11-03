@@ -22,10 +22,6 @@ extern "C" fn times(
     _: usize,
     block: Option<Value>,
 ) -> Option<Value> {
-    let count = match self_val.try_fixnum() {
-        Some(i) => i,
-        None => unimplemented!(),
-    };
     /*let mut bp: u64;
     unsafe {
         std::arch::asm!(
@@ -33,7 +29,11 @@ extern "C" fn times(
             bp = out(reg) bp,
         );
     }
-    super::op::_dump_stacktrace(vm, globals, bp as *const u64);*/
+    dbg!(bp as *const u8);*/
+    let count = match self_val.try_fixnum() {
+        Some(i) => i,
+        None => unimplemented!(),
+    };
     if let Some(block) = block {
         for i in 0..count {
             vm.invoke_block(globals, block, self_val, &[Value::new_integer(i)])?;
@@ -75,8 +75,15 @@ mod test {
     use super::tests::*;
 
     #[test]
-    #[ignore]
     fn times() {
-        run_test("a = 100; 4.times do puts a; end");
+        run_test_no_result_check(
+            r##"
+        a = 100
+        4.times do
+          puts a
+          #__dump
+        end
+        "##,
+        );
     }
 }

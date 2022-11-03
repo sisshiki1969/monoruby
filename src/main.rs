@@ -7,20 +7,21 @@ use rustyline::Editor;
 use monoruby::*;
 
 #[derive(clap::Parser, Debug)]
-#[clap(author, version, about, long_about = None, trailing_var_arg = true)]
+#[command(author, version, about, long_about = None, trailing_var_arg = true)]
 struct CommandLineArgs {
     /// one liner. several -e's allowed. Omit [programfile]
-    #[clap(short, multiple_occurrences = true)]
+    #[arg(short, num_args = 0..)]
     exec: Vec<String>,
     /// print the version number, then turn on verbose mode
-    #[clap(short)]
+    #[arg(short)]
     verbose: bool,
     /// switch just-in-time compilation.
-    #[clap(short, long)]
+    #[arg(short, long)]
     no_jit: bool,
-    #[clap(short = 'W', default_value = "1")]
+    #[arg(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
+    #[arg(num_args = 0..)]
     file: Option<String>,
 }
 

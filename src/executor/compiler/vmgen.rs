@@ -61,13 +61,14 @@ macro_rules! cmp_ops {
 impl Codegen {
     pub(super) fn get_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
-        let return_label = self.jit.label();
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
             pushq r13;
             pushq r14;
             pushq r15;
+            pushq rbp;
+            subq rsp, 8;
 
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
@@ -101,8 +102,10 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_SELF)], rax;
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
+            xorq rbp, rbp;
             call rax;
-        return_label:
+            addq rsp, 8;
+            popq rbp;
             popq r15;
             popq r14;
             popq r13;
@@ -112,7 +115,6 @@ impl Codegen {
         };
 
         self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
-        self.entry_point_return = self.jit.get_label_address(return_label);
     }
 
     ///

@@ -17,6 +17,20 @@ impl Interp {
         }
     }
 
+    /// Execute top level method.
+    pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+        let main_data = self.get_func_data(globals, func_id) as *const _;
+
+        #[cfg(feature = "emit-bc")]
+        globals.dump_bc();
+
+        let entry_point = self.codegen.entry_point;
+        let res = entry_point(self, globals, main_data);
+        globals.flush_stdout();
+
+        res.ok_or_else(|| globals.take_error().unwrap())
+    }
+
     pub(crate) fn push_class_context(&mut self, class_id: ClassId) {
         self.lexical_class.push(class_id);
     }
@@ -41,20 +55,6 @@ impl Interp {
 
     pub(crate) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
-    }
-
-    /// Execute top level method.
-    pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let main_data = self.get_func_data(globals, func_id) as *const _;
-
-        #[cfg(feature = "emit-bc")]
-        globals.dump_bc();
-
-        let entry_point = self.codegen.entry_point;
-        let res = entry_point(self, globals, main_data);
-        globals.flush_stdout();
-
-        res.ok_or_else(|| globals.take_error().unwrap())
     }
 }
 
@@ -95,23 +95,13 @@ impl Interp {
     ) -> Option<Value> {
         let len = args.len();
         let func_id = globals.find_method_checked(receiver, method, len)?;
-        self.invoke_func(globals, func_id, receiver, args)
-    }
-
-    ///
-    /// Invoke func with *args*: &\[Value\].
-    ///
-    fn invoke_func(
-        &mut self,
-        globals: &mut Globals,
-        func_id: FuncId,
-        receiver: Value,
-        args: &[Value],
-    ) -> Option<Value> {
         let data = self.get_func_data(globals, func_id) as *const _;
         (self.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 
+    ///
+    /// Invoke block for *receiver* and *method* from native function.
+    ///
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
@@ -147,7 +137,6 @@ impl Interp {
         globals: &'a mut Globals,
         func_id: FuncId,
     ) -> &'a FuncData {
-        self.codegen.compile_on_demand(globals, func_id);
-        &globals.func[func_id].data
+        self.codegen.compile_on_demand(globals, func_id)
     }
 }

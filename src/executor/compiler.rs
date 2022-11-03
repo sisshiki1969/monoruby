@@ -38,7 +38,6 @@ pub struct Codegen {
     pub vm_entry: DestLabel,
     pub vm_fetch: DestLabel,
     pub entry_point: EntryPoint,
-    pub entry_point_return: CodePtr,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub f64_to_val: DestLabel,
@@ -352,17 +351,18 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_META)], rax;
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
-            /*if invoke_block {
+            if invoke_block {
                 monoasm! { jit,
                     movq rax, [rbp];
+                    movq rax, [rax];
                     lea  rax, [rax - (OFFSET_OUTER)];
                     movq [rsp - (16 + OFFSET_OUTER)], rax;
                 };
-            } else {*/
-            monoasm! { jit,
-                movq [rsp - (16 + OFFSET_OUTER)], 0;
-            };
-            //}
+            } else {
+                monoasm! { jit,
+                    movq [rsp - (16 + OFFSET_OUTER)], 0;
+                };
+            }
             monoasm! { jit,
                 // set self (= receiver)
                 movq [rsp - (16 + OFFSET_SELF)], rcx;
@@ -378,11 +378,15 @@ impl Codegen {
                 //       +-------------+
                 // -0x10 |   old rbp   |
                 //       +-------------+
-                // -0x18 |    meta     | func_id
+                // -0x18 |    outer    |
                 //       +-------------+
-                // -0x20 |     %0      | receiver
+                // -0x20 |    meta     | func_id
                 //       +-------------+
-                // -0x28 | %1(1st arg) |
+                // -0x28 |    Block    |
+                //       +-------------+
+                // -0x30 |     %0      | receiver
+                //       +-------------+
+                // -0x38 | %1(1st arg) |
                 //       +-------------+
                 //       |             |
                 //
@@ -514,7 +518,6 @@ impl Codegen {
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            entry_point_return: entry_unimpl,
             vm_return,
             f64_to_val: entry_panic,
             heap_to_f64,
@@ -919,7 +922,11 @@ impl Codegen {
     ///  - (old rbp) is to be set by callee.
     ///
 
-    pub(crate) fn compile_on_demand(&mut self, globals: &mut Globals, func_id: FuncId) {
+    pub(super) fn compile_on_demand<'a>(
+        &mut self,
+        globals: &'a mut Globals,
+        func_id: FuncId,
+    ) -> &'a FuncData {
         let func = &mut globals.func[func_id];
         if func.data.codeptr.is_none() {
             let codeptr = match func.kind {
@@ -929,7 +936,7 @@ impl Codegen {
                     } else {
                         self.gen_vm_stub()
                     };
-                    func.data.meta.set_jit();
+                    //func.data.meta.set_jit();
                     codeptr
                 }
                 FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
@@ -939,6 +946,7 @@ impl Codegen {
             self.jit.finalize();
             func.data.codeptr = Some(codeptr);
         }
+        &func.data
     }
 
     ///
@@ -1151,113 +1159,119 @@ impl Codegen {
     }
 }
 
-#[test]
-fn float_test() {
-    let mut gen = Codegen::new(false, Value::nil());
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    let panic = gen.entry_panic;
-    let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
-    let assume_float_to_f64 = gen.jit.label();
-    monoasm!(&mut gen.jit,
-    assume_float_to_f64:
-        pushq rbp;
-    );
-    gen.gen_val_to_f64_assume_float(0, panic);
-    monoasm!(&mut gen.jit,
-        popq rbp;
-        ret;
-    );
-    gen.jit.finalize();
-    let to_f64_entry = gen.jit.get_label_address(assume_float_to_f64);
+    #[test]
+    fn float_test() {
+        let mut gen = Codegen::new(false, Value::nil());
 
-    let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
-    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+        let panic = gen.entry_panic;
+        let from_f64_entry = gen.jit.get_label_address(gen.f64_to_val);
+        let assume_float_to_f64 = gen.jit.label();
+        monoasm!(&mut gen.jit,
+        assume_float_to_f64:
+            pushq rbp;
+        );
+        gen.gen_val_to_f64_assume_float(0, panic);
+        monoasm!(&mut gen.jit,
+            popq rbp;
+            ret;
+        );
+        gen.jit.finalize();
+        let to_f64_entry = gen.jit.get_label_address(assume_float_to_f64);
 
-    for n in [
-        0.0,
-        4.2,
-        35354354354.2135365,
-        -3535354345111.5696876565435432,
-        f64::MAX,
-        f64::MAX / 10.0,
-        f64::MIN * 10.0,
-        f64::NAN,
-    ] {
-        let v = from_f64(n);
-        let (lhs, rhs) = (n, to_f64(v));
-        if lhs.is_nan() {
-            assert!(rhs.is_nan());
-        } else {
-            assert_eq!(n, to_f64(v));
+        let from_f64: fn(f64) -> Value = unsafe { std::mem::transmute(from_f64_entry.as_ptr()) };
+        let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+
+        for n in [
+            0.0,
+            4.2,
+            35354354354.2135365,
+            -3535354345111.5696876565435432,
+            f64::MAX,
+            f64::MAX / 10.0,
+            f64::MIN * 10.0,
+            f64::NAN,
+        ] {
+            let v = from_f64(n);
+            let (lhs, rhs) = (n, to_f64(v));
+            if lhs.is_nan() {
+                assert!(rhs.is_nan());
+            } else {
+                assert_eq!(n, to_f64(v));
+            }
         }
     }
-}
 
-#[test]
-fn float_test2() {
-    let mut gen = Codegen::new(false, Value::nil());
+    #[test]
+    fn float_test2() {
+        let mut gen = Codegen::new(false, Value::nil());
 
-    let panic = gen.entry_panic;
-    let assume_float_to_f64 = gen.jit.label();
-    monoasm!(&mut gen.jit,
-    assume_float_to_f64:
-        pushq rbp;
-    );
-    gen.gen_val_to_f64_assume_float(0, panic);
-    monoasm!(&mut gen.jit,
-        popq rbp;
-        ret;
-    );
-    let assume_int_to_f64 = gen.jit.label();
-    monoasm!(&mut gen.jit,
-    assume_int_to_f64:
-        pushq rbp;
-    );
-    gen.gen_val_to_f64_assume_integer(0, panic);
-    monoasm!(&mut gen.jit,
-        popq rbp;
-        ret;
-    );
-    gen.jit.finalize();
-    let float_to_f64_entry = gen.jit.get_label_address(assume_float_to_f64);
-    let int_to_f64_entry = gen.jit.get_label_address(assume_int_to_f64);
+        let panic = gen.entry_panic;
+        let assume_float_to_f64 = gen.jit.label();
+        monoasm!(&mut gen.jit,
+        assume_float_to_f64:
+            pushq rbp;
+        );
+        gen.gen_val_to_f64_assume_float(0, panic);
+        monoasm!(&mut gen.jit,
+            popq rbp;
+            ret;
+        );
+        let assume_int_to_f64 = gen.jit.label();
+        monoasm!(&mut gen.jit,
+        assume_int_to_f64:
+            pushq rbp;
+        );
+        gen.gen_val_to_f64_assume_integer(0, panic);
+        monoasm!(&mut gen.jit,
+            popq rbp;
+            ret;
+        );
+        gen.jit.finalize();
+        let float_to_f64_entry = gen.jit.get_label_address(assume_float_to_f64);
+        let int_to_f64_entry = gen.jit.get_label_address(assume_int_to_f64);
 
-    let float_to_f64: fn(Value) -> f64 =
-        unsafe { std::mem::transmute(float_to_f64_entry.as_ptr()) };
-    let int_to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
-    assert_eq!(3.574, float_to_f64(Value::new_float(3.574)));
-    assert_eq!(0.0, float_to_f64(Value::new_float(0.0)));
-    assert_eq!(143.0, int_to_f64(Value::new_integer(143)));
-    assert_eq!(14354813558.0, int_to_f64(Value::new_integer(14354813558)));
-    assert_eq!(-143.0, int_to_f64(Value::new_integer(-143)));
-}
+        let float_to_f64: fn(Value) -> f64 =
+            unsafe { std::mem::transmute(float_to_f64_entry.as_ptr()) };
+        let int_to_f64: fn(Value) -> f64 =
+            unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
+        assert_eq!(3.574, float_to_f64(Value::new_float(3.574)));
+        assert_eq!(0.0, float_to_f64(Value::new_float(0.0)));
+        assert_eq!(143.0, int_to_f64(Value::new_integer(143)));
+        assert_eq!(14354813558.0, int_to_f64(Value::new_integer(14354813558)));
+        assert_eq!(-143.0, int_to_f64(Value::new_integer(-143)));
+    }
 
-#[test]
-fn float_test3() {
-    let mut gen = Codegen::new(false, Value::nil());
+    #[test]
+    fn float_test3() {
+        let mut gen = Codegen::new(false, Value::nil());
 
-    let panic = gen.entry_panic;
-    let to_f64 = gen.jit.label();
-    monoasm!(&mut gen.jit,
-    to_f64:
-        pushq rbp;
-    );
-    gen.gen_val_to_f64(0, panic);
-    monoasm!(&mut gen.jit,
-        popq rbp;
-        ret;
-    );
-    gen.jit.finalize();
-    let to_f64_entry = gen.jit.get_label_address(to_f64);
+        let panic = gen.entry_panic;
+        let to_f64 = gen.jit.label();
+        monoasm!(&mut gen.jit,
+        to_f64:
+            pushq rbp;
+        );
+        gen.gen_val_to_f64(0, panic);
+        monoasm!(&mut gen.jit,
+            popq rbp;
+            ret;
+        );
+        gen.jit.finalize();
+        let to_f64_entry = gen.jit.get_label_address(to_f64);
 
-    let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
-    assert_eq!(3.574, to_f64(Value::new_float(3.574)));
-    assert_eq!(0.0, to_f64(Value::new_float(0.0)));
-    assert_eq!(f64::MAX, to_f64(Value::new_float(f64::MAX)));
-    assert_eq!(f64::MIN, to_f64(Value::new_float(f64::MIN)));
-    assert!(to_f64(Value::new_float(f64::NAN)).is_nan());
-    assert!(to_f64(Value::new_float(f64::INFINITY)).is_infinite());
-    assert_eq!(143.0, to_f64(Value::new_integer(143)));
-    assert_eq!(14354813558.0, to_f64(Value::new_integer(14354813558)));
-    assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
+        let to_f64: fn(Value) -> f64 = unsafe { std::mem::transmute(to_f64_entry.as_ptr()) };
+        assert_eq!(3.574, to_f64(Value::new_float(3.574)));
+        assert_eq!(0.0, to_f64(Value::new_float(0.0)));
+        assert_eq!(f64::MAX, to_f64(Value::new_float(f64::MAX)));
+        assert_eq!(f64::MIN, to_f64(Value::new_float(f64::MIN)));
+        assert!(to_f64(Value::new_float(f64::NAN)).is_nan());
+        assert!(to_f64(Value::new_float(f64::INFINITY)).is_infinite());
+        assert_eq!(143.0, to_f64(Value::new_integer(143)));
+        assert_eq!(14354813558.0, to_f64(Value::new_integer(14354813558)));
+        assert_eq!(-143.0, to_f64(Value::new_integer(-143)));
+    }
 }

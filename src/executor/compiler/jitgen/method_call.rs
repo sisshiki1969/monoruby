@@ -392,7 +392,7 @@ impl Codegen {
         //       +-------------+
         // -0x18 |    meta     |
         //       +-------------+
-        // -0x20 | blk  |      |
+        // -0x20 |   block     |
         //       +-------------+
         // -0x28 |     %0      |
         //       +-------------+
@@ -400,12 +400,13 @@ impl Codegen {
         //       +-------------+
         //       |             |
         //
+        // rdi: receiver
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         let xmm_using = ctx.get_xmm_using();
         let caller = self.jit.label();
-        self.jit.bind_label(caller);
         monoasm!(self.jit,
+        caller:
             pushq rbp;
             movq rbp, rsp;
             movq [rbp - (OFFSET_OUTER)], 0;
@@ -429,7 +430,7 @@ impl Codegen {
         match block {
             Some(block) => {
                 monoasm!(self.jit,
-                    movq r9, [rbp - (conv(block))];
+                    movq r9, [rbp - (conv(block))]; // block
                 );
             }
             None => {

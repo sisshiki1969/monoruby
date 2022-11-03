@@ -15,8 +15,11 @@ emit-bc = []
 emit-tir = []
 log-jit = []
 
+[profile.dev]
+opt-level = 1
+
 [dependencies]
-clap = { version = "3.1.0", features = ["derive"] }
+clap = { version = "4.0.18", features = ["derive"] }
 chumsky = "0.8.0"
 ariadne = "0.1.3"
 rustyline = "10.0.0"

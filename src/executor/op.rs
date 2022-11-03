@@ -453,17 +453,12 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, m
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
         eprint!("  [{}]: bp:{:?} ", i, bp);
-        if bp.is_null() {
-            eprintln!("");
-            break;
-        }
         let ret_addr = unsafe { *bp.add(1) as *const u64 };
         eprintln!("ret adr: {:?} ", ret_addr);
         let prev_bp = unsafe { *bp as *const u64 };
-        if interp.codegen.jit.include(ret_addr as _) {
-            _dump_frame_info(interp, globals, bp);
-        }
-        if interp.codegen.entry_point_return.as_ptr() as u64 == ret_addr as u64 {
+        _dump_frame_info(interp, globals, bp);
+        //code = interp.codegen.jit.include(ret_addr as _);
+        if prev_bp.is_null() {
             break;
         }
         bp = prev_bp;
@@ -475,12 +470,14 @@ fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, bp: *const u64)
     let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) });
     let outer = unsafe { *bp.sub(OFFSET_OUTER as usize / 8) };
     let func_id = meta.func_id();
+    if globals.func.len() <= func_id.0 as usize {
+        return;
+    }
     eprintln!(
-        "    name:[{}] bp:{:?} outer:0x{:012x} {:?}",
+        "    name:[{}] outer:0x{:012x} {:?}",
         globals.func[func_id]
             .name()
             .unwrap_or(&"<unnamed>".to_string()),
-        bp,
         outer,
         meta,
     );
