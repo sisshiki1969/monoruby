@@ -263,11 +263,10 @@ impl Codegen {
         entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, rbp;
             movq rax, (op::_dump_stacktrace);
-            pushq rax;
+            subq rax, 8;
             call rax;
-            popq rax;
+            addq rax, 8;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (panic);
@@ -350,12 +349,16 @@ impl Codegen {
                 movq rax, [rdx + (FUNCDATA_OFFSET_META)];
                 movq [rsp - (16 + OFFSET_META)], rax;
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
+                // push frame
+                movq rax, [rbx];
+                lea  rdi, [rsp - (16 + OFFSET_CFP)];
+                movq [rdi], rax;
+                movq [rbx], rdi;
             };
             if invoke_block {
                 monoasm! { jit,
-                    movq rax, [rbp];
                     movq rax, [rax];
-                    lea  rax, [rax - (OFFSET_OUTER)];
+                    lea  rax, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
                     movq [rsp - (16 + OFFSET_OUTER)], rax;
                 };
             } else {
@@ -397,6 +400,8 @@ impl Codegen {
             monoasm! { jit,
                 movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
                 call rax;
+                movq rdi, [rsp - (16 + OFFSET_CFP)];
+                movq [rbx], rdi;
                 popq r15;
                 popq r14;
                 popq r13;
@@ -529,11 +534,33 @@ impl Codegen {
         };
         codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);
-        codegen.get_entry_point(main_object);
+        codegen.gen_entry_point(main_object);
         codegen.jit.finalize();
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
         codegen
+    }
+
+    /// Push frame
+    ///
+    /// destroy rax, rdi
+    fn push_frame(&mut self) {
+        monoasm!(self.jit,
+            movq rax, [rbx];
+            lea  rdi, [rsp - (16 + OFFSET_CFP)];
+            movq [rdi], rax;
+            movq [rbx], rdi;
+        );
+    }
+
+    /// Pop frame
+    ///
+    /// destroy rdi
+    fn pop_frame(&mut self) {
+        monoasm!(self.jit,
+            movq rdi, [rsp - (16 + OFFSET_CFP)];
+            movq [rbx], rdi;
+        );
     }
 
     ///

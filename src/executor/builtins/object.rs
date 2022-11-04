@@ -123,8 +123,6 @@ extern "C" fn assert(
     Some(Value::nil())
 }
 
-use std::arch::asm;
-
 extern "C" fn dump(
     vm: &mut Interp,
     globals: &mut Globals,
@@ -133,14 +131,7 @@ extern "C" fn dump(
     _len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    let mut bp: u64;
-    unsafe {
-        asm!(
-            "mov {bp}, rbp",
-            bp = out(reg) bp,
-        );
-    }
-    super::op::_dump_stacktrace(vm, globals, bp as *const u64);
+    super::op::_dump_stacktrace(vm, globals);
     Some(Value::nil())
 }
 

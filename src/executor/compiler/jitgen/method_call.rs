@@ -183,6 +183,7 @@ impl Codegen {
         method_resolved:
         );
 
+        self.push_frame();
         self.set_self_and_args(recv, args, block, len);
 
         monoasm!(self.jit,
@@ -199,6 +200,7 @@ impl Codegen {
         patch_adr:
         );
 
+        self.pop_frame();
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
             testq rax, rax;
@@ -415,14 +417,16 @@ impl Codegen {
             movq rax, (Meta::native(func_id, len as _).0);
             movq [rbp - (OFFSET_META)], rax;
             movq [rbp - (OFFSET_BLOCK)], r9;
-            subq rsp, (OFFSET_SELF);
+            subq rsp, ((OFFSET_SELF + 15) & !0xf);
         );
-        self.xmm_save(&xmm_using);
+
         monoasm!(self.jit,
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
             movq rax, (abs_address);
             call rax;
         );
-        self.xmm_restore(&xmm_using);
+
         monoasm!(self.jit,
             leave;
             ret;
@@ -441,15 +445,18 @@ impl Codegen {
                 );
             }
         }
+        self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rdx, rdi;  // self: Value
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+        );
+        self.push_frame();
+        monoasm!(self.jit,
             lea  rcx, [rbp - (conv(args))];  // args: *const Value
             movq r8, (len);
             call caller;
         );
-
+        self.pop_frame();
+        self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
@@ -467,34 +474,13 @@ impl Codegen {
         cached: Cached,
         pc: BcPc,
     ) {
-        // set arguments to a callee stack.
-        //
-        //       +-------------+
-        //  0x00 |             | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |   old rbp   |
-        //       +-------------+
-        // -0x18 |    meta     |
-        //       +-------------+
-        // -0x20 | blk  |      |
-        //       +-------------+
-        // -0x28 |     %0      |
-        //       +-------------+
-        // -0x30 | %1(1st arg) |
-        //       +-------------+
-        //       |             |
-        //
         // argument registers:
         //   rdi: args len
         //
-        let method_resolved = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
 
-        self.jit.bind_label(method_resolved);
-
+        self.push_frame();
         self.set_self_and_args(recv, args, block, len);
 
         monoasm!(self.jit,
@@ -510,6 +496,8 @@ impl Codegen {
             // patch point
             call (cached.codeptr - src_point - 5);
         );
+        self.pop_frame();
+        self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);

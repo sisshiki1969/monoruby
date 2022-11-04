@@ -4,7 +4,9 @@ use super::*;
 ///
 /// Bytecode interpreter.
 ///
+#[repr(C)]
 pub struct Interp {
+    pub cfp: usize,
     pub codegen: Codegen,
     lexical_class: Vec<ClassId>,
 }
@@ -12,6 +14,7 @@ pub struct Interp {
 impl Interp {
     pub fn new(globals: &mut Globals, no_jit: bool) -> Self {
         Self {
+            cfp: 0,
             codegen: Codegen::new(no_jit, Value::main_object(globals)),
             lexical_class: vec![],
         }

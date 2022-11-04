@@ -59,7 +59,7 @@ macro_rules! cmp_ops {
 }
 
 impl Codegen {
-    pub(super) fn get_entry_point(&mut self, main_object: Value) {
+    pub(super) fn gen_entry_point(&mut self, main_object: Value) {
         let entry = self.jit.get_current_address();
         monoasm! { self.jit,
             pushq rbx;
@@ -78,6 +78,9 @@ impl Codegen {
             // set block
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq [rsp - (16 + OFFSET_OUTER)], 0;
+            movq [rsp - (16 + OFFSET_CFP)], 0;
+            lea  rax, [rsp - (16 + OFFSET_CFP)];
+            movq [rbx], rax;
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+
@@ -102,8 +105,9 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_SELF)], rax;
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
-            xorq rbp, rbp;
             call rax;
+            // pop frame
+            movq [rbx], 0;
             addq rsp, 8;
             popq rbp;
             popq r15;
@@ -634,6 +638,9 @@ impl Codegen {
             jne  slowpath;
 
         exec:
+        };
+        self.push_frame();
+        monoasm! { self.jit,
             movq [rsp - (16 + OFFSET_OUTER)], 0;
             // set meta
             movq rdi, [r13 + 16];
@@ -704,6 +711,9 @@ impl Codegen {
             // set pc
             movq r13, [r13 + 24];    // r13: BcPc
             call rax;
+        };
+        self.pop_frame();
+        monoasm! { self.jit,
             addq rsp, 16;
             popq r13;   // pop pc
             popq r15;   // pop %ret

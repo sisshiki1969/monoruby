@@ -30,21 +30,22 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
 - measurements are shown in iteration/sec (the higher, the better).
 
-|  impl \ bench   | app_fib | so_mandelbrot |  tarai | quicksort |
-| :-------------: | ------: | ------------: | -----: | :-------: |
-|    monoruby     |  23.137 |        14.695 | 15.195 | 408.580k  |
-| ruby(3.2.0-dev) |   3.305 |         0.528 |  2.742 |  65.608k  |
-|   ruby --yjit   |  13.250 |         0.702 | 11.398 | 108.308k  |
+|  bench \ impl   |  3.2.0-dev |   --yjit   | monoruby  |
+| :-------------: | :--------: | :--------: | :-------: |
+|      qsort      |   74.016k  |   113.075k |  361.426k |
+|     app_fib     |     3.615  |     13.938 |    17.951 |
+|  so_mandelbrot  |     0.615  |      0.832 |    13.571 |
+|    so_nbody     |     1.033  |      1.560 |     4.751 |
 
-|    bench \ impl     | 3.2.0-dev |  --yjit  | monoruby |
-| :-----------------: | :-------: | :------: | :------: |
-|       vm_ivar       | 209.106M  | 143.486M | 860.795M |
-|     vm_ivar_get     |  12.703   |  25.456  |  65.388  |
-|     vm_ivar_set     | 145.923M  | 139.298M | 401.092M |
-| vm_ivar_generic_get |  16.950M  | 15.658M  | 191.712M |
-| vm_ivar_generic_set |  7.496M   |  9.636M  | 180.772M |
-|    vm_attr_ivar     |  60.527M  | 58.644M  | 277.252M |
-|  vm_attr_ivar_set   |  53.804M  | 57.584M  | 183.506M |
+|    bench \ impl     | 3.2.0-dev |  --yjit   | monoruby  |
+| :-----------------: | :-------: | :-------: | :-------: |
+|             vm_ivar |  159.172M |  160.985M |  593.191M |
+|         vm_ivar_get |    12.251 |    28.422 |    58.717 |
+|         vm_ivar_set |  134.974M |  137.563M |  533.527M |
+| vm_ivar_generic_get |   16.402M |   16.332M |  112.353M |
+| vm_ivar_generic_set |    8.152M |   10.313M |   75.855M |
+|        vm_attr_ivar |   58.936M |   58.063M |  301.761M |
+|    vm_attr_ivar_set |   64.160M |   62.901M |  300.453M |
 
 ## How to run
 

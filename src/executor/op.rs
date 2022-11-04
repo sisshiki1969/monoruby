@@ -449,30 +449,28 @@ pub extern "C" fn define_method(
     globals.add_method(parent, name, func);
 }
 
-pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals, mut bp: *const u64) {
+pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals) {
+    let mut cfp = interp.cfp as *const usize;
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
-        eprint!("  [{}]: bp:{:?} ", i, bp);
-        let ret_addr = unsafe { *bp.add(1) as *const u64 };
+        eprint!("  [{}]: cfp:{:?} ", i, cfp);
+        let ret_addr = unsafe { *cfp.add(2) as *const usize };
         eprintln!("ret adr: {:?} ", ret_addr);
-        let prev_bp = unsafe { *bp as *const u64 };
-        _dump_frame_info(interp, globals, bp);
-        //code = interp.codegen.jit.include(ret_addr as _);
-        if prev_bp.is_null() {
+        let prev_cfp = unsafe { *cfp as *const usize };
+        _dump_frame_info(interp, globals, cfp);
+        if prev_cfp.is_null() {
             break;
         }
-        bp = prev_bp;
+        cfp = prev_cfp;
     }
     eprintln!("-----end stacktrace");
 }
 
-fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, bp: *const u64) {
-    let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) });
+fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, cfp: *const usize) {
+    let bp = unsafe { cfp.add(OFFSET_CFP as usize / 8) };
+    let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) as u64 });
     let outer = unsafe { *bp.sub(OFFSET_OUTER as usize / 8) };
     let func_id = meta.func_id();
-    if globals.func.len() <= func_id.0 as usize {
-        return;
-    }
     eprintln!(
         "    name:[{}] outer:0x{:012x} {:?}",
         globals.func[func_id]
@@ -483,7 +481,7 @@ fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, bp: *const u64)
     );
     eprint!("    ");
     for r in 0..meta.reg_num() as usize {
-        let v = unsafe { Value::from(*bp.sub(OFFSET_SELF as usize / 8 + r)) };
+        let v = unsafe { Value::from(*bp.sub(OFFSET_SELF as usize / 8 + r) as u64) };
         eprint!(
             "%{}{}:[{}] ",
             r,

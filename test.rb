@@ -1,7 +1,8 @@
 a = 42
 
-6.times do |x|
-  6.times do |y|
+10.times do |x|
+  10.times do |y|
+    __dump
     puts "#{x},#{y}"
   end
 end
