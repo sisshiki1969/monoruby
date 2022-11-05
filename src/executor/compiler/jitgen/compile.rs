@@ -540,7 +540,7 @@ impl Codegen {
             }
 
             let next_idx = cc.bb_pos + ofs + 1;
-            if let Some(_) = cc.bb_info[next_idx] {
+            if cc.bb_info[next_idx].is_some() {
                 let branch_dest = self.jit.label();
                 cc.new_branch(cc.bb_pos + ofs, next_idx, ctx.clone(), branch_dest);
                 monoasm!(self.jit,

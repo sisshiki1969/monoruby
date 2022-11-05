@@ -12,7 +12,7 @@ macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Interp,
+                interp: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -71,7 +71,7 @@ pub(super) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
 
 // TODO: support rhs < 0.
 pub(super) extern "C" fn pow_values(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -126,7 +126,7 @@ binop_values!(
 );
 
 pub(super) extern "C" fn div_values(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -206,7 +206,7 @@ macro_rules! int_binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Interp,
+                interp: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -237,7 +237,7 @@ int_binop_values!(
 );
 
 pub(super) extern "C" fn shr_values(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -265,7 +265,7 @@ pub(super) extern "C" fn shr_values(
 }
 
 pub(super) extern "C" fn shl_values(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -372,7 +372,7 @@ macro_rules! eq_values {
 eq_values!(eq, ne);
 
 pub(super) extern "C" fn neg_value(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
 ) -> Option<Value> {
@@ -400,7 +400,7 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
 }
 
 pub extern "C" fn vm_get_constant(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
@@ -423,7 +423,7 @@ pub extern "C" fn vm_get_constant(
 /// rax: Option<Value>
 ///
 pub extern "C" fn get_constant(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
@@ -431,7 +431,7 @@ pub extern "C" fn get_constant(
 }
 
 pub extern "C" fn set_constant(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     val: Value,
@@ -440,7 +440,7 @@ pub extern "C" fn set_constant(
 }
 
 pub extern "C" fn define_method(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
@@ -449,7 +449,7 @@ pub extern "C" fn define_method(
     globals.add_method(parent, name, func);
 }
 
-pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals) {
+pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals) {
     let mut cfp = interp.cfp as *const usize;
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
@@ -466,7 +466,7 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Interp, globals: &mut Globals) {
     eprintln!("-----end stacktrace");
 }
 
-fn _dump_frame_info(_interp: &mut Interp, globals: &mut Globals, cfp: *const usize) {
+fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, cfp: *const usize) {
     let bp = unsafe { cfp.add(OFFSET_CFP as usize / 8) };
     let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) as u64 });
     let outer = unsafe { *bp.sub(OFFSET_OUTER as usize / 8) };

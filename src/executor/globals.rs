@@ -62,7 +62,7 @@ impl Globals {
                 return;
             }
         };
-        match Interp::eval_toplevel(self, startup_fid) {
+        match Executor::eval_toplevel(self, startup_fid) {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("error occured in executing startup.rb.");
@@ -74,7 +74,7 @@ impl Globals {
 }
 
 impl Globals {
-    fn array_tos(&self, v: &Vec<Value>) -> String {
+    fn array_tos(&self, v: &[Value]) -> String {
         match v.len() {
             0 => "[]".to_string(),
             1 => format!("[{}]", self.val_inspect(v[0])),
@@ -240,7 +240,7 @@ impl Globals {
     ///
     pub(crate) fn define_attr_reader(
         &mut self,
-        interp: &mut Interp,
+        interp: &mut Executor,
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {
@@ -257,7 +257,7 @@ impl Globals {
     ///
     pub(crate) fn define_attr_writer(
         &mut self,
-        interp: &mut Interp,
+        interp: &mut Executor,
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {

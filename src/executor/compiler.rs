@@ -10,10 +10,10 @@ use super::*;
 mod jitgen;
 mod vmgen;
 
-pub type EntryPoint = extern "C" fn(&mut Interp, &mut Globals, *const FuncData) -> Option<Value>;
+pub type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
 
 pub type Invoker = extern "C" fn(
-    &mut Interp,
+    &mut Executor,
     &mut Globals,
     *const FuncData,
     Value,
@@ -22,7 +22,7 @@ pub type Invoker = extern "C" fn(
 ) -> Option<Value>;
 
 pub type Invoker2 =
-    extern "C" fn(&mut Interp, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
+    extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
 ///
 /// Bytecode compiler
@@ -63,7 +63,7 @@ fn conv(reg: SlotId) -> i64 {
 /// If no method was found, return None (==0u64).
 ///
 extern "C" fn find_method<'a>(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &'a mut Globals,
     func_name: IdentId,
     args_len: usize,
@@ -75,7 +75,7 @@ extern "C" fn find_method<'a>(
 }
 
 extern "C" fn vm_get_func_data<'a>(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &'a mut Globals,
     func_id: FuncId,
 ) -> &'a FuncData {
@@ -93,7 +93,7 @@ extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
 }
 
 extern "C" fn get_index(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     index: Value,
@@ -120,7 +120,7 @@ extern "C" fn get_index(
 }
 
 extern "C" fn set_index(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     index: Value,
@@ -171,7 +171,7 @@ extern "C" fn set_instance_var(
 }
 
 extern "C" fn define_class(
-    interp: &mut Interp,
+    interp: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     superclass: Option<Value>,
@@ -208,15 +208,15 @@ extern "C" fn define_class(
     Some(self_val)
 }
 
-extern "C" fn pop_class_context(interp: &mut Interp, _globals: &mut Globals) {
+extern "C" fn pop_class_context(interp: &mut Executor, _globals: &mut Globals) {
     interp.pop_class_context();
 }
 
-extern "C" fn unimplemented_inst(_: &mut Interp, _: &mut Globals, opcode: u64) {
+extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
     panic!("unimplemented inst. {:016x}", opcode);
 }
 
-extern "C" fn panic(_: &mut Interp, _: &mut Globals) {
+extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
@@ -229,7 +229,7 @@ extern "C" fn error_divide_by_zero(globals: &mut Globals) {
 }
 
 extern "C" fn get_error_location(
-    _interp: &mut Interp,
+    _interp: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
@@ -434,7 +434,7 @@ impl Codegen {
 
         // method invoker.
         let method_invoker: extern "C" fn(
-            &mut Interp,
+            &mut Executor,
             &mut Globals,
             *const FuncData,
             Value,
@@ -454,7 +454,7 @@ impl Codegen {
 
         // block invoker.
         let block_invoker: extern "C" fn(
-            &mut Interp,
+            &mut Executor,
             &mut Globals,
             *const FuncData,
             Value,
@@ -467,7 +467,7 @@ impl Codegen {
 
         // method invoker.
         let method_invoker2: extern "C" fn(
-            &mut Interp,
+            &mut Executor,
             &mut Globals,
             *const FuncData,
             Value,
@@ -1160,7 +1160,7 @@ impl Codegen {
     /// Compile the Ruby method.
     ///
     extern "C" fn exec_jit_compile(
-        interp: &mut Interp,
+        interp: &mut Executor,
         globals: &mut Globals,
         func_id: FuncId,
     ) -> CodePtr {
@@ -1173,7 +1173,7 @@ impl Codegen {
     /// Compile the loop.
     ///
     extern "C" fn exec_jit_partial_compile(
-        interp: &mut Interp,
+        interp: &mut Executor,
         globals: &mut Globals,
         func_id: FuncId,
         pc: BcPc,

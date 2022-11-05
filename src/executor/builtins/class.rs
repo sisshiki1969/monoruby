@@ -23,7 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// !! We must call Object#initialize.
 extern "C" fn new(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -43,7 +43,7 @@ extern "C" fn new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 extern "C" fn superclass(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
@@ -63,7 +63,7 @@ extern "C" fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 extern "C" fn allocate(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
@@ -80,7 +80,7 @@ extern "C" fn allocate(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 extern "C" fn tos(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
@@ -97,7 +97,7 @@ extern "C" fn tos(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 extern "C" fn constants(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
@@ -108,7 +108,7 @@ extern "C" fn constants(
     let v = globals
         .get_constant_names(class_id)
         .into_iter()
-        .map(|name| Value::new_symbol(name))
+        .map(Value::new_symbol)
         .collect();
     Some(Value::new_array(v))
 }
@@ -122,7 +122,7 @@ extern "C" fn constants(
 ///
 /// TODO: support inherited_too.
 extern "C" fn instance_methods(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
@@ -133,7 +133,7 @@ extern "C" fn instance_methods(
     let v = globals
         .get_method_names(class_id)
         .into_iter()
-        .map(|name| Value::new_symbol(name))
+        .map(Value::new_symbol)
         .collect();
     Some(Value::new_array(v))
 }
@@ -143,7 +143,7 @@ extern "C" fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 extern "C" fn attr_reader(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -165,7 +165,7 @@ extern "C" fn attr_reader(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 extern "C" fn attr_writer(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -187,7 +187,7 @@ extern "C" fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 extern "C" fn attr_accessor(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -198,7 +198,7 @@ extern "C" fn attr_accessor(
     let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(vm, class_id, arg_name.clone());
+        let method_name = globals.define_attr_reader(vm, class_id, arg_name);
         res.push(Value::new_symbol(method_name));
         let method_name = globals.define_attr_writer(vm, class_id, arg_name);
         res.push(Value::new_symbol(method_name));

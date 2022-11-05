@@ -752,15 +752,15 @@ impl Codegen {
     }
 
     fn load_binary_args_with_mode(&mut self, mode: &BinOpMode) {
-        match mode {
-            &BinOpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
-            &BinOpMode::RI(lhs, rhs) => {
+        match *mode {
+            BinOpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
+            BinOpMode::RI(lhs, rhs) => {
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(lhs))];
                     movq rsi, (Value::int32(rhs as i32).get());
                 );
             }
-            &BinOpMode::IR(lhs, rhs) => {
+            BinOpMode::IR(lhs, rhs) => {
                 monoasm!(self.jit,
                     movq rdi, (Value::int32(lhs as i32).get());
                     movq rsi, [rbp - (conv(rhs))];

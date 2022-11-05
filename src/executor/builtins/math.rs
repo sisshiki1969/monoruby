@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
 extern "C" fn sqrt(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _self_val: Value,
     arg: Arg,

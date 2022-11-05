@@ -26,12 +26,16 @@ impl ClassId {
     }
 
     pub(crate) fn is_always_frozen(&self) -> bool {
-        match *self {
+        matches!(
+            *self,
+            NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS
+        )
+        /*match *self {
             NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
                 true
             }
             _ => false,
-        }
+        }*/
     }
 }
 
@@ -53,9 +57,9 @@ impl std::fmt::Debug for ClassId {
     }
 }
 
-impl Into<u32> for ClassId {
-    fn into(self) -> u32 {
-        self.0
+impl From<ClassId> for u32 {
+    fn from(val: ClassId) -> Self {
+        val.0
     }
 }
 

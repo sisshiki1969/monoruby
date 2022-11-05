@@ -2,6 +2,7 @@
 #![feature(int_roundings)]
 #![feature(const_option)]
 #![feature(once_cell)]
+#![allow(clippy::too_many_arguments)]
 mod alloc;
 mod executor;
 mod id_table;
@@ -37,7 +38,7 @@ pub fn compile_and_run(
             return Err(err);
         }
     };
-    let res = Interp::eval_toplevel(globals, fid);
+    let res = Executor::eval_toplevel(globals, fid);
     if let Err(err) = &res {
         eprintln!("{}", err.get_error_message(globals));
         err.show_all_loc();

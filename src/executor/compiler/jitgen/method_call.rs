@@ -32,9 +32,9 @@ impl Codegen {
                         version,
                         pc: callee_pc,
                     };
-                    self.gen_call_cached(globals, &ctx, recv, args, None, len, ret, cached, pc);
+                    self.gen_call_cached(globals, ctx, recv, args, None, len, ret, cached, pc);
                 } else {
-                    self.gen_call_not_cached(&ctx, recv, name, args, None, len, ret, pc);
+                    self.gen_call_not_cached(ctx, recv, name, args, None, len, ret, pc);
                 }
             }
             BcOp::MethodCallBlock(ret, name, class_id, version) => {
@@ -51,7 +51,7 @@ impl Codegen {
                     };
                     self.gen_call_cached(
                         globals,
-                        &ctx,
+                        ctx,
                         recv,
                         args + 1,
                         Some(args),
@@ -61,7 +61,7 @@ impl Codegen {
                         pc,
                     );
                 } else {
-                    self.gen_call_not_cached(&ctx, recv, name, args + 1, Some(args), len, ret, pc);
+                    self.gen_call_not_cached(ctx, recv, name, args + 1, Some(args), len, ret, pc);
                 }
             }
             _ => unreachable!(),
@@ -83,7 +83,7 @@ impl Codegen {
         cached: Cached,
         pc: BcPc,
     ) {
-        let deopt = self.gen_side_deopt_dest(pc - 1, &ctx);
+        let deopt = self.gen_side_deopt_dest(pc - 1, ctx);
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(recv))];
         );
@@ -101,18 +101,18 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 } else {
-                    self.attr_reader(&ctx, ivar_name, ret);
+                    self.attr_reader(ctx, ivar_name, ret);
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
-                self.attr_writer(&ctx, ivar_name, ret, args, pc);
+                self.attr_writer(ctx, ivar_name, ret, args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                self.native_call(&ctx, func_id, ret, args, block, len, abs_address, pc);
+                self.native_call(ctx, func_id, ret, args, block, len, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(recv, ret, args, block, len, &ctx, cached, pc);
+                self.method_call_cached(recv, ret, args, block, len, ctx, cached, pc);
             }
         };
     }

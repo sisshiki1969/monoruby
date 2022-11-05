@@ -61,7 +61,7 @@ _: Option<Value>,
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 extern "C" fn puts(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _: Value,
     arg: Arg,
@@ -95,7 +95,7 @@ extern "C" fn puts(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 extern "C" fn print(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _: Value,
     arg: Arg,
@@ -109,7 +109,7 @@ extern "C" fn print(
 }
 
 extern "C" fn assert(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     _: Value,
     arg: Arg,
@@ -124,7 +124,7 @@ extern "C" fn assert(
 }
 
 extern "C" fn dump(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     _: Value,
     _arg: Arg,
@@ -140,7 +140,7 @@ extern "C" fn dump(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 extern "C" fn respond_to(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -160,7 +160,7 @@ extern "C" fn respond_to(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
 extern "C" fn inspect(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _: Arg,
@@ -176,7 +176,7 @@ extern "C" fn inspect(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
 extern "C" fn class(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _: Arg,
@@ -191,7 +191,7 @@ extern "C" fn class(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
 extern "C" fn singleton_class(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _: Arg,
@@ -206,7 +206,7 @@ extern "C" fn singleton_class(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 extern "C" fn instance_variable_defined(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -227,7 +227,7 @@ extern "C" fn instance_variable_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 extern "C" fn instance_variable_set(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -245,7 +245,7 @@ extern "C" fn instance_variable_set(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 extern "C" fn instance_variable_get(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -262,7 +262,7 @@ extern "C" fn instance_variable_get(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
 extern "C" fn kernel_integer(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _: Value,
     arg: Arg,
@@ -274,17 +274,18 @@ extern "C" fn kernel_integer(
         RV::Integer(num) => return Some(Value::new_integer(num)),
         RV::BigInt(num) => return Some(Value::new_bigint(num.clone())),
         RV::Float(num) => return Some(Value::new_integer(num.trunc() as i64)),
-        RV::String(b) => match String::from_utf8(b.to_vec()) {
-            Ok(s) => match s.parse::<i64>() {
-                Ok(num) => return Some(Value::new_integer(num)),
-                Err(_) => {
-                    let s = arg0.to_s(globals);
-                    globals.err_argument(&format!("invalid value for Integer(): {}", s));
-                    return None;
+        RV::String(b) => {
+            if let Ok(s) = String::from_utf8(b.to_vec()) {
+                match s.parse::<i64>() {
+                    Ok(num) => return Some(Value::new_integer(num)),
+                    Err(_) => {
+                        let s = arg0.to_s(globals);
+                        globals.err_argument(&format!("invalid value for Integer(): {}", s));
+                        return None;
+                    }
                 }
-            },
-            Err(_) => {}
-        },
+            }
+        }
         _ => {}
     };
     globals.err_no_implict_conv(arg0, INTEGER_CLASS);

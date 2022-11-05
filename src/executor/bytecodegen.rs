@@ -735,12 +735,9 @@ impl IrContext {
                         return Err(MonorubyErr::escape_from_eval(loc, info.sourceinfo.clone()))
                     }
                 };
-                match ret_reg {
-                    Some(reg) => {
-                        let temp = self.gen_temp_expr(ctx, info, val)?;
-                        self.gen_mov(reg, temp)
-                    }
-                    None => {}
+                if let Some(reg) = ret_reg {
+                    let temp = self.gen_temp_expr(ctx, info, val)?;
+                    self.gen_mov(reg, temp)
                 }
                 self.push(BcIr::Br(break_pos), loc);
                 return Ok(());

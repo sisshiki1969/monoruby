@@ -396,7 +396,7 @@ impl BinOpK {
 
     pub(crate) fn generic_func(
         &self,
-    ) -> extern "C" fn(&mut Interp, &mut Globals, Value, Value) -> Option<Value> {
+    ) -> extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value> {
         match self {
             BinOpK::Add => add_values,
             BinOpK::Sub => sub_values,

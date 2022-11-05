@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 extern "C" fn times(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _: Arg,
@@ -42,7 +42,7 @@ extern "C" fn times(
         unimplemented!("needs block.")
     };
 
-    return Some(self_val);
+    Some(self_val)
 }
 
 /// ### Integer#chr
@@ -51,23 +51,20 @@ extern "C" fn times(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 extern "C" fn chr(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
     _len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    match self_val.try_fixnum() {
-        Some(i) => {
-            if let Ok(b) = u8::try_from(i) {
-                return Some(Value::new_string_from_slice(&[b]));
-            }
+    if let Some(i) = self_val.try_fixnum() {
+        if let Ok(b) = u8::try_from(i) {
+            return Some(Value::new_string_from_slice(&[b]));
         }
-        _ => {}
     };
     globals.err_char_out_of_range(self_val);
-    return None;
+    None
 }
 
 #[cfg(test)]

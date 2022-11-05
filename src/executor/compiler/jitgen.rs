@@ -88,7 +88,7 @@ impl StackSlotInfo {
         });
     }
 
-    fn merge_entries(entries: &Vec<BranchEntry>) -> Self {
+    fn merge_entries(entries: &[BranchEntry]) -> Self {
         let mut target = entries[0].bbctx.stack_slot.clone();
         #[cfg(feature = "emit-tir")]
         eprintln!("  <-{}: {:?}", entries[0].src_idx, target);
@@ -141,7 +141,7 @@ impl BBContext {
         ctx
     }
 
-    fn remove_unused(&mut self, unused: &Vec<SlotId>) {
+    fn remove_unused(&mut self, unused: &[SlotId]) {
         unused.iter().for_each(|reg| self.dealloc_xmm(*reg));
     }
 
@@ -158,12 +158,12 @@ impl BBContext {
     }
 
     fn link_rw_xmm(&mut self, reg: SlotId, freg: u16) {
-        self.stack_slot[reg] = LinkMode::XmmRW(freg as u16);
+        self.stack_slot[reg] = LinkMode::XmmRW(freg);
         self.xmm[freg as usize].push(reg);
     }
 
     fn link_r_xmm(&mut self, reg: SlotId, freg: u16) {
-        self.stack_slot[reg] = LinkMode::XmmR(freg as u16);
+        self.stack_slot[reg] = LinkMode::XmmR(freg);
         self.xmm[freg as usize].push(reg);
     }
 
@@ -372,7 +372,7 @@ enum BinOpMode {
 
 #[cfg(feature = "log-jit")]
 extern "C" fn log_deoptimize(
-    _interp: &mut Interp,
+    _interp: &mut Executor,
     globals: &mut Globals,
     func_id: FuncId,
     pc: BcPc,
@@ -637,14 +637,14 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &Vec<usize>) {
-        self.xmm_save(&xmm_using);
+    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &[usize]) {
+        self.xmm_save(xmm_using);
         monoasm!(self.jit,
             movl rsi, (cached_ivarid.get());
             movq rax, (RValue::get_ivar);
             call rax;
         );
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     fn jit_store_ivar(
@@ -706,15 +706,15 @@ impl Codegen {
         self.jit.select_page(0);
     }
 
-    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &Vec<usize>) {
-        self.xmm_save(&xmm_using);
+    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &[usize]) {
+        self.xmm_save(xmm_using);
         monoasm!(self.jit,
             movl rsi, (cached_ivarid.get());
             movq rdx, [rbp - (conv(src))];   // val: Value
             movq rax, (RValue::set_ivar);
             call rax;
         );
-        self.xmm_restore(&xmm_using);
+        self.xmm_restore(xmm_using);
     }
 
     fn jit_get_index(&mut self, ret: SlotId, base: SlotId, idx: SlotId, pc: BcPc, ctx: &BBContext) {
@@ -920,7 +920,7 @@ impl Codegen {
     }
 
     fn gen_write_back_single(&mut self, freg: u16, v: Vec<SlotId>) {
-        if v.len() == 0 {
+        if v.is_empty() {
             return;
         }
         #[cfg(feature = "emit-tir")]
@@ -944,7 +944,7 @@ impl Codegen {
         self.jit.select_page(1);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
-        if wb.len() != 0 {
+        if !wb.is_empty() {
             #[cfg(feature = "emit-tir")]
             eprintln!("--gen deopt");
             self.gen_write_back(wb);
@@ -1114,7 +1114,7 @@ impl Codegen {
         );
     }
 
-    fn xmm_save(&mut self, xmm_using: &Vec<usize>) {
+    fn xmm_save(&mut self, xmm_using: &[usize]) {
         let len = xmm_using.len();
         if len == 0 {
             return;
@@ -1130,7 +1130,7 @@ impl Codegen {
         }
     }
 
-    fn xmm_restore(&mut self, xmm_using: &Vec<usize>) {
+    fn xmm_restore(&mut self, xmm_using: &[usize]) {
         let len = xmm_using.len();
         if len == 0 {
             return;

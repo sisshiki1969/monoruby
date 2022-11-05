@@ -63,7 +63,7 @@ fn main() {
             let mut buf = String::new();
             let mut script_line = 0;
             let mut context = None;
-            let mut interp = Interp::new(&mut globals, args.no_jit);
+            let mut interp = Executor::new(&mut globals, args.no_jit);
             loop {
                 let prompt = format!(
                     "monoruby:{:03}{} ",

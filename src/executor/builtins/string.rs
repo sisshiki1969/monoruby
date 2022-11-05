@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 extern "C" fn add(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -47,17 +47,18 @@ enum Integer {
 fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<Integer> {
     match val.unpack() {
         RV::Integer(i) => return Some(Integer::Fixnum(i)),
-        RV::String(s) => match String::from_utf8(s.to_vec()) {
-            Ok(s) => match s.parse::<i64>() {
-                Ok(i) => return Some(Integer::Fixnum(i)),
-                Err(_) => {
-                    if let Ok(b) = s.parse::<BigInt>() {
-                        return Some(Integer::BigInt(b));
+        RV::String(s) => {
+            if let Ok(s) = String::from_utf8(s.to_vec()) {
+                match s.parse::<i64>() {
+                    Ok(i) => return Some(Integer::Fixnum(i)),
+                    Err(_) => {
+                        if let Ok(b) = s.parse::<BigInt>() {
+                            return Some(Integer::BigInt(b));
+                        }
                     }
                 }
-            },
-            Err(_) => {}
-        },
+            }
+        }
         _ => {}
     }
     let s = val.to_s(globals);
@@ -80,21 +81,18 @@ fn coerce_to_float(globals: &mut Globals, val: Value) -> Option<f64> {
 fn coerce_to_char(globals: &mut Globals, val: Value) -> Option<char> {
     match val.unpack() {
         RV::Integer(i) => {
-            match u32::try_from(i) {
-                Ok(u) => match char::from_u32(u) {
-                    Some(c) => return Some(c),
-                    None => {}
-                },
-                _ => {}
+            if let Ok(u) = u32::try_from(i) {
+                if let Some(c) = char::from_u32(u) {
+                    return Some(c);
+                }
             }
             globals.err_argument("invalid character");
         }
         RV::Float(f) => {
             let f = f.trunc();
             if 0.0 <= f && f <= u32::MAX as f64 {
-                match char::from_u32(f as u32) {
-                    Some(c) => return Some(c),
-                    None => {}
+                if let Some(c) = char::from_u32(f as u32) {
+                    return Some(c);
                 }
             }
             globals.err_argument("invalid character");
@@ -132,7 +130,7 @@ macro_rules! next_char {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
 extern "C" fn rem(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,

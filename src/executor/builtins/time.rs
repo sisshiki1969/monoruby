@@ -18,7 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 extern "C" fn now(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     _self_val: Value,
     _arg: Arg,
@@ -35,7 +35,7 @@ extern "C" fn now(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 extern "C" fn sub(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,

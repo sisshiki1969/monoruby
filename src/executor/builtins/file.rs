@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 extern "C" fn write(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _self_val: Value,
     arg: Arg,

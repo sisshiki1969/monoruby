@@ -204,7 +204,7 @@ impl<T: GCBox> Allocator<T> {
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         #[cfg(not(feature = "gc-stress"))]
         {
-            if !self.is_allocated() && !(self.malloc_threshold < malloced) {
+            if !self.is_allocated() && self.malloc_threshold >= malloced {
                 return;
             }
         }
@@ -350,9 +350,8 @@ impl<T: GCBox> Allocator<T> {
 impl<T: GCBox> Allocator<T> {
     fn check_ptr(&self, ptr: *mut T) {
         let page_ptr = PageRef::from_inner(ptr);
-        match self.pages.iter().find(|heap| **heap == page_ptr) {
-            Some(_) => return,
-            None => {}
+        if self.pages.iter().any(|heap| *heap == page_ptr) {
+            return;
         };
         if self.current == page_ptr {
             return;
@@ -366,15 +365,10 @@ impl<T: GCBox> Allocator<T> {
     fn check_free_list(&self) -> usize {
         let mut c = 0;
         let mut free = self.free;
-        loop {
-            match free {
-                Some(f) => {
-                    let p = f.as_ptr();
-                    self.check_ptr(p);
-                    free = unsafe { (*p).next() };
-                }
-                None => break,
-            };
+        while let Some(f) = free {
+            let p = f.as_ptr();
+            self.check_ptr(p);
+            free = unsafe { (*p).next() };
             c += 1;
         }
         c

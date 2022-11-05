@@ -22,7 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// TODO: Support arguments.
 extern "C" fn new(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -44,7 +44,7 @@ extern "C" fn new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
 extern "C" fn size(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     mut self_val: Value,
     _arg: Arg,
@@ -60,7 +60,7 @@ extern "C" fn size(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
 extern "C" fn add(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -84,7 +84,7 @@ extern "C" fn add(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
 extern "C" fn shl(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     mut self_val: Value,
     arg: Arg,
@@ -100,7 +100,7 @@ extern "C" fn shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
 extern "C" fn index_assign(
-    _vm: &mut Interp,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
