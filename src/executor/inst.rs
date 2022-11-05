@@ -172,6 +172,9 @@ impl BcPc {
             BcOp::LoadDynVar(ret, src, outer) => {
                 format!("{:?} = dynvar({outer}, [{:?}])", ret, src)
             }
+            BcOp::StoreDynVar(dst, outer, src) => {
+                format!("dynvar({outer}, [{:?}]) = {:?}", dst, src)
+            }
             BcOp::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
                     "{:?} = {}: {}[{:?}]",
@@ -429,7 +432,22 @@ pub(super) enum BcIr {
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
     StoreConst(BcReg, IdentId),
-    LoadDynVar(BcReg, BcReg, usize),
+    LoadDynVar {
+        /// return register of the current frame.
+        ret: BcReg,
+        /// source register of the outer frame.
+        src: BcReg,
+        /// outer frame count.
+        outer: usize,
+    },
+    StoreDynVar {
+        /// destination register of the outer frame.
+        dst: BcReg,
+        /// outer frame count.
+        outer: usize,
+        /// source register of the current frame.
+        src: BcReg,
+    },
     LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
     StoreIvar(BcReg, IdentId), // src, id  - @id = %src
     Nil(BcReg),
@@ -626,6 +644,9 @@ impl std::fmt::Debug for Bc {
             BcOp::LoadDynVar(ret, src, outer) => {
                 write!(f, "{:?} = dynvar({outer}, [{:?}])", ret, src)
             }
+            BcOp::StoreDynVar(dst, outer, src) => {
+                write!(f, "dynvar({outer}, [{:?}]) = {:?}", dst, src)
+            }
             BcOp::LoadIvar(reg, id, ..) => {
                 write!(f, "{:?} = @[{:?}]", reg, id)
             }
@@ -754,6 +775,7 @@ pub(super) enum BcOp {
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
     LoadDynVar(SlotId, SlotId, usize),
+    StoreDynVar(SlotId, usize, SlotId),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     /// nil(%reg)
@@ -931,6 +953,7 @@ impl BcOp {
                 148 => Self::Ret(SlotId::new(op1)),
                 149 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
                 150 => Self::LoadDynVar(SlotId::new(op1), SlotId::new(op2), op3 as usize),
+                151 => Self::StoreDynVar(SlotId::new(op1), op3 as usize, SlotId::new(op3)),
                 155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 156..=161 => Self::Cmp(
                     CmpKind::from(opcode - 156),

@@ -245,6 +245,7 @@ impl Codegen {
         self.dispatch[149] = mov;
 
         self.dispatch[150] = self.vm_load_dvar();
+        self.dispatch[151] = self.vm_store_dvar();
         self.dispatch[155] = self.vm_concat();
 
         self.dispatch[156] = self.vm_eqrr();
@@ -580,6 +581,31 @@ impl Codegen {
             movq rax, [rax + rdi * 8 - (OFFSET_SELF)];
         };
         self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_store_dvar(&mut self) -> CodePtr {
+        // r15: dst
+        // rdi: outer
+        // rsi: src
+        let label = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
+        monoasm! { self.jit,
+            movq rax, [rbp - (OFFSET_OUTER)];
+        loop_:
+            subq rdi, 1;
+            jz   loop_exit;
+            movq rax, [rax];
+            jmp  loop_;
+        loop_exit:
+            lea  rax, [rax + (OFFSET_OUTER)];
+            negq rsi;
+            negq r15;
+            movq rdi, [rbp + rsi * 8 - (OFFSET_SELF)];
+            movq [rax + rsi * 8 - (OFFSET_SELF)], rdi;
+        };
         self.fetch_and_dispatch();
         label
     }

@@ -73,13 +73,15 @@ mod test {
 
     #[test]
     fn times() {
-        run_test_no_result_check(
+        run_test(
             r##"
+        res = []
         a = 100
-        4.times do
-          puts a
-          #__dump
+        10.times do |x|
+          a = x
+          res << a
         end
+        res
         "##,
         );
     }

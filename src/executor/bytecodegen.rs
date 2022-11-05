@@ -139,6 +139,7 @@ pub(crate) fn is_smi(node: &Node) -> Option<i16> {
 enum LvalueKind {
     Const(IdentId),
     InstanceVar(IdentId),
+    DynamicVar { outer: usize, dst: BcReg },
     Index { base: BcReg, index: BcReg },
     Send { recv: BcReg, method: IdentId },
     Other,
@@ -288,6 +289,11 @@ impl IrContext {
                 let name = IdentId::get_ident_id(name);
                 LvalueKind::InstanceVar(name)
             }
+            NodeKind::DynamicLocalVar(outer, ident) => {
+                let outer = *outer;
+                let dst = BcLocal(info.refer_dynamic_local(outer, ident)).into();
+                LvalueKind::DynamicVar { outer, dst }
+            }
             NodeKind::Index { box base, index } => {
                 assert_eq!(1, index.len());
                 let index = index[0].clone();
@@ -322,6 +328,9 @@ impl IrContext {
             }
             LvalueKind::InstanceVar(name) => {
                 self.push(BcIr::StoreIvar(src, name), loc);
+            }
+            LvalueKind::DynamicVar { outer, dst } => {
+                self.push(BcIr::StoreDynVar { dst, outer, src }, loc);
             }
             LvalueKind::Index { base, index } => {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
@@ -619,8 +628,8 @@ impl IrContext {
             }
             NodeKind::DynamicLocalVar(outer, ident) => {
                 let ret = info.push().into();
-                let src = BcLocal(info.refer_dynamic_local(outer, &ident));
-                self.push(BcIr::LoadDynVar(ret, src.into(), outer), loc);
+                let src = BcLocal(info.refer_dynamic_local(outer, &ident)).into();
+                self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
             }
             NodeKind::Const {
                 toplevel,
@@ -1474,11 +1483,17 @@ impl IrContext {
                     let op3 = info.get_index(idx);
                     Bc::from(enc_www(133, op1.0, op2.0, op3.0))
                 }
-                BcIr::LoadDynVar(ret, src, outer) => {
+                BcIr::LoadDynVar { ret, src, outer } => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
                     let op3 = *outer as u16;
                     Bc::from(enc_www(150, op1.0, op2.0, op3))
+                }
+                BcIr::StoreDynVar { dst, outer, src } => {
+                    let op1 = info.get_index(dst);
+                    let op2 = *outer as u16;
+                    let op3 = info.get_index(src);
+                    Bc::from(enc_www(151, op1.0, op2, op3.0))
                 }
                 BcIr::LoadConst(reg, toplevel, prefix, name) => {
                     let op1 = info.get_index(reg);

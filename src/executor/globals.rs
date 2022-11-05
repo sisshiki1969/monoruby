@@ -61,8 +61,7 @@ impl Globals {
             Ok(func_id) => func_id,
             Err(err) => {
                 eprintln!("error occured in compiling startup.rb.");
-                eprintln!("{}", err.get_error_message(self));
-                err.show_loc();
+                err.show_error_message_and_all_loc(self);
                 return;
             }
         };
@@ -70,8 +69,7 @@ impl Globals {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("error occured in executing startup.rb.");
-                eprintln!("{}", err.get_error_message(self));
-                err.show_loc();
+                err.show_error_message_and_all_loc(self);
             }
         };
     }

@@ -1,4 +1,4 @@
 benchmark:
-  exp: |
+  integer_times: |
     1000000.times do end
 loop_count: 5

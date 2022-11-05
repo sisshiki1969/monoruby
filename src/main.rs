@@ -92,8 +92,7 @@ fn main() {
                                     rl.add_history_entry(code.as_str());
                                     cont_mode = true;
                                 } else {
-                                    eprintln!("{}", err.get_error_message(&globals));
-                                    err.show_all_loc();
+                                    err.show_error_message_and_all_loc(&globals);
                                     cont_mode = false;
                                 };
                                 continue;
@@ -103,10 +102,7 @@ fn main() {
                         cont_mode = false;
                         match interp.eval(&mut globals, main_fid) {
                             Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
-                            Err(err) => {
-                                eprintln!("{}", err.get_error_message(&globals));
-                                err.show_all_loc();
-                            }
+                            Err(err) => err.show_error_message_and_all_loc(&globals),
                         };
                         script_line += 1;
                     }

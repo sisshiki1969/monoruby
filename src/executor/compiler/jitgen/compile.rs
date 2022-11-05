@@ -267,6 +267,21 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
+                BcOp::StoreDynVar(dst, outer, src) => {
+                    monoasm!(self.jit,
+                        movq rax, [rbp - (OFFSET_OUTER)];
+                    );
+                    for _ in 0..outer - 1 {
+                        monoasm!(self.jit,
+                            movq rax, [rax];
+                        );
+                    }
+                    monoasm!(self.jit,
+                        lea  rax, [rax + (OFFSET_OUTER)];
+                        movq rdi, [rbp - (conv(src))];
+                        movq [rax - (conv(dst))], rdi;
+                    );
+                }
                 BcOp::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,

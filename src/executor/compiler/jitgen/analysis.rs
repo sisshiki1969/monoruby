@@ -340,6 +340,7 @@ impl LoopAnalysis {
                 BcOp::LoadDynVar(dst, ..) => {
                     reg_info.def_as(dst, false);
                 }
+                BcOp::StoreDynVar(..) => {}
                 BcOp::StoreIvar(src, ..) => {
                     reg_info.use_non_float(src);
                 }
