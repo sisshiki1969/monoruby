@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,32 +12,32 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@359bebbc29cbe6c87da6bc9ea3bc930432750108
-      with:
-        ruby-version: '3.1'
-    - uses: dtolnay/rust-toolchain@nightly
-      with:
-        toolchain: nightly-2022-06-30
-    - run: |
-        cargo install grcov
-        rustup component add llvm-tools-preview
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test --all-features --verbose
-      run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" cargo run -- test.rb
-      run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" cargo run -- -e "puts 42"
+      - uses: actions/checkout@v3
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@359bebbc29cbe6c87da6bc9ea3bc930432750108
+        with:
+          ruby-version: "3.1"
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2022-06-30
+      - run: |
+          cargo install grcov
+          rustup component add llvm-tools-preview
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo test --all-features --verbose
+      - name: Run tests
+        run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" cargo run -- test.rb
+      - name: Run tests
+        run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" cargo run -- -e "puts 42"
 
-    - name: Run grcov
-      run:  grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
-    - name: Upload to codecov.io
-      uses: codecov/codecov-action@v2
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-
+      - name: Run grcov
+        run: grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v2
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
