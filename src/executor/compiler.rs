@@ -10,9 +10,9 @@ use super::*;
 mod jitgen;
 mod vmgen;
 
-pub type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
+type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
 
-pub type Invoker = extern "C" fn(
+type Invoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     *const FuncData,
@@ -21,7 +21,7 @@ pub type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
-pub type Invoker2 =
+type Invoker2 =
     extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
 ///
@@ -37,16 +37,16 @@ pub struct Codegen {
     pub entry_panic: DestLabel,
     pub vm_entry: DestLabel,
     pub vm_fetch: DestLabel,
-    pub entry_point: EntryPoint,
+    pub(super) entry_point: EntryPoint,
     entry_find_method: DestLabel,
     pub vm_return: DestLabel,
     pub f64_to_val: DestLabel,
     pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
     pub dispatch: Vec<CodePtr>,
-    pub method_invoker: Invoker,
-    pub method_invoker2: Invoker2,
-    pub block_invoker: Invoker,
+    pub(super) method_invoker: Invoker,
+    pub(super) method_invoker2: Invoker2,
+    pub(super) block_invoker: Invoker,
 }
 
 fn conv(reg: SlotId) -> i64 {

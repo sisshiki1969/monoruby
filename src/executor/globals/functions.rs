@@ -15,7 +15,7 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
-pub struct Funcs(Vec<FuncInfo>);
+struct Funcs(Vec<FuncInfo>);
 
 impl std::ops::Index<FuncId> for Funcs {
     type Output = FuncInfo;
@@ -105,7 +105,7 @@ pub struct ConstSiteInfo {
 pub struct ConstSiteId(pub u32);
 
 #[derive(Clone, PartialEq)]
-pub struct FnStore {
+pub(crate) struct FnStore {
     functions: Funcs,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
@@ -138,7 +138,7 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
 }
 
 impl FnStore {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             functions: Funcs::default(),
             constsite_info: vec![],
@@ -146,11 +146,11 @@ impl FnStore {
     }
 
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn functions(&self) -> &Vec<FuncInfo> {
+    pub(super) fn functions(&self) -> &Vec<FuncInfo> {
         &self.functions.0
     }
 
-    pub(crate) fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.functions.0.len()
     }
 
@@ -261,144 +261,8 @@ pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
 pub const FUNCDATA_OFFSET_PC: u64 = 8;
 pub const FUNCDATA_OFFSET_META: u64 = 16;
 
-///
-/// Metadata.
-///
-/// ~~~text
-///   7   6   5   4    3   2    1    0
-/// +-------+-------+---------+----+----+
-/// |    FuncId     | reg_num |kind|mode|
-/// +-------+-------+---------+----+----+
-///
-/// kind:   0 VM
-///         1 JIT
-///         2 NATIVE
-///
-/// mode:   0 method
-///         1 class def
-/// ~~~
-///
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-#[repr(transparent)]
-pub struct Meta(pub u64);
-
-impl std::fmt::Debug for Meta {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "kind:{} mode:{} {:?} regs:{}",
-            match self.kind() {
-                0 => "VM",
-                1 => "JIT",
-                2 => "NATIVE",
-                _ => "INVALID",
-            },
-            match self.mode() {
-                0 => "method",
-                1 => "class_def",
-                _ => "INVALID",
-            },
-            self.func_id(),
-            self.reg_num()
-        )
-    }
-}
-
-impl Meta {
-    pub(crate) fn new(meta: u64) -> Self {
-        Self(meta)
-    }
-
-    pub(crate) fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
-        // kind = VM, mode = method
-        Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
-    }
-
-    pub(crate) fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
-        // kind = VM, mode = classdef
-        Self((1 << 56) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
-    }
-
-    pub(crate) fn native(func_id: FuncId, reg_num: i64) -> Self {
-        // kind = NATIVE, mode = method
-        Self((2 << 48) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
-    }
-
-    pub(crate) fn func_id(&self) -> FuncId {
-        FuncId(self.0 as u32)
-    }
-
-    pub(crate) fn reg_num(&self) -> i64 {
-        (self.0 >> 32) as u16 as i16 as i64
-    }
-
-    pub(crate) fn kind(&self) -> u8 {
-        (self.0 >> 48) as u8
-    }
-
-    pub(crate) fn mode(&self) -> u8 {
-        (self.0 >> 56) as u8
-    }
-
-    ///
-    /// Set JIT flag in Meta.
-    ///
-    pub(crate) fn set_jit(&mut self) {
-        let meta = (self.0 & 0xff00_ffff_ffff_ffff) | (1 << 48);
-        self.0 = meta;
-    }
-
-    ///
-    /// Set the number of registers in Meta.
-    ///
-    pub(crate) fn set_reg_num(&mut self, reg_num: i64) {
-        let meta = (self.0 & 0xffff_0000_ffff_ffff) | ((reg_num as i16 as u16 as u64) << 32);
-        self.0 = meta;
-    }
-}
-
-#[test]
-fn meta_test() {
-    let meta = Meta::vm_method(FuncId(12), 42);
-    assert_eq!(FuncId(12), meta.func_id());
-    assert_eq!(42, meta.reg_num());
-    assert_eq!(0, meta.mode());
-    let mut meta = Meta::vm_method(FuncId(42), -1);
-    assert_eq!(FuncId(42), meta.func_id());
-    assert_eq!(-1, meta.reg_num());
-    meta.set_reg_num(12);
-    assert_eq!(FuncId(42), meta.func_id());
-    assert_eq!(12, meta.reg_num());
-    let mut meta = Meta::vm_classdef(FuncId(12), 42);
-    assert_eq!(1, meta.mode());
-    meta.set_reg_num(12);
-    meta.set_jit();
-    assert_eq!(1, meta.mode());
-    assert_eq!(8, std::mem::size_of::<i64>());
-    assert_eq!(8, std::mem::size_of::<Option<CodePtr>>());
-    assert_eq!(8, std::mem::size_of::<BcPc>());
-    assert_eq!(8, std::mem::size_of::<Meta>());
-}
-
 #[derive(Debug, Clone, PartialEq, Default)]
-#[repr(C)]
-pub struct FuncData {
-    /// address of function.
-    pub codeptr: Option<CodePtr>,
-    /// the address of program counter
-    pub pc: BcPc,
-    /// metadata of this function.
-    pub meta: Meta,
-}
-
-impl FuncData {
-    fn set_reg_num(&mut self, reg_num: i64) {
-        self.meta.set_reg_num(reg_num);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct FuncInfo {
+pub(crate) struct FuncInfo {
     /// name of this function.
     name: Option<String>,
     /// arity of this function.
@@ -504,7 +368,7 @@ impl FuncInfo {
         }
     }
 
-    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
+    fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
         match &mut self.kind {
             FuncKind::ISeq(info) => info,
             _ => unreachable!(),

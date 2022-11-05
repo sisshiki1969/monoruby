@@ -169,11 +169,11 @@ impl BcPc {
             BcOp::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
-            BcOp::LoadDynVar(ret, src, outer) => {
-                format!("{:?} = dynvar({outer}, [{:?}])", ret, src)
+            BcOp::LoadDynVar(ret, src) => {
+                format!("{:?} = {:?}", ret, src)
             }
-            BcOp::StoreDynVar(dst, outer, src) => {
-                format!("dynvar({outer}, [{:?}]) = {:?}", dst, src)
+            BcOp::StoreDynVar(dst, src) => {
+                format!("{:?} = {:?}", dst, src)
             }
             BcOp::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
@@ -339,6 +339,18 @@ pub(crate) struct InstId(pub u32);
 impl std::fmt::Debug for InstId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, ":{:05}", self.0)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DynVar {
+    pub(crate) reg: SlotId,
+    pub(crate) outer: usize,
+}
+
+impl std::fmt::Debug for DynVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dynvar({}, {:?})", self.outer, self.reg)
     }
 }
 
@@ -540,7 +552,7 @@ impl Bc {
         }
     }
 
-    pub(crate) fn meta(&self) -> Meta {
+    pub(super) fn meta(&self) -> Meta {
         Meta::new(self.op1)
     }
 
@@ -641,11 +653,11 @@ impl std::fmt::Debug for Bc {
             BcOp::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
-            BcOp::LoadDynVar(ret, src, outer) => {
-                write!(f, "{:?} = dynvar({outer}, [{:?}])", ret, src)
+            BcOp::LoadDynVar(ret, src) => {
+                write!(f, "{:?} = {:?}", ret, src)
             }
-            BcOp::StoreDynVar(dst, outer, src) => {
-                write!(f, "dynvar({outer}, [{:?}]) = {:?}", dst, src)
+            BcOp::StoreDynVar(dst, src) => {
+                write!(f, "{:?} = {:?}", dst, src)
             }
             BcOp::LoadIvar(reg, id, ..) => {
                 write!(f, "{:?} = @[{:?}]", reg, id)
@@ -754,7 +766,7 @@ impl Bc2 {
 ///
 /// Bytecode instructions.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(super) enum BcOp {
     /// branch(dest)
     Br(i32),
@@ -774,8 +786,8 @@ pub(super) enum BcOp {
     IndexAssign(SlotId, SlotId, SlotId),
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
-    LoadDynVar(SlotId, SlotId, usize),
-    StoreDynVar(SlotId, usize, SlotId),
+    LoadDynVar(SlotId, DynVar),
+    StoreDynVar(DynVar, SlotId),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     /// nil(%reg)
@@ -952,8 +964,20 @@ impl BcOp {
                 ),
                 148 => Self::Ret(SlotId::new(op1)),
                 149 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
-                150 => Self::LoadDynVar(SlotId::new(op1), SlotId::new(op2), op3 as usize),
-                151 => Self::StoreDynVar(SlotId::new(op1), op3 as usize, SlotId::new(op3)),
+                150 => Self::LoadDynVar(
+                    SlotId::new(op1),
+                    DynVar {
+                        reg: SlotId::new(op2),
+                        outer: op3 as usize,
+                    },
+                ),
+                151 => Self::StoreDynVar(
+                    DynVar {
+                        reg: SlotId::new(op1),
+                        outer: op3 as usize,
+                    },
+                    SlotId::new(op3),
+                ),
                 155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 156..=161 => Self::Cmp(
                     CmpKind::from(opcode - 156),

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-pub(super) struct RegInfo {
+struct RegInfo {
     info: Vec<RegState>,
 }
 
@@ -10,7 +10,7 @@ impl RegInfo {
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
     ///
-    pub(super) fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
         self.info
             .iter()
             .enumerate()
@@ -122,7 +122,7 @@ impl std::ops::IndexMut<usize> for RegInfo {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct RegState {
+struct RegState {
     xmm_link: XmmLink,
     is_used: IsUsed,
 }
@@ -185,7 +185,7 @@ pub(super) struct LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    pub(super) fn analyse(func: &ISeqInfo, bb_pos: usize) -> (RegInfo, Vec<SlotId>) {
+    pub(super) fn analyse(func: &ISeqInfo, bb_pos: usize) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx
@@ -241,7 +241,7 @@ impl LoopAnalysis {
                 .collect::<Vec<_>>()
         );
 
-        (info, exit_info.get_unused())
+        (info.get_loop_used_as_float(), exit_info.get_unused())
     }
 }
 
@@ -331,21 +331,23 @@ impl LoopAnalysis {
                 BcOp::ClassDef { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::StoreConst(..) => {}
                 BcOp::LoadConst(dst, _const_id) => {
                     let is_float =
                         pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
                     reg_info.def_as(dst, is_float);
                 }
+                BcOp::StoreConst(..) => {}
                 BcOp::LoadDynVar(dst, ..) => {
                     reg_info.def_as(dst, false);
                 }
-                BcOp::StoreDynVar(..) => {}
-                BcOp::StoreIvar(src, ..) => {
+                BcOp::StoreDynVar(_dst, src) => {
                     reg_info.use_non_float(src);
                 }
                 BcOp::LoadIvar(dst, ..) => {
                     reg_info.def_as(dst, false);
+                }
+                BcOp::StoreIvar(src, ..) => {
+                    reg_info.use_non_float(src);
                 }
                 BcOp::Neg(dst, src) => {
                     let is_float = pc.is_float1();

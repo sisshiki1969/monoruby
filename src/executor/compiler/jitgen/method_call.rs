@@ -22,6 +22,9 @@ impl Codegen {
         match (pc - 1).op1() {
             BcOp::MethodCall(ret, name, class_id, version) => {
                 ctx.dealloc_xmm(ret);
+                ctx.write_back_slot(self, recv);
+                ctx.write_back_range(self, args, len);
+
                 if let Some(codeptr) = codeptr {
                     let meta = (pc + 1).meta();
                     let callee_pc = (pc + 1).pc();
@@ -39,6 +42,12 @@ impl Codegen {
             }
             BcOp::MethodCallBlock(ret, name, class_id, version) => {
                 ctx.dealloc_xmm(ret);
+                //ctx.write_back_slot(self, recv);
+                //ctx.write_back_slot(self, args);
+                //ctx.write_back_range(self, args + 1, len);
+                let wb = ctx.get_write_back();
+                self.gen_write_back(wb);
+
                 if let Some(codeptr) = codeptr {
                     let meta = (pc + 1).meta();
                     let callee_pc = (pc + 1).pc();

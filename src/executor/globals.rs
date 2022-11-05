@@ -20,7 +20,7 @@ pub use functions::*;
 ///
 pub struct Globals {
     /// function info.
-    pub func: FnStore,
+    pub(crate) func: FnStore,
     /// class table.
     class: ClassStore,
     error: Option<MonorubyErr>,

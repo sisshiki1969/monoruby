@@ -71,7 +71,7 @@ enum LoopKind {
     While,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct IrContext {
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
