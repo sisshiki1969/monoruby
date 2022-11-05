@@ -1,4 +1,5 @@
 use super::*;
+use ruruby_parse::{Node, NodeKind, Parser};
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;

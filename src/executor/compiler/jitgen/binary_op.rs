@@ -1,4 +1,5 @@
 use super::*;
+use ruruby_parse::CmpKind;
 
 macro_rules! cmp_main {
     ($op:ident) => {

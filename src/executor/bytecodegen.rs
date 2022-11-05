@@ -1,6 +1,7 @@
 use super::*;
 use num::BigInt;
 use paste::paste;
+use ruruby_parse::{ArgList, BinOp, BlockInfo, CmpKind, Loc, Node, NodeKind, UnOp};
 
 ///
 /// ID of register.

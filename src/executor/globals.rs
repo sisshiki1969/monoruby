@@ -1,3 +1,7 @@
+use ruruby_parse::{
+    BinOp, BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind,
+    Parser, SourceInfoRef,
+};
 use std::io::Write;
 use std::io::{stdout, BufWriter, Stdout};
 use std::path::PathBuf;

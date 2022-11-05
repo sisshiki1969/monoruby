@@ -1,4 +1,5 @@
 use super::*;
+use ruruby_parse::CmpKind;
 
 ///
 /// Program counter base.

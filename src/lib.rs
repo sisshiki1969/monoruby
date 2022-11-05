@@ -16,10 +16,6 @@ pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 use id_table::*;
 use monoasm::CodePtr;
-use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CmpKind, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr,
-    ParseErrKind, Parser, SourceInfoRef, UnOp,
-};
 use rvalue::*;
 use value::*;
 
