@@ -197,20 +197,6 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
-    pub(crate) fn main_object(globals: &mut Globals) -> Self {
-        let main_object = Value::new_object(OBJECT_CLASS);
-        globals.set_ivar(
-            main_object,
-            IdentId::_NAME,
-            Value::new_string_from_str("main"),
-        );
-        main_object
-    }
-
-    /*pub(crate) fn new_bytes(b: Vec<u8>) -> Self {
-        RValue::new_bytes(b).pack()
-    }*/
-
     pub(crate) fn new_string(s: String) -> Self {
         RValue::new_string(s).pack()
     }

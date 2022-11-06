@@ -1,179 +1,5 @@
 use super::*;
 
-#[derive(Debug, Clone)]
-struct RegInfo {
-    info: Vec<RegState>,
-}
-
-impl RegInfo {
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
-        self.info
-            .iter()
-            .enumerate()
-            .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
-                (XmmLink::R(true) | XmmLink::RW, IsUsed::Used) => Some((SlotId(i as u16), true)),
-                (XmmLink::R(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn get_unused(&self) -> Vec<SlotId> {
-        self.info
-            .iter()
-            .enumerate()
-            .flat_map(|(i, state)| {
-                if state.is_used == IsUsed::NotUsed {
-                    Some(SlotId(i as u16))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
-impl RegInfo {
-    fn new(reg_num: usize) -> Self {
-        Self {
-            info: vec![RegState::new(); reg_num],
-        }
-    }
-
-    fn merge(&mut self, other: &Self) {
-        for (i, detail) in &mut self.info.iter_mut().enumerate() {
-            detail.xmm_link.merge(&other[i].xmm_link);
-            detail.is_used.merge(&other[i].is_used);
-        }
-    }
-
-    fn use_as(&mut self, slot: SlotId, is_float: bool, class: ClassId) {
-        self[slot].xmm_link = if is_float {
-            match self[slot].xmm_link {
-                XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::RW => XmmLink::RW,
-            }
-        } else {
-            match self[slot].xmm_link {
-                XmmLink::None => XmmLink::None,
-                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::RW => XmmLink::R(true),
-            }
-        };
-        if self[slot].is_used != IsUsed::NotUsed {
-            self[slot].is_used = IsUsed::Used;
-        }
-    }
-
-    fn use_non_float(&mut self, slot: SlotId) {
-        self.use_as(slot, false, NIL_CLASS)
-    }
-
-    fn def_as(&mut self, slot: SlotId, is_float: bool) {
-        if slot.is_zero() {
-            return;
-        }
-        self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
-        if self[slot].is_used == IsUsed::ND {
-            self[slot].is_used = IsUsed::NotUsed;
-        }
-    }
-
-    fn copy(&mut self, dst: SlotId, src: SlotId) {
-        if self[src].is_used != IsUsed::NotUsed {
-            self[src].is_used = IsUsed::Used;
-        }
-        if self[dst].is_used == IsUsed::ND {
-            self[dst].is_used = IsUsed::NotUsed;
-        }
-        self[dst].xmm_link = self[src].xmm_link;
-    }
-}
-
-impl std::ops::Index<SlotId> for RegInfo {
-    type Output = RegState;
-    fn index(&self, i: SlotId) -> &Self::Output {
-        &self.info[i.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<SlotId> for RegInfo {
-    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
-        &mut self.info[i.0 as usize]
-    }
-}
-
-impl std::ops::Index<usize> for RegInfo {
-    type Output = RegState;
-    fn index(&self, i: usize) -> &Self::Output {
-        &self.info[i]
-    }
-}
-
-impl std::ops::IndexMut<usize> for RegInfo {
-    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
-        &mut self.info[i]
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RegState {
-    xmm_link: XmmLink,
-    is_used: IsUsed,
-}
-
-impl RegState {
-    fn new() -> Self {
-        Self {
-            xmm_link: XmmLink::None,
-            is_used: IsUsed::ND,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum XmmLink {
-    None,
-    /// R(isFloat)
-    R(bool),
-    RW,
-}
-
-impl XmmLink {
-    fn merge(&mut self, other: &Self) {
-        *self = match (*self, other) {
-            (XmmLink::RW, XmmLink::RW) => XmmLink::RW,
-            (XmmLink::R(true), XmmLink::R(true))
-            | (XmmLink::R(true), XmmLink::RW)
-            | (XmmLink::RW, XmmLink::R(true)) => XmmLink::R(true),
-            (_, XmmLink::R(_)) | (XmmLink::R(_), _) => XmmLink::R(false),
-            _ => XmmLink::None,
-        };
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum IsUsed {
-    ND,
-    Used,
-    NotUsed,
-}
-
-impl IsUsed {
-    fn merge(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
-            (IsUsed::NotUsed, IsUsed::NotUsed) => IsUsed::NotUsed,
-            _ => IsUsed::ND,
-        };
-    }
-}
-
 pub(super) struct LoopAnalysis {
     /// key: dest_idx, value Vec<(src_idx, reginfo)>
     branch_map: HashMap<usize, Vec<(usize, RegInfo)>>,
@@ -443,5 +269,179 @@ impl LoopAnalysis {
             }
         }
         unreachable!();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RegInfo {
+    info: Vec<RegState>,
+}
+
+impl RegInfo {
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.info
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
+                (XmmLink::R(true) | XmmLink::RW, IsUsed::Used) => Some((SlotId(i as u16), true)),
+                (XmmLink::R(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn get_unused(&self) -> Vec<SlotId> {
+        self.info
+            .iter()
+            .enumerate()
+            .flat_map(|(i, state)| {
+                if state.is_used == IsUsed::NotUsed {
+                    Some(SlotId(i as u16))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl RegInfo {
+    fn new(reg_num: usize) -> Self {
+        Self {
+            info: vec![RegState::new(); reg_num],
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        for (i, detail) in &mut self.info.iter_mut().enumerate() {
+            detail.xmm_link.merge(&other[i].xmm_link);
+            detail.is_used.merge(&other[i].is_used);
+        }
+    }
+
+    fn use_as(&mut self, slot: SlotId, is_float: bool, class: ClassId) {
+        self[slot].xmm_link = if is_float {
+            match self[slot].xmm_link {
+                XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::RW => XmmLink::RW,
+            }
+        } else {
+            match self[slot].xmm_link {
+                XmmLink::None => XmmLink::None,
+                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
+                XmmLink::RW => XmmLink::R(true),
+            }
+        };
+        if self[slot].is_used != IsUsed::NotUsed {
+            self[slot].is_used = IsUsed::Used;
+        }
+    }
+
+    fn use_non_float(&mut self, slot: SlotId) {
+        self.use_as(slot, false, NIL_CLASS)
+    }
+
+    fn def_as(&mut self, slot: SlotId, is_float: bool) {
+        if slot.is_zero() {
+            return;
+        }
+        self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
+        if self[slot].is_used == IsUsed::ND {
+            self[slot].is_used = IsUsed::NotUsed;
+        }
+    }
+
+    fn copy(&mut self, dst: SlotId, src: SlotId) {
+        if self[src].is_used != IsUsed::NotUsed {
+            self[src].is_used = IsUsed::Used;
+        }
+        if self[dst].is_used == IsUsed::ND {
+            self[dst].is_used = IsUsed::NotUsed;
+        }
+        self[dst].xmm_link = self[src].xmm_link;
+    }
+}
+
+impl std::ops::Index<SlotId> for RegInfo {
+    type Output = RegState;
+    fn index(&self, i: SlotId) -> &Self::Output {
+        &self.info[i.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<SlotId> for RegInfo {
+    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
+        &mut self.info[i.0 as usize]
+    }
+}
+
+impl std::ops::Index<usize> for RegInfo {
+    type Output = RegState;
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.info[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for RegInfo {
+    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+        &mut self.info[i]
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RegState {
+    xmm_link: XmmLink,
+    is_used: IsUsed,
+}
+
+impl RegState {
+    fn new() -> Self {
+        Self {
+            xmm_link: XmmLink::None,
+            is_used: IsUsed::ND,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum XmmLink {
+    None,
+    /// R(isFloat)
+    R(bool),
+    RW,
+}
+
+impl XmmLink {
+    fn merge(&mut self, other: &Self) {
+        *self = match (*self, other) {
+            (XmmLink::RW, XmmLink::RW) => XmmLink::RW,
+            (XmmLink::R(true), XmmLink::R(true))
+            | (XmmLink::R(true), XmmLink::RW)
+            | (XmmLink::RW, XmmLink::R(true)) => XmmLink::R(true),
+            (_, XmmLink::R(_)) | (XmmLink::R(_), _) => XmmLink::R(false),
+            _ => XmmLink::None,
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum IsUsed {
+    ND,
+    Used,
+    NotUsed,
+}
+
+impl IsUsed {
+    fn merge(&mut self, other: &Self) {
+        *self = match (&self, other) {
+            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
+            (IsUsed::NotUsed, IsUsed::NotUsed) => IsUsed::NotUsed,
+            _ => IsUsed::ND,
+        };
     }
 }

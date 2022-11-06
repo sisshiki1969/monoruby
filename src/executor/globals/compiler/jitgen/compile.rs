@@ -1,30 +1,6 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn gen_backedge_branch(
-        &mut self,
-        cc: &mut CompileContext,
-        func: &ISeqInfo,
-        bb_pos: usize,
-    ) {
-        if let Some(entries) = cc.branch_map.remove(&bb_pos) {
-            let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
-            let target_ctx = BBContext::from(&target_slot_info);
-            for BranchEntry {
-                src_idx: _src_idx,
-                mut bbctx,
-                dest_label,
-            } in entries
-            {
-                #[cfg(feature = "emit-tir")]
-                eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
-                bbctx.remove_unused(&unused);
-                let pc = func.get_pc(bb_pos);
-                self.gen_write_back_for_target(bbctx, &target_ctx, dest_label, target_label, pc);
-            }
-        }
-    }
-
     pub(super) fn jit_load_ivar(
         &mut self,
         ctx: &BBContext,
@@ -213,9 +189,9 @@ impl Codegen {
             testq rax, rax; // rax: Option<Value>
             jeq  jit_return;
             movq r15, rax; // r15 <- self
-            movl rdx, (func_id.0);  // rdx <- func_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+            movl rsi, (func_id.0);  // rdx <- func_id
+            //movq rdi, rbx;  // &mut Interp
+            movq rdi, r12;  // &mut Globals
             movq rax, (vm_get_func_data);
             call rax; // rax <- &FuncData
             //

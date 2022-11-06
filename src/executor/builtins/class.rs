@@ -143,7 +143,7 @@ extern "C" fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 extern "C" fn attr_reader(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -154,7 +154,7 @@ extern "C" fn attr_reader(
     let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(vm, class_id, arg_name);
+        let method_name = globals.define_attr_reader(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array(res))
@@ -165,7 +165,7 @@ extern "C" fn attr_reader(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 extern "C" fn attr_writer(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -176,7 +176,7 @@ extern "C" fn attr_writer(
     let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_writer(vm, class_id, arg_name);
+        let method_name = globals.define_attr_writer(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array(res))
@@ -187,7 +187,7 @@ extern "C" fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 extern "C" fn attr_accessor(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -198,9 +198,9 @@ extern "C" fn attr_accessor(
     let class_id = self_val.as_class();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(vm, class_id, arg_name);
+        let method_name = globals.define_attr_reader(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
-        let method_name = globals.define_attr_writer(vm, class_id, arg_name);
+        let method_name = globals.define_attr_writer(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array(res))

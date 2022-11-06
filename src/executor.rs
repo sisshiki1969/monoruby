@@ -2,13 +2,11 @@ use super::*;
 
 mod builtins;
 mod bytecodegen;
-mod compiler;
 mod globals;
 mod inst;
 mod op;
 pub use builtins::*;
 use bytecodegen::*;
-pub use compiler::*;
 pub use globals::*;
 use inst::*;
 use op::*;
@@ -35,27 +33,25 @@ pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 #[repr(C)]
 pub struct Executor {
     pub cfp: usize,
-    pub codegen: Codegen,
     lexical_class: Vec<ClassId>,
 }
 
 impl Executor {
-    pub fn new(globals: &mut Globals, no_jit: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             cfp: 0,
-            codegen: Codegen::new(no_jit, Value::main_object(globals)),
             lexical_class: vec![],
         }
     }
 
     /// Execute top level method.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let main_data = self.get_func_data(globals, func_id) as *const _;
+        let main_data = globals.compile_on_demand(func_id) as *const _;
 
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let entry_point = self.codegen.entry_point;
+        let entry_point = globals.codegen.entry_point;
         let res = entry_point(self, globals, main_data);
         globals.flush_stdout();
 
@@ -80,12 +76,8 @@ impl Executor {
 
     /// Execute top level method.
     pub(crate) fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let mut eval = Self::new(globals, globals.no_jit);
-        eval.eval(globals, func_id)
-    }
-
-    pub(crate) fn class_version_inc(&mut self) {
-        unsafe { *self.codegen.class_version_addr += 1 }
+        let mut executer = Self::new();
+        executer.eval(globals, func_id)
     }
 }
 
@@ -126,8 +118,8 @@ impl Executor {
     ) -> Option<Value> {
         let len = args.len();
         let func_id = globals.find_method_checked(receiver, method, len)?;
-        let data = self.get_func_data(globals, func_id) as *const _;
-        (self.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
+        let data = globals.compile_on_demand(func_id) as *const _;
+        (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 
     ///
@@ -144,8 +136,8 @@ impl Executor {
             RV::Integer(id) => FuncId(id as u32),
             _ => unimplemented!(),
         };
-        let data = self.get_func_data(globals, func_id) as *const _;
-        (self.codegen.block_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
+        let data = globals.compile_on_demand(func_id) as *const _;
+        (globals.codegen.block_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 
     ///
@@ -159,12 +151,8 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
-        let data = self.get_func_data(globals, func_id) as *const _;
-        (self.codegen.method_invoker2)(self, globals, data, receiver, args, len)
-    }
-
-    fn get_func_data<'a>(&mut self, globals: &'a mut Globals, func_id: FuncId) -> &'a FuncData {
-        self.codegen.compile_on_demand(globals, func_id)
+        let data = globals.compile_on_demand(func_id) as *const _;
+        (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
     }
 }
 

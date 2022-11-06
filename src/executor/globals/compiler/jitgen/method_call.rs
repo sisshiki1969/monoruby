@@ -11,7 +11,7 @@ struct Cached {
 impl Codegen {
     pub(super) fn gen_method_call(
         &mut self,
-        globals: &Globals,
+        fnstore: &FnStore,
         ctx: &mut BBContext,
         recv: SlotId,
         args: SlotId,
@@ -35,7 +35,7 @@ impl Codegen {
                         version,
                         pc: callee_pc,
                     };
-                    self.gen_call_cached(globals, ctx, recv, args, None, len, ret, cached, pc);
+                    self.gen_call_cached(fnstore, ctx, recv, args, None, len, ret, cached, pc);
                 } else {
                     self.gen_call_not_cached(ctx, recv, name, args, None, len, ret, pc);
                 }
@@ -59,7 +59,7 @@ impl Codegen {
                         pc: callee_pc,
                     };
                     self.gen_call_cached(
-                        globals,
+                        fnstore,
                         ctx,
                         recv,
                         args + 1,
@@ -82,7 +82,7 @@ impl Codegen {
     ///
     fn gen_call_cached(
         &mut self,
-        globals: &Globals,
+        fnstore: &FnStore,
         ctx: &BBContext,
         recv: SlotId,
         args: SlotId,
@@ -99,7 +99,7 @@ impl Codegen {
         self.guard_class(cached.class_id, deopt);
         self.guard_version(cached.version, deopt);
         let func_id = cached.meta.func_id();
-        match globals.func[func_id].kind {
+        match fnstore[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 if cached.class_id.is_always_frozen() {
@@ -223,9 +223,9 @@ impl Codegen {
         // call site stub code.
         monoasm!(self.jit,
         slow_path:
-            movq rdx, (u32::from(name)); // IdentId
-            movq rcx, (len as usize); // args_len: usize
-            movq r8, [rbp - (conv(recv))]; // receiver: Value
+            movq rsi, (u32::from(name)); // IdentId
+            movq rdx, (len as usize); // args_len: usize
+            movq rcx, [rbp - (conv(recv))]; // receiver: Value
             call entry_find_method;
             // absolute address was returned to rax.
             testq rax, rax;

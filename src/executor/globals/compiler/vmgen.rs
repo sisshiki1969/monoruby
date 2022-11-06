@@ -301,7 +301,7 @@ impl Codegen {
     /// ### registers destroyed
     /// - r8, r9
     ///
-    pub(crate) fn fetch_and_dispatch(&mut self) {
+    fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
             movq rax, [r13]; // rax <- :0:1:2:3
@@ -754,9 +754,9 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
-            movq rdx, [rsp + 8];  // rdx: IdentId
-            movzxw rcx, [r13];  // rcx: len
-            movq r8, [rsp]; // r8: receiver:Value
+            movq rsi, [rsp + 8];  // rdx: IdentId
+            movzxw rdx, [r13];  // rcx: len
+            movq rcx, [rsp]; // r8: receiver:Value
             call entry_find_method; // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
@@ -796,10 +796,10 @@ impl Codegen {
         if !no_jit {
             monoasm!(self.jit,
             compile:
-                movq rdi, rbx;
-                movq rsi, r12;
-                movl rdx, [rbp - (OFFSET_FUNCID)];
-                lea rcx, [r13 - 16];
+                //movq rdi, rbx;
+                movq rdi, r12;
+                movl rsi, [rbp - (OFFSET_FUNCID)];
+                lea rdx, [r13 - 16];
                 movq rax, (Self::exec_jit_partial_compile);
                 call rax;
                 movq [r13 - 8], rax;
@@ -1223,9 +1223,9 @@ impl Codegen {
             testq rax, rax; // rax: Option<Value>
             jeq  vm_return;
             movq r15, rax; // r15 <- self
-            movl rdx, [r13 - 4];  // rdx <- func_id
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
+            movl rsi, [r13 - 4];  // rdx <- func_id
+            //movq rdi, rbx;  // &mut Interp
+            movq rdi, r12;  // &mut Globals
             movq rax, (vm_get_func_data);
             call rax; // rax <- &FuncData
             //

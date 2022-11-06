@@ -1,3 +1,4 @@
+use monoasm::DestLabel;
 use ruruby_parse::{
     BinOp, BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind,
     Parser, SourceInfoRef,
@@ -9,9 +10,11 @@ use std::path::PathBuf;
 use super::*;
 
 mod class;
+mod compiler;
 mod error;
 mod functions;
 pub use class::*;
+pub use compiler::*;
 pub use error::*;
 pub use functions::*;
 
@@ -19,6 +22,7 @@ pub use functions::*;
 /// Global state.
 ///
 pub struct Globals {
+    pub codegen: Codegen,
     /// function info.
     pub(crate) func: FnStore,
     /// class table.
@@ -34,7 +38,9 @@ pub struct Globals {
 
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
+        let main_object = Value::new_object(OBJECT_CLASS);
         let mut globals = Self {
+            codegen: Codegen::new(no_jit, main_object),
             func: FnStore::new(),
             class: ClassStore::new(),
             error: None,
@@ -43,6 +49,11 @@ impl Globals {
             stdout: BufWriter::new(stdout()),
         };
         builtins::init_builtins(&mut globals);
+        globals.set_ivar(
+            main_object,
+            IdentId::_NAME,
+            Value::new_string_from_str("main"),
+        );
         globals
     }
 
@@ -52,6 +63,10 @@ impl Globals {
 
     pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
         self.stdout.write_all(bytes).unwrap();
+    }
+
+    pub(crate) fn class_version_inc(&mut self) {
+        unsafe { *self.codegen.class_version_addr += 1 }
     }
 
     pub fn exec_startup(&mut self) {
@@ -72,6 +87,92 @@ impl Globals {
                 err.show_error_message_and_all_loc(self);
             }
         };
+    }
+
+    ///
+    /// ## stack layout for JIT-ed code (just after prologue).
+    ///
+    ///~~~text
+    ///       +-------------+
+    /// +0x08 | return addr |
+    ///       +-------------+
+    ///  0x00 |  prev rbp   | <- rbp
+    ///       +-------------+  
+    /// -0x08 |    meta     |  
+    ///       +-------------+  
+    /// -0x10 |     %0      |
+    ///       +-------------+
+    /// -0x18 |     %1      |
+    ///       +-------------+
+    ///       |      :      |
+    ///       +-------------+
+    /// -0xy0 |    %(n-1)   | <- rsp
+    ///       +-------------+
+    ///       |      :      |
+    /// ~~~
+
+    /// ## ABI of JIT-compiled code.
+    ///
+    /// ### argument registers:
+    ///  - rdi: number pf args
+    ///
+    /// ### global registers:
+    ///  - rbx: &mut Interp
+    ///  - r12: &mut Globals
+    ///  - r13: pc (dummy for JIT-ed code)
+    ///
+    /// ## stack layout when just after the code is called
+    /// ~~~text
+    ///       +-------------+
+    /// -0x00 | return addr | <- rsp
+    ///       +-------------+
+    /// -0x08 |  (old rbp)  |
+    ///       +-------------+
+    /// -0x10 |    meta     |
+    ///       +-------------+
+    /// -0x18 |     %0      |
+    ///       +-------------+
+    /// -0x20 | %1(1st arg) |
+    ///       +-------------+
+    ///       |             |
+    /// ~~~~
+    ///
+    ///  - meta and arguments is set by caller.
+    ///  - (old rbp) is to be set by callee.
+    ///
+
+    pub(super) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
+        //let func = &mut globals.func[func_id];
+        if self.func[func_id].data.codeptr.is_none() {
+            let codeptr = match self.func[func_id].kind {
+                FuncKind::ISeq(_) => {
+                    let codeptr = if !self.no_jit {
+                        self.codegen.gen_jit_stub()
+                    } else {
+                        self.codegen.gen_vm_stub()
+                    };
+                    //func.data.meta.set_jit();
+                    codeptr
+                }
+                FuncKind::Builtin { abs_address } => self.codegen.wrap_native_func(abs_address),
+                FuncKind::AttrReader { ivar_name } => self.codegen.gen_attr_reader(ivar_name),
+                FuncKind::AttrWriter { ivar_name } => self.codegen.gen_attr_writer(ivar_name),
+            };
+            self.codegen.jit.finalize();
+            self.func[func_id].data.codeptr = Some(codeptr);
+        }
+        &self.func[func_id].data
+    }
+
+    pub(super) fn jit_compile_ruby(
+        &mut self,
+        func_id: FuncId,
+        position: Option<usize>,
+    ) -> DestLabel {
+        let (label, _cc) = self.codegen.jit_compile_ruby(&self.func, func_id, position);
+        #[cfg(any(feature = "emit-asm"))]
+        self.dump_disas(&_cc, func_id);
+        label
     }
 }
 
@@ -242,7 +343,6 @@ impl Globals {
     ///
     pub(crate) fn define_attr_reader(
         &mut self,
-        interp: &mut Executor,
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {
@@ -250,7 +350,7 @@ impl Globals {
         let method_name_str = IdentId::get_name(method_name);
         let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
         self.add_method(class_id, method_name, func_id);
-        interp.class_version_inc();
+        self.class_version_inc();
         method_name
     }
 
@@ -259,7 +359,6 @@ impl Globals {
     ///
     pub(crate) fn define_attr_writer(
         &mut self,
-        interp: &mut Executor,
         class_id: ClassId,
         method_name: IdentId,
     ) -> IdentId {
@@ -268,7 +367,7 @@ impl Globals {
         let method_name_str = IdentId::get_name(method_name);
         let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
         self.add_method(class_id, method_name, func_id);
-        interp.class_version_inc();
+        self.class_version_inc();
         method_name
     }
 
@@ -311,5 +410,64 @@ impl Globals {
                 FuncKind::ISeq(_) => info.dump_bc(self),
                 _ => {}
             });
+    }
+}
+
+#[cfg(any(feature = "emit-asm"))]
+impl Globals {
+    fn dump_disas(&mut self, cc: &CompileContext, func_id: FuncId) {
+        let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
+        eprintln!(
+            "offset:{:?} code: {} bytes  data: {} bytes",
+            start,
+            *code_end - *start,
+            *end - *code_end
+        );
+        self.codegen.jit.select_page(0);
+        let dump = self.codegen.jit.dump_code().unwrap();
+        //eprintln!("{}", dump);
+        let dump: Vec<(usize, String)> = dump
+            .split('\n')
+            .filter(|s| s.len() >= 29)
+            .map(|x| {
+                let i = x.find(':').unwrap();
+                (
+                    match usize::from_str_radix(&x[0..i].trim(), 16) {
+                        Ok(i) => i,
+                        _ => {
+                            panic!("{}", &x[0..i].trim());
+                        }
+                    },
+                    x[28..].to_string(),
+                )
+            })
+            .collect();
+        let func = self.func[func_id].as_ruby_func();
+        for (i, text) in dump {
+            cc.sourcemap
+                .iter()
+                .filter_map(
+                    |(bc_pos, code_pos)| {
+                        if *code_pos == i {
+                            Some(*bc_pos)
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .for_each(|bc_pos| {
+                    let pc = BcPc::from(&func.bytecode()[bc_pos]);
+                    eprintln!(
+                        ":{:05} {}",
+                        bc_pos,
+                        match pc.format(self, bc_pos) {
+                            Some(s) => s,
+                            None => "".to_string(),
+                        }
+                    );
+                });
+
+            eprintln!("  {:05x}: {}", i, text);
+        }
     }
 }
