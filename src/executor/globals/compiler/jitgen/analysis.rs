@@ -218,16 +218,20 @@ impl LoopAnalysis {
                 }
                 BcOp::MethodCall(..) => {}
                 BcOp::MethodCallBlock(..) => {}
-                BcOp::MethodArgs(recv, args, len, _) => {
+                BcOp::MethodArgs(method_info) => {
+                    let MethodInfo {
+                        recv, args, len, ..
+                    } = method_info;
+                    let class = (self.pc - 1).class_version().0;
                     match (self.pc - 1).op1() {
-                        BcOp::MethodCall(ret, _, class, _) => {
+                        BcOp::MethodCall(ret, _, ..) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             for i in 0..len {
                                 reg_info.use_non_float(args + i);
                             }
                             reg_info.def_as(ret, false);
                         }
-                        BcOp::MethodCallBlock(ret, _, class, _) => {
+                        BcOp::MethodCallBlock(ret, _, ..) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             for i in 0..len + 1 {
                                 reg_info.use_non_float(args + i);
@@ -323,8 +327,8 @@ impl RegInfo {
         }
     }
 
-    fn use_as(&mut self, slot: SlotId, is_float: bool, class: ClassId) {
-        self[slot].xmm_link = if is_float {
+    fn use_as(&mut self, slot: SlotId, is_float_op: bool, class: ClassId) {
+        self[slot].xmm_link = if is_float_op {
             match self[slot].xmm_link {
                 XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
                 XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),

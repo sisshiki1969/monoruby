@@ -253,10 +253,15 @@ impl BcPc {
 
             BcOp::Ret(reg) => format!("ret {:?}", reg),
             BcOp::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            BcOp::MethodCall(ret, name, class_id, _) => {
+            BcOp::MethodCall(ret, name) => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
-                    BcOp::MethodArgs(recv, args, len, _) => (recv, args, len),
+                    BcOp::MethodArgs(method_info) => {
+                        let MethodInfo {
+                            recv, args, len, ..
+                        } = method_info;
+                        (recv, args, len)
+                    }
                     _ => unreachable!(),
                 };
                 let name = IdentId::get_name(name);
@@ -272,12 +277,17 @@ impl BcPc {
                         len,
                     )
                 };
-                format!("{:36} [{}]", op1, class_id.get_name(globals))
+                format!("{:36} [{}]", op1, self.class_version().0.get_name(globals))
             }
-            BcOp::MethodCallBlock(ret, name, class_id, _) => {
+            BcOp::MethodCallBlock(ret, name) => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
-                    BcOp::MethodArgs(recv, args, len, _) => (recv, args, len),
+                    BcOp::MethodArgs(method_info) => {
+                        let MethodInfo {
+                            recv, args, len, ..
+                        } = method_info;
+                        (recv, args, len)
+                    }
                     _ => unreachable!(),
                 };
                 let name = IdentId::get_name(name);
@@ -294,7 +304,7 @@ impl BcPc {
                         args,
                     )
                 };
-                format!("{:36} [{}]", op1, class_id.get_name(globals))
+                format!("{:36} [{}]", op1, self.class_version().0.get_name(globals))
             }
             BcOp::MethodArgs(..) => return None,
             BcOp::MethodDef(name, func_id) => {
@@ -538,7 +548,7 @@ impl Bc {
         ClassId::new((self.op2.0 >> 32) as u32)
     }
 
-    fn class_version(&self) -> (ClassId, u32) {
+    pub(crate) fn class_version(&self) -> (ClassId, u32) {
         let op = self.op2.0;
         (ClassId::new(op as u32), (op >> 32) as u32)
     }
@@ -707,16 +717,20 @@ impl std::fmt::Debug for Bc {
 
             BcOp::Ret(reg) => write!(f, "ret {:?}", reg),
             BcOp::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
-            BcOp::MethodCall(ret, name, class_id, _) => {
+            BcOp::MethodCall(ret, name) => {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                write!(f, "{:28} {:?}", op1, class_id)
+                write!(f, "{:28} {:?}", op1, self.class_version().0)
             }
-            BcOp::MethodCallBlock(ret, name, class_id, _) => {
+            BcOp::MethodCallBlock(ret, name) => {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                write!(f, "{:28} {:?}", op1, class_id)
+                write!(f, "{:28} {:?}", op1, self.class_version().0)
             }
-            BcOp::MethodArgs(recv, args, len, _) => {
-                write!(f, "{:?}.call_args ({:?}; {})", recv, args, len)
+            BcOp::MethodArgs(method_info) => {
+                write!(
+                    f,
+                    "{:?}.call_args ({:?}; {})",
+                    method_info.recv, method_info.args, method_info.len
+                )
             }
             BcOp::MethodDef(name, _) => {
                 write!(f, "method_def {:?}", name)
@@ -817,10 +831,10 @@ pub(super) enum BcOp {
     //                |      Meta     |      PC       |
     //                +-------+-------+-------+-------+
     /// func call(%ret, name)
-    MethodCall(SlotId, IdentId, ClassId, u32),
-    MethodCallBlock(SlotId, IdentId, ClassId, u32),
+    MethodCall(SlotId, IdentId),
+    MethodCallBlock(SlotId, IdentId),
     /// func call 2nd opecode(%recv, %args, len)
-    MethodArgs(SlotId, SlotId, u16, Option<CodePtr>),
+    MethodArgs(MethodInfo),
     /// method definition(method_name, func_id)
     MethodDef(IdentId, FuncId),
     /// class definition(method_name, func_id)
@@ -835,6 +849,25 @@ pub(super) enum BcOp {
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MethodInfo {
+    pub recv: SlotId,
+    pub args: SlotId,
+    pub len: u16,
+    pub callee_codeptr: Option<CodePtr>,
+}
+
+impl MethodInfo {
+    fn new(recv: SlotId, args: SlotId, len: u16, callee_codeptr: Option<CodePtr>) -> Self {
+        MethodInfo {
+            recv,
+            args,
+            len,
+            callee_codeptr,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -875,15 +908,7 @@ impl BcOp {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => {
-                    let class_version = pc.class_version();
-                    Self::MethodCall(
-                        SlotId::new(op1),
-                        IdentId::from(op2),
-                        class_version.0,
-                        class_version.1,
-                    )
-                }
+                1 => Self::MethodCall(SlotId::new(op1), IdentId::from(op2)),
                 2 => Self::MethodDef(
                     IdentId::from((pc.op2.0) as u32),
                     FuncId((pc.op2.0 >> 32) as u32),
@@ -929,22 +954,19 @@ impl BcOp {
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
-                19 => {
-                    let class_version = pc.class_version();
-                    Self::MethodCallBlock(
-                        SlotId::new(op1),
-                        IdentId::from(op2),
-                        class_version.0,
-                        class_version.1,
-                    )
-                }
+                19 => Self::MethodCallBlock(SlotId::new(op1), IdentId::from(op2)),
                 _ => unreachable!("{:016x}", op),
             }
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
                 129 => Self::Neg(SlotId::new(op1), SlotId::new(op2)),
-                130 => Self::MethodArgs(SlotId::new(op1), SlotId::new(op2), op3, pc.codeptr()),
+                130 => Self::MethodArgs(MethodInfo::new(
+                    SlotId::new(op1),
+                    SlotId::new(op2),
+                    op3,
+                    pc.codeptr(),
+                )),
                 131 => Self::Array(SlotId::new(op1), SlotId::new(op2), op3),
                 132 => Self::Index(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
                 133 => Self::IndexAssign(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),

@@ -8,7 +8,7 @@ pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
       res = ({0})
-      for __i in 0..5 do
+      for __i in 0..7 do
           res2 = ({0})
           __assert(res, res2)
       end
@@ -538,6 +538,19 @@ mod test {
     #[test]
     fn test_fn() {
         run_test("def f; end; f");
+        run_test2(
+            "
+        def f(a,b)
+          a-b
+        end
+        a = []
+        for i in 0..10
+          a << f(4,7)
+          a << f(4,7) do end
+        end
+        a
+        ",
+        );
     }
 
     #[test]

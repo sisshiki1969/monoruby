@@ -8,72 +8,65 @@ struct Cached {
     pc: BcPc,
 }
 
+impl Cached {
+    fn new(pc: BcPc, codeptr: CodePtr) -> Self {
+        let (class_id, version) = (pc - 1).class_version();
+        Cached {
+            codeptr,
+            meta: (pc + 1).meta(),
+            class_id,
+            version,
+            pc: (pc + 1).pc(),
+        }
+    }
+}
+
 impl Codegen {
     pub(super) fn gen_method_call(
         &mut self,
         fnstore: &FnStore,
         ctx: &mut BBContext,
-        recv: SlotId,
-        args: SlotId,
-        len: u16,
+        mut method_info: MethodInfo,
         pc: BcPc,
-        codeptr: Option<CodePtr>,
     ) {
+        let MethodInfo {
+            recv, args, len, ..
+        } = method_info;
         match (pc - 1).op1() {
-            BcOp::MethodCall(ret, name, class_id, version) => {
+            BcOp::MethodCall(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
                 ctx.write_back_slot(self, recv);
                 ctx.write_back_range(self, args, len);
-
-                if let Some(codeptr) = codeptr {
-                    let meta = (pc + 1).meta();
-                    let callee_pc = (pc + 1).pc();
-                    let cached = Cached {
-                        codeptr,
-                        meta,
-                        class_id,
-                        version,
-                        pc: callee_pc,
-                    };
-                    self.gen_call_cached(fnstore, ctx, recv, args, None, len, ret, cached, pc);
-                } else {
-                    self.gen_call_not_cached(ctx, recv, name, args, None, len, ret, pc);
-                }
+                self.gen_call(fnstore, ctx, method_info, name, None, ret, pc);
             }
-            BcOp::MethodCallBlock(ret, name, class_id, version) => {
+            BcOp::MethodCallBlock(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
-                //ctx.write_back_slot(self, recv);
-                //ctx.write_back_slot(self, args);
-                //ctx.write_back_range(self, args + 1, len);
+                // We must write back all registers since slots may be accessed from block.
                 let wb = ctx.get_write_back();
                 self.gen_write_back(wb);
-
-                if let Some(codeptr) = codeptr {
-                    let meta = (pc + 1).meta();
-                    let callee_pc = (pc + 1).pc();
-                    let cached = Cached {
-                        codeptr,
-                        meta,
-                        class_id,
-                        version,
-                        pc: callee_pc,
-                    };
-                    self.gen_call_cached(
-                        fnstore,
-                        ctx,
-                        recv,
-                        args + 1,
-                        Some(args),
-                        len,
-                        ret,
-                        cached,
-                        pc,
-                    );
-                } else {
-                    self.gen_call_not_cached(ctx, recv, name, args + 1, Some(args), len, ret, pc);
-                }
+                method_info.args = method_info.args + 1;
+                self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn gen_call(
+        &mut self,
+        fnstore: &FnStore,
+        ctx: &BBContext,
+        method_info: MethodInfo,
+        name: IdentId,
+        block: Option<SlotId>,
+        ret: SlotId,
+        pc: BcPc,
+    ) {
+        let MethodInfo { callee_codeptr, .. } = method_info;
+        if let Some(codeptr) = callee_codeptr {
+            let cached = Cached::new(pc, codeptr);
+            self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc);
+        } else {
+            self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
         }
     }
 
@@ -84,24 +77,22 @@ impl Codegen {
         &mut self,
         fnstore: &FnStore,
         ctx: &BBContext,
-        recv: SlotId,
-        args: SlotId,
+        method_info: MethodInfo,
         block: Option<SlotId>,
-        len: u16,
         ret: SlotId,
         cached: Cached,
         pc: BcPc,
     ) {
         let deopt = self.gen_side_deopt_dest(pc - 1, ctx);
         monoasm!(self.jit,
-            movq rdi, [rbp - (conv(recv))];
+            movq rdi, [rbp - (conv(method_info.recv))];
         );
         self.guard_class(cached.class_id, deopt);
         self.guard_version(cached.version, deopt);
         let func_id = cached.meta.func_id();
         match fnstore[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
-                assert_eq!(0, len);
+                assert_eq!(0, method_info.len);
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -114,14 +105,14 @@ impl Codegen {
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
-                assert_eq!(1, len);
-                self.attr_writer(ctx, ivar_name, ret, args, pc);
+                assert_eq!(1, method_info.len);
+                self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                self.native_call(ctx, func_id, ret, args, block, len, abs_address, pc);
+                self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(recv, ret, args, block, len, ctx, cached, pc);
+                self.method_call_cached(method_info, ret, block, ctx, cached, pc);
             }
         };
     }
@@ -132,14 +123,13 @@ impl Codegen {
     fn gen_call_not_cached(
         &mut self,
         ctx: &BBContext,
-        recv: SlotId,
+        method_info: MethodInfo,
         name: IdentId,
-        args: SlotId,
         block: Option<SlotId>,
-        len: u16,
         ret: SlotId,
         pc: BcPc,
     ) {
+        let MethodInfo { recv, len, .. } = method_info;
         // set arguments to a callee stack.
         //
         //       +-------------+
@@ -193,7 +183,7 @@ impl Codegen {
         );
 
         self.push_frame();
-        self.set_self_and_args(recv, args, block, len);
+        self.set_self_and_args(method_info, block);
 
         monoasm!(self.jit,
             // set meta.
@@ -203,7 +193,6 @@ impl Codegen {
 
             movq r13, qword 0;
         patch_pc:
-            movq rdi, (len);
             // patch point
             call entry_panic;
         patch_adr:
@@ -386,14 +375,14 @@ impl Codegen {
     fn native_call(
         &mut self,
         ctx: &BBContext,
+        method_info: MethodInfo,
         func_id: FuncId,
         ret: SlotId,
-        args: SlotId,
         block: Option<SlotId>,
-        len: u16,
         abs_address: u64,
         pc: BcPc,
     ) {
+        let MethodInfo { args, len, .. } = method_info;
         // set arguments to a callee stack.
         //
         //       +-------------+
@@ -474,11 +463,9 @@ impl Codegen {
 
     fn method_call_cached(
         &mut self,
-        recv: SlotId,
+        method_info: MethodInfo,
         ret: SlotId,
-        args: SlotId,
         block: Option<SlotId>,
-        len: u16,
         ctx: &BBContext,
         cached: Cached,
         pc: BcPc,
@@ -490,7 +477,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
 
         self.push_frame();
-        self.set_self_and_args(recv, args, block, len);
+        self.set_self_and_args(method_info, block);
 
         monoasm!(self.jit,
             // set meta.
@@ -498,7 +485,6 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_META)], rax;
 
             movq r13, qword (cached.pc.get_u64());
-            movq rdi, (len);
         );
         let src_point = self.jit.get_current_address();
         monoasm!(self.jit,
@@ -523,12 +509,16 @@ impl Codegen {
         );
     }
 
-    fn set_self_and_args(&mut self, recv: SlotId, args: SlotId, block: Option<SlotId>, len: u16) {
-        // set self
+    fn set_self_and_args(&mut self, method_info: MethodInfo, block: Option<SlotId>) {
+        let MethodInfo {
+            recv, args, len, ..
+        } = method_info;
+        // set self, outer, len
         monoasm!(self.jit,
             movq rax, [rbp - (conv(recv))];
             movq [rsp - (16 + OFFSET_SELF)], rax;
             movq [rsp - (16 + OFFSET_OUTER)], 0;
+            movq rdi, (len);
         );
         // set arguments
         for i in 0..len {

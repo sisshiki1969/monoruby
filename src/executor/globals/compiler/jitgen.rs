@@ -353,8 +353,8 @@ impl Codegen {
                 }
                 BcOp::MethodCall(..) => {}
                 BcOp::MethodCallBlock(..) => {}
-                BcOp::MethodArgs(recv, args, len, callee_codeptr) => {
-                    self.gen_method_call(fnstore, &mut ctx, recv, args, len, pc, callee_codeptr);
+                BcOp::MethodArgs(method_info) => {
+                    self.gen_method_call(fnstore, &mut ctx, method_info, pc);
                     skip = true;
                 }
                 BcOp::MethodDef(name, func) => {
