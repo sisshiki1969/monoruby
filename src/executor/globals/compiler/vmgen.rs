@@ -799,6 +799,7 @@ impl Codegen {
                 //movq rdi, rbx;
                 movq rdi, r12;
                 movl rsi, [rbp - (OFFSET_FUNCID)];
+                movq rcx, [rbp - (OFFSET_SELF)];
                 lea rdx, [r13 - 16];
                 movq rax, (Self::exec_jit_partial_compile);
                 call rax;

@@ -167,9 +167,12 @@ impl Globals {
     pub(super) fn jit_compile_ruby(
         &mut self,
         func_id: FuncId,
+        self_class: ClassId,
         position: Option<usize>,
     ) -> DestLabel {
-        let (label, _cc) = self.codegen.jit_compile_ruby(&self.func, func_id, position);
+        let (label, _cc) = self
+            .codegen
+            .jit_compile_ruby(&self.func, func_id, self_class, position);
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(&_cc, func_id);
         label

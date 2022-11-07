@@ -107,7 +107,7 @@ impl Executor {
 
 impl Executor {
     ///
-    /// Invoke method for *receiver* and *method* from native function.
+    /// Invoke method for *receiver* and *method*.
     ///
     pub(crate) fn invoke_method(
         &mut self,
@@ -123,7 +123,7 @@ impl Executor {
     }
 
     ///
-    /// Invoke block for *receiver* and *method* from native function.
+    /// Invoke block for *receiver* and *method*.
     ///
     pub(crate) fn invoke_block(
         &mut self,

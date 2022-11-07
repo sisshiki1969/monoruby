@@ -1256,9 +1256,9 @@ impl Codegen {
             subl [rip + counter], 1;
             jne vm_entry;
             movl rsi, [rsp - (8 + OFFSET_FUNCID)];
+            movq rdx, [rsp - (8 + OFFSET_SELF)];
             subq rsp, 1024;
             pushq rdi;
-            //movq rdi, rbx;
             movq rdi, r12;
             movq rax, (Self::exec_jit_compile);
             call rax;
@@ -1426,9 +1426,14 @@ impl Codegen {
     ///
     /// Compile the Ruby method.
     ///
-    extern "C" fn exec_jit_compile(globals: &mut Globals, func_id: FuncId) -> CodePtr {
+    extern "C" fn exec_jit_compile(
+        globals: &mut Globals,
+        func_id: FuncId,
+        self_value: Value,
+    ) -> CodePtr {
         globals.func[func_id].data.meta.set_jit();
-        let label = globals.jit_compile_ruby(func_id, None);
+        let self_class = self_value.class_id();
+        let label = globals.jit_compile_ruby(func_id, self_class, None);
         globals.codegen.jit.get_label_address(label)
     }
 
@@ -1439,9 +1444,11 @@ impl Codegen {
         globals: &mut Globals,
         func_id: FuncId,
         pc: BcPc,
+        self_value: Value,
     ) -> CodePtr {
         let pc_index = pc - globals.func[func_id].data.pc;
-        let label = globals.jit_compile_ruby(func_id, Some(pc_index));
+        let self_class = self_value.class_id();
+        let label = globals.jit_compile_ruby(func_id, self_class, Some(pc_index));
         globals.codegen.jit.get_label_address(label)
     }
 
@@ -1449,6 +1456,7 @@ impl Codegen {
         &mut self,
         fnstore: &FnStore,
         func_id: FuncId,
+        self_class: ClassId,
         position: Option<usize>,
     ) -> (DestLabel, CompileContext) {
         let func = fnstore[func_id].as_ruby_func();
@@ -1457,7 +1465,7 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
             eprintln!(
-                "--> start {} compile: {} {:?} start:[{:05}] bytecode:{:?}",
+                "--> start {} compile: {} {:?} self_class:{:?} start:[{:05}] bytecode:{:?}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -1468,6 +1476,7 @@ impl Codegen {
                     None => "<unnamed>",
                 },
                 func.id,
+                self_class,
                 start_pos,
                 func.bytecode().as_ptr(),
             );
