@@ -62,10 +62,11 @@ struct BBContext {
     /// information for xmm registers.
     xmm: [Vec<SlotId>; 14],
     self_class: ClassId,
+    self_kind: Option<u8>,
 }
 
 impl BBContext {
-    fn new(reg_num: usize, self_class: ClassId) -> Self {
+    fn new(reg_num: usize, self_value: Value) -> Self {
         let xmm = (0..14)
             .map(|_| vec![])
             .collect::<Vec<Vec<SlotId>>>()
@@ -74,12 +75,13 @@ impl BBContext {
         Self {
             stack_slot: StackSlotInfo(vec![LinkMode::None; reg_num]),
             xmm,
-            self_class,
+            self_class: self_value.class_id(),
+            self_kind: self_value.kind(),
         }
     }
 
-    fn from(slot_info: &StackSlotInfo, self_class: ClassId) -> Self {
-        let mut ctx = Self::new(slot_info.0.len(), self_class);
+    fn from(slot_info: &StackSlotInfo, self_value: Value) -> Self {
+        let mut ctx = Self::new(slot_info.0.len(), self_value);
         for (i, mode) in slot_info.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
@@ -268,7 +270,7 @@ pub(super) struct CompileContext {
     branch_map: HashMap<usize, Vec<BranchEntry>>,
     backedge_map: HashMap<usize, (DestLabel, StackSlotInfo, Vec<SlotId>)>,
     start_codepos: usize,
-    self_class: ClassId,
+    self_value: Value,
     #[cfg(feature = "emit-asm")]
     pub(super) sourcemap: Vec<(usize, usize)>,
 }
@@ -279,7 +281,7 @@ impl CompileContext {
         codegen: &mut Codegen,
         start_pos: usize,
         is_loop: bool,
-        self_class: ClassId,
+        self_value: Value,
     ) -> Self {
         let bb_info = func.get_bb_info();
         let mut labels = HashMap::default();
@@ -297,7 +299,7 @@ impl CompileContext {
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             start_codepos: 0,
-            self_class,
+            self_value,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
         }
@@ -1437,8 +1439,7 @@ impl Codegen {
         self_value: Value,
     ) -> CodePtr {
         globals.func[func_id].data.meta.set_jit();
-        let self_class = self_value.class_id();
-        let label = globals.jit_compile_ruby(func_id, self_class, None);
+        let label = globals.jit_compile_ruby(func_id, self_value, None);
         globals.codegen.jit.get_label_address(label)
     }
 
@@ -1452,8 +1453,7 @@ impl Codegen {
         self_value: Value,
     ) -> CodePtr {
         let pc_index = pc - globals.func[func_id].data.pc;
-        let self_class = self_value.class_id();
-        let label = globals.jit_compile_ruby(func_id, self_class, Some(pc_index));
+        let label = globals.jit_compile_ruby(func_id, self_value, Some(pc_index));
         globals.codegen.jit.get_label_address(label)
     }
 
@@ -1461,7 +1461,7 @@ impl Codegen {
         &mut self,
         fnstore: &FnStore,
         func_id: FuncId,
-        self_class: ClassId,
+        self_value: Value,
         position: Option<usize>,
     ) -> (DestLabel, CompileContext) {
         let func = fnstore[func_id].as_ruby_func();
@@ -1481,7 +1481,7 @@ impl Codegen {
                     None => "<unnamed>",
                 },
                 func.id,
-                self_class,
+                self_value.class_id(),
                 start_pos,
                 func.bytecode().as_ptr(),
             );
@@ -1492,7 +1492,7 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
 
-        let mut cc = CompileContext::new(func, self, start_pos, position.is_some(), self_class);
+        let mut cc = CompileContext::new(func, self, start_pos, position.is_some(), self_value);
         let bb_start_pos: Vec<_> = cc
             .bb_info
             .iter()
@@ -1519,7 +1519,7 @@ impl Codegen {
             start_pos,
             vec![BranchEntry {
                 src_idx: 0,
-                bbctx: BBContext::new(reg_num, self_class),
+                bbctx: BBContext::new(reg_num, self_value),
                 dest_label: self.jit.label(),
             }],
         );

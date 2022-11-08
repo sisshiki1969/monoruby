@@ -85,6 +85,10 @@ impl Value {
         }
     }
 
+    pub(crate) fn kind(&self) -> Option<u8> {
+        self.try_rvalue().map(|rv| rv.kind())
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
             rv.change_class(new_class_id);

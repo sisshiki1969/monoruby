@@ -287,12 +287,12 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
-            cmpl rsi, (OBJECT_INLINE_IVAR);
-            jge no_inline;
             xorq rax, rax;
             movw rax, [rdi + 2];    // ObjKind
             cmpq rax, (ObjKind::OBJECT);
             jne  no_inline;
+            cmpl rsi, (OBJECT_INLINE_IVAR);
+            jge no_inline;
             movq rax, [rdi + rsi * 8 + 16];
             jmp exit;
         no_inline:
@@ -345,12 +345,12 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
-            cmpl rsi, (OBJECT_INLINE_IVAR);
-            jge no_inline;
             xorq rax, rax;
             movw rax, [rdi + 2];    // ObjKind
             cmpq rax, (ObjKind::OBJECT);
             jne  no_inline;
+            cmpl rsi, (OBJECT_INLINE_IVAR);
+            jge no_inline;
             movq rax, [rbp - (conv(args))];  //val: Value
             movq [rdi + rsi * 8 + 16], rax;
             jmp exit;

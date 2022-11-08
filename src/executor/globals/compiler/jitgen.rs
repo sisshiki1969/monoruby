@@ -488,7 +488,7 @@ impl Codegen {
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
-            let target_ctx = BBContext::from(&target_slot_info, cc.self_class);
+            let target_ctx = BBContext::from(&target_slot_info, cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
@@ -1009,7 +1009,7 @@ impl Codegen {
             }
 
             let target_slot_info = StackSlotInfo::merge_entries(&entries);
-            let mut ctx = BBContext::new(func.total_reg_num(), cc.self_class);
+            let mut ctx = BBContext::new(func.total_reg_num(), cc.self_value);
             for (reg, class) in use_set {
                 match target_slot_info[reg] {
                     LinkMode::None => {}
@@ -1072,7 +1072,7 @@ impl Codegen {
             eprintln!("  target: {:?}", target_slot_info);
 
             let cur_label = cc.labels[&bb_pos];
-            let target_ctx = BBContext::from(&target_slot_info, cc.self_class);
+            let target_ctx = BBContext::from(&target_slot_info, cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 bbctx,
