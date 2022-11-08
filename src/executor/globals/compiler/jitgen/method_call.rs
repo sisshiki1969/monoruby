@@ -61,10 +61,18 @@ impl Codegen {
         ret: SlotId,
         pc: BcPc,
     ) {
-        let MethodInfo { callee_codeptr, .. } = method_info;
+        let MethodInfo {
+            callee_codeptr,
+            recv,
+            ..
+        } = method_info;
         if let Some(codeptr) = callee_codeptr {
             let cached = Cached::new(pc, codeptr);
-            self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc);
+            if recv.is_zero() && ctx.self_class != cached.class_id {
+                self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
+            } else {
+                self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc);
+            }
         } else {
             self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
         }
@@ -87,7 +95,11 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(method_info.recv))];
         );
-        self.guard_class(cached.class_id, deopt);
+        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+        // Thus, we can omit a class guard.
+        if !method_info.recv.is_zero() {
+            self.guard_class(cached.class_id, deopt);
+        }
         self.guard_version(cached.version, deopt);
         let func_id = cached.meta.func_id();
         match fnstore[func_id].kind {
@@ -112,7 +124,7 @@ impl Codegen {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(method_info, ret, block, ctx, cached, pc);
+                self.method_call_cached(ctx, method_info, ret, block, cached, pc);
             }
         };
     }
@@ -165,16 +177,26 @@ impl Codegen {
         let entry_panic = self.entry_panic;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        if !recv.is_zero() {
+        // class guard
+        // r15 <- recv's class
+        if recv.is_zero() {
+            // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+            monoasm!(self.jit,
+                movl r15, (ctx.self_class.0);
+            );
+        } else {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(recv))];
                 movq rax, (Value::get_class);
                 call rax;
                 movl r15, rax;  // r15: receiver class_id
-                cmpl r15, [rip + cached_recv_class];
-                jne slow_path;
             );
         }
+        monoasm!(self.jit,
+            cmpl r15, [rip + cached_recv_class];
+            jne slow_path;
+        );
+        // version guard
         monoasm!(self.jit,
             movl rax, [rip + global_class_version];
             cmpl [rip + cached_class_version], rax;
@@ -208,8 +230,9 @@ impl Codegen {
             self.store_rax(ret);
         }
 
+        // slow path
+        // r15: recv's class
         self.jit.select_page(1);
-        // call site stub code.
         monoasm!(self.jit,
         slow_path:
             movq rsi, (u32::from(name)); // IdentId
@@ -239,13 +262,7 @@ impl Codegen {
 
             movl rax, [rip + global_class_version];
             movl [rip + cached_class_version], rax;
-        );
-        if !recv.is_zero() {
-            monoasm!(self.jit,
-                movl [rip + cached_recv_class], r15;
-            );
-        }
-        monoasm!(self.jit,
+            movl [rip + cached_recv_class], r15;
             jmp method_resolved;
         );
         let entry_return = self.vm_return;
@@ -463,10 +480,10 @@ impl Codegen {
 
     fn method_call_cached(
         &mut self,
+        ctx: &BBContext,
         method_info: MethodInfo,
         ret: SlotId,
         block: Option<SlotId>,
-        ctx: &BBContext,
         cached: Cached,
         pc: BcPc,
     ) {

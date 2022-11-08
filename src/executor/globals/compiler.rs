@@ -61,10 +61,11 @@ struct BBContext {
     stack_slot: StackSlotInfo,
     /// information for xmm registers.
     xmm: [Vec<SlotId>; 14],
+    self_class: ClassId,
 }
 
 impl BBContext {
-    fn new(reg_num: usize) -> Self {
+    fn new(reg_num: usize, self_class: ClassId) -> Self {
         let xmm = (0..14)
             .map(|_| vec![])
             .collect::<Vec<Vec<SlotId>>>()
@@ -73,11 +74,12 @@ impl BBContext {
         Self {
             stack_slot: StackSlotInfo(vec![LinkMode::None; reg_num]),
             xmm,
+            self_class,
         }
     }
 
-    fn from(slot_info: &StackSlotInfo) -> Self {
-        let mut ctx = Self::new(slot_info.0.len());
+    fn from(slot_info: &StackSlotInfo, self_class: ClassId) -> Self {
+        let mut ctx = Self::new(slot_info.0.len(), self_class);
         for (i, mode) in slot_info.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
@@ -266,6 +268,7 @@ pub(super) struct CompileContext {
     branch_map: HashMap<usize, Vec<BranchEntry>>,
     backedge_map: HashMap<usize, (DestLabel, StackSlotInfo, Vec<SlotId>)>,
     start_codepos: usize,
+    self_class: ClassId,
     #[cfg(feature = "emit-asm")]
     pub(super) sourcemap: Vec<(usize, usize)>,
 }
@@ -276,6 +279,7 @@ impl CompileContext {
         codegen: &mut Codegen,
         start_pos: usize,
         is_loop: bool,
+        self_class: ClassId,
     ) -> Self {
         let bb_info = func.get_bb_info();
         let mut labels = HashMap::default();
@@ -293,6 +297,7 @@ impl CompileContext {
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             start_codepos: 0,
+            self_class,
             #[cfg(feature = "emit-asm")]
             sourcemap: vec![],
         }
@@ -1487,7 +1492,7 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
 
-        let mut cc = CompileContext::new(func, self, start_pos, position.is_some());
+        let mut cc = CompileContext::new(func, self, start_pos, position.is_some(), self_class);
         let bb_start_pos: Vec<_> = cc
             .bb_info
             .iter()
@@ -1514,7 +1519,7 @@ impl Codegen {
             start_pos,
             vec![BranchEntry {
                 src_idx: 0,
-                bbctx: BBContext::new(reg_num),
+                bbctx: BBContext::new(reg_num, self_class),
                 dest_label: self.jit.label(),
             }],
         );
