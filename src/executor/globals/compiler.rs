@@ -1457,105 +1457,6 @@ impl Codegen {
         globals.codegen.jit.get_label_address(label)
     }
 
-    pub(super) fn jit_compile_ruby(
-        &mut self,
-        fnstore: &FnStore,
-        func_id: FuncId,
-        self_value: Value,
-        position: Option<usize>,
-    ) -> (DestLabel, CompileContext) {
-        let func = fnstore[func_id].as_ruby_func();
-        let start_pos = position.unwrap_or_default();
-
-        #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
-        {
-            eprintln!(
-                "--> start {} compile: {} {:?} self_class:{:?} start:[{:05}] bytecode:{:?}",
-                if position.is_some() {
-                    "partial"
-                } else {
-                    "whole"
-                },
-                match func.name() {
-                    Some(name) => name,
-                    None => "<unnamed>",
-                },
-                func.id,
-                self_value.class_id(),
-                start_pos,
-                func.bytecode().as_ptr(),
-            );
-        }
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        let now = std::time::Instant::now();
-
-        let entry = self.jit.label();
-        self.jit.bind_label(entry);
-
-        let mut cc = CompileContext::new(func, self, start_pos, position.is_some(), self_value);
-        let bb_start_pos: Vec<_> = cc
-            .bb_info
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, v)| match v {
-                Some(_) => {
-                    if idx >= start_pos {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                }
-                None => None,
-            })
-            .collect();
-        let reg_num = func.total_reg_num();
-        cc.start_codepos = self.jit.get_current();
-
-        if position.is_none() {
-            self.prologue(func.total_reg_num(), func.total_arg_num());
-        }
-
-        let pc = func.get_pc(position.unwrap_or_default());
-        let side_exit = self.gen_side_deopt(pc);
-        monoasm!(self.jit,
-            movq rdi, [rbp - (OFFSET_SELF)];
-        );
-        self.guard_class(self_value.class_id(), side_exit);
-
-        cc.branch_map.insert(
-            start_pos,
-            vec![BranchEntry {
-                src_idx: 0,
-                bbctx: BBContext::new(reg_num, self_value),
-                dest_label: self.jit.label(),
-            }],
-        );
-        for i in bb_start_pos {
-            cc.bb_pos = i;
-            if self.compile_bb(fnstore, func, &mut cc) {
-                break;
-            };
-        }
-
-        let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
-        for pos in keys.into_iter() {
-            self.gen_backedge_branch(&mut cc, func, pos);
-        }
-
-        self.jit.finalize();
-
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        let elapsed = now.elapsed();
-        //#[cfg(feature = "emit-tir")]
-        //eprintln!("{:?}", cc.tir);
-
-        #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-        eprintln!("    finished compile. elapsed:{:?}", elapsed);
-        #[cfg(feature = "emit-tir")]
-        eprintln!("    finished compile.");
-        (entry, cc)
-    }
-
     ///
     /// Type guard.
     ///
@@ -1631,6 +1532,115 @@ impl Codegen {
             cmpl [rdi + 4], (class_id.0);
             jne side_exit;
         )
+    }
+}
+
+impl Globals {
+    fn jit_compile_ruby(
+        &mut self,
+        func_id: FuncId,
+        self_value: Value,
+        position: Option<usize>,
+    ) -> DestLabel {
+        let (label, _cc) = {
+            let func = self.func[func_id].as_ruby_func();
+            let start_pos = position.unwrap_or_default();
+
+            #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
+            {
+                eprintln!(
+                    "==> start {} compile: {} {:?} self_class:{} start:[{:05}] bytecode:{:?}",
+                    if position.is_some() {
+                        "partial"
+                    } else {
+                        "whole"
+                    },
+                    match func.name() {
+                        Some(name) => name,
+                        None => "<unnamed>",
+                    },
+                    func.id,
+                    self_value.class_id().get_name(self),
+                    start_pos,
+                    func.bytecode().as_ptr(),
+                );
+            }
+            #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+            let now = std::time::Instant::now();
+
+            let entry = self.codegen.jit.label();
+            self.codegen.jit.bind_label(entry);
+
+            let mut cc = CompileContext::new(
+                func,
+                &mut self.codegen,
+                start_pos,
+                position.is_some(),
+                self_value,
+            );
+            let bb_start_pos: Vec<_> = cc
+                .bb_info
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, v)| match v {
+                    Some(_) => {
+                        if idx >= start_pos {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                })
+                .collect();
+            let reg_num = func.total_reg_num();
+            cc.start_codepos = self.codegen.jit.get_current();
+
+            if position.is_none() {
+                self.codegen.prologue(func);
+                let pc = func.get_pc(position.unwrap_or_default());
+                let side_exit = self.codegen.gen_side_deopt(pc);
+                monoasm!(self.codegen.jit,
+                    movq rdi, [rbp - (OFFSET_SELF)];
+                );
+                self.codegen.guard_class(self_value.class_id(), side_exit);
+            }
+
+            cc.branch_map.insert(
+                start_pos,
+                vec![BranchEntry {
+                    src_idx: 0,
+                    bbctx: BBContext::new(reg_num, self_value),
+                    dest_label: self.codegen.jit.label(),
+                }],
+            );
+            for i in bb_start_pos {
+                cc.bb_pos = i;
+                if self.codegen.compile_bb(&self.func, func, &mut cc) {
+                    break;
+                };
+            }
+
+            let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
+            for pos in keys.into_iter() {
+                self.codegen.gen_backedge_branch(&mut cc, func, pos);
+            }
+
+            self.codegen.jit.finalize();
+
+            #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
+            {
+                let elapsed = now.elapsed();
+                eprintln!("<== finished compile. elapsed:{:?}", elapsed);
+            }
+            #[cfg(feature = "emit-tir")]
+            eprintln!("<== finished compile.");
+            (entry, cc)
+        };
+
+        #[cfg(any(feature = "emit-asm"))]
+        self.dump_disas(&_cc, func_id);
+        label
     }
 }
 

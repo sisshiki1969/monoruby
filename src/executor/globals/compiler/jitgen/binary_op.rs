@@ -119,7 +119,7 @@ impl Codegen {
         ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        let deopt = self.gen_side_deopt_dest(pc, ctx);
+        let deopt = self.gen_side_writeback_deopt(pc, ctx);
         match kind {
             BinOpK::Add => {
                 match mode {

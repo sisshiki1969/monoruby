@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Debug)]
 struct Cached {
     codeptr: CodePtr,
     meta: Meta,
@@ -91,7 +92,7 @@ impl Codegen {
         cached: Cached,
         pc: BcPc,
     ) {
-        let deopt = self.gen_side_deopt_dest(pc - 1, ctx);
+        let deopt = self.gen_side_writeback_deopt(pc - 1, ctx);
         monoasm!(self.jit,
             movq rdi, [rbp - (conv(method_info.recv))];
         );

@@ -75,7 +75,7 @@ impl Codegen {
         let exit = self.jit.label();
 
         let cached_float = self.jit.const_f64(0.0);
-        let side_exit = self.gen_side_deopt_dest(pc, ctx);
+        let side_exit = self.gen_side_writeback_deopt(pc, ctx);
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);

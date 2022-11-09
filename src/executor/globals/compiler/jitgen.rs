@@ -38,13 +38,13 @@ extern "C" fn log_deoptimize(
     let fmt = pc.format(globals, index).unwrap_or_default();
     if let BcOp::LoopEnd = pc.op1() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {}", index, fmt);
+        eprintln!("    [{:05}] {fmt}", index);
     } else if let BcOp::ClassDef { .. } = pc.op1() {
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {}", index, fmt);
+        eprintln!("    [{:05}] {fmt}", index);
     } else {
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {} caused by {:?}", index, fmt, v);
+        eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
     }
 }
 
@@ -525,7 +525,7 @@ impl Codegen {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm_read(reg);
-                let side_exit = self.gen_side_deopt_dest(pc, ctx);
+                let side_exit = self.gen_side_writeback_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
@@ -540,7 +540,7 @@ impl Codegen {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm_read(reg);
-                let side_exit = self.gen_side_deopt_dest(pc, ctx);
+                let side_exit = self.gen_side_writeback_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
@@ -766,7 +766,7 @@ impl Codegen {
             jmp exit;
         );
         self.jit.select_page(0);
-        let side_label = self.gen_side_deopt_dest(pc + 1, &src_ctx);
+        let side_label = self.gen_side_writeback_deopt(pc + 1, &src_ctx);
         self.jit.select_page(1);
         monoasm!(self.jit,
         side_exit:
@@ -792,47 +792,34 @@ impl Codegen {
     }
 
     ///
-    /// Get *DestLabel* for fallback to interpreter.
+    /// Get *DestLabel* for write-back and fallback to interpreter.
     ///
-    pub(super) fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
-        let wb = ctx.get_write_back();
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        let entry = self.jit.label();
-        self.jit.bind_label(entry);
-        if !wb.is_empty() {
-            #[cfg(feature = "emit-tir")]
-            eprintln!("--gen deopt");
-            self.gen_write_back(wb);
-            #[cfg(feature = "emit-tir")]
-            eprintln!("--gen deopt end");
-        }
-        let fetch = self.vm_fetch;
-        monoasm!(self.jit,
-            movq r13, (pc.get_u64());
-        );
-        #[cfg(feature = "log-jit")]
-        monoasm!(self.jit,
-            movq r8, rdi; // the Value which caused this deopt.
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [rbp - (OFFSET_META)];
-            movq rcx, r13;
-            movq rax, (log_deoptimize);
-            call rax;
-        );
-        monoasm!(self.jit,
-            jmp fetch;
-        );
-        self.jit.select_page(0);
-        entry
+    fn gen_side_writeback_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
+        self.gen_side_deopt_main(pc, Some(ctx))
     }
 
+    ///
+    /// Get *DestLabel* for fallback to interpreter. (without write-back)
+    ///
     pub(super) fn gen_side_deopt(&mut self, pc: BcPc) -> DestLabel {
+        self.gen_side_deopt_main(pc, None)
+    }
+
+    fn gen_side_deopt_main(&mut self, pc: BcPc, ctx: Option<&BBContext>) -> DestLabel {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         let entry = self.jit.label();
         self.jit.bind_label(entry);
+        if let Some(ctx) = ctx {
+            let wb = ctx.get_write_back();
+            if !wb.is_empty() {
+                #[cfg(feature = "emit-tir")]
+                eprintln!("--gen deopt");
+                self.gen_write_back(wb);
+                #[cfg(feature = "emit-tir")]
+                eprintln!("--gen deopt end");
+            }
+        }
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
             movq r13, (pc.get_u64());
@@ -858,13 +845,15 @@ impl Codegen {
     /// Fallback to interpreter after Writing back all linked xmms.
     ///
     fn deopt(&mut self, ctx: &BBContext, pc: BcPc) {
-        let fallback = self.gen_side_deopt_dest(pc, ctx);
+        let fallback = self.gen_side_writeback_deopt(pc, ctx);
         monoasm!(self.jit,
             jmp fallback;
         );
     }
 
-    pub(super) fn prologue(&mut self, regs: usize, args: usize) {
+    pub(super) fn prologue(&mut self, func: &ISeqInfo) {
+        let regs = func.total_reg_num();
+        let args = func.total_arg_num();
         let offset = (regs * 8 + OFFSET_SELF as usize + 15) & !0xf;
         let clear_len = regs - args;
         monoasm!(self.jit,

@@ -10,49 +10,44 @@ impl Codegen {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        let slow_path = self.jit.label();
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         monoasm!(self.jit,
             movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
-        self.guard_class(cached_class, slow_path);
-        if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-            let no_inline = self.jit.label();
-            monoasm!(self.jit,
-                xorq rax, rax;
-                movw rax, [rdi + 2];    // ObjKind
-                cmpq rax, (ObjKind::OBJECT);
-                jne  no_inline;
-                movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
-            );
-            self.jit.select_page(1);
-            self.jit.bind_label(no_inline);
-            self.get_ivar(cached_ivarid, &xmm_using);
-            monoasm!(self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
+        if ctx.self_class == cached_class {
+            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+                let no_inline = self.jit.label();
+                monoasm!(self.jit,
+                    xorq rax, rax;
+                    movw rax, [rdi + 2];    // ObjKind
+                    cmpq rax, (ObjKind::OBJECT);
+                    jne  no_inline;
+                    movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
+                );
+                self.jit.select_page(1);
+                self.jit.bind_label(no_inline);
+                self.get_ivar(cached_ivarid, &xmm_using);
+                monoasm!(self.jit,
+                    jmp exit;
+                );
+                self.jit.select_page(0);
+            } else {
+                self.get_ivar(cached_ivarid, &xmm_using)
+            }
         } else {
-            self.get_ivar(cached_ivarid, &xmm_using)
+            // ctx.self_class != cached_class merely happens, but possible.
+            self.xmm_save(&xmm_using);
+            monoasm!(self.jit,
+                movq rsi, (id.get());  // id: IdentId
+                movq rdx, r12; // &mut Globals
+                movq rax, (get_instance_var);
+                call rax;
+            );
+            self.xmm_restore(&xmm_using);
         }
         self.jit.bind_label(exit);
         self.store_rax(ret);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(slow_path);
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rsi, (id.get());  // id: IdentId
-            movq rdx, r12; // &mut Globals
-            movq rax, (get_instance_var);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp exit;
-        );
-        self.jit.select_page(0);
     }
 
     pub(super) fn jit_store_ivar(
@@ -65,53 +60,46 @@ impl Codegen {
         cached_ivarid: IvarId,
     ) {
         assert!(!cached_class.is_always_frozen());
-        let slow_path = self.jit.label();
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         monoasm!(self.jit,
             movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
-        self.guard_class(cached_class, slow_path);
-        if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-            let no_inline = self.jit.label();
-            monoasm!(self.jit,
-                xorq rax, rax;
-                movw rax, [rdi + 2];
-                cmpq rax, (ObjKind::OBJECT);
-                jne  no_inline;
-                movq rax, [rbp - (conv(src))];   // val: Value
-                movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
-            );
-            self.jit.select_page(1);
-            self.jit.bind_label(no_inline);
-            self.set_ivar(src, cached_ivarid, &xmm_using);
-            monoasm!(self.jit,
-                jmp exit;
-            );
-            self.jit.select_page(0);
+        if ctx.self_class == cached_class {
+            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
+                let no_inline = self.jit.label();
+                monoasm!(self.jit,
+                    xorq rax, rax;
+                    movw rax, [rdi + 2];
+                    cmpq rax, (ObjKind::OBJECT);
+                    jne  no_inline;
+                    movq rax, [rbp - (conv(src))];   // val: Value
+                    movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
+                );
+                self.jit.select_page(1);
+                self.jit.bind_label(no_inline);
+                self.set_ivar(src, cached_ivarid, &xmm_using);
+                monoasm!(self.jit,
+                    jmp exit;
+                );
+                self.jit.select_page(0);
+            } else {
+                self.set_ivar(src, cached_ivarid, &xmm_using);
+            }
         } else {
-            self.set_ivar(src, cached_ivarid, &xmm_using);
+            self.xmm_save(&xmm_using);
+            monoasm!(self.jit,
+                movq rsi, rdi;  // base: Value
+                movq rdx, (id.get());  // id: IdentId
+                movq rcx, [rbp - (conv(src))];   // val: Value
+                movq rdi, r12; //&mut Globals
+                movq rax, (set_instance_var);
+                call rax;
+            );
+            self.xmm_restore(&xmm_using);
+            self.handle_error(pc);
         }
-
         self.jit.bind_label(exit);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(slow_path);
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rsi, rdi;  // base: Value
-            movq rdx, (id.get());  // id: IdentId
-            movq rcx, [rbp - (conv(src))];   // val: Value
-            movq rdi, r12; //&mut Globals
-            movq rax, (set_instance_var);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
-        monoasm!(self.jit,
-            jmp exit;
-        );
-        self.jit.select_page(0);
     }
 
     pub(super) fn jit_get_index(
