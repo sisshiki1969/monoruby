@@ -569,85 +569,6 @@ impl Codegen {
     }
 }
 
-impl Codegen {
-    ///
-    /// Type guard.
-    ///
-    /// Generate type guard for *class_id*.
-    /// If the type was not matched, deoptimize and go to *side_exit*.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - rdi: Value
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
-    ///
-    fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
-        match class_id {
-            INTEGER_CLASS => {
-                let exit = self.jit.label();
-                monoasm!(self.jit,
-                    testq rdi, 0b001;
-                    jnz exit;
-                );
-                self.guard_unpacked_class(class_id, side_exit);
-                self.jit.bind_label(exit);
-            }
-            FLOAT_CLASS => {
-                let exit = self.jit.label();
-                monoasm!(self.jit,
-                    testq rdi, 0b001;
-                    jnz side_exit;
-                    testq rdi, 0b010;
-                    jnz exit;
-                );
-                self.guard_unpacked_class(class_id, side_exit);
-                self.jit.bind_label(exit);
-            }
-            NIL_CLASS => {
-                monoasm!(self.jit,
-                    cmpq rdi, (NIL_VALUE);
-                    jnz side_exit;
-                );
-            }
-            SYMBOL_CLASS => {
-                monoasm!(self.jit,
-                    cmpb rdi, (TAG_SYMBOL);
-                    jnz side_exit;
-                );
-            }
-            TRUE_CLASS => {
-                monoasm!(self.jit,
-                    cmpq rdi, (TRUE_VALUE);
-                    jnz side_exit;
-                );
-            }
-            FALSE_CLASS => {
-                monoasm!(self.jit,
-                    cmpq rdi, (FALSE_VALUE);
-                    jnz side_exit;
-                );
-            }
-            _ => self.guard_unpacked_class(class_id, side_exit),
-        }
-    }
-
-    fn guard_unpacked_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
-        monoasm!(self.jit,
-            testq rdi, 0b111;
-            jnz side_exit;
-            cmpl [rdi + 4], (class_id.0);
-            jne side_exit;
-        )
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -873,7 +794,7 @@ impl Codegen {
     ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
-    fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
+    pub(super) fn gen_side_deopt_dest(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let wb = ctx.get_write_back();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -886,6 +807,32 @@ impl Codegen {
             #[cfg(feature = "emit-tir")]
             eprintln!("--gen deopt end");
         }
+        let fetch = self.vm_fetch;
+        monoasm!(self.jit,
+            movq r13, (pc.get_u64());
+        );
+        #[cfg(feature = "log-jit")]
+        monoasm!(self.jit,
+            movq r8, rdi; // the Value which caused this deopt.
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [rbp - (OFFSET_META)];
+            movq rcx, r13;
+            movq rax, (log_deoptimize);
+            call rax;
+        );
+        monoasm!(self.jit,
+            jmp fetch;
+        );
+        self.jit.select_page(0);
+        entry
+    }
+
+    pub(super) fn gen_side_deopt(&mut self, pc: BcPc) -> DestLabel {
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        let entry = self.jit.label();
+        self.jit.bind_label(entry);
         let fetch = self.vm_fetch;
         monoasm!(self.jit,
             movq r13, (pc.get_u64());
