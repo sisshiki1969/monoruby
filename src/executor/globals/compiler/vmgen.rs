@@ -222,6 +222,7 @@ impl Codegen {
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
         self.dispatch[19] = self.vm_method_call(true);
+        self.dispatch[20] = self.vm_yield();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -763,6 +764,137 @@ impl Codegen {
             movl [r13 - 8], r15;
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;
+            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq [r13 + 8], rdi;
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [r13 + 16], rdi;
+            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
+            movq [r13 + 24], rdi;
+            jmp exec;
+        );
+        self.jit.select_page(0);
+
+        label
+    }
+
+    fn vm_yield(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let exit = self.jit.label();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
+        let slowpath = self.jit.label();
+        let exec = self.jit.label();
+        let vm_return = self.vm_return;
+        //
+        //      +------+------+------+------+
+        //      |    Yield    |             |
+        //      +------+------+------+------+
+        // r13->| MethodArgs  |   CodePtr   |
+        //      +------+------+------+------+
+        //      |     Meta    |     PC      |
+        //      +------+------+------+------+
+        //
+        // rdi: IdentId
+        // r15: %ret
+        // [r13 +  0]; len
+        // [r13 +  2]; %args
+        // [r13 +  4]: %recv
+        // [r13 +  8]: CodePtr
+        // [r13 + 16]: Meta
+        // [r13 + 24]: PC
+
+        monoasm! { self.jit,
+            pushq r15;
+            pushq r13; // push pc
+            // rsp + 08:[%ret]
+            // rsp + 00:[pc]
+            cmpq [r13 + 8], 0;
+            jeq  slowpath;
+        exec:
+        };
+        self.push_frame();
+        monoasm! { self.jit,
+            movq [rsp - (16 + OFFSET_OUTER)], 0;
+            // set meta
+            movq rdi, [r13 + 16];
+            movq [rsp -(16 + OFFSET_META)], rdi;
+            movzxw rcx, [r13 + 2]; // rcx <- args
+            movzxw rdi, [r13 + 0];  // rdi <- len
+            // set self (= receiver)
+            movq rax, [rbp - (OFFSET_SELF)];
+            movq [rsp - (16 + OFFSET_SELF)], rax;
+        };
+        self.vm_get_addr_rcx(); // rcx <- *args
+
+        //
+        //       +-------------+
+        // +0x08 |     pc      |
+        //       +-------------+
+        //  0x00 |   ret reg   | <- rsp
+        //       +-------------+
+        // -0x08 | return addr |
+        //       +-------------+
+        // -0x10 |   old rbp   |
+        //       +-------------+
+        // -0x18 |    outer    |
+        //       +-------------+
+        // -0x20 |    meta     |
+        //       +-------------+
+        // -0x28 |    block    |
+        //       +-------------+
+        // -0x30 |     %0      |
+        //       +-------------+
+        // -0x38 | %1(1st arg) | <- rdx
+        //       +-------------+
+        //       |             |
+        //
+        monoasm! { self.jit,
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            movq r8, rdi;
+            testq r8, r8;
+            jeq  loop_exit;
+            negq r8;
+        loop_:
+            movq rax, [rcx + r8 * 8 + 8];
+            movq [rsp + r8 * 8 - (16 + OFFSET_SELF)], rax;
+            addq r8, 1;
+            jne  loop_;
+        loop_exit:
+
+            // argument registers:
+            //   rdi: args len
+            //
+            // global registers:
+            //   rbx: &mut Interp
+            //   r12: &mut Globals
+            //   r13: pc
+            //
+            movq rax, [r13 + 8];
+            // set pc
+            movq r13, [r13 + 24];    // r13: BcPc
+            call rax;
+        };
+        self.pop_frame();
+        monoasm! { self.jit,
+            popq r13;   // pop pc
+            popq r15;   // pop %ret
+            addq r13, 32;
+            testq rax, rax;
+            jeq vm_return;
+        };
+        self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        slowpath:
+            movq rdi, r12;
+            movq rsi, [rbp - (OFFSET_BLOCK)];
+            shrq rsi, 1;
+            movq rax, (vm_get_func_data);
+            call rax;
+            testq rax, rax;
+            jeq vm_return;
             movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             movq [r13 + 8], rdi;
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];

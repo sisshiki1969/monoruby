@@ -217,6 +217,7 @@ impl LoopAnalysis {
                     reg_info.def_as(dst, false);
                 }
                 BcOp::MethodCall(..) => {}
+                BcOp::Yield(..) => {}
                 BcOp::MethodCallBlock(..) => {}
                 BcOp::MethodArgs(method_info) => {
                     let MethodInfo {
@@ -234,6 +235,13 @@ impl LoopAnalysis {
                         BcOp::MethodCallBlock(ret, _, ..) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             for i in 0..len + 1 {
+                                reg_info.use_non_float(args + i);
+                            }
+                            reg_info.def_as(ret, false);
+                        }
+                        BcOp::Yield(ret) => {
+                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                            for i in 0..len {
                                 reg_info.use_non_float(args + i);
                             }
                             reg_info.def_as(ret, false);

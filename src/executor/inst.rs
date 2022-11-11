@@ -279,6 +279,21 @@ impl BcPc {
                 };
                 format!("{:36} [{}]", op1, self.class_version().0.get_name(globals))
             }
+            BcOp::Yield(ret) => {
+                let args_pc = *self + 1;
+                let (args, len) = match args_pc.op1() {
+                    BcOp::MethodArgs(method_info) => {
+                        let MethodInfo { args, len, .. } = method_info;
+                        (args, len)
+                    }
+                    _ => unreachable!(),
+                };
+                if len == 0 {
+                    format!("{} = yield", ret.ret_str())
+                } else {
+                    format!("{} = yield({:?}; {})", ret.ret_str(), args, len)
+                }
+            }
             BcOp::MethodCallBlock(ret, name) => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
@@ -483,6 +498,7 @@ pub(super) enum BcIr {
     Mov(BcReg, BcReg),                       // dst, offset
     MethodCall(Option<BcReg>, IdentId),      // (ret, id)
     MethodCallBlock(Option<BcReg>, IdentId), // (ret, id)
+    Yield(Option<BcReg>),                    // ret
     MethodArgs(BcReg, BcReg, usize),         // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
@@ -725,6 +741,10 @@ impl std::fmt::Debug for Bc {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
                 write!(f, "{:28} {:?}", op1, self.class_version().0)
             }
+            BcOp::Yield(ret) => {
+                let op1 = format!("{} = yield", ret.ret_str());
+                write!(f, "{:28}", op1)
+            }
             BcOp::MethodArgs(method_info) => {
                 write!(
                     f,
@@ -833,6 +853,7 @@ pub(super) enum BcOp {
     /// func call(%ret, name)
     MethodCall(SlotId, IdentId),
     MethodCallBlock(SlotId, IdentId),
+    Yield(SlotId),
     /// func call 2nd opecode(%recv, %args, len)
     MethodArgs(MethodInfo),
     /// method definition(method_name, func_id)
@@ -955,6 +976,7 @@ impl BcOp {
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
                 19 => Self::MethodCallBlock(SlotId::new(op1), IdentId::from(op2)),
+                20 => Self::Yield(SlotId::new(op1)),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

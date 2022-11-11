@@ -353,6 +353,7 @@ impl Codegen {
                 }
                 BcOp::MethodCall(..) => {}
                 BcOp::MethodCallBlock(..) => {}
+                BcOp::Yield(..) => {}
                 BcOp::MethodArgs(method_info) => {
                     self.gen_method_call(fnstore, &mut ctx, method_info, pc);
                     skip = true;

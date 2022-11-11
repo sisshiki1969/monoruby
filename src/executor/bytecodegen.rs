@@ -677,6 +677,14 @@ impl IrContext {
                 };
                 return self.gen_method_call(ctx, info, method, None, arglist, ret, is_ret, loc);
             }
+            NodeKind::Yield(arglist) => {
+                let ret = if use_value {
+                    Some(info.push().into())
+                } else {
+                    None
+                };
+                return self.gen_yield(ctx, info, arglist, ret, is_ret, loc);
+            }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
                 let ret = if use_value {
@@ -1084,6 +1092,36 @@ impl IrContext {
             info.pop().into()
         };
         self.gen_call(recv, method, ret, arg.into(), len, has_block, loc);
+        if is_ret {
+            self.gen_ret(info, None);
+        }
+        Ok(())
+    }
+
+    fn gen_yield(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        arglist: ArgList,
+        ret: Option<BcReg>,
+        is_ret: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        assert!(arglist.kw_args.is_empty());
+        assert!(arglist.hash_splat.is_empty());
+        assert!(!arglist.delegate);
+        assert!(arglist.block.is_none());
+        let old_temp = info.temp;
+        let arg = info.next_reg();
+        let args = arglist.args;
+        let len = args.len();
+        self.gen_args(ctx, info, args)?;
+        info.temp = old_temp;
+
+        self.push(BcIr::Yield(ret), loc);
+        self.push(BcIr::MethodArgs(BcReg::Self_, arg.into(), len), loc);
+        self.push(BcIr::InlineCache, loc);
+
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1588,6 +1626,13 @@ impl IrContext {
                         ClassId::new(0),
                         -1i32 as u32,
                     )
+                }
+                BcIr::Yield(ret) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(enc_wl(20, op1.0, 0), ClassId::new(0), 0)
                 }
                 BcIr::MethodArgs(recv, args, len) => {
                     let op1 = info.get_index(recv);
