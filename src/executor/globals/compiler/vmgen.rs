@@ -168,6 +168,8 @@ impl Codegen {
         self.vm_fetch = entry_fetch;
         self.fetch_and_dispatch();
 
+        self.vm_entry = entry;
+
         //BcOp::Ret
         let ret = self.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -202,7 +204,6 @@ impl Codegen {
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
-        self.vm_entry = entry;
         self.dispatch[1] = self.vm_method_call(false);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
@@ -285,6 +286,163 @@ impl Codegen {
         self.dispatch[222] = mul_ri;
         self.dispatch[223] = div_ri;
         self.dispatch[230] = pow_ri;
+
+        // method invoker.
+        let method_invoker: extern "C" fn(
+            &mut Executor,
+            &mut Globals,
+            *const FuncData,
+            Value,
+            *const Value,
+            usize,
+        ) -> Option<Value> =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        // rdi: &mut Interp
+        // rsi: &mut Globals
+        // rdx: *const FuncData
+        // rcx: receiver: Value
+        // r8:  *args: *const Value
+        // r9:  len: usize
+
+        self.gen_invoker_prologue(false);
+        self.gen_invoker_prep();
+        self.gen_invoker_epilogue();
+
+        self.method_invoker = method_invoker;
+
+        // block invoker.
+        let block_invoker: extern "C" fn(
+            &mut Executor,
+            &mut Globals,
+            *const FuncData,
+            Value,
+            *const Value,
+            usize,
+        ) -> Option<Value> =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        self.gen_invoker_prologue(true);
+        self.gen_invoker_prep();
+        self.gen_invoker_epilogue();
+
+        self.block_invoker = block_invoker;
+
+        // method invoker.
+        let method_invoker2: extern "C" fn(
+            &mut Executor,
+            &mut Globals,
+            *const FuncData,
+            Value,
+            Arg,
+            usize,
+        ) -> Option<Value> =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        let loop_exit = self.jit.label();
+        let loop_ = self.jit.label();
+        // rdi: &mut Interp
+        // rsi: &mut Globals
+        // rdx: *const FuncData
+        // rcx: receiver: Value
+        // r8:  args: Arg
+        // r9:  len: usize
+        self.gen_invoker_prologue(false);
+        monoasm! { self.jit,
+            // r8 <- *args
+            // r9 <- len
+            movq rdi, r9;
+            testq r9, r9;
+            jeq  loop_exit;
+            negq r9;
+        loop_:
+            movq rax, [r8 + r9 * 8 + 8];
+            movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
+            addq r9, 1;
+            jne  loop_;
+        loop_exit:
+        };
+        self.gen_invoker_epilogue();
+
+        self.method_invoker2 = method_invoker2;
+    }
+
+    fn gen_invoker_prologue(&mut self, invoke_block: bool) {
+        monoasm! { self.jit,
+            pushq rbx;
+            pushq r12;
+            pushq r13;
+            pushq r14;
+            pushq r15;
+            movq rbx, rdi;
+            movq r12, rsi;
+            // set meta/func_id
+            movq rax, [rdx + (FUNCDATA_OFFSET_META)];
+            movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+        };
+        self.push_frame(invoke_block);
+        monoasm! { self.jit,
+            // set self (= receiver)
+            movq [rsp - (16 + OFFSET_SELF)], rcx;
+
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+            //
+            //       +-------------+
+            // +0x08 |             |
+            //       +-------------+
+            //  0x00 |             | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    outer    |
+            //       +-------------+
+            // -0x20 |    meta     | func_id
+            //       +-------------+
+            // -0x28 |    Block    |
+            //       +-------------+
+            // -0x30 |     %0      | receiver
+            //       +-------------+
+            // -0x38 | %1(1st arg) |
+            //       +-------------+
+            //       |             |
+            //
+        };
+    }
+
+    fn gen_invoker_epilogue(&mut self) {
+        monoasm! { self.jit,
+            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            call rax;
+            movq rdi, [rsp - (16 + OFFSET_CFP)];
+            movq [rbx], rdi;
+            popq r15;
+            popq r14;
+            popq r13;
+            popq r12;
+            popq rbx;
+            ret;
+        };
+    }
+
+    fn gen_invoker_prep(&mut self) {
+        let loop_exit = self.jit.label();
+        let loop_ = self.jit.label();
+        monoasm! { self.jit,
+            // r8 <- *args
+            // r9 <- len
+            movq rdi, r9;
+            testq r9, r9;
+            jeq  loop_exit;
+            movq r10, r9;
+            negq r9;
+        loop_:
+            movq rax, [r8 + r10 * 8 - 8];
+            movq [rsp + r9 * 8 - (16 + OFFSET_SELF)], rax;
+            subq r10, 1;
+            addq r9, 1;
+            jne  loop_;
+        loop_exit:
+        };
     }
 
     ///
@@ -679,28 +837,6 @@ impl Codegen {
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        //
-        //       +-------------+
-        // +0x08 |     pc      |
-        //       +-------------+
-        //  0x00 |   ret reg   | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |   old rbp   |
-        //       +-------------+
-        // -0x18 |    outer    |
-        //       +-------------+
-        // -0x20 |    meta     |
-        //       +-------------+
-        // -0x28 |    block    |
-        //       +-------------+
-        // -0x30 |     %0      |
-        //       +-------------+
-        // -0x38 | %1(1st arg) | <- rdx
-        //       +-------------+
-        //       |             |
-        //
         if has_block {
             // set block
             monoasm! { self.jit,
