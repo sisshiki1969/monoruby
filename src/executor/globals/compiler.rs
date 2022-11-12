@@ -436,6 +436,15 @@ extern "C" fn vm_get_func_data<'a>(globals: &'a mut Globals, func_id: FuncId) ->
     globals.compile_on_demand(func_id)
 }
 
+extern "C" fn vm_get_block_data<'a>(globals: &'a mut Globals, block: Value) -> &'a FuncData {
+    if let Some(func_id) = block.try_fixnum() {
+        if let Ok(func_id) = u32::try_from(func_id) {
+            return globals.compile_on_demand(FuncId(func_id as u32));
+        }
+    }
+    unimplemented!()
+}
+
 extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     let mut v = if len == 0 {
         vec![]
@@ -894,21 +903,32 @@ impl Codegen {
         codegen
     }
 
-    /// Push frame
+    /// Push control frame and set outer.
     ///
-    /// destroy rax, rdi
-    fn push_frame(&mut self) {
+    /// destroy: rax, rdi
+    fn push_frame(&mut self, invoke_block: bool) {
         monoasm!(self.jit,
             movq rax, [rbx];
             lea  rdi, [rsp - (16 + OFFSET_CFP)];
             movq [rdi], rax;
             movq [rbx], rdi;
         );
+        if invoke_block {
+            monoasm! { self.jit,
+                movq rax, [rax];
+                lea  rax, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
+                movq [rsp - (16 + OFFSET_OUTER)], rax;
+            };
+        } else {
+            monoasm! { self.jit,
+                movq [rsp - (16 + OFFSET_OUTER)], 0;
+            };
+        }
     }
 
-    /// Pop frame
+    /// Pop control frame
     ///
-    /// destroy rdi
+    /// destroy: rdi
     fn pop_frame(&mut self) {
         monoasm!(self.jit,
             movq rdi, [rsp - (16 + OFFSET_CFP)];

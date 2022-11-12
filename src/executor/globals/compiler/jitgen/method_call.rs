@@ -48,6 +48,11 @@ impl Codegen {
                 method_info.args = method_info.args + 1;
                 self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
             }
+            BcOp::Yield(ret) => {
+                ctx.dealloc_xmm(ret);
+                ctx.write_back_range(self, args, len);
+                self.gen_yield(ctx, method_info, ret, pc);
+            }
             _ => unreachable!(),
         }
     }
@@ -205,7 +210,7 @@ impl Codegen {
         method_resolved:
         );
 
-        self.push_frame();
+        self.push_frame(false);
         self.set_self_and_args(method_info, block);
 
         monoasm!(self.jit,
@@ -429,21 +434,15 @@ impl Codegen {
         caller:
             pushq rbp;
             movq rbp, rsp;
-            movq [rbp - (OFFSET_OUTER)], 0;
+            //movq [rbp - (OFFSET_OUTER)], 0;
             movq rax, (Meta::native(func_id, len as _).0);
             movq [rbp - (OFFSET_META)], rax;
             movq [rbp - (OFFSET_BLOCK)], r9;
             subq rsp, ((OFFSET_SELF + 15) & !0xf);
-        );
-
-        monoasm!(self.jit,
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (abs_address);
             call rax;
-        );
-
-        monoasm!(self.jit,
             leave;
             ret;
         );
@@ -465,7 +464,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdx, rdi;  // self: Value
         );
-        self.push_frame();
+        self.push_frame(false);
         monoasm!(self.jit,
             lea  rcx, [rbp - (conv(args))];  // args: *const Value
             movq r8, (len);
@@ -494,7 +493,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
 
-        self.push_frame();
+        self.push_frame(false);
         self.set_self_and_args(method_info, block);
 
         monoasm!(self.jit,
@@ -516,6 +515,54 @@ impl Codegen {
             self.store_rax(ret);
         }
     }
+
+    fn gen_yield(&mut self, ctx: &BBContext, method_info: MethodInfo, ret: SlotId, pc: BcPc) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        monoasm! { self.jit,
+            // rdx <- &FuncData
+            movq rdi, r12;
+            movq rsi, [rbp - (OFFSET_BLOCK)];
+            movq rax, (vm_get_block_data);
+            call rax;
+            movq rdx, rax;
+        }
+        self.push_frame(true);
+        monoasm! { self.jit,
+            // rsi <- CodePtr
+            movq rsi, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            // set meta
+            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq [rsp -(16 + OFFSET_META)], rdi;
+            // set pc
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            // set self
+            movq rax, [rbp - (OFFSET_SELF)];
+            movq [rsp - (16 + OFFSET_SELF)], rax;
+            // set block
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+        };
+        // set arguments
+        self.set_args(method_info.args, method_info.len);
+        monoasm! { self.jit,
+            // argument registers:
+            //   rdi: args len
+            //
+            // global registers:
+            //   rbx: &mut Interp
+            //   r12: &mut Globals
+            //   r13: pc
+            //
+            movq rdi, (method_info.len);
+            call rsi;
+        };
+        self.pop_frame();
+        self.xmm_restore(&xmm_using);
+        self.handle_error(pc);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+    }
 }
 
 impl Codegen {
@@ -527,25 +574,21 @@ impl Codegen {
         );
     }
 
+    /// Set *self*, len, block, and arguments.
+    ///
+    /// out    : rdi <- len
+    /// destroy: rax
     fn set_self_and_args(&mut self, method_info: MethodInfo, block: Option<SlotId>) {
         let MethodInfo {
             recv, args, len, ..
         } = method_info;
-        // set self, outer, len
+        // set self, len
         monoasm!(self.jit,
             movq rax, [rbp - (conv(recv))];
             movq [rsp - (16 + OFFSET_SELF)], rax;
-            movq [rsp - (16 + OFFSET_OUTER)], 0;
             movq rdi, (len);
         );
-        // set arguments
-        for i in 0..len {
-            let reg = args + i;
-            monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - (16 + OFFSET_ARG0 as i32 + i as i32 * 8)], rax;
-            );
-        }
+        self.set_args(args, len);
         // set block
         match block {
             Some(block) => {
@@ -559,6 +602,20 @@ impl Codegen {
                     movq [rsp - (16 + OFFSET_BLOCK)], 0;
                 );
             }
+        }
+    }
+
+    /// Set arguments.
+    ///
+    /// destroy: rax
+    fn set_args(&mut self, args: SlotId, len: u16) {
+        // set arguments
+        for i in 0..len {
+            let reg = args + i;
+            monoasm!(self.jit,
+                movq rax, [rbp - (conv(reg))];
+                movq [rsp - (16 + OFFSET_ARG0 as i32 + i as i32 * 8)], rax;
+            );
         }
     }
 }
@@ -600,6 +657,45 @@ mod test {
         end
                 
         res
+        "##,
+        );
+    }
+
+    #[test]
+    fn yield_test() {
+        tests::run_test(
+            r##"
+          def f(x,y)
+            yield x,y
+          end
+          
+          res = []
+          for i in 0..10
+            res << f(i,5) {|x,y| x+y}
+            res << f(i,8) {|x,y| x+y}
+          end
+          res
+        "##,
+        );
+    }
+
+    #[test]
+    fn iterator() {
+        tests::run_test(
+            r##"
+        class Array
+          def iich
+            for i in 0...self.size
+              yield(self[i])
+            end
+          end
+        end
+
+        a = []
+        [2,5,7,10,2.2,7,9].iich do |x|
+          a << x*2
+        end
+        a
         "##,
         );
     }

@@ -1,6 +1,13 @@
-def f(x,y)
-  yield x,y
+class Array
+  def iich
+    for i in 0...self.size
+      yield(self[i])
+    end
+  end
 end
 
-f(3,5) {|x,y| puts "#{x} & #{y}"}
-f(4,1) {|x,y| puts "#{x+y}"}
+a = []
+[2,5,7,10,2.2,7,9].iich do |x|
+  a << x*2
+end
+puts a

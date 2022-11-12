@@ -666,9 +666,8 @@ impl Codegen {
 
         exec:
         };
-        self.push_frame();
+        self.push_frame(false);
         monoasm! { self.jit,
-            movq [rsp - (16 + OFFSET_OUTER)], 0;
             // set meta
             movq rdi, [r13 + 16];
             movq [rsp -(16 + OFFSET_META)], rdi;
@@ -782,8 +781,6 @@ impl Codegen {
         let exit = self.jit.label();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
-        let slowpath = self.jit.label();
-        let exec = self.jit.label();
         let vm_return = self.vm_return;
         //
         //      +------+------+------+------+
@@ -808,22 +805,24 @@ impl Codegen {
             pushq r13; // push pc
             // rsp + 08:[%ret]
             // rsp + 00:[pc]
-            cmpq [r13 + 8], 0;
-            jeq  slowpath;
-        exec:
-        };
-        self.push_frame();
-        monoasm! { self.jit,
-            movq [rsp - (16 + OFFSET_OUTER)], 0;
+            movq rdi, r12;
+            movq rsi, [rbp - (OFFSET_BLOCK)];
+            movq rax, (vm_get_block_data);
+            call rax;
+            // r9 <- CodePtr
+            movq r9, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
-            movq rdi, [r13 + 16];
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + OFFSET_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
-            movzxw rdi, [r13 + 0];  // rdi <- len
-            // set self (= receiver)
+            movzxw r10, [r13 + 0];  // r10 <- len
+            // set pc
+            movq r13, [rax + (FUNCDATA_OFFSET_PC)];
+            // set self
             movq rax, [rbp - (OFFSET_SELF)];
             movq [rsp - (16 + OFFSET_SELF)], rax;
         };
+        self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
 
         //
@@ -850,7 +849,7 @@ impl Codegen {
         //
         monoasm! { self.jit,
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
-            movq r8, rdi;
+            movq r8, r10;
             testq r8, r8;
             jeq  loop_exit;
             negq r8;
@@ -869,10 +868,8 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, [r13 + 8];
-            // set pc
-            movq r13, [r13 + 24];    // r13: BcPc
-            call rax;
+            movq rdi, r10;
+            call r9;
         };
         self.pop_frame();
         monoasm! { self.jit,
@@ -884,27 +881,6 @@ impl Codegen {
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
-
-        self.jit.select_page(1);
-        monoasm!(self.jit,
-        slowpath:
-            movq rdi, r12;
-            movq rsi, [rbp - (OFFSET_BLOCK)];
-            shrq rsi, 1;
-            movq rax, (vm_get_func_data);
-            call rax;
-            testq rax, rax;
-            jeq vm_return;
-            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
-            movq [r13 + 8], rdi;
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [r13 + 16], rdi;
-            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
-            movq [r13 + 24], rdi;
-            jmp exec;
-        );
-        self.jit.select_page(0);
-
         label
     }
 
