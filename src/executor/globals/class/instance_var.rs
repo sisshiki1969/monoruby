@@ -35,14 +35,14 @@ impl Globals {
     /// Get the value of a instance variable with *name* which belongs to *val*.
     ///
     pub(crate) fn get_ivar(&self, mut val: Value, name: IdentId) -> Option<Value> {
-        let class_id = self.get_real_class_id(val);
+        let class_id = val.class_id();
         let rval = val.try_rvalue_mut()?;
         let id = self.class[class_id].ivar_names.get(&name)?;
         rval.get_var(*id)
     }
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
-        let class_id = self.get_real_class_id(val);
+        let class_id = val.class_id();
         let rval = match val.try_rvalue_mut() {
             Some(rval) => rval,
             None => return vec![],
@@ -58,7 +58,7 @@ impl Globals {
     /// Set *val* to the instance variable with *name* which belongs to *base*.
     ///
     pub(crate) fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Option<()> {
-        let class_id = self.get_real_class_id(base);
+        let class_id = base.class_id();
         let rval = match base.try_rvalue_mut() {
             Some(rval) => rval,
             None => {
@@ -79,7 +79,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     cache_class: &mut ClassId,
     cache_ivarid: &mut IvarId,
 ) -> Value {
-    let class_id = globals.get_real_class_id(base);
+    let class_id = base.class_id();
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => return Value::nil(),
@@ -104,7 +104,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
     cache_class: &mut ClassId,
     cache_ivarid: &mut IvarId,
 ) -> Option<Value> {
-    let class_id = globals.get_real_class_id(base);
+    let class_id = base.class_id();
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => {

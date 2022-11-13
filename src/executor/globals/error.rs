@@ -188,7 +188,7 @@ impl MonorubyErr {
                     "undefined method `{}' for {}:{}",
                     IdentId::get_name(*name),
                     obj.to_s(globals),
-                    globals.get_real_class_id(*obj).get_name(globals)
+                    obj.get_real_class_name(globals)
                 )
             }
             MonorubyErrKind::WrongArguments(name) => name.to_string(),

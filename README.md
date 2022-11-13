@@ -15,10 +15,11 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 This project still remains in early-alpha stage. Currently, only the functionalities described below are implemented.
 
-- classes: Integer, Float, String, Symbol, Class
+- classes: Object, Integer, Float, String, Symbol, Class, Array
 - superclass and singleton class and methods
 - local variables
 - instance variables & accessor
+- block and dynamic local variables
 - if-then-elsif-end statement
 - for-in statement
 - while statement
@@ -28,24 +29,27 @@ This project still remains in early-alpha stage. Currently, only the functionali
 ## Benchmark
 
 - measured by [benchmark-driver](https://github.com/benchmark-driver/benchmark-driver) with '--repeat-count 3' option.
+- benchmark codes are [in the official repo](https://github.com/ruby/ruby/tree/master/benchmark) except qsort and tarai.
 - measurements are shown in iteration/sec (the higher, the better).
 
-|  bench \ impl   |  3.2.0-dev |   --yjit   | monoruby  |
-| :-------------: | :--------: | :--------: | :-------: |
-|      qsort      |   74.016k  |   113.075k |  361.426k |
-|     app_fib     |     3.615  |     13.938 |    17.951 |
-|  so_mandelbrot  |     0.615  |      0.832 |    13.571 |
-|    so_nbody     |     1.033  |      1.560 |     4.751 |
+|                |3.2.0-preview3| 3.2.0-preview3 --yjit| 3.2.0-preview3 --mjit|   monoruby|
+|:---------------|-------------:|---------------------:|---------------------:|----------:|
+|loop_whileloop  |         2.892|                 2.887|                 2.858|     23.685|
+|qsort*          |      125.036k|              315.657k|              119.578k|   384.874k|
+|app_fib         |         3.637|                14.396|                 4.569|     17.185|
+|tarai*          |         2.809|                12.851|                 3.915|     14.762|
+|so_mandelbrot   |         0.623|                 0.976|                 0.824|     13.832|
+|so_nbody        |         0.920|                 1.538|                 0.878|      5.132|
 
-|    bench \ impl     | 3.2.0-dev |  --yjit   | monoruby  |
-| :-----------------: | :-------: | :-------: | :-------: |
-|             vm_ivar |  159.172M |  160.985M |  593.191M |
-|         vm_ivar_get |    12.251 |    28.422 |    58.717 |
-|         vm_ivar_set |  134.974M |  137.563M |  533.527M |
-| vm_ivar_generic_get |   16.402M |   16.332M |  112.353M |
-| vm_ivar_generic_set |    8.152M |   10.313M |   75.855M |
-|        vm_attr_ivar |   58.936M |   58.063M |  301.761M |
-|    vm_attr_ivar_set |   64.160M |   62.901M |  300.453M |
+|                     |3.2.0-preview3| 3.2.0-preview3 --yjit|     monoruby|
+|:--------------------|-------------:|---------------------:|------------:|
+|vm_ivar              |      170.332M|              170.449M|     732.590M|
+|vm_ivar_get          |        12.067|                26.865|       74.040|
+|vm_ivar_set          |      109.025M|              115.217M|     707.712M|
+|vm_ivar_generic_get  |       15.167M|               16.079M|     118.955M|
+|vm_ivar_generic_set  |       12.556M|               16.322M|      79.166M|
+|vm_attr_ivar         |       58.778M|               58.759M|     269.301M|
+|vm_attr_ivar_set     |       52.270M|               52.345M|     307.156M|
 
 ## How to run
 
