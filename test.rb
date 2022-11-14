@@ -1,13 +1,14 @@
-class Array
-  def iich
-    for i in 0...self.size
-      yield(self[i])
-    end
+
+num = 50000
+c = 0
+
+for i in 0...num
+  x = rand
+  y = rand
+
+  if x*x+y*y <= 1.0
+    c += 1
   end
 end
 
-a = []
-[2,5,7,10,2.2,7,9].iich do |x|
-  a << x*2
-end
-puts a
+puts 4.0 * c / num

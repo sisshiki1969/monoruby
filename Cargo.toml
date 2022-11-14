@@ -35,3 +35,4 @@ chrono = "0.4.19"
 smallvec = { version = "1.9.0", features = ["const_generics"] }
 escape_string = "0.1.2"
 hex = "0.4.3"
+rand = "0.8.5"

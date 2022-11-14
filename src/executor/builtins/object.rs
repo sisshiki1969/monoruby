@@ -1,3 +1,5 @@
+use num::{ToPrimitive, Zero};
+
 use crate::*;
 
 //
@@ -13,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(
@@ -184,6 +187,42 @@ extern "C" fn class(
     _: Option<Value>,
 ) -> Option<Value> {
     Some(self_val.get_real_class_id(globals).get_obj(globals))
+}
+
+/// ### Kernel.#rand
+/// - rand(max = 0) -> Integer | Float
+/// - rand(range) -> Integer | Float | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
+extern "C" fn rand(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<Value>,
+) -> Option<Value> {
+    let i = match len {
+        0 => 0i64,
+        1 => match arg[0].unpack() {
+            RV::Integer(i) => i,
+            RV::Float(f) => f.to_i64().unwrap(),
+            _ => unimplemented!(),
+        },
+        n => {
+            globals.err_argument(&format!(
+                "wrong number of arguments (given {n}, expeted 0..1)"
+            ));
+            return None;
+        }
+    };
+    if !i.is_zero() {
+        Some(Value::new_integer(
+            (rand::random::<f64>() * (i.abs() as f64)) as i64,
+        ))
+    } else {
+        Some(Value::new_float(rand::random()))
+    }
 }
 
 /// ### Object#singleton_class
