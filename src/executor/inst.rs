@@ -1018,7 +1018,7 @@ impl BcOp {
                 151 => Self::StoreDynVar(
                     DynVar {
                         reg: SlotId::new(op1),
-                        outer: op3 as usize,
+                        outer: op2 as usize,
                     },
                     SlotId::new(op3),
                 ),

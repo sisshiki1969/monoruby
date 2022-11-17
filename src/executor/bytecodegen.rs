@@ -157,7 +157,7 @@ impl IrContext {
     fn gen_load_const(
         &mut self,
         info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         toplevel: bool,
         name: String,
         prefix: Vec<String>,
@@ -169,27 +169,21 @@ impl IrContext {
             .map(IdentId::get_ident_id_from_string)
             .collect();
         let reg = match dst {
-            Some(local) => local.into(),
+            Some(local) => local,
             None => info.push().into(),
         };
         self.push(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
     }
 
-    fn gen_load_ivar(
-        &mut self,
-        info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
-        name: IdentId,
-        loc: Loc,
-    ) {
+    fn gen_load_ivar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let reg = match dst {
-            Some(local) => local.into(),
+            Some(local) => local,
             None => info.push().into(),
         };
         self.push(BcIr::LoadIvar(reg, name), loc);
     }
 
-    fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, v: Value) {
+    fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
@@ -197,7 +191,7 @@ impl IrContext {
         self.push(BcIr::Literal(reg, v), Loc::default());
     }
 
-    fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, i: i64) {
+    fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local.into(),
@@ -209,11 +203,11 @@ impl IrContext {
         }
     }
 
-    fn gen_float(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, f: f64) {
+    fn gen_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
         self.gen_literal(info, dst, Value::new_float(f));
     }
 
-    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, sym: IdentId) {
+    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: IdentId) {
         let reg = match dst {
             Some(local) => local.into(),
             None => info.push().into(),
@@ -221,7 +215,7 @@ impl IrContext {
         self.push(BcIr::Symbol(reg, sym), Loc::default());
     }
 
-    fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, s: String) {
+    fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
         self.gen_literal(info, dst, Value::new_string(s));
     }
 
@@ -233,7 +227,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        ret: Option<BcLocal>,
+        ret: Option<BcReg>,
         nodes: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
@@ -241,7 +235,7 @@ impl IrContext {
         let src = self.gen_args(ctx, info, nodes)?.into();
         info.popn(len);
         let ret = match ret {
-            Some(local) => local.into(),
+            Some(local) => local,
             None => info.push().into(),
         };
         self.emit_array(ret, src, len, loc);
@@ -252,7 +246,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        ret: Option<BcLocal>,
+        ret: Option<BcReg>,
         base: Node,
         index: Node,
         loc: Loc,
@@ -260,7 +254,7 @@ impl IrContext {
         let (base, idx) = self.gen_binary_temp_expr(ctx, info, base, index)?;
         let ret = match ret {
             None => info.push().into(),
-            Some(local) => local.into(),
+            Some(local) => local,
         };
         self.push(BcIr::Index(ret, base, idx), loc);
         Ok(())
@@ -342,22 +336,21 @@ impl IrContext {
         }
     }
 
-    fn gen_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>, bigint: BigInt) {
+    fn gen_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
         self.gen_literal(info, dst, Value::new_bigint(bigint));
     }
 
-    fn gen_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcLocal>) {
+    fn gen_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>) {
         let reg = match dst {
-            Some(local) => local.into(),
+            Some(dst) => dst,
             None => info.push().into(),
         };
         self.push(BcIr::Nil(reg), Loc::default());
     }
 
-    fn gen_neg(&mut self, info: &mut ISeqInfo, local: Option<BcLocal>, loc: Loc) {
+    fn gen_neg(&mut self, info: &mut ISeqInfo, local: Option<BcReg>, loc: Loc) {
         match local {
             Some(local) => {
-                let local = local.into();
                 self.push(BcIr::Neg(local, local), loc);
             }
             None => {
@@ -368,9 +361,9 @@ impl IrContext {
         };
     }
 
-    fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcLocal>) {
+    fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcReg>) {
         let ret = match local {
-            Some(local) => local.into(),
+            Some(ret) => ret.into(),
             None => info.pop().into(),
         };
         assert_eq!(0, info.temp);
@@ -393,7 +386,7 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         mut nodes: Vec<Node>,
-        ret: Option<BcLocal>,
+        ret: Option<BcReg>,
         use_value: bool,
         is_ret: bool,
     ) -> Result<()> {
@@ -479,7 +472,7 @@ impl IrContext {
         op: BinOp,
         lhs: Node,
         rhs: Node,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<BcReg> {
         match op {
@@ -568,9 +561,9 @@ impl IrContext {
             }
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = info.is_refer_local(&lhs) {
-                    self.gen_binop(ctx, info, op, lhs, rhs, Some(local), loc)?;
+                    self.gen_binop(ctx, info, op, lhs, rhs, Some(local.into()), loc)?;
                     if is_ret {
-                        self.gen_ret(info, Some(local));
+                        self.gen_ret(info, Some(local.into()));
                     } else if use_value {
                         self.gen_temp_mov(info, local.into());
                     }
@@ -597,9 +590,9 @@ impl IrContext {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(local) = info.is_assign_local(&lhs) {
-                        self.gen_store_expr(ctx, info, local, rhs)?;
+                        self.gen_store_expr(ctx, info, local.into(), rhs)?;
                         if is_ret {
-                            self.gen_ret(info, Some(local));
+                            self.gen_ret(info, Some(local.into()));
                         } else if use_value {
                             self.gen_temp_mov(info, local.into());
                         }
@@ -621,7 +614,7 @@ impl IrContext {
             NodeKind::LocalVar(ident) => {
                 let local = info.refer_local(&ident);
                 if is_ret {
-                    self.gen_ret(info, Some(local));
+                    self.gen_ret(info, Some(local.into()));
                 } else if use_value {
                     self.gen_temp_mov(info, local.into());
                 }
@@ -763,7 +756,7 @@ impl IrContext {
             }
             NodeKind::Return(box expr) => {
                 if let Some(local) = info.is_refer_local(&expr) {
-                    self.gen_ret(info, Some(local));
+                    self.gen_ret(info, Some(local.into()));
                 } else {
                     self.gen_expr(ctx, info, expr, true, true)?;
                 }
@@ -847,67 +840,67 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        local: BcLocal,
+        dst: BcReg,
         rhs: Node,
     ) -> Result<()> {
         let loc = rhs.loc;
         match rhs.kind {
-            NodeKind::Nil => self.gen_nil(info, Some(local)),
-            NodeKind::Bool(b) => self.gen_literal(info, Some(local), Value::bool(b)),
-            NodeKind::SelfValue => self.gen_mov(local.into(), BcReg::Self_),
-            NodeKind::Integer(i) => self.gen_integer(info, Some(local), i),
+            NodeKind::Nil => self.gen_nil(info, Some(dst)),
+            NodeKind::Bool(b) => self.gen_literal(info, Some(dst), Value::bool(b)),
+            NodeKind::SelfValue => self.gen_mov(dst.into(), BcReg::Self_),
+            NodeKind::Integer(i) => self.gen_integer(info, Some(dst), i),
             NodeKind::Symbol(sym) => {
                 let sym = IdentId::get_ident_id_from_string(sym);
-                self.gen_symbol(info, Some(local), sym)
+                self.gen_symbol(info, Some(dst), sym)
             }
-            NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(local), bigint),
-            NodeKind::Float(f) => self.gen_float(info, Some(local), f),
-            NodeKind::String(s) => self.gen_string(info, Some(local), s),
-            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, Some(local), nodes, loc)?,
+            NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(dst), bigint),
+            NodeKind::Float(f) => self.gen_float(info, Some(dst), f),
+            NodeKind::String(s) => self.gen_string(info, Some(dst), s),
+            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
             } => {
                 assert_eq!(1, index.len());
-                self.gen_index(ctx, info, Some(local), base, index.remove(0), loc)?;
+                self.gen_index(ctx, info, Some(dst), base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => {
                 assert!(op == UnOp::Neg);
                 match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(info, Some(local), -i),
-                    NodeKind::Float(f) => self.gen_float(info, Some(local), -f),
+                    NodeKind::Integer(i) => self.gen_integer(info, Some(dst), -i),
+                    NodeKind::Float(f) => self.gen_float(info, Some(dst), -f),
                     _ => {
-                        self.gen_store_expr(ctx, info, local, rhs)?;
-                        self.gen_neg(info, Some(local), loc);
+                        self.gen_store_expr(ctx, info, dst, rhs)?;
+                        self.gen_neg(info, Some(dst), loc);
                     }
                 };
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(ctx, info, op, lhs, rhs, Some(local), loc)?;
+                self.gen_binop(ctx, info, op, lhs, rhs, Some(dst), loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(src) = info.is_assign_local(&lhs) {
-                        self.gen_store_expr(ctx, info, src, rhs)?;
-                        self.gen_mov(local.into(), src.into());
+                        self.gen_store_expr(ctx, info, src.into(), rhs)?;
+                        self.gen_mov(dst.into(), src.into());
                     } else {
                         let temp = info.temp;
                         let lhs = self.eval_lvalue(ctx, info, &lhs)?;
-                        let src = local.into();
-                        self.gen_store_expr(ctx, info, local, rhs)?;
+                        let src = dst.into();
+                        self.gen_store_expr(ctx, info, dst, rhs)?;
                         self.gen_assign(src, lhs, loc);
                         info.temp = temp;
                     }
                 } else {
                     self.gen_mul_assign(ctx, info, mlhs, mrhs, true, false)?;
                     let temp = info.pop().into();
-                    self.gen_mov(local.into(), temp);
+                    self.gen_mov(dst.into(), temp);
                 }
             }
             NodeKind::LocalVar(ident) => {
                 let local2 = info.refer_local(&ident);
-                self.gen_mov(local.into(), local2.into());
+                self.gen_mov(dst.into(), local2.into());
             }
             NodeKind::Const {
                 toplevel,
@@ -915,11 +908,11 @@ impl IrContext {
                 parent: _,
                 prefix,
             } => {
-                self.gen_load_const(info, local.into(), toplevel, name, prefix, loc);
+                self.gen_load_const(info, dst.into(), toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
-                self.gen_load_ivar(info, local.into(), name, loc);
+                self.gen_load_ivar(info, dst.into(), name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -927,7 +920,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(local.into());
+                let ret = Some(dst.into());
                 self.gen_method_call(ctx, info, method, Some(receiver), arglist, ret, false, loc)?;
             }
             NodeKind::FuncCall {
@@ -935,12 +928,12 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(local.into());
+                let ret = Some(dst.into());
                 self.gen_method_call(ctx, info, method, None, arglist, ret, false, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
-                self.gen_comp_stmts(ctx, info, nodes, Some(local), false, false)?;
+                self.gen_comp_stmts(ctx, info, nodes, Some(dst), false, false)?;
             }
             NodeKind::ClassDef {
                 base,
@@ -951,13 +944,13 @@ impl IrContext {
             } => {
                 assert!(base.is_none());
                 assert!(!is_module);
-                let ret = Some(local.into());
+                let ret = Some(dst.into());
                 let superclass = superclass.map(|c| *c);
                 self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
-                self.gen_mov(local.into(), ret);
+                self.gen_mov(dst.into(), ret);
                 info.pop();
             }
         };
@@ -1137,14 +1130,14 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg, BcReg)> {
         let (lhs, rhs) = self.gen_binary_temp_expr(ctx, info, lhs, rhs)?;
         let dst = match dst {
             None => info.push().into(),
-            Some(local) => local.into(),
+            Some(local) => local,
         };
         Ok((dst, lhs, rhs))
     }
@@ -1153,13 +1146,13 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         lhs: Node,
     ) -> Result<(BcReg, BcReg)> {
         let lhs = self.gen_temp_expr(ctx, info, lhs)?;
         let dst = match dst {
             None => info.push().into(),
-            Some(local) => local.into(),
+            Some(local) => local,
         };
         Ok((dst, lhs))
     }
@@ -1168,20 +1161,18 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         lhs: Node,
         rhs: Node,
     ) -> Result<BcReg> {
         let exit_pos = self.new_label();
         let dst = match dst {
             None => info.push().into(),
-            Some(local) => local.into(),
+            Some(reg) => reg,
         };
-        let lhs = self.gen_temp_expr(ctx, info, lhs)?;
-        self.push(BcIr::Mov(dst, lhs), Loc::default());
-        self.gen_condnotbr(lhs, exit_pos, false);
-        let rhs = self.gen_temp_expr(ctx, info, rhs)?;
-        self.push(BcIr::Mov(dst, rhs), Loc::default());
+        self.gen_store_expr(ctx, info, dst, lhs)?;
+        self.gen_condnotbr(dst, exit_pos, false);
+        self.gen_store_expr(ctx, info, dst, rhs)?;
         self.apply_label(exit_pos);
         Ok(dst)
     }
@@ -1190,7 +1181,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        dst: Option<BcLocal>,
+        dst: Option<BcReg>,
         kind: CmpKind,
         lhs: Node,
         rhs: Node,
@@ -1295,7 +1286,7 @@ impl IrContext {
         {
             let loop_entry = self.new_label();
             let loop_exit = self.new_label();
-            self.gen_store_expr(ctx, info, counter, start)?;
+            self.gen_store_expr(ctx, info, counter.into(), start)?;
             let end = self.push_expr(ctx, info, end)?;
 
             self.apply_label(loop_entry);
@@ -1395,7 +1386,7 @@ macro_rules! gen_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 info: &mut ISeqInfo,
-                dst: Option<BcLocal>,
+                dst: Option<BcReg>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,
@@ -1419,7 +1410,7 @@ macro_rules! gen_ri_ops {
                 &mut self,
                 ctx: &mut FnStore,
                 info: &mut ISeqInfo,
-                dst: Option<BcLocal>,
+                dst: Option<BcReg>,
                 lhs: Node,
                 rhs: Node,
                 loc: Loc,

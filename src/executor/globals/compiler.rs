@@ -752,12 +752,17 @@ impl Codegen {
         if invoke_block {
             monoasm! { self.jit,
                 movq rax, [rax];
-                lea  rax, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
-                movq [rsp - (16 + OFFSET_OUTER)], rax;
+                lea  rdi, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
+                movq [rsp - (16 + OFFSET_OUTER)], rdi;
+                // set self
+                movq  rdi, [rax - ((OFFSET_SELF - OFFSET_CFP) as i32)];
+                movq [rsp - (16 + OFFSET_SELF)], rdi;
             };
         } else {
             monoasm! { self.jit,
                 movq [rsp - (16 + OFFSET_OUTER)], 0;
+                // set self
+                movq [rsp - (16 + OFFSET_SELF)], rcx;
             };
         }
     }

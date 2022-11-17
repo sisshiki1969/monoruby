@@ -1,3 +1,5 @@
+use num::ToPrimitive;
+
 use crate::*;
 
 //
@@ -7,6 +9,7 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "to_f", tof, 0);
 }
 
 /// ### Integer#times
@@ -65,6 +68,22 @@ extern "C" fn chr(
     };
     globals.err_char_out_of_range(self_val);
     None
+}
+
+extern "C" fn tof(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<Value>,
+) -> Option<Value> {
+    let f = match self_val.unpack() {
+        RV::Integer(i) => i as f64,
+        RV::BigInt(b) => b.to_f64().unwrap(),
+        _ => unimplemented!(),
+    };
+    Some(Value::new_float(f))
 }
 
 #[cfg(test)]

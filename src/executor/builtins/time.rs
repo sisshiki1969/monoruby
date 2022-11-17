@@ -25,7 +25,7 @@ extern "C" fn now(
     _len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    let t = Utc::now().with_timezone(&FixedOffset::east(9 * 3600));
+    let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInfo::Local(t);
     Some(Value::new_time(time_info))
 }

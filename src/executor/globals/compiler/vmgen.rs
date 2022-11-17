@@ -380,9 +380,6 @@ impl Codegen {
         };
         self.push_frame(invoke_block);
         monoasm! { self.jit,
-            // set self (= receiver)
-            movq [rsp - (16 + OFFSET_SELF)], rcx;
-
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
             //
             //       +-------------+

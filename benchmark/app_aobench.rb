@@ -11,10 +11,11 @@ IMAGE_HEIGHT = 256
 NSUBSAMPLES = 2
 NAO_SAMPLES = 8
 
-srand(0)
+#srand(0)
 
 class Vec
   def initialize(x, y, z)
+    puts "Vec::initialize(#{x},#{y},#{z})"
     @x = x
     @y = y
     @z = z
@@ -66,6 +67,7 @@ class Sphere
   attr_reader :center, :radius
 
   def intersect(ray, isect)
+    puts "sphere intersect"
     rs = ray.org.vsub(@center)
     b = rs.vdot(ray.dir)
     c = rs.vdot(rs) - (@radius * @radius)
@@ -96,6 +98,7 @@ class Plane
   end
 
   def intersect(ray, isect)
+    puts "plane_intersect"
     d = -@p.vdot(@n)
     v = ray.dir.vdot(@n)
     v0 = v
@@ -231,13 +234,14 @@ class Scene
     nsf = nsubsamples.to_f
     h.times do |y|
       w.times do |x|
+        puts "x=#{x} y=#{y}"
         rad = Vec.new(0.0, 0.0, 0.0)
 
         # Subsampling
         nsubsamples.times do |v|
           nsubsamples.times do |u|
-
             cnt = cnt + 1
+            puts "x=#{x} y=#{y} u=#{u} v=#{v} cnt=#{cnt}"
             wf = w.to_f
             hf = h.to_f
             xf = x.to_f
@@ -245,14 +249,16 @@ class Scene
             uf = u.to_f
             vf = v.to_f
 
+            
             px = (xf + (uf / nsf) - (wf / 2.0)) / (wf / 2.0)
             py = -(yf + (vf / nsf) - (hf / 2.0)) / (hf / 2.0)
 
             eye = Vec.new(px, py, -1.0).vnormalize
 
             ray = Ray.new(Vec.new(0.0, 0.0, 0.0), eye)
-
+            
             isect = Isect.new
+            puts "x=#{x} y=#{y} u=#{u} v=#{v} ray=#{ray} isect=#{isect} eye=#{eye}"
             @spheres[0].intersect(ray, isect)
             @spheres[1].intersect(ray, isect)
             @spheres[2].intersect(ray, isect)
@@ -265,13 +271,12 @@ class Scene
             end
           end
         end
-
         r = rad.x / (nsf * nsf)
         g = rad.y / (nsf * nsf)
         b = rad.z / (nsf * nsf)
-        printf("%c", clamp(r))
-        printf("%c", clamp(g))
-        printf("%c", clamp(b))
+        print clamp(r).to_s
+        print clamp(g).to_s
+        print clamp(b).to_s
       end
       nil
     end
@@ -280,18 +285,18 @@ class Scene
   end
 end
 
-alias printf_orig printf
-def printf *args
+#alias printf_orig printf
+#def printf *args
   # $fp.printf(*args)
-end
+#end
 
 # File.open("ao.ppm", "w") do |fp|
   # $fp = fp
-  printf("P6\n")
-  printf("%d %d\n", IMAGE_WIDTH, IMAGE_HEIGHT)
-  printf("255\n")
+  puts("P6")
+  puts("#{IMAGE_WIDTH} #{IMAGE_HEIGHT}")
+  puts("255")
   Scene.new.render(IMAGE_WIDTH, IMAGE_HEIGHT, NSUBSAMPLES)
 # end
 
-undef printf
-alias printf printf_orig
+#undef printf
+#alias printf printf_orig
