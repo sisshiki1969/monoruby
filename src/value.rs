@@ -3,7 +3,6 @@ use num::{BigInt, ToPrimitive};
 
 use crate::alloc::{Allocator, GC};
 
-//const UNINITIALIZED: u64 = 0x24; // 0010_0100
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
@@ -137,6 +136,10 @@ impl Value {
 
     pub(crate) fn get(&self) -> u64 {
         self.0.get()
+    }
+
+    pub fn to_bool(&self) -> bool {
+        self.get() & !0x10 != NIL_VALUE
     }
 
     pub const fn nil() -> Self {

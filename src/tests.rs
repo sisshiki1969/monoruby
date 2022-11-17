@@ -998,4 +998,14 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_logical_ops() {
+        let input = ["true", "false", "nil", "100", ":ab", "Object"];
+        for lhs in input {
+            for rhs in input {
+                run_test(&format!("{} && {}", lhs, rhs));
+            }
+        }
+    }
 }

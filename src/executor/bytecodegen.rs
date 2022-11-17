@@ -494,6 +494,7 @@ impl IrContext {
             BinOp::BitXor => self.gen_bitxor(ctx, info, dst, lhs, rhs, loc),
             BinOp::Shr => self.gen_shr(ctx, info, dst, lhs, rhs, loc),
             BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
+            BinOp::LAnd => self.gen_land(ctx, info, dst, lhs, rhs),
             BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
             _ => Err(MonorubyErr::unsupported_operator(
                 op,
@@ -1161,6 +1162,28 @@ impl IrContext {
             Some(local) => local.into(),
         };
         Ok((dst, lhs))
+    }
+
+    fn gen_land(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        dst: Option<BcLocal>,
+        lhs: Node,
+        rhs: Node,
+    ) -> Result<BcReg> {
+        let exit_pos = self.new_label();
+        let dst = match dst {
+            None => info.push().into(),
+            Some(local) => local.into(),
+        };
+        let lhs = self.gen_temp_expr(ctx, info, lhs)?;
+        self.push(BcIr::Mov(dst, lhs), Loc::default());
+        self.gen_condnotbr(lhs, exit_pos, false);
+        let rhs = self.gen_temp_expr(ctx, info, rhs)?;
+        self.push(BcIr::Mov(dst, rhs), Loc::default());
+        self.apply_label(exit_pos);
+        Ok(dst)
     }
 
     fn gen_cmp(
