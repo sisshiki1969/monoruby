@@ -800,8 +800,8 @@ impl Codegen {
 
         monoasm! { self.jit,
             pushq r15;
-            pushq r13; // push pc
-            pushq rdi; // push IdentId
+            pushq r13;
+            pushq rdi;
             movzxw rdi, [r13 + 4];
         };
         self.vm_get_rdi();

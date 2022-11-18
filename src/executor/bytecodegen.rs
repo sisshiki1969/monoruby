@@ -1030,7 +1030,14 @@ impl IrContext {
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
         self.push(BcIr::InlineCache, loc);
     }
+}
+enum RecvKind {
+    SelfValue,
+    Local(BcReg),
+    Temp,
+}
 
+impl IrContext {
     fn gen_method_call(
         &mut self,
         ctx: &mut FnStore,
@@ -1043,13 +1050,18 @@ impl IrContext {
         loc: Loc,
     ) -> Result<()> {
         let method = IdentId::get_ident_id_from_string(method);
-        let self_flag = match receiver {
-            Some(receiver) if receiver.kind == NodeKind::SelfValue => true,
+        let recv_kind = match receiver {
             Some(receiver) => {
-                self.push_expr(ctx, info, receiver)?;
-                false
+                if receiver.kind == NodeKind::SelfValue {
+                    RecvKind::SelfValue
+                } else if let Some(local) = info.is_refer_local(&receiver) {
+                    RecvKind::Local(local.into())
+                } else {
+                    self.push_expr(ctx, info, receiver)?;
+                    RecvKind::Temp
+                }
             }
-            None => true,
+            None => RecvKind::SelfValue,
         };
 
         assert!(arglist.kw_args.is_empty());
@@ -1080,10 +1092,10 @@ impl IrContext {
         self.gen_args(ctx, info, args)?;
         info.temp = old_temp;
 
-        let recv = if self_flag {
-            BcReg::Self_
-        } else {
-            info.pop().into()
+        let recv = match recv_kind {
+            RecvKind::SelfValue => BcReg::Self_,
+            RecvKind::Local(reg) => reg,
+            RecvKind::Temp => info.pop().into(),
         };
         self.gen_call(recv, method, ret, arg.into(), len, has_block, loc);
         if is_ret {

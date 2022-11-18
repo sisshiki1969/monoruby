@@ -438,6 +438,7 @@ impl Codegen {
             movq rax, (Meta::native(func_id, len as _).0);
             movq [rbp - (OFFSET_META)], rax;
             movq [rbp - (OFFSET_BLOCK)], r9;
+            movq [rbp - (OFFSET_SELF)], rdx;
             subq rsp, ((OFFSET_SELF + 15) & !0xf);
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals

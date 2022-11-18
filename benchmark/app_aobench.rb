@@ -184,7 +184,6 @@ class Scene
   end
 
   def ambient_occlusion(isect)
-    puts "ambient occlusion #{isect.inspect}"
     basis = Array.new
     otherBasis(basis, isect.n)
 
@@ -196,38 +195,35 @@ class Scene
     p0 = Vec.new(isect.pl.x + eps * isect.n.x,
     isect.pl.y + eps * isect.n.y,
     isect.pl.z + eps * isect.n.z)
-    puts "p0=#{p0.inspect}"
     nphi.times do |j|
-      puts "j=#{j}"
-      puts ntheta
       ntheta.times do |i|
-        puts "i=#{i}"
         r = rand
         phi = 2.0 * 3.14159265 * rand
         x = Math.cos(phi) * Math.sqrt(1.0 - r)
         y = Math.sin(phi) * Math.sqrt(1.0 - r)
         z = Math.sqrt(r)
-
+        
         rx = x * basis[0].x + y * basis[1].x + z * basis[2].x
         ry = x * basis[0].y + y * basis[1].y + z * basis[2].y
         rz = x * basis[0].z + y * basis[1].z + z * basis[2].z
-
+        
         raydir = Vec.new(rx, ry, rz)
         ray = Ray.new(p0, raydir)
-
+        
         occisect = Isect.new
         @spheres[0].intersect(ray, occisect)
         @spheres[1].intersect(ray, occisect)
         @spheres[2].intersect(ray, occisect)
         @plane.intersect(ray, occisect)
         if occisect.hit then
-          occlusion = occlusion + 1.0
+          occlusion += 1.0
+          puts occlusion
         else
           0.0
         end
       end
     end
-
+    puts occlusion
     occlusion = (ntheta.to_f * nphi.to_f - occlusion) / (ntheta.to_f * nphi.to_f)
 
     Vec.new(occlusion, occlusion, occlusion)
@@ -245,7 +241,7 @@ class Scene
           nsubsamples.times do |u|
             cnt = cnt + 1
             #puts "x=#{x} y=#{y} u=#{u} v=#{v} cnt=#{cnt}"
-            exit if cnt > 101092
+            #exit if cnt > 101092
             wf = w.to_f
             hf = h.to_f
             xf = x.to_f
@@ -277,9 +273,9 @@ class Scene
         r = rad.x / (nsf * nsf)
         g = rad.y / (nsf * nsf)
         b = rad.z / (nsf * nsf)
-        #print clamp(r)
-        #print clamp(g)
-        #print clamp(b)
+        #print "#{r} "
+        #print "#{g} "
+        #print "#{b} "
       end
       nil
     end

@@ -741,6 +741,7 @@ impl Codegen {
 
     /// Push control frame and set outer.
     ///
+    /// in: rcx<-self
     /// destroy: rax, rdi
     fn push_frame(&mut self, invoke_block: bool) {
         monoasm!(self.jit,
@@ -772,7 +773,7 @@ impl Codegen {
     /// destroy: rdi
     fn pop_frame(&mut self) {
         monoasm!(self.jit,
-            movq rdi, [rsp - (16 + OFFSET_CFP)];
+            lea  rdi, [rbp - (OFFSET_CFP)];
             movq [rbx], rdi;
         );
     }
