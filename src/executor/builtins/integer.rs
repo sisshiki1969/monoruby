@@ -72,7 +72,7 @@ extern "C" fn chr(
 
 extern "C" fn tof(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
     _len: usize,
@@ -94,13 +94,20 @@ mod test {
     fn times() {
         run_test(
             r##"
-        res = []
-        a = 100
-        10.times do |x|
-          a = x
-          res << a
+        a = 0
+        5.times do |z|
+          b = 0
+          7.times do |y|
+            10.times do |x|
+              a += x
+              b += x + y
+            end
+            a += y
+          end
+          a += z
+          a -= b
         end
-        res
+        a
         "##,
         );
     }

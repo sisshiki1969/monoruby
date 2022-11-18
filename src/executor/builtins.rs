@@ -3,6 +3,7 @@ use super::*;
 mod array;
 mod class;
 mod file;
+mod float;
 mod integer;
 mod math;
 mod object;
@@ -87,6 +88,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 
     object::init(globals);
     integer::init(globals);
+    float::init(globals);
     class::init(globals);
     string::init(globals);
     array::init(globals);

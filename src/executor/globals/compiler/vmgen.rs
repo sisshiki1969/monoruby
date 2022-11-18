@@ -720,6 +720,9 @@ impl Codegen {
     }
 
     fn vm_load_dvar(&mut self) -> CodePtr {
+        // r15: dst
+        // rdi: src reg
+        // rsi: src outer
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
@@ -742,8 +745,8 @@ impl Codegen {
     }
 
     fn vm_store_dvar(&mut self) -> CodePtr {
-        // r15: dst
-        // rdi: outer
+        // r15: dst reg
+        // rdi: dst outer
         // rsi: src
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
@@ -760,7 +763,7 @@ impl Codegen {
             negq rsi;
             negq r15;
             movq rdi, [rbp + rsi * 8 - (OFFSET_SELF)];
-            movq [rax + rsi * 8 - (OFFSET_SELF)], rdi;
+            movq [rax + r15 * 8 - (OFFSET_SELF)], rdi;
         };
         self.fetch_and_dispatch();
         label

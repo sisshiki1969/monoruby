@@ -15,7 +15,6 @@ NAO_SAMPLES = 8
 
 class Vec
   def initialize(x, y, z)
-    puts "Vec::initialize(#{x},#{y},#{z})"
     @x = x
     @y = y
     @z = z
@@ -67,7 +66,7 @@ class Sphere
   attr_reader :center, :radius
 
   def intersect(ray, isect)
-    puts "sphere intersect"
+    #puts "sphere intersect"
     rs = ray.org.vsub(@center)
     b = rs.vdot(ray.dir)
     c = rs.vdot(rs) - (@radius * @radius)
@@ -98,7 +97,7 @@ class Plane
   end
 
   def intersect(ray, isect)
-    puts "plane_intersect"
+    #puts "plane intersect"
     d = -@p.vdot(@n)
     v = ray.dir.vdot(@n)
     v0 = v
@@ -108,9 +107,9 @@ class Plane
     if v0 < 1.0e-17 then
       return
     end
-
+    
     t = -(ray.org.vdot(@n) + d) / v
-
+    
     if t > 0.0 and t < isect.t then
       isect.hit = true
       isect.t = t
@@ -185,6 +184,7 @@ class Scene
   end
 
   def ambient_occlusion(isect)
+    puts "ambient occlusion #{isect.inspect}"
     basis = Array.new
     otherBasis(basis, isect.n)
 
@@ -192,12 +192,16 @@ class Scene
     nphi      = NAO_SAMPLES
     eps       = 0.0001
     occlusion = 0.0
-
+    
     p0 = Vec.new(isect.pl.x + eps * isect.n.x,
-                isect.pl.y + eps * isect.n.y,
-                isect.pl.z + eps * isect.n.z)
+    isect.pl.y + eps * isect.n.y,
+    isect.pl.z + eps * isect.n.z)
+    puts "p0=#{p0.inspect}"
     nphi.times do |j|
+      puts "j=#{j}"
+      puts ntheta
       ntheta.times do |i|
+        puts "i=#{i}"
         r = rand
         phi = 2.0 * 3.14159265 * rand
         x = Math.cos(phi) * Math.sqrt(1.0 - r)
@@ -234,31 +238,30 @@ class Scene
     nsf = nsubsamples.to_f
     h.times do |y|
       w.times do |x|
-        puts "x=#{x} y=#{y}"
         rad = Vec.new(0.0, 0.0, 0.0)
 
         # Subsampling
         nsubsamples.times do |v|
           nsubsamples.times do |u|
             cnt = cnt + 1
-            puts "x=#{x} y=#{y} u=#{u} v=#{v} cnt=#{cnt}"
+            #puts "x=#{x} y=#{y} u=#{u} v=#{v} cnt=#{cnt}"
+            exit if cnt > 101092
             wf = w.to_f
             hf = h.to_f
             xf = x.to_f
             yf = y.to_f
             uf = u.to_f
             vf = v.to_f
-
             
             px = (xf + (uf / nsf) - (wf / 2.0)) / (wf / 2.0)
             py = -(yf + (vf / nsf) - (hf / 2.0)) / (hf / 2.0)
-
+            
             eye = Vec.new(px, py, -1.0).vnormalize
-
+            
             ray = Ray.new(Vec.new(0.0, 0.0, 0.0), eye)
             
             isect = Isect.new
-            puts "x=#{x} y=#{y} u=#{u} v=#{v} ray=#{ray} isect=#{isect} eye=#{eye}"
+            
             @spheres[0].intersect(ray, isect)
             @spheres[1].intersect(ray, isect)
             @spheres[2].intersect(ray, isect)
@@ -274,9 +277,9 @@ class Scene
         r = rad.x / (nsf * nsf)
         g = rad.y / (nsf * nsf)
         b = rad.z / (nsf * nsf)
-        print clamp(r).to_s
-        print clamp(g).to_s
-        print clamp(b).to_s
+        #print clamp(r)
+        #print clamp(g)
+        #print clamp(b)
       end
       nil
     end

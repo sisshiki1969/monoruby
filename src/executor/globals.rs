@@ -199,7 +199,7 @@ impl Globals {
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(val).into_iter() {
-                s += &format!(" {}={}", IdentId::get_name(id), v.to_s(self));
+                s += &format!(" {}={}", IdentId::get_name(id), self.val_inspect(v));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
