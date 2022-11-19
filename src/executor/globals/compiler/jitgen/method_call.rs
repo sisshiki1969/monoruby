@@ -42,10 +42,11 @@ impl Codegen {
             }
             BcOp::MethodCallBlock(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
-                // We must write back all registers since slots may be accessed from block.
-                let wb = ctx.get_write_back();
-                ctx.dealloc_wb(&wb);
+                ctx.write_back_range(self, args, len + 1);
+                // We must write back and unlink all local vars since they may be accessed from block.
+                let wb = ctx.get_locals_write_back();
                 self.gen_write_back(wb);
+                ctx.dealloc_locals();
                 method_info.args = method_info.args + 1;
                 self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
             }

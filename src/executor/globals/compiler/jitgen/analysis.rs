@@ -237,6 +237,10 @@ impl LoopAnalysis {
                             for i in 0..len + 1 {
                                 reg_info.use_non_float(args + i);
                             }
+                            // unlink all local variables.
+                            for i in 1..1 + func.local_num() as u16 {
+                                reg_info.unlink(SlotId(i));
+                            }
                             reg_info.def_as(ret, false);
                         }
                         BcOp::Yield(ret) => {
@@ -356,6 +360,10 @@ impl RegInfo {
 
     fn use_non_float(&mut self, slot: SlotId) {
         self.use_as(slot, false, NIL_CLASS)
+    }
+
+    fn unlink(&mut self, slot: SlotId) {
+        self[slot].xmm_link = XmmLink::None;
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {

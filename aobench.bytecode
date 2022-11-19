@@ -1,0 +1,917 @@
+   Compiling monoruby v0.1.0 (/home/monochrome/monoruby)
+    Finished release [optimized] target(s) in 5.68s
+     Running `target/release/monoruby benchmark/app_aobench.rb`
+------------------------------------
+FuncId(43) name:/main args:[] bc:BcPcBase(0x55d516024fc0) meta:kind:VM mode:method FuncId(43) regs:2
++:00000 _ = class_def "Math" < _: FuncId(44)
+ :00001 %1 = class_def "Process" < _: FuncId(45)
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(44) name:Math args:[] bc:BcPcBase(0x55d516025090) meta:kind:VM mode:class_def FuncId(44) regs:2
++:00000 %1 = literal[3.141592653589793]
+ :00001 const[PI] = %1
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(45) name:Process args:[] bc:BcPcBase(0x55d51601a0c0) meta:kind:VM mode:class_def FuncId(45) regs:2
++:00000 %1 = nil
+ :00001 ret %1
+------------------------------------
+------------------------------------
+FuncId(43) name:/main args:[] bc:BcPcBase(0x55d516024fc0) meta:kind:VM mode:method FuncId(43) regs:2
++:00000 _ = class_def "Math" < _: FuncId(44)
+ :00001 %1 = class_def "Process" < _: FuncId(45)
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(44) name:Math args:[] bc:BcPcBase(0x55d516025090) meta:kind:VM mode:class_def FuncId(44) regs:2
++:00000 %1 = literal[3.141592653589793]
+ :00001 const[PI] = %1
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(45) name:Process args:[] bc:BcPcBase(0x55d51601a0c0) meta:kind:VM mode:class_def FuncId(45) regs:2
++:00000 %1 = nil
+ :00001 ret %1
+------------------------------------
+------------------------------------
+FuncId(46) name:/main args:[] bc:BcPcBase(0x55d51608a4a0) meta:kind:VM mode:method FuncId(46) regs:6
++:00000 %1 = 256: i32
+ :00001 const[IMAGE_WIDTH] = %1
+ :00002 %1 = 256: i32
+ :00003 const[IMAGE_HEIGHT] = %1
+ :00004 %1 = 2: i32
+ :00005 const[NSUBSAMPLES] = %1
+ :00006 %1 = 8: i32
+ :00007 const[NAO_SAMPLES] = %1
+ :00008 _ = class_def "Vec" < _: FuncId(47)
+ :00009 _ = class_def "Sphere" < _: FuncId(48)
+ :00010 _ = class_def "Plane" < _: FuncId(49)
+ :00011 _ = class_def "Ray" < _: FuncId(50)
+ :00012 _ = class_def "Isect" < _: FuncId(51)
+ :00013 method_def "clamp": FuncId(52)
+ :00014 method_def "otherBasis": FuncId(53)
+ :00015 _ = class_def "Scene" < _: FuncId(54)
+ :00016 %1 = literal["P6"]
+ :00017 _ = %0.call puts(%1; 1)              [<INVALID>]
+ :00020 %1 = const[IMAGE_WIDTH]              [<invalid>]
+ :00021 %2 = literal["\ "]
+ :00022 %3 = const[IMAGE_HEIGHT]             [<invalid>]
+ :00023 %1 = concat(%1; 3)
+ :00024 _ = %0.call puts(%1; 1)              [<INVALID>]
+ :00027 %1 = literal["255"]
+ :00028 _ = %0.call puts(%1; 1)              [<INVALID>]
+ :00031 %3 = const[Scene]                    [<invalid>]
+ :00032 %2 = %3.call new()                   [<INVALID>]
+ :00035 %3 = const[IMAGE_WIDTH]              [<invalid>]
+ :00036 %4 = const[IMAGE_HEIGHT]             [<invalid>]
+ :00037 %5 = const[NSUBSAMPLES]              [<invalid>]
+ :00038 %1 = %2.call render(%3; 3)           [<INVALID>]
+ :00041 ret %1
+------------------------------------
+------------------------------------
+FuncId(47) name:Vec args:[] bc:BcPcBase(0x55d516019910) meta:kind:VM mode:class_def FuncId(47) regs:4
++:00000 method_def "initialize": FuncId(55)
+ :00001 %1 = :x
+ :00002 %2 = :y
+ :00003 %3 = :z
+ :00004 _ = %0.call attr_accessor(%1; 3)     [<INVALID>]
+ :00007 method_def "vadd": FuncId(56)
+ :00008 method_def "vsub": FuncId(57)
+ :00009 method_def "vcross": FuncId(58)
+ :00010 method_def "vdot": FuncId(59)
+ :00011 method_def "vlength": FuncId(60)
+ :00012 method_def "vnormalize": FuncId(61)
+ :00013 %1 = :vnormalize
+ :00014 ret %1
+------------------------------------
+------------------------------------
+FuncId(48) name:Sphere args:[] bc:BcPcBase(0x55d51603c010) meta:kind:VM mode:class_def FuncId(48) regs:3
++:00000 method_def "initialize": FuncId(62)
+ :00001 %1 = :center
+ :00002 %2 = :radius
+ :00003 _ = %0.call attr_reader(%1; 2)       [<INVALID>]
+ :00006 method_def "intersect": FuncId(63)
+ :00007 %1 = :intersect
+ :00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(49) name:Plane args:[] bc:BcPcBase(0x55d51603e990) meta:kind:VM mode:class_def FuncId(49) regs:2
++:00000 method_def "initialize": FuncId(64)
+ :00001 method_def "intersect": FuncId(65)
+ :00002 %1 = :intersect
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(50) name:Ray args:[] bc:BcPcBase(0x55d51601ba90) meta:kind:VM mode:class_def FuncId(50) regs:4
++:00000 method_def "initialize": FuncId(66)
+ :00001 %2 = :org
+ :00002 %3 = :dir
+ :00003 %1 = %0.call attr_accessor(%2; 2)    [<INVALID>]
+ :00006 ret %1
+------------------------------------
+------------------------------------
+FuncId(51) name:Isect args:[] bc:BcPcBase(0x55d51604f570) meta:kind:VM mode:class_def FuncId(51) regs:6
++:00000 method_def "initialize": FuncId(67)
+ :00001 %2 = :t
+ :00002 %3 = :hit
+ :00003 %4 = :pl
+ :00004 %5 = :n
+ :00005 %1 = %0.call attr_accessor(%2; 4)    [<INVALID>]
+ :00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(52) name:clamp args:["f"] bc:BcPcBase(0x55d51608a390) meta:kind:VM mode:method FuncId(52) regs:4
++:00000 %3 = literal[255.5]
+ :00001 %2 = %1 * %3                         [Integer][Integer]
+ :00002 %3 = literal[255.0]
+ :00003 _%3 = %2 > %3                        [Integer][Integer]
+ :00004 condnotbr _%3 =>:00007
+ :00005 %2 = literal[255.0]
+ :00006 br =>:00007
++:00007 %3 = literal[0.0]
+ :00008 _%3 = %2 < %3                        [Integer][Integer]
+ :00009 condnotbr _%3 =>:00012
+ :00010 %2 = literal[0.0]
+ :00011 br =>:00012
++:00012 %3 = %2.call to_i()                  [<INVALID>]
+ :00015 ret %3
+------------------------------------
+------------------------------------
+FuncId(53) name:otherBasis args:["basis", "n"] bc:BcPcBase(0x55d516058240) meta:kind:VM mode:method FuncId(53) regs:9
++:00000 %3 = 2: i32
+ :00001 %5 = const[Vec]                      [<invalid>]
+ :00002 %6 = %2.call x()                     [<INVALID>]
+ :00005 %7 = %2.call y()                     [<INVALID>]
+ :00008 %8 = %2.call z()                     [<INVALID>]
+ :00011 %4 = %5.call new(%6; 3)              [<INVALID>]
+ :00014 %1.[%3] = %4
+ :00015 %3 = 1: i32
+ :00016 %5 = const[Vec]                      [<invalid>]
+ :00017 %6 = literal[0.0]
+ :00018 %7 = literal[0.0]
+ :00019 %8 = literal[0.0]
+ :00020 %4 = %5.call new(%6; 3)              [<INVALID>]
+ :00023 %1.[%3] = %4
+ :00024 %4 = %2.call x()                     [<INVALID>]
+ :00027 %5 = literal[0.6]
+ :00028 %3 = %4 < %5                         [Integer][Integer]
+ :00029 condnotbr %3 =>:00035
+ :00030 %4 = %2.call x()                     [<INVALID>]
+ :00033 %5 = literal[-0.6]
+ :00034 %3 = %4 > %5                         [Integer][Integer]
++:00035 condnotbr %3 =>:00043
+ :00036 %3 = 1: i32
+ :00037 %3 = %1.[%3]
+ :00038 %4 = literal[1.0]
+ :00039 _ = %3.call x=(%4; 1)                [<INVALID>]
+ :00042 br =>:00087
++:00043 %4 = %2.call y()                     [<INVALID>]
+ :00046 %5 = literal[0.6]
+ :00047 %3 = %4 < %5                         [Integer][Integer]
+ :00048 condnotbr %3 =>:00054
+ :00049 %4 = %2.call y()                     [<INVALID>]
+ :00052 %5 = literal[-0.6]
+ :00053 %3 = %4 > %5                         [Integer][Integer]
++:00054 condnotbr %3 =>:00062
+ :00055 %3 = 1: i32
+ :00056 %3 = %1.[%3]
+ :00057 %4 = literal[1.0]
+ :00058 _ = %3.call y=(%4; 1)                [<INVALID>]
+ :00061 br =>:00087
++:00062 %4 = %2.call z()                     [<INVALID>]
+ :00065 %5 = literal[0.6]
+ :00066 %3 = %4 < %5                         [Integer][Integer]
+ :00067 condnotbr %3 =>:00073
+ :00068 %4 = %2.call z()                     [<INVALID>]
+ :00071 %5 = literal[-0.6]
+ :00072 %3 = %4 > %5                         [Integer][Integer]
++:00073 condnotbr %3 =>:00081
+ :00074 %3 = 1: i32
+ :00075 %3 = %1.[%3]
+ :00076 %4 = literal[1.0]
+ :00077 _ = %3.call z=(%4; 1)                [<INVALID>]
+ :00080 br =>:00087
++:00081 %3 = 1: i32
+ :00082 %3 = %1.[%3]
+ :00083 %4 = literal[1.0]
+ :00084 _ = %3.call x=(%4; 1)                [<INVALID>]
++:00087 %3 = 0: i32
+ :00088 %5 = 1: i32
+ :00089 %5 = %1.[%5]
+ :00090 %6 = 2: i32
+ :00091 %6 = %1.[%6]
+ :00092 %4 = %5.call vcross(%6; 1)           [<INVALID>]
+ :00095 %1.[%3] = %4
+ :00096 %3 = 0: i32
+ :00097 %5 = 0: i32
+ :00098 %5 = %1.[%5]
+ :00099 %4 = %5.call vnormalize()            [<INVALID>]
+ :00102 %1.[%3] = %4
+ :00103 %3 = 1: i32
+ :00104 %5 = 2: i32
+ :00105 %5 = %1.[%5]
+ :00106 %6 = 0: i32
+ :00107 %6 = %1.[%6]
+ :00108 %4 = %5.call vcross(%6; 1)           [<INVALID>]
+ :00111 %1.[%3] = %4
+ :00112 %3 = 1: i32
+ :00113 %5 = 1: i32
+ :00114 %5 = %1.[%5]
+ :00115 %4 = %5.call vnormalize()            [<INVALID>]
+ :00118 %1.[%3] = %4
+ :00119 %3 = %4
+ :00120 ret %3
+------------------------------------
+------------------------------------
+FuncId(54) name:Scene args:[] bc:BcPcBase(0x55d516037e90) meta:kind:VM mode:class_def FuncId(54) regs:2
++:00000 method_def "initialize": FuncId(68)
+ :00001 method_def "ambient_occlusion": FuncId(69)
+ :00002 method_def "render": FuncId(70)
+ :00003 %1 = :render
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(55) name:initialize args:["x", "y", "z"] bc:BcPcBase(0x55d51605ed70) meta:kind:VM mode:method FuncId(55) regs:5
++:00000 @x: <INVALID>[IvarId(0)] = %1
+ :00001 @y: <INVALID>[IvarId(0)] = %2
+ :00002 @z: <INVALID>[IvarId(0)] = %3
+ :00003 %4 = %3
+ :00004 ret %4
+------------------------------------
+------------------------------------
+FuncId(56) name:vadd args:["b"] bc:BcPcBase(0x55d51605ebb0) meta:kind:VM mode:method FuncId(56) regs:8
++:00000 %3 = const[Vec]                      [<invalid>]
+ :00001 %4 = @x: <INVALID>[IvarId(0)]
+ :00002 %5 = %1.call x()                     [<INVALID>]
+ :00005 %4 = %4 + %5                         [Integer][Integer]
+ :00006 %5 = @y: <INVALID>[IvarId(0)]
+ :00007 %6 = %1.call y()                     [<INVALID>]
+ :00010 %5 = %5 + %6                         [Integer][Integer]
+ :00011 %6 = @z: <INVALID>[IvarId(0)]
+ :00012 %7 = %1.call z()                     [<INVALID>]
+ :00015 %6 = %6 + %7                         [Integer][Integer]
+ :00016 %2 = %3.call new(%4; 3)              [<INVALID>]
+ :00019 ret %2
+------------------------------------
+------------------------------------
+FuncId(57) name:vsub args:["b"] bc:BcPcBase(0x55d516046f70) meta:kind:VM mode:method FuncId(57) regs:8
++:00000 %3 = const[Vec]                      [<invalid>]
+ :00001 %4 = @x: <INVALID>[IvarId(0)]
+ :00002 %5 = %1.call x()                     [<INVALID>]
+ :00005 %4 = %4 - %5                         [Integer][Integer]
+ :00006 %5 = @y: <INVALID>[IvarId(0)]
+ :00007 %6 = %1.call y()                     [<INVALID>]
+ :00010 %5 = %5 - %6                         [Integer][Integer]
+ :00011 %6 = @z: <INVALID>[IvarId(0)]
+ :00012 %7 = %1.call z()                     [<INVALID>]
+ :00015 %6 = %6 - %7                         [Integer][Integer]
+ :00016 %2 = %3.call new(%4; 3)              [<INVALID>]
+ :00019 ret %2
+------------------------------------
+------------------------------------
+FuncId(58) name:vcross args:["b"] bc:BcPcBase(0x55d51603cb40) meta:kind:VM mode:method FuncId(58) regs:9
++:00000 %3 = const[Vec]                      [<invalid>]
+ :00001 %4 = @y: <INVALID>[IvarId(0)]
+ :00002 %5 = %1.call z()                     [<INVALID>]
+ :00005 %4 = %4 * %5                         [Integer][Integer]
+ :00006 %5 = @z: <INVALID>[IvarId(0)]
+ :00007 %6 = %1.call y()                     [<INVALID>]
+ :00010 %5 = %5 * %6                         [Integer][Integer]
+ :00011 %4 = %4 - %5                         [Integer][Integer]
+ :00012 %5 = @z: <INVALID>[IvarId(0)]
+ :00013 %6 = %1.call x()                     [<INVALID>]
+ :00016 %5 = %5 * %6                         [Integer][Integer]
+ :00017 %6 = @x: <INVALID>[IvarId(0)]
+ :00018 %7 = %1.call z()                     [<INVALID>]
+ :00021 %6 = %6 * %7                         [Integer][Integer]
+ :00022 %5 = %5 - %6                         [Integer][Integer]
+ :00023 %6 = @x: <INVALID>[IvarId(0)]
+ :00024 %7 = %1.call y()                     [<INVALID>]
+ :00027 %6 = %6 * %7                         [Integer][Integer]
+ :00028 %7 = @y: <INVALID>[IvarId(0)]
+ :00029 %8 = %1.call x()                     [<INVALID>]
+ :00032 %7 = %7 * %8                         [Integer][Integer]
+ :00033 %6 = %6 - %7                         [Integer][Integer]
+ :00034 %2 = %3.call new(%4; 3)              [<INVALID>]
+ :00037 ret %2
+------------------------------------
+------------------------------------
+FuncId(59) name:vdot args:["b"] bc:BcPcBase(0x55d516088fd0) meta:kind:VM mode:method FuncId(59) regs:5
++:00000 %2 = @x: <INVALID>[IvarId(0)]
+ :00001 %3 = %1.call x()                     [<INVALID>]
+ :00004 %2 = %2 * %3                         [Integer][Integer]
+ :00005 %3 = @y: <INVALID>[IvarId(0)]
+ :00006 %4 = %1.call y()                     [<INVALID>]
+ :00009 %3 = %3 * %4                         [Integer][Integer]
+ :00010 %2 = %2 + %3                         [Integer][Integer]
+ :00011 %3 = @z: <INVALID>[IvarId(0)]
+ :00012 %4 = %1.call z()                     [<INVALID>]
+ :00015 %3 = %3 * %4                         [Integer][Integer]
+ :00016 %2 = %2 + %3                         [Integer][Integer]
+ :00017 ret %2
+------------------------------------
+------------------------------------
+FuncId(60) name:vlength args:[] bc:BcPcBase(0x55d51603bcf0) meta:kind:VM mode:method FuncId(60) regs:6
++:00000 %2 = const[Math]                     [<invalid>]
+ :00001 %3 = @x: <INVALID>[IvarId(0)]
+ :00002 %4 = @x: <INVALID>[IvarId(0)]
+ :00003 %3 = %3 * %4                         [Integer][Integer]
+ :00004 %4 = @y: <INVALID>[IvarId(0)]
+ :00005 %5 = @y: <INVALID>[IvarId(0)]
+ :00006 %4 = %4 * %5                         [Integer][Integer]
+ :00007 %3 = %3 + %4                         [Integer][Integer]
+ :00008 %4 = @z: <INVALID>[IvarId(0)]
+ :00009 %5 = @z: <INVALID>[IvarId(0)]
+ :00010 %4 = %4 * %5                         [Integer][Integer]
+ :00011 %3 = %3 + %4                         [Integer][Integer]
+ :00012 %1 = %2.call sqrt(%3; 1)             [<INVALID>]
+ :00015 ret %1
+------------------------------------
+------------------------------------
+FuncId(61) name:vnormalize args:[] bc:BcPcBase(0x55d51604f660) meta:kind:VM mode:method FuncId(61) regs:7
++:00000 %3 = %0.call vlength()               [<INVALID>]
+ :00003 %1 = %3
+ :00004 %3 = const[Vec]                      [<invalid>]
+ :00005 %4 = @x: <INVALID>[IvarId(0)]
+ :00006 %5 = @y: <INVALID>[IvarId(0)]
+ :00007 %6 = @z: <INVALID>[IvarId(0)]
+ :00008 %2 = %3.call new(%4; 3)              [<INVALID>]
+ :00011 %3 = literal[1e-17]
+ :00012 _%3 = %1 > %3                        [Integer][Integer]
+ :00013 condnotbr _%3 =>:00036
+ :00014 %3 = %2.call x()                     [<INVALID>]
+ :00017 %3 = %3 / %1                         [Integer][Integer]
+ :00018 _ = %2.call x=(%3; 1)                [<INVALID>]
+ :00021 %3 = %2.call y()                     [<INVALID>]
+ :00024 %3 = %3 / %1                         [Integer][Integer]
+ :00025 _ = %2.call y=(%3; 1)                [<INVALID>]
+ :00028 %3 = %2.call z()                     [<INVALID>]
+ :00031 %3 = %3 / %1                         [Integer][Integer]
+ :00032 _ = %2.call z=(%3; 1)                [<INVALID>]
+ :00035 br =>:00036
++:00036 ret %2
+------------------------------------
+------------------------------------
+FuncId(62) name:initialize args:["center", "radius"] bc:BcPcBase(0x55d51601ba20) meta:kind:VM mode:method FuncId(62) regs:4
++:00000 @center: <INVALID>[IvarId(0)] = %1
+ :00001 @radius: <INVALID>[IvarId(0)] = %2
+ :00002 %3 = %2
+ :00003 ret %3
+------------------------------------
+------------------------------------
+FuncId(63) name:intersect args:["ray", "isect"] bc:BcPcBase(0x55d51603f660) meta:kind:VM mode:method FuncId(63) regs:16
++:00000 %9 = %1.call org()                   [<INVALID>]
+ :00003 %10 = @center: <INVALID>[IvarId(0)]
+ :00004 %3 = %9.call vsub(%10; 1)            [<INVALID>]
+ :00007 %9 = %1.call dir()                   [<INVALID>]
+ :00010 %4 = %3.call vdot(%9; 1)             [<INVALID>]
+ :00013 %10 = %3
+ :00014 %9 = %3.call vdot(%10; 1)            [<INVALID>]
+ :00017 %10 = @radius: <INVALID>[IvarId(0)]
+ :00018 %11 = @radius: <INVALID>[IvarId(0)]
+ :00019 %10 = %10 * %11                      [Integer][Integer]
+ :00020 %5 = %9 - %10                        [Integer][Integer]
+ :00021 %9 = %4 * %4                         [Integer][Integer]
+ :00022 %6 = %9 - %5                         [Integer][Integer]
+ :00023 %9 = literal[0.0]
+ :00024 _%9 = %6 > %9                        [Integer][Integer]
+ :00025 condnotbr _%9 =>:00113
+ :00026 %9 = %4
+ :00027 %9 = neg %9                          [Integer]
+ :00028 %11 = const[Math]                    [<invalid>]
+ :00029 %12 = %6
+ :00030 %10 = %11.call sqrt(%12; 1)          [<INVALID>]
+ :00033 %7 = %9 - %10                        [Integer][Integer]
+ :00034 %10 = literal[0.0]
+ :00035 %9 = %7 > %10                        [Integer][Integer]
+ :00036 condnotbr %9 =>:00041
+ :00037 %10 = %2.call t()                    [<INVALID>]
+ :00040 %9 = %7 < %10                        [Integer][Integer]
++:00041 condnotbr %9 =>:00112
+ :00042 _ = %2.call t=(%7; 1)                [<INVALID>]
+ :00045 %9 = literal[true]
+ :00046 _ = %2.call hit=(%9; 1)              [<INVALID>]
+ :00049 %10 = const[Vec]                     [<invalid>]
+ :00050 %12 = %1.call org()                  [<INVALID>]
+ :00053 %11 = %12.call x()                   [<INVALID>]
+ :00056 %13 = %1.call dir()                  [<INVALID>]
+ :00059 %12 = %13.call x()                   [<INVALID>]
+ :00062 %12 = %12 * %7                       [Integer][Integer]
+ :00063 %11 = %11 + %12                      [Integer][Integer]
+ :00064 %13 = %1.call org()                  [<INVALID>]
+ :00067 %12 = %13.call y()                   [<INVALID>]
+ :00070 %14 = %1.call dir()                  [<INVALID>]
+ :00073 %13 = %14.call y()                   [<INVALID>]
+ :00076 %13 = %13 * %7                       [Integer][Integer]
+ :00077 %12 = %12 + %13                      [Integer][Integer]
+ :00078 %14 = %1.call org()                  [<INVALID>]
+ :00081 %13 = %14.call z()                   [<INVALID>]
+ :00084 %15 = %1.call dir()                  [<INVALID>]
+ :00087 %14 = %15.call z()                   [<INVALID>]
+ :00090 %14 = %14 * %7                       [Integer][Integer]
+ :00091 %13 = %13 + %14                      [Integer][Integer]
+ :00092 %9 = %10.call new(%11; 3)            [<INVALID>]
+ :00095 _ = %2.call pl=(%9; 1)               [<INVALID>]
+ :00098 %9 = %2.call pl()                    [<INVALID>]
+ :00101 %10 = @center: <INVALID>[IvarId(0)]
+ :00102 %8 = %9.call vsub(%10; 1)            [<INVALID>]
+ :00105 %9 = %8.call vnormalize()            [<INVALID>]
+ :00108 _ = %2.call n=(%9; 1)                [<INVALID>]
+ :00111 br =>:00112
++:00112 br =>:00113
++:00113 %9 = nil
+ :00114 ret %9
+------------------------------------
+------------------------------------
+FuncId(64) name:initialize args:["p", "n"] bc:BcPcBase(0x55d51601b5c0) meta:kind:VM mode:method FuncId(64) regs:4
++:00000 @p: <INVALID>[IvarId(0)] = %1
+ :00001 @n: <INVALID>[IvarId(0)] = %2
+ :00002 %3 = %2
+ :00003 ret %3
+------------------------------------
+------------------------------------
+FuncId(65) name:intersect args:["ray", "isect"] bc:BcPcBase(0x55d516041500) meta:kind:VM mode:method FuncId(65) regs:14
++:00000 %7 = @p: <INVALID>[IvarId(0)]
+ :00001 %8 = @n: <INVALID>[IvarId(0)]
+ :00002 %3 = %7.call vdot(%8; 1)             [<INVALID>]
+ :00005 %3 = neg %3                          [Integer]
+ :00006 %7 = %1.call dir()                   [<INVALID>]
+ :00009 %8 = @n: <INVALID>[IvarId(0)]
+ :00010 %4 = %7.call vdot(%8; 1)             [<INVALID>]
+ :00013 %5 = %4
+ :00014 %7 = literal[0.0]
+ :00015 _%7 = %4 < %7                        [Integer][Integer]
+ :00016 condnotbr _%7 =>:00020
+ :00017 %5 = %4
+ :00018 %5 = neg %5                          [Integer]
+ :00019 br =>:00020
++:00020 %7 = literal[1e-17]
+ :00021 _%7 = %5 < %7                        [Integer][Integer]
+ :00022 condnotbr _%7 =>:00026
+ :00023 %7 = nil
+ :00024 ret %7
+ :00025 br =>:00026
++:00026 %8 = %1.call org()                   [<INVALID>]
+ :00029 %9 = @n: <INVALID>[IvarId(0)]
+ :00030 %7 = %8.call vdot(%9; 1)             [<INVALID>]
+ :00033 %7 = %7 + %3                         [Integer][Integer]
+ :00034 %7 = neg %7                          [Integer]
+ :00035 %6 = %7 / %4                         [Integer][Integer]
+ :00036 %8 = literal[0.0]
+ :00037 %7 = %6 > %8                         [Integer][Integer]
+ :00038 condnotbr %7 =>:00043
+ :00039 %8 = %2.call t()                     [<INVALID>]
+ :00042 %7 = %6 < %8                         [Integer][Integer]
++:00043 condnotbr %7 =>:00105
+ :00044 %7 = literal[true]
+ :00045 _ = %2.call hit=(%7; 1)              [<INVALID>]
+ :00048 _ = %2.call t=(%6; 1)                [<INVALID>]
+ :00051 %7 = @n: <INVALID>[IvarId(0)]
+ :00052 _ = %2.call n=(%7; 1)                [<INVALID>]
+ :00055 %8 = const[Vec]                      [<invalid>]
+ :00056 %10 = %1.call org()                  [<INVALID>]
+ :00059 %9 = %10.call x()                    [<INVALID>]
+ :00062 %11 = %1.call dir()                  [<INVALID>]
+ :00065 %10 = %11.call x()                   [<INVALID>]
+ :00068 %10 = %6 * %10                       [Integer][Integer]
+ :00069 %9 = %9 + %10                        [Integer][Integer]
+ :00070 %11 = %1.call org()                  [<INVALID>]
+ :00073 %10 = %11.call y()                   [<INVALID>]
+ :00076 %12 = %1.call dir()                  [<INVALID>]
+ :00079 %11 = %12.call y()                   [<INVALID>]
+ :00082 %11 = %6 * %11                       [Integer][Integer]
+ :00083 %10 = %10 + %11                      [Integer][Integer]
+ :00084 %12 = %1.call org()                  [<INVALID>]
+ :00087 %11 = %12.call z()                   [<INVALID>]
+ :00090 %13 = %1.call dir()                  [<INVALID>]
+ :00093 %12 = %13.call z()                   [<INVALID>]
+ :00096 %12 = %6 * %12                       [Integer][Integer]
+ :00097 %11 = %11 + %12                      [Integer][Integer]
+ :00098 %7 = %8.call new(%9; 3)              [<INVALID>]
+ :00101 _ = %2.call pl=(%7; 1)               [<INVALID>]
+ :00104 br =>:00105
++:00105 %7 = nil
+ :00106 ret %7
+------------------------------------
+------------------------------------
+FuncId(66) name:initialize args:["org", "dir"] bc:BcPcBase(0x55d51601c090) meta:kind:VM mode:method FuncId(66) regs:4
++:00000 @org: <INVALID>[IvarId(0)] = %1
+ :00001 @dir: <INVALID>[IvarId(0)] = %2
+ :00002 %3 = %2
+ :00003 ret %3
+------------------------------------
+------------------------------------
+FuncId(67) name:initialize args:[] bc:BcPcBase(0x55d51603fe00) meta:kind:VM mode:method FuncId(67) regs:6
++:00000 %1 = literal[10000000.0]
+ :00001 @t: <INVALID>[IvarId(0)] = %1
+ :00002 %1 = literal[false]
+ :00003 @hit: <INVALID>[IvarId(0)] = %1
+ :00004 %2 = const[Vec]                      [<invalid>]
+ :00005 %3 = literal[0.0]
+ :00006 %4 = literal[0.0]
+ :00007 %5 = literal[0.0]
+ :00008 %1 = %2.call new(%3; 3)              [<INVALID>]
+ :00011 @pl: <INVALID>[IvarId(0)] = %1
+ :00012 %2 = const[Vec]                      [<invalid>]
+ :00013 %3 = literal[0.0]
+ :00014 %4 = literal[0.0]
+ :00015 %5 = literal[0.0]
+ :00016 %1 = %2.call new(%3; 3)              [<INVALID>]
+ :00019 @n: <INVALID>[IvarId(0)] = %1
+ :00020 ret %1
+------------------------------------
+------------------------------------
+FuncId(68) name:initialize args:[] bc:BcPcBase(0x55d51604f0c0) meta:kind:VM mode:method FuncId(68) regs:10
++:00000 %2 = const[Array]                    [<invalid>]
+ :00001 %1 = %2.call new()                   [<INVALID>]
+ :00004 @spheres: <INVALID>[IvarId(0)] = %1
+ :00005 %1 = @spheres: <INVALID>[IvarId(0)]
+ :00006 %2 = 0: i32
+ :00007 %4 = const[Sphere]                   [<invalid>]
+ :00008 %6 = const[Vec]                      [<invalid>]
+ :00009 %7 = literal[-2.0]
+ :00010 %8 = literal[0.0]
+ :00011 %9 = literal[-3.5]
+ :00012 %5 = %6.call new(%7; 3)              [<INVALID>]
+ :00015 %6 = literal[0.5]
+ :00016 %3 = %4.call new(%5; 2)              [<INVALID>]
+ :00019 %1.[%2] = %3
+ :00020 %1 = @spheres: <INVALID>[IvarId(0)]
+ :00021 %2 = 1: i32
+ :00022 %4 = const[Sphere]                   [<invalid>]
+ :00023 %6 = const[Vec]                      [<invalid>]
+ :00024 %7 = literal[-0.5]
+ :00025 %8 = literal[0.0]
+ :00026 %9 = literal[-3.0]
+ :00027 %5 = %6.call new(%7; 3)              [<INVALID>]
+ :00030 %6 = literal[0.5]
+ :00031 %3 = %4.call new(%5; 2)              [<INVALID>]
+ :00034 %1.[%2] = %3
+ :00035 %1 = @spheres: <INVALID>[IvarId(0)]
+ :00036 %2 = 2: i32
+ :00037 %4 = const[Sphere]                   [<invalid>]
+ :00038 %6 = const[Vec]                      [<invalid>]
+ :00039 %7 = literal[1.0]
+ :00040 %8 = literal[0.0]
+ :00041 %9 = literal[-2.2]
+ :00042 %5 = %6.call new(%7; 3)              [<INVALID>]
+ :00045 %6 = literal[0.5]
+ :00046 %3 = %4.call new(%5; 2)              [<INVALID>]
+ :00049 %1.[%2] = %3
+ :00050 %2 = const[Plane]                    [<invalid>]
+ :00051 %4 = const[Vec]                      [<invalid>]
+ :00052 %5 = literal[0.0]
+ :00053 %6 = literal[-0.5]
+ :00054 %7 = literal[0.0]
+ :00055 %3 = %4.call new(%5; 3)              [<INVALID>]
+ :00058 %5 = const[Vec]                      [<invalid>]
+ :00059 %6 = literal[0.0]
+ :00060 %7 = literal[1.0]
+ :00061 %8 = literal[0.0]
+ :00062 %4 = %5.call new(%6; 3)              [<INVALID>]
+ :00065 %1 = %2.call new(%3; 2)              [<INVALID>]
+ :00068 @plane: <INVALID>[IvarId(0)] = %1
+ :00069 ret %1
+------------------------------------
+------------------------------------
+FuncId(69) name:ambient_occlusion args:["isect"] bc:BcPcBase(0x55d516041c10) meta:kind:VM mode:method FuncId(69) regs:14
++:00000 %8 = const[Array]                    [<invalid>]
+ :00001 %2 = %8.call new()                   [<INVALID>]
+ :00004 %8 = %2
+ :00005 %9 = %1.call n()                     [<INVALID>]
+ :00008 _ = %0.call otherBasis(%8; 2)        [<INVALID>]
+ :00011 %3 = const[NAO_SAMPLES]              [<invalid>]
+ :00012 %4 = const[NAO_SAMPLES]              [<invalid>]
+ :00013 %5 = literal[0.0001]
+ :00014 %6 = literal[0.0]
+ :00015 %8 = const[Vec]                      [<invalid>]
+ :00016 %10 = %1.call pl()                   [<INVALID>]
+ :00019 %9 = %10.call x()                    [<INVALID>]
+ :00022 %11 = %1.call n()                    [<INVALID>]
+ :00025 %10 = %11.call x()                   [<INVALID>]
+ :00028 %10 = %5 * %10                       [Integer][Integer]
+ :00029 %9 = %9 + %10                        [Integer][Integer]
+ :00030 %11 = %1.call pl()                   [<INVALID>]
+ :00033 %10 = %11.call y()                   [<INVALID>]
+ :00036 %12 = %1.call n()                    [<INVALID>]
+ :00039 %11 = %12.call y()                   [<INVALID>]
+ :00042 %11 = %5 * %11                       [Integer][Integer]
+ :00043 %10 = %10 + %11                      [Integer][Integer]
+ :00044 %12 = %1.call pl()                   [<INVALID>]
+ :00047 %11 = %12.call z()                   [<INVALID>]
+ :00050 %13 = %1.call n()                    [<INVALID>]
+ :00053 %12 = %13.call z()                   [<INVALID>]
+ :00056 %12 = %5 * %12                       [Integer][Integer]
+ :00057 %11 = %11 + %12                      [Integer][Integer]
+ :00058 %7 = %8.call new(%9; 3)              [<INVALID>]
+ :00061 %8 = literal[71]
+ :00062 _ = %4.call times(&%8)               [<INVALID>]
+ :00065 %8 = %3.call to_f()                  [<INVALID>]
+ :00068 %9 = %4.call to_f()                  [<INVALID>]
+ :00071 %8 = %8 * %9                         [Integer][Integer]
+ :00072 %8 = %8 - %6                         [Integer][Integer]
+ :00073 %9 = %3.call to_f()                  [<INVALID>]
+ :00076 %10 = %4.call to_f()                 [<INVALID>]
+ :00079 %9 = %9 * %10                        [Integer][Integer]
+ :00080 %6 = %8 / %9                         [Integer][Integer]
+ :00081 %9 = const[Vec]                      [<invalid>]
+ :00082 %10 = %6
+ :00083 %11 = %6
+ :00084 %12 = %6
+ :00085 %8 = %9.call new(%10; 3)             [<INVALID>]
+ :00088 ret %8
+------------------------------------
+------------------------------------
+FuncId(70) name:render args:["w", "h", "nsubsamples"] bc:BcPcBase(0x55d51603ca70) meta:kind:VM mode:method FuncId(70) regs:7
++:00000 %4 = 0: i32
+ :00001 %5 = %3.call to_f()                  [<INVALID>]
+ :00004 %6 = literal[72]
+ :00005 _ = %2.call times(&%6)               [<INVALID>]
+ :00008 %6 = nil
+ :00009 ret %6
+------------------------------------
+------------------------------------
+FuncId(71) name:<ANONYMOUS> args:["j"] bc:BcPcBase(0x55d51601a5d0) meta:kind:VM mode:method FuncId(71) regs:5
++:00000 %3 = dynvar(1, %3)
+ :00001 %4 = literal[73]
+ :00002 %2 = %3.call times(&%4)              [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(72) name:<ANONYMOUS> args:["y"] bc:BcPcBase(0x55d516019480) meta:kind:VM mode:method FuncId(72) regs:4
++:00000 %2 = dynvar(1, %1)
+ :00001 %3 = literal[74]
+ :00002 _ = %2.call times(&%3)               [<INVALID>]
+ :00005 %2 = nil
+ :00006 ret %2
+------------------------------------
+------------------------------------
+FuncId(73) name:<ANONYMOUS> args:["i"] bc:BcPcBase(0x55d516037f30) meta:kind:VM mode:method FuncId(73) regs:17
++:00000 %13 = %0.call rand()                 [<INVALID>]
+ :00003 %2 = %13
+ :00004 %13 = literal[2.0]
+ :00005 %14 = literal[3.14159265]
+ :00006 %13 = %13 * %14                      [Integer][Integer]
+ :00007 %14 = %0.call rand()                 [<INVALID>]
+ :00010 %3 = %13 * %14                       [Integer][Integer]
+ :00011 %14 = const[Math]                    [<invalid>]
+ :00012 %15 = %3
+ :00013 %13 = %14.call cos(%15; 1)           [<INVALID>]
+ :00016 %15 = const[Math]                    [<invalid>]
+ :00017 %16 = literal[1.0]
+ :00018 %16 = %16 - %2                       [Integer][Integer]
+ :00019 %14 = %15.call sqrt(%16; 1)          [<INVALID>]
+ :00022 %4 = %13 * %14                       [Integer][Integer]
+ :00023 %14 = const[Math]                    [<invalid>]
+ :00024 %15 = %3
+ :00025 %13 = %14.call sin(%15; 1)           [<INVALID>]
+ :00028 %15 = const[Math]                    [<invalid>]
+ :00029 %16 = literal[1.0]
+ :00030 %16 = %16 - %2                       [Integer][Integer]
+ :00031 %14 = %15.call sqrt(%16; 1)          [<INVALID>]
+ :00034 %5 = %13 * %14                       [Integer][Integer]
+ :00035 %13 = const[Math]                    [<invalid>]
+ :00036 %14 = %2
+ :00037 %6 = %13.call sqrt(%14; 1)           [<INVALID>]
+ :00040 %14 = dynvar(2, %2)
+ :00041 %15 = 0: i32
+ :00042 %14 = %14.[%15]
+ :00043 %13 = %14.call x()                   [<INVALID>]
+ :00046 %13 = %4 * %13                       [Integer][Integer]
+ :00047 %15 = dynvar(2, %2)
+ :00048 %16 = 1: i32
+ :00049 %15 = %15.[%16]
+ :00050 %14 = %15.call x()                   [<INVALID>]
+ :00053 %14 = %5 * %14                       [Integer][Integer]
+ :00054 %13 = %13 + %14                      [Integer][Integer]
+ :00055 %15 = dynvar(2, %2)
+ :00056 %16 = 2: i32
+ :00057 %15 = %15.[%16]
+ :00058 %14 = %15.call x()                   [<INVALID>]
+ :00061 %14 = %6 * %14                       [Integer][Integer]
+ :00062 %7 = %13 + %14                       [Integer][Integer]
+ :00063 %14 = dynvar(2, %2)
+ :00064 %15 = 0: i32
+ :00065 %14 = %14.[%15]
+ :00066 %13 = %14.call y()                   [<INVALID>]
+ :00069 %13 = %4 * %13                       [Integer][Integer]
+ :00070 %15 = dynvar(2, %2)
+ :00071 %16 = 1: i32
+ :00072 %15 = %15.[%16]
+ :00073 %14 = %15.call y()                   [<INVALID>]
+ :00076 %14 = %5 * %14                       [Integer][Integer]
+ :00077 %13 = %13 + %14                      [Integer][Integer]
+ :00078 %15 = dynvar(2, %2)
+ :00079 %16 = 2: i32
+ :00080 %15 = %15.[%16]
+ :00081 %14 = %15.call y()                   [<INVALID>]
+ :00084 %14 = %6 * %14                       [Integer][Integer]
+ :00085 %8 = %13 + %14                       [Integer][Integer]
+ :00086 %14 = dynvar(2, %2)
+ :00087 %15 = 0: i32
+ :00088 %14 = %14.[%15]
+ :00089 %13 = %14.call z()                   [<INVALID>]
+ :00092 %13 = %4 * %13                       [Integer][Integer]
+ :00093 %15 = dynvar(2, %2)
+ :00094 %16 = 1: i32
+ :00095 %15 = %15.[%16]
+ :00096 %14 = %15.call z()                   [<INVALID>]
+ :00099 %14 = %5 * %14                       [Integer][Integer]
+ :00100 %13 = %13 + %14                      [Integer][Integer]
+ :00101 %15 = dynvar(2, %2)
+ :00102 %16 = 2: i32
+ :00103 %15 = %15.[%16]
+ :00104 %14 = %15.call z()                   [<INVALID>]
+ :00107 %14 = %6 * %14                       [Integer][Integer]
+ :00108 %9 = %13 + %14                       [Integer][Integer]
+ :00109 %13 = const[Vec]                     [<invalid>]
+ :00110 %14 = %7
+ :00111 %15 = %8
+ :00112 %16 = %9
+ :00113 %10 = %13.call new(%14; 3)           [<INVALID>]
+ :00116 %13 = const[Ray]                     [<invalid>]
+ :00117 %14 = dynvar(2, %7)
+ :00118 %15 = %10
+ :00119 %11 = %13.call new(%14; 2)           [<INVALID>]
+ :00122 %13 = const[Isect]                   [<invalid>]
+ :00123 %12 = %13.call new()                 [<INVALID>]
+ :00126 %13 = @spheres: <INVALID>[IvarId(0)]
+ :00127 %14 = 0: i32
+ :00128 %13 = %13.[%14]
+ :00129 %14 = %11
+ :00130 %15 = %12
+ :00131 _ = %13.call intersect(%14; 2)       [<INVALID>]
+ :00134 %13 = @spheres: <INVALID>[IvarId(0)]
+ :00135 %14 = 1: i32
+ :00136 %13 = %13.[%14]
+ :00137 %14 = %11
+ :00138 %15 = %12
+ :00139 _ = %13.call intersect(%14; 2)       [<INVALID>]
+ :00142 %13 = @spheres: <INVALID>[IvarId(0)]
+ :00143 %14 = 2: i32
+ :00144 %13 = %13.[%14]
+ :00145 %14 = %11
+ :00146 %15 = %12
+ :00147 _ = %13.call intersect(%14; 2)       [<INVALID>]
+ :00150 %13 = @plane: <INVALID>[IvarId(0)]
+ :00151 %14 = %11
+ :00152 %15 = %12
+ :00153 _ = %13.call intersect(%14; 2)       [<INVALID>]
+ :00156 %13 = %12.call hit()                 [<INVALID>]
+ :00159 condnotbr %13 =>:00165
+ :00160 %13 = dynvar(2, %6)
+ :00161 %14 = literal[1.0]
+ :00162 %13 = %13 + %14                      [Integer][Integer]
+ :00163 dynvar(2, %6) = %13
+ :00164 ret %13
++:00165 %13 = literal[0.0]
+ :00166 ret %13
+------------------------------------
+------------------------------------
+FuncId(74) name:<ANONYMOUS> args:["x"] bc:BcPcBase(0x55d51603c5a0) meta:kind:VM mode:method FuncId(74) regs:10
++:00000 %6 = const[Vec]                      [<invalid>]
+ :00001 %7 = literal[0.0]
+ :00002 %8 = literal[0.0]
+ :00003 %9 = literal[0.0]
+ :00004 %2 = %6.call new(%7; 3)              [<INVALID>]
+ :00007 %6 = dynvar(2, %3)
+ :00008 %7 = literal[75]
+ :00009 _ = %6.call times(&%7)               [<INVALID>]
+ :00012 %6 = %2.call x()                     [<INVALID>]
+ :00015 %7 = dynvar(2, %5)
+ :00016 %8 = dynvar(2, %5)
+ :00017 %7 = %7 * %8                         [Integer][Integer]
+ :00018 %3 = %6 / %7                         [Integer][Integer]
+ :00019 %6 = %2.call y()                     [<INVALID>]
+ :00022 %7 = dynvar(2, %5)
+ :00023 %8 = dynvar(2, %5)
+ :00024 %7 = %7 * %8                         [Integer][Integer]
+ :00025 %4 = %6 / %7                         [Integer][Integer]
+ :00026 %6 = %2.call z()                     [<INVALID>]
+ :00029 %7 = dynvar(2, %5)
+ :00030 %8 = dynvar(2, %5)
+ :00031 %7 = %7 * %8                         [Integer][Integer]
+ :00032 %5 = %6 / %7                         [Integer][Integer]
+ :00033 %8 = %4
+ :00034 %7 = %0.call clamp(%8; 1)            [<INVALID>]
+ :00037 %6 = %7.call chr()                   [<INVALID>]
+ :00040 _ = %0.call print(%6; 1)             [<INVALID>]
+ :00043 %8 = %3
+ :00044 %7 = %0.call clamp(%8; 1)            [<INVALID>]
+ :00047 %6 = %7.call chr()                   [<INVALID>]
+ :00050 _ = %0.call print(%6; 1)             [<INVALID>]
+ :00053 %9 = %5
+ :00054 %8 = %0.call clamp(%9; 1)            [<INVALID>]
+ :00057 %7 = %8.call chr()                   [<INVALID>]
+ :00060 %6 = %0.call print(%7; 1)            [<INVALID>]
+ :00063 ret %6
+------------------------------------
+------------------------------------
+FuncId(75) name:<ANONYMOUS> args:["v"] bc:BcPcBase(0x55d516079060) meta:kind:VM mode:method FuncId(75) regs:5
++:00000 %3 = dynvar(3, %3)
+ :00001 %4 = literal[76]
+ :00002 %2 = %3.call times(&%4)              [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(76) name:<ANONYMOUS> args:["u"] bc:BcPcBase(0x55d516085bd0) meta:kind:VM mode:method FuncId(76) regs:20
++:00000 %14 = dynvar(4, %4)
+ :00001 %14 = %14 + 1: i16                   [Integer][Integer]
+ :00002 dynvar(4, %4) = %14
+ :00003 %14 = dynvar(4, %1)
+ :00004 %2 = %14.call to_f()                 [<INVALID>]
+ :00007 %14 = dynvar(4, %2)
+ :00008 %3 = %14.call to_f()                 [<INVALID>]
+ :00011 %14 = dynvar(2, %1)
+ :00012 %4 = %14.call to_f()                 [<INVALID>]
+ :00015 %14 = dynvar(3, %1)
+ :00016 %5 = %14.call to_f()                 [<INVALID>]
+ :00019 %6 = %1.call to_f()                  [<INVALID>]
+ :00022 %14 = dynvar(1, %1)
+ :00023 %7 = %14.call to_f()                 [<INVALID>]
+ :00026 %14 = dynvar(4, %5)
+ :00027 %14 = %6 / %14                       [Integer][Integer]
+ :00028 %14 = %4 + %14                       [Integer][Integer]
+ :00029 %15 = literal[2.0]
+ :00030 %15 = %2 / %15                       [Integer][Integer]
+ :00031 %14 = %14 - %15                      [Integer][Integer]
+ :00032 %15 = literal[2.0]
+ :00033 %15 = %2 / %15                       [Integer][Integer]
+ :00034 %8 = %14 / %15                       [Integer][Integer]
+ :00035 %14 = dynvar(4, %5)
+ :00036 %14 = %7 / %14                       [Integer][Integer]
+ :00037 %14 = %5 + %14                       [Integer][Integer]
+ :00038 %15 = literal[2.0]
+ :00039 %15 = %3 / %15                       [Integer][Integer]
+ :00040 %14 = %14 - %15                      [Integer][Integer]
+ :00041 %14 = neg %14                        [Integer]
+ :00042 %15 = literal[2.0]
+ :00043 %15 = %3 / %15                       [Integer][Integer]
+ :00044 %9 = %14 / %15                       [Integer][Integer]
+ :00045 %15 = const[Vec]                     [<invalid>]
+ :00046 %16 = %8
+ :00047 %17 = %9
+ :00048 %18 = literal[-1.0]
+ :00049 %14 = %15.call new(%16; 3)           [<INVALID>]
+ :00052 %10 = %14.call vnormalize()          [<INVALID>]
+ :00055 %14 = const[Ray]                     [<invalid>]
+ :00056 %16 = const[Vec]                     [<invalid>]
+ :00057 %17 = literal[0.0]
+ :00058 %18 = literal[0.0]
+ :00059 %19 = literal[0.0]
+ :00060 %15 = %16.call new(%17; 3)           [<INVALID>]
+ :00063 %16 = %10
+ :00064 %11 = %14.call new(%15; 2)           [<INVALID>]
+ :00067 %14 = const[Isect]                   [<invalid>]
+ :00068 %12 = %14.call new()                 [<INVALID>]
+ :00071 %14 = @spheres: <INVALID>[IvarId(0)]
+ :00072 %15 = 0: i32
+ :00073 %14 = %14.[%15]
+ :00074 %15 = %11
+ :00075 %16 = %12
+ :00076 _ = %14.call intersect(%15; 2)       [<INVALID>]
+ :00079 %14 = @spheres: <INVALID>[IvarId(0)]
+ :00080 %15 = 1: i32
+ :00081 %14 = %14.[%15]
+ :00082 %15 = %11
+ :00083 %16 = %12
+ :00084 _ = %14.call intersect(%15; 2)       [<INVALID>]
+ :00087 %14 = @spheres: <INVALID>[IvarId(0)]
+ :00088 %15 = 2: i32
+ :00089 %14 = %14.[%15]
+ :00090 %15 = %11
+ :00091 %16 = %12
+ :00092 _ = %14.call intersect(%15; 2)       [<INVALID>]
+ :00095 %14 = @plane: <INVALID>[IvarId(0)]
+ :00096 %15 = %11
+ :00097 %16 = %12
+ :00098 _ = %14.call intersect(%15; 2)       [<INVALID>]
+ :00101 %14 = %12.call hit()                 [<INVALID>]
+ :00104 condnotbr %14 =>:00147
+ :00105 %14 = %12
+ :00106 %13 = %0.call ambient_occlusion(%14; 1) [<INVALID>]
+ :00109 %14 = dynvar(2, %2)
+ :00110 %16 = dynvar(2, %2)
+ :00111 %15 = %16.call x()                   [<INVALID>]
+ :00114 %16 = %13.call x()                   [<INVALID>]
+ :00117 %15 = %15 + %16                      [Integer][Integer]
+ :00118 _ = %14.call x=(%15; 1)              [<INVALID>]
+ :00121 %14 = dynvar(2, %2)
+ :00122 %16 = dynvar(2, %2)
+ :00123 %15 = %16.call y()                   [<INVALID>]
+ :00126 %16 = %13.call y()                   [<INVALID>]
+ :00129 %15 = %15 + %16                      [Integer][Integer]
+ :00130 _ = %14.call y=(%15; 1)              [<INVALID>]
+ :00133 %14 = dynvar(2, %2)
+ :00134 %16 = dynvar(2, %2)
+ :00135 %15 = %16.call z()                   [<INVALID>]
+ :00138 %16 = %13.call z()                   [<INVALID>]
+ :00141 %15 = %15 + %16                      [Integer][Integer]
+ :00142 _ = %14.call z=(%15; 1)              [<INVALID>]
+ :00145 %14 = %15
+ :00146 ret %14
++:00147 %14 = nil
+ :00148 ret %14
+------------------------------------

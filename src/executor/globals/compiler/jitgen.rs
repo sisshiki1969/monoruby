@@ -29,10 +29,7 @@ extern "C" fn log_deoptimize(
     pc: BcPc,
     v: Value,
 ) {
-    let name = match globals.func[func_id].as_ruby_func().name() {
-        Some(name) => name.to_string(),
-        None => "<unnamed>".to_string(),
-    };
+    let name = globals.func[func_id].as_ruby_func().name();
     let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
@@ -43,6 +40,12 @@ extern "C" fn log_deoptimize(
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
+        match globals.deopt_stats.get_mut(&(func_id, index)) {
+            Some(c) => *c = *c + 1,
+            None => {
+                globals.deopt_stats.insert((func_id, index), 0);
+            }
+        };
         eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
     }
@@ -177,9 +180,10 @@ impl Codegen {
                             movq rax, [rax];
                         );
                     }
+                    let offset = conv(src.reg) - OFFSET_OUTER;
                     monoasm!(self.jit,
-                        lea  rax, [rax + (OFFSET_OUTER)];
-                        movq rax, [rax - (conv(src.reg))];
+                        //lea  rax, [rax + (OFFSET_OUTER)];
+                        movq rax, [rax - (offset)];
                     );
                     if ret.0 != 0 {
                         self.store_rax(ret);
@@ -195,10 +199,11 @@ impl Codegen {
                             movq rax, [rax];
                         );
                     }
+                    let offset = conv(dst.reg) - OFFSET_OUTER;
                     monoasm!(self.jit,
-                        lea  rax, [rax + (OFFSET_OUTER)];
+                        //lea  rax, [rax + (OFFSET_OUTER)];
                         movq rdi, [rbp - (conv(src))];
-                        movq [rax - (conv(dst.reg))], rdi;
+                        movq [rax - (offset)], rdi;
                     );
                 }
                 BcOp::Nil(ret) => {
@@ -489,7 +494,7 @@ impl Codegen {
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
-            let target_ctx = BBContext::from(&target_slot_info, cc.self_value);
+            let target_ctx = BBContext::from(&target_slot_info, func.local_num(), cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
@@ -946,7 +951,7 @@ impl Codegen {
             }
 
             let target_slot_info = StackSlotInfo::merge_entries(&entries);
-            let mut ctx = BBContext::new(func.total_reg_num(), cc.self_value);
+            let mut ctx = BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, class) in use_set {
                 match target_slot_info[reg] {
                     LinkMode::None => {}
@@ -1009,7 +1014,7 @@ impl Codegen {
             eprintln!("  target: {:?}", target_slot_info);
 
             let cur_label = cc.labels[&bb_pos];
-            let target_ctx = BBContext::from(&target_slot_info, cc.self_value);
+            let target_ctx = BBContext::from(&target_slot_info, func.local_num(), cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 bbctx,

@@ -34,6 +34,8 @@ pub struct Globals {
     pub no_jit: bool,
     /// stdout.
     stdout: BufWriter<Stdout>,
+    #[cfg(feature = "log-jit")]
+    pub deopt_stats: HashMap<(FuncId, usize), usize>,
 }
 
 impl Globals {
@@ -47,6 +49,8 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
+            #[cfg(feature = "log-jit")]
+            deopt_stats: HashMap::default(),
         };
         builtins::init_builtins(&mut globals);
         globals.set_ivar(

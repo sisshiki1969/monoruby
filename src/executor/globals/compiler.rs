@@ -63,10 +63,11 @@ struct BBContext {
     xmm: [Vec<SlotId>; 14],
     self_class: ClassId,
     self_kind: Option<u8>,
+    local_num: usize,
 }
 
 impl BBContext {
-    fn new(reg_num: usize, self_value: Value) -> Self {
+    fn new(reg_num: usize, local_num: usize, self_value: Value) -> Self {
         let xmm = (0..14)
             .map(|_| vec![])
             .collect::<Vec<Vec<SlotId>>>()
@@ -77,11 +78,12 @@ impl BBContext {
             xmm,
             self_class: self_value.class_id(),
             self_kind: self_value.kind(),
+            local_num,
         }
     }
 
-    fn from(slot_info: &StackSlotInfo, self_value: Value) -> Self {
-        let mut ctx = Self::new(slot_info.0.len(), self_value);
+    fn from(slot_info: &StackSlotInfo, local_num: usize, self_value: Value) -> Self {
+        let mut ctx = Self::new(slot_info.0.len(), local_num, self_value);
         for (i, mode) in slot_info.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
@@ -139,9 +141,9 @@ impl BBContext {
         }
     }
 
-    fn dealloc_wb(&mut self, wb: &[(u16, Vec<SlotId>)]) {
-        for (_, reg) in wb {
-            reg.iter().for_each(|r| self.dealloc_xmm(*r))
+    fn dealloc_locals(&mut self) {
+        for reg in 1..1 + self.local_num as u16 {
+            self.dealloc_xmm(SlotId(reg));
         }
     }
 
@@ -241,6 +243,30 @@ impl BBContext {
                     let v: Vec<_> = self.xmm[i]
                         .iter()
                         .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::XmmRW(_)))
+                        .cloned()
+                        .collect();
+                    Some((i as u16, v))
+                }
+            })
+            .filter(|(_, v)| !v.is_empty())
+            .collect()
+    }
+
+    fn get_locals_write_back(&self) -> WriteBack {
+        let local_num = self.local_num;
+        self.xmm
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                if v.is_empty() {
+                    None
+                } else {
+                    let v: Vec<_> = self.xmm[i]
+                        .iter()
+                        .filter(|reg| {
+                            reg.0 as usize <= local_num
+                                && matches!(self.stack_slot[**reg], LinkMode::XmmRW(_))
+                        })
                         .cloned()
                         .collect();
                     Some((i as u16, v))
@@ -1423,10 +1449,7 @@ impl Globals {
                     } else {
                         "whole"
                     },
-                    match func.name() {
-                        Some(name) => name,
-                        None => "<unnamed>",
-                    },
+                    func.name(),
                     func.id,
                     self_value.class_id().get_name(self),
                     start_pos,
@@ -1462,6 +1485,7 @@ impl Globals {
                 })
                 .collect();
             let reg_num = func.total_reg_num();
+            let local_num = func.local_num();
             cc.start_codepos = self.codegen.jit.get_current();
 
             if position.is_none() {
@@ -1478,7 +1502,7 @@ impl Globals {
                 start_pos,
                 vec![BranchEntry {
                     src_idx: 0,
-                    bbctx: BBContext::new(reg_num, self_value),
+                    bbctx: BBContext::new(reg_num, local_num, self_value),
                     dest_label: self.codegen.jit.label(),
                 }],
             );

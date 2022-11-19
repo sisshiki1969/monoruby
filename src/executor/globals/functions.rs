@@ -497,6 +497,11 @@ impl ISeqInfo {
         1 + self.locals.len() + self.temp_num as usize
     }
 
+    /// get a number of local vars.
+    pub(crate) fn local_num(&self) -> usize {
+        self.locals.len()
+    }
+
     /// get a number of arguments(includes *self*).
     pub(crate) fn total_arg_num(&self) -> usize {
         1 + self.args.len()
@@ -504,8 +509,12 @@ impl ISeqInfo {
 
     /// get name.
     #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
-    pub(crate) fn name(&self) -> &Option<String> {
-        &self.name
+    pub(crate) fn name(&self) -> String {
+        match &self.name {
+            Some(name) => name,
+            None => "<unnamed>",
+        }
+        .to_string()
     }
 
     /// get bytecode.

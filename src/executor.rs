@@ -48,6 +48,22 @@ impl Executor {
         let entry_point = globals.codegen.entry_point;
         let res = entry_point(self, globals, main_data);
         globals.flush_stdout();
+        #[cfg(feature = "log-jit")]
+        {
+            eprintln!();
+            eprintln!("deoptimization stats");
+            eprintln!(
+                "{:15} FuncId({:3}) [{:05}]  {:10}",
+                "func name", "", "index", "count"
+            );
+            for ((func_id, index), count) in &globals.deopt_stats {
+                let name = globals.func[*func_id].as_ruby_func().name();
+                eprintln!(
+                    "{:15} FuncId({:3}) [{:05}]  {:10}",
+                    name, func_id.0, index, count
+                );
+            }
+        }
 
         res.ok_or_else(|| globals.take_error().unwrap())
     }
