@@ -217,13 +217,11 @@ class Scene
         @plane.intersect(ray, occisect)
         if occisect.hit then
           occlusion += 1.0
-          puts occlusion
         else
           0.0
         end
       end
     end
-    puts occlusion
     occlusion = (ntheta.to_f * nphi.to_f - occlusion) / (ntheta.to_f * nphi.to_f)
 
     Vec.new(occlusion, occlusion, occlusion)
@@ -273,9 +271,9 @@ class Scene
         r = rad.x / (nsf * nsf)
         g = rad.y / (nsf * nsf)
         b = rad.z / (nsf * nsf)
-        #print "#{r} "
-        #print "#{g} "
-        #print "#{b} "
+        print clamp(g).chr
+        print clamp(r).chr
+        print clamp(b).chr
       end
       nil
     end

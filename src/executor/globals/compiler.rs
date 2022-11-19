@@ -139,6 +139,12 @@ impl BBContext {
         }
     }
 
+    fn dealloc_wb(&mut self, wb: &[(u16, Vec<SlotId>)]) {
+        for (_, reg) in wb {
+            reg.iter().for_each(|r| self.dealloc_xmm(*r))
+        }
+    }
+
     fn xmm_swap(&mut self, l: u16, r: u16) {
         self.xmm.swap(l as usize, r as usize);
         self.stack_slot.0.iter_mut().for_each(|mode| match mode {

@@ -44,6 +44,7 @@ impl Codegen {
                 ctx.dealloc_xmm(ret);
                 // We must write back all registers since slots may be accessed from block.
                 let wb = ctx.get_write_back();
+                ctx.dealloc_wb(&wb);
                 self.gen_write_back(wb);
                 method_info.args = method_info.args + 1;
                 self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
