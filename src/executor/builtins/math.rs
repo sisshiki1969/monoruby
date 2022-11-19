@@ -96,4 +96,12 @@ mod test {
         run_test("Math.sqrt 128");
         run_test("Math.sqrt 2192.56818");
     }
+
+    #[test]
+    fn torigonometric() {
+        run_test("Math.cos 149");
+        run_test("Math.cos -14.97522");
+        run_test("Math.sin 149");
+        run_test("Math.sin -14.97522");
+    }
 }

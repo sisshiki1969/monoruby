@@ -427,28 +427,28 @@ impl StackSlotInfo {
 ///
 /// If no method was found, return None (==0u64).
 ///
-extern "C" fn find_method<'a>(
-    globals: &'a mut Globals,
+extern "C" fn find_method(
+    globals: &mut Globals,
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
-) -> Option<&'a FuncData> {
+) -> Option<&FuncData> {
     let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
     let data = globals.compile_on_demand(func_id);
     Some(data)
 }
 
-extern "C" fn vm_get_func_data<'a>(globals: &'a mut Globals, func_id: FuncId) -> &'a FuncData {
+extern "C" fn vm_get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {
     globals.compile_on_demand(func_id)
 }
 
-extern "C" fn vm_get_block_data<'a>(globals: &'a mut Globals, block: Value) -> &'a FuncData {
+extern "C" fn vm_get_block_data(globals: &mut Globals, block: Value) -> &FuncData {
     if let Some(func_id) = block.try_fixnum() {
         if let Ok(func_id) = u32::try_from(func_id) {
-            return globals.compile_on_demand(FuncId(func_id as u32));
+            return globals.compile_on_demand(FuncId(func_id));
         }
     }
-    unimplemented!()
+    unreachable!()
 }
 
 extern "C" fn gen_array(src: *const Value, len: usize) -> Value {

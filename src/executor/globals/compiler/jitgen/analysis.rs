@@ -225,14 +225,14 @@ impl LoopAnalysis {
                     } = method_info;
                     let class = (self.pc - 1).class_version().0;
                     match (self.pc - 1).op1() {
-                        BcOp::MethodCall(ret, _, ..) => {
+                        BcOp::MethodCall(ret, ..) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             for i in 0..len {
                                 reg_info.use_non_float(args + i);
                             }
                             reg_info.def_as(ret, false);
                         }
-                        BcOp::MethodCallBlock(ret, _, ..) => {
+                        BcOp::MethodCallBlock(ret, ..) => {
                             reg_info.use_as(recv, class == FLOAT_CLASS, class);
                             for i in 0..len + 1 {
                                 reg_info.use_non_float(args + i);

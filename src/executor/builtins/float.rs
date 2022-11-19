@@ -40,9 +40,9 @@ mod test {
 
     #[test]
     fn times() {
-        run_test(
-            r##"
-        "##,
-        );
+        run_test("4.87.to_i");
+        run_test("-2.18.to_i");
+        run_test("4.7777.to_f");
+        run_test("-725.11.to_f");
     }
 }

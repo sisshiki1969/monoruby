@@ -30,6 +30,7 @@ pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 ///
 /// Bytecode interpreter.
 ///
+#[derive(Default)]
 #[repr(C)]
 pub struct Executor {
     pub cfp: usize,
@@ -37,13 +38,6 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn new() -> Self {
-        Self {
-            cfp: 0,
-            lexical_class: vec![],
-        }
-    }
-
     /// Execute top level method.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let main_data = globals.compile_on_demand(func_id) as *const _;
@@ -76,7 +70,7 @@ impl Executor {
 
     /// Execute top level method.
     pub(crate) fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let mut executer = Self::new();
+        let mut executer = Self::default();
         executer.eval(globals, func_id)
     }
 }

@@ -185,7 +185,7 @@ impl IrContext {
 
     fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
         let reg = match dst {
-            Some(local) => local.into(),
+            Some(local) => local,
             None => info.push().into(),
         };
         self.push(BcIr::Literal(reg, v), Loc::default());
@@ -194,7 +194,7 @@ impl IrContext {
     fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
-                Some(local) => local.into(),
+                Some(local) => local,
                 None => info.push().into(),
             };
             self.push(BcIr::Integer(reg, i), Loc::default());
@@ -209,7 +209,7 @@ impl IrContext {
 
     fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: IdentId) {
         let reg = match dst {
-            Some(local) => local.into(),
+            Some(local) => local,
             None => info.push().into(),
         };
         self.push(BcIr::Symbol(reg, sym), Loc::default());
@@ -363,7 +363,7 @@ impl IrContext {
 
     fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcReg>) {
         let ret = match local {
-            Some(ret) => ret.into(),
+            Some(ret) => ret,
             None => info.pop().into(),
         };
         assert_eq!(0, info.temp);
@@ -403,7 +403,7 @@ impl IrContext {
                 if is_ret {
                     self.gen_ret(info, ret.into());
                 } else if use_value {
-                    self.gen_temp_mov(info, ret.into());
+                    self.gen_temp_mov(info, ret);
                 }
             }
             None => {
@@ -847,7 +847,7 @@ impl IrContext {
         match rhs.kind {
             NodeKind::Nil => self.gen_nil(info, Some(dst)),
             NodeKind::Bool(b) => self.gen_literal(info, Some(dst), Value::bool(b)),
-            NodeKind::SelfValue => self.gen_mov(dst.into(), BcReg::Self_),
+            NodeKind::SelfValue => self.gen_mov(dst, BcReg::Self_),
             NodeKind::Integer(i) => self.gen_integer(info, Some(dst), i),
             NodeKind::Symbol(sym) => {
                 let sym = IdentId::get_ident_id_from_string(sym);
@@ -883,24 +883,23 @@ impl IrContext {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(src) = info.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, src.into(), rhs)?;
-                        self.gen_mov(dst.into(), src.into());
+                        self.gen_mov(dst, src.into());
                     } else {
                         let temp = info.temp;
                         let lhs = self.eval_lvalue(ctx, info, &lhs)?;
-                        let src = dst.into();
                         self.gen_store_expr(ctx, info, dst, rhs)?;
-                        self.gen_assign(src, lhs, loc);
+                        self.gen_assign(dst, lhs, loc);
                         info.temp = temp;
                     }
                 } else {
                     self.gen_mul_assign(ctx, info, mlhs, mrhs, true, false)?;
                     let temp = info.pop().into();
-                    self.gen_mov(dst.into(), temp);
+                    self.gen_mov(dst, temp);
                 }
             }
             NodeKind::LocalVar(ident) => {
                 let local2 = info.refer_local(&ident);
-                self.gen_mov(dst.into(), local2.into());
+                self.gen_mov(dst, local2.into());
             }
             NodeKind::Const {
                 toplevel,
@@ -920,7 +919,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(dst.into());
+                let ret = Some(dst);
                 self.gen_method_call(ctx, info, method, Some(receiver), arglist, ret, false, loc)?;
             }
             NodeKind::FuncCall {
@@ -928,7 +927,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = Some(dst.into());
+                let ret = Some(dst);
                 self.gen_method_call(ctx, info, method, None, arglist, ret, false, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
@@ -944,13 +943,13 @@ impl IrContext {
             } => {
                 assert!(base.is_none());
                 assert!(!is_module);
-                let ret = Some(dst.into());
+                let ret = Some(dst);
                 let superclass = superclass.map(|c| *c);
                 self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
-                self.gen_mov(dst.into(), ret);
+                self.gen_mov(dst, ret);
                 info.pop();
             }
         };

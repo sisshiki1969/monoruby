@@ -111,4 +111,9 @@ mod test {
         "##,
         );
     }
+
+    #[test]
+    fn to_f() {
+        run_test("253.to_f");
+    }
 }

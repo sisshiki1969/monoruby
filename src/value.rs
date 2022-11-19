@@ -138,7 +138,7 @@ impl Value {
         self.0.get()
     }
 
-    pub fn to_bool(&self) -> bool {
+    pub fn as_bool(&self) -> bool {
         self.get() & !0x10 != NIL_VALUE
     }
 
