@@ -181,7 +181,7 @@ impl LoopAnalysis {
                     reg_info.def_as(dst, is_float);
                 }
                 BcOp::BinOp(_kind, dst, lhs, rhs) => {
-                    let is_float = pc.is_binary_float();
+                    let is_float = pc.is_float_binop();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
                     reg_info.def_as(dst, is_float);
@@ -197,7 +197,7 @@ impl LoopAnalysis {
                     reg_info.def_as(dst, is_float);
                 }
                 BcOp::Cmp(_kind, dst, lhs, rhs, _opt) => {
-                    let is_float = pc.is_binary_float();
+                    let is_float = pc.is_float_binop();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
                     reg_info.def_as(dst, false);

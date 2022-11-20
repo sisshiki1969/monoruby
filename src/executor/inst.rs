@@ -613,11 +613,11 @@ impl Bc {
         self.classid2() == FLOAT_CLASS
     }
 
-    pub(crate) fn is_binary_integer(&self) -> bool {
+    pub(crate) fn is_integer_binop(&self) -> bool {
         self.classid1() == INTEGER_CLASS && self.classid2() == INTEGER_CLASS
     }
 
-    pub(crate) fn is_binary_float(&self) -> bool {
+    pub(crate) fn is_float_binop(&self) -> bool {
         match (self.classid1(), self.classid2()) {
             (INTEGER_CLASS, INTEGER_CLASS) => false,
             (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => true,

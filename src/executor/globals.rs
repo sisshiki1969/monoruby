@@ -404,11 +404,9 @@ impl Globals {
                 _ => {}
             });
     }
-}
 
-#[cfg(any(feature = "emit-asm"))]
-impl Globals {
-    fn dump_disas(&mut self, cc: &CompileContext, func_id: FuncId) {
+    #[cfg(any(feature = "emit-asm"))]
+    fn dump_disas(&mut self, sourcemap: Vec<(usize, usize)>, func_id: FuncId) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
         eprintln!(
             "offset:{:?} code: {} bytes  data: {} bytes",
@@ -437,7 +435,7 @@ impl Globals {
             .collect();
         let func = self.func[func_id].as_ruby_func();
         for (i, text) in dump {
-            cc.sourcemap
+            sourcemap
                 .iter()
                 .filter_map(
                     |(bc_pos, code_pos)| {
