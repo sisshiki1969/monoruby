@@ -231,7 +231,7 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &[usize]) {
+    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
         monoasm!(self.jit,
             movl rsi, (cached_ivarid.get());
@@ -241,7 +241,7 @@ impl Codegen {
         self.xmm_restore(xmm_using);
     }
 
-    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &[usize]) {
+    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
         monoasm!(self.jit,
             movl rsi, (cached_ivarid.get());

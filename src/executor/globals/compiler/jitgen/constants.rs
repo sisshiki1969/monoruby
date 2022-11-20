@@ -64,7 +64,7 @@ impl Codegen {
         &mut self,
         ctx: &BBContext,
         dst: SlotId,
-        fdst: u16,
+        fdst: Xmm,
         id: ConstSiteId,
         pc: BcPc,
     ) {
@@ -75,7 +75,7 @@ impl Codegen {
         let exit = self.jit.label();
 
         let cached_float = self.jit.const_f64(0.0);
-        let side_exit = self.gen_side_writeback_deopt(pc, ctx);
+        let side_exit = self.gen_side_deopt(pc, ctx);
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
@@ -98,7 +98,7 @@ impl Codegen {
             cmpq rax, [rip + cached_const_version];
             jne  slow_path;
         exit:
-            movq xmm(fdst as u64 + 2), [rip + cached_float];
+            movq xmm(fdst.enc()), [rip + cached_float];
             movq rax, [rip + cached_value];
         );
         self.store_rax(dst);

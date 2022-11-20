@@ -7,7 +7,7 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         pc: BcPc,
-    ) -> (u16, u16) {
+    ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
                 self.xmm_read_assume(ctx, lhs, pc.classid1(), pc),
@@ -24,16 +24,16 @@ impl Codegen {
         ctx: &mut BBContext,
         reg: SlotId,
         pc: BcPc,
-    ) -> u16 {
+    ) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm_read(reg);
-                let side_exit = self.gen_side_writeback_deopt(pc, ctx);
+                let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
-                self.gen_val_to_f64_assume_float(freg as u64 + 2, side_exit);
+                self.gen_val_to_f64_assume_float(freg.enc(), side_exit);
                 freg
             }
         }
@@ -47,7 +47,7 @@ impl Codegen {
         rhs: SlotId,
         class: ClassId,
         pc: BcPc,
-    ) -> u16 {
+    ) -> Xmm {
         match class {
             INTEGER_CLASS => self.xmm_read_assume_integer(ctx, rhs, pc),
             FLOAT_CLASS => self.xmm_read_assume_float(ctx, rhs, pc),
@@ -55,16 +55,16 @@ impl Codegen {
         }
     }
 
-    fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> u16 {
+    fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm_read(reg);
-                let side_exit = self.gen_side_writeback_deopt(pc, ctx);
+                let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];
                 );
-                self.gen_val_to_f64_assume_integer(freg as u64 + 2, side_exit);
+                self.gen_val_to_f64_assume_integer(freg.enc(), side_exit);
                 freg
             }
         }

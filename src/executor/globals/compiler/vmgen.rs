@@ -14,7 +14,7 @@ macro_rules! cmp_ops {
               self.vm_get_addr_r15(); // r15 <- ret addr
               self.guard_rdi_fixnum(generic0);
               self.guard_rsi_fixnum(generic0);
-              self.[<cmp_ $op>](generic1, vec![]);
+              self.[<vm_cmp_ $op>](generic1);
               self.vm_store_r15();
               self.fetch_and_dispatch();
               self.jit.select_page(1);
@@ -38,7 +38,7 @@ macro_rules! cmp_ops {
               orq  rsi, 1;
             };
             self.guard_rdi_fixnum(generic0);
-            self.[<cmp_ $op>](generic1, vec![]);
+            self.[<vm_cmp_ $op>](generic1);
             self.vm_store_r15();
             self.fetch_and_dispatch();
             self.jit.select_page(1);

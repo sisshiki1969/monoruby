@@ -4,20 +4,12 @@ use ruruby_parse::CmpKind;
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            pub(crate) fn [<cmp_ $op>](&mut self, generic:DestLabel, xmm_using: Vec<usize>) {
+            fn [<cmp_ $op>](&mut self, generic:DestLabel, xmm_using: Vec<Xmm>) {
                 let exit = self.jit.label();
-                monoasm! { self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                exit:
-                };
+                self.[<integer_cmp_ $op>]();
+                self.jit.bind_label(exit);
                 self.jit.select_page(1);
-                monoasm!(self.jit,
-                    generic:
-                );
+                self.jit.bind_label(generic);
                 self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
                     // generic path
@@ -25,6 +17,33 @@ macro_rules! cmp_main {
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    jmp  exit;
+                );
+                self.jit.select_page(0);
+            }
+
+            fn [<integer_cmp_ $op>](&mut self) {
+                monoasm! { self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                };
+            }
+
+            pub(crate) fn [<vm_cmp_ $op>](&mut self, generic:DestLabel) {
+                let exit = self.jit.label();
+                self.[<integer_cmp_ $op>]();
+                self.jit.bind_label(exit);
+                self.jit.select_page(1);
+                self.jit.bind_label(generic);
+                monoasm!(self.jit,
+                    // generic path
+                    movq rax, ([<cmp_ $op _values>]);
+                    call rax;
+                );
                 monoasm!(self.jit,
                     jmp  exit;
                 );
@@ -41,7 +60,7 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
         paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<usize>) {
+            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, generic:DestLabel, brkind: BrKind, xmm_using: Vec<Xmm>) {
                 let cont = self.jit.label();
                 match brkind {
                     BrKind::BrIf => monoasm! { self.jit,
@@ -119,7 +138,7 @@ impl Codegen {
         ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        let deopt = self.gen_side_writeback_deopt(pc, ctx);
+        let deopt = self.gen_side_deopt(pc, ctx);
         match kind {
             BinOpK::Add => {
                 match mode {
@@ -251,13 +270,13 @@ impl Codegen {
         &mut self,
         kind: BinOpK,
         ctx: &BBContext,
-        fret: u16,
-        flhs: u16,
-        frhs: u16,
+        fret: Xmm,
+        flhs: Xmm,
+        frhs: Xmm,
     ) {
-        let lhs = flhs as u64 + 2;
-        let rhs = frhs as u64 + 2;
-        let ret = fret as u64 + 2;
+        let lhs = flhs.enc();
+        let rhs = frhs.enc();
+        let ret = fret.enc();
         match kind {
             BinOpK::Add => {
                 if ret == rhs {
@@ -340,12 +359,12 @@ impl Codegen {
         &mut self,
         kind: BinOpK,
         ctx: &BBContext,
-        fret: u16,
-        flhs: u16,
+        fret: Xmm,
+        flhs: Xmm,
         rhs: i16,
     ) {
         let rhs_label = self.jit.const_f64(rhs as f64);
-        let ret = fret as u64 + 2;
+        let ret = fret.enc();
         match kind {
             BinOpK::Add => {
                 self.xmm_mov(flhs, fret);
@@ -379,7 +398,7 @@ impl Codegen {
                 }
             }
             BinOpK::Exp => {
-                let lhs = flhs as u64 + 2;
+                let lhs = flhs.enc();
                 let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
                 monoasm!(self.jit,
@@ -401,13 +420,13 @@ impl Codegen {
         &mut self,
         kind: BinOpK,
         ctx: &BBContext,
-        fret: u16,
+        fret: Xmm,
         lhs: i16,
-        frhs: u16,
+        frhs: Xmm,
     ) {
         let lhs = self.jit.const_f64(lhs as f64);
-        let rhs = frhs as u64 + 2;
-        let ret = fret as u64 + 2;
+        let rhs = frhs.enc();
+        let ret = fret.enc();
         match kind {
             BinOpK::Add => {
                 if ret != rhs {
@@ -546,13 +565,26 @@ impl Codegen {
         self.store_rax(ret);
     }
 
+    pub(super) fn gen_integer_cmp_kind(&mut self, kind: CmpKind, ret: SlotId) {
+        match kind {
+            CmpKind::Eq => self.integer_cmp_eq(),
+            CmpKind::Ne => self.integer_cmp_ne(),
+            CmpKind::Ge => self.integer_cmp_ge(),
+            CmpKind::Gt => self.integer_cmp_gt(),
+            CmpKind::Le => self.integer_cmp_le(),
+            CmpKind::Lt => self.integer_cmp_lt(),
+            _ => unimplemented!(),
+        }
+        self.store_rax(ret);
+    }
+
     pub(super) fn gen_cmp_int_opt(
         &mut self,
         kind: CmpKind,
         branch_dest: DestLabel,
         generic: DestLabel,
         brkind: BrKind,
-        xmm_using: Vec<usize>,
+        xmm_using: Vec<Xmm>,
     ) {
         match kind {
             CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, generic, brkind, xmm_using),

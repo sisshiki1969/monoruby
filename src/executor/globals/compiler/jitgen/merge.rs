@@ -151,7 +151,7 @@ impl Codegen {
             if target_ctx.stack_slot[reg] == LinkMode::None {
                 match src_ctx.stack_slot[reg] {
                     LinkMode::XmmRW(freg) => {
-                        let v = src_ctx.xmm[freg as usize].clone();
+                        let v = src_ctx.xmm[freg].clone();
                         for i in &v {
                             src_ctx.stack_slot[*i] = LinkMode::XmmR(freg);
                         }
@@ -174,36 +174,36 @@ impl Codegen {
                 (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) => {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
-                    } else if src_ctx.xmm[r as usize].is_empty() {
+                    } else if src_ctx.xmm[r].is_empty() {
                         monoasm!(self.jit,
-                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                            movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_rw_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!(self.jit,
-                            movq  xmm0, xmm(l as u64 + 2);
-                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
-                            movq  xmm(r as u64 + 2), xmm0;
+                            movq  xmm0, xmm(l.enc());
+                            movq  xmm(l.enc()), xmm(r.enc());
+                            movq  xmm(r.enc()), xmm0;
                         );
                     }
                 }
                 (LinkMode::XmmR(l), LinkMode::XmmRW(r)) => {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
-                    } else if src_ctx.xmm[r as usize].is_empty() {
+                    } else if src_ctx.xmm[r].is_empty() {
                         monoasm!(self.jit,
-                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                            movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_rw_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!(self.jit,
-                            movq  xmm0, xmm(l as u64 + 2);
-                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
-                            movq  xmm(r as u64 + 2), xmm0;
+                            movq  xmm0, xmm(l.enc());
+                            movq  xmm(l.enc()), xmm(r.enc());
+                            movq  xmm(r.enc()), xmm0;
                         );
                     }
                     guard_list.push(reg);
@@ -213,36 +213,36 @@ impl Codegen {
                     self.gen_write_back_single(l, vec![reg]);
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
-                    } else if src_ctx.xmm[r as usize].is_empty() {
+                    } else if src_ctx.xmm[r].is_empty() {
                         monoasm!(self.jit,
-                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                            movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_r_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!(self.jit,
-                            movq  xmm0, xmm(l as u64 + 2);
-                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
-                            movq  xmm(r as u64 + 2), xmm0;
+                            movq  xmm0, xmm(l.enc());
+                            movq  xmm(l.enc()), xmm(r.enc());
+                            movq  xmm(r.enc()), xmm0;
                         );
                     }
                 }
                 (LinkMode::XmmR(l), LinkMode::XmmR(r)) => {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
-                    } else if src_ctx.xmm[r as usize].is_empty() {
+                    } else if src_ctx.xmm[r].is_empty() {
                         monoasm!(self.jit,
-                            movq  xmm(r as u64 + 2), xmm(l as u64 + 2);
+                            movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_r_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!(self.jit,
-                            movq  xmm0, xmm(l as u64 + 2);
-                            movq  xmm(l as u64 + 2), xmm(r as u64 + 2);
-                            movq  xmm(r as u64 + 2), xmm0;
+                            movq  xmm0, xmm(l.enc());
+                            movq  xmm(l.enc()), xmm(r.enc());
+                            movq  xmm(r.enc()), xmm0;
                         );
                     }
                 }
@@ -261,7 +261,7 @@ impl Codegen {
             monoasm!(self.jit,
                 movq rdi, [rbp - (conv(reg))];
             );
-            self.gen_val_to_f64(freg as u64 + 2, side_exit);
+            self.gen_val_to_f64(freg.enc(), side_exit);
             #[cfg(feature = "emit-tir")]
             eprintln!("      conv: {:?}->{:?}", reg, freg);
         }
@@ -272,7 +272,7 @@ impl Codegen {
             jmp exit;
         );
         self.jit.select_page(0);
-        let side_label = self.gen_side_writeback_deopt(pc + 1, &src_ctx);
+        let side_label = self.gen_side_deopt(pc + 1, &src_ctx);
         self.jit.select_page(1);
         monoasm!(self.jit,
         side_exit:
