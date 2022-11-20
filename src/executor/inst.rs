@@ -161,7 +161,7 @@ impl BcPc {
                     "{:36} [{}]",
                     op1,
                     match self.value() {
-                        None => "<invalid>".to_string(),
+                        None => "<INVALID>".to_string(),
                         Some(val) => val.inspect(globals),
                     }
                 )

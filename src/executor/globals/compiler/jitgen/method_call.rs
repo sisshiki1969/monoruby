@@ -37,6 +37,21 @@ impl Codegen {
             BcOp::MethodCall(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
                 ctx.write_back_slot(self, recv);
+                if let Some(codeptr) = method_info.callee_codeptr {
+                    let cached = Cached::new(pc, codeptr);
+                    if cached.class_id == INTEGER_CLASS && name == IdentId::get_ident_id("to_f") {
+                        let deopt = self.gen_side_deopt(pc - 1, ctx);
+                        let fret = ctx.xmm_write(ret);
+                        monoasm!(self.jit,
+                            movq  rdi, [rbp - (conv(method_info.recv))];
+                            testq rdi, 0b001;
+                            jz    deopt;
+                            sarq  rdi, 1;
+                            cvtsi2sdq xmm(fret.enc()), rdi;
+                        );
+                        return;
+                    }
+                }
                 ctx.write_back_range(self, args, len);
                 self.gen_call(fnstore, ctx, method_info, name, None, ret, pc);
             }

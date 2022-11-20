@@ -115,5 +115,7 @@ mod test {
     #[test]
     fn to_f() {
         run_test("253.to_f");
+        run_test("-25253.to_f");
+        run_test("0.to_f");
     }
 }

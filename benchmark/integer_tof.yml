@@ -1,6 +1,6 @@
 benchmark:
   to_f: |
-    a = 4587.1254
+    a = 4587
     a.to_f
     a.to_f
     a.to_f
