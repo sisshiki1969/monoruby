@@ -317,6 +317,20 @@ impl Globals {
         func_id
     }
 
+    pub(crate) fn define_builtin_func_tof(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arity: i32,
+    ) -> FuncId {
+        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
+        let name_id = IdentId::get_ident_id(name);
+        self.add_method(class_id, name_id, func_id);
+        self.func.tof = func_id;
+        func_id
+    }
+
     pub(crate) fn define_builtin_singleton_func(
         &mut self,
         class_id: ClassId,
@@ -328,6 +342,21 @@ impl Globals {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id);
+        func_id
+    }
+
+    pub(crate) fn define_builtin_singleton_func_sqrt(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arity: i32,
+    ) -> FuncId {
+        let class_id = self.get_singleton_id(class_id);
+        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
+        let name_id = IdentId::get_ident_id(name);
+        self.add_method(class_id, name_id, func_id);
+        self.func.sqrt = func_id;
         func_id
     }
 

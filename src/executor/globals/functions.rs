@@ -107,6 +107,8 @@ pub struct ConstSiteId(pub u32);
 #[derive(Clone, PartialEq)]
 pub(crate) struct FnStore {
     functions: Funcs,
+    pub(crate) tof: FuncId,
+    pub(crate) sqrt: FuncId,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
 }
@@ -141,6 +143,8 @@ impl FnStore {
     pub(super) fn new() -> Self {
         Self {
             functions: Funcs::default(),
+            tof: FuncId::default(),
+            sqrt: FuncId::default(),
             constsite_info: vec![],
         }
     }

@@ -1,10 +1,4 @@
 benchmark:
   to_f: |
-    a = 4587
-    a.to_f
-    a.to_f
-    a.to_f
-    a.to_f
-    a.to_f
-    a.to_f
+    4587.to_f
 loop_count: 1000000

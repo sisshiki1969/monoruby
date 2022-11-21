@@ -20,6 +20,10 @@ impl Cached {
             pc: (pc + 1).pc(),
         }
     }
+
+    fn func_id(&self) -> FuncId {
+        self.meta.func_id()
+    }
 }
 
 impl Codegen {
@@ -39,7 +43,7 @@ impl Codegen {
                 ctx.write_back_slot(self, recv);
                 if let Some(codeptr) = method_info.callee_codeptr {
                     let cached = Cached::new(pc, codeptr);
-                    if cached.class_id == INTEGER_CLASS && name == IdentId::get_ident_id("to_f") {
+                    if cached.func_id() == fnstore.tof {
                         let deopt = self.gen_side_deopt(pc - 1, ctx);
                         let fret = ctx.xmm_write(ret);
                         monoasm!(self.jit,
@@ -48,6 +52,14 @@ impl Codegen {
                             jz    deopt;
                             sarq  rdi, 1;
                             cvtsi2sdq xmm(fret.enc()), rdi;
+                        );
+                        return;
+                    } else if cached.func_id() == fnstore.sqrt {
+                        //let deopt = self.gen_side_deopt(pc - 1, ctx);
+                        let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
+                        let fret = ctx.xmm_write(ret);
+                        monoasm!(self.jit,
+                            sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
                         );
                         return;
                     }
