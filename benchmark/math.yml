@@ -1,0 +1,8 @@
+benchmark:
+  math_sqrt: |
+    Math.sqrt 3468.56
+  math_sin: |
+    Math.sin 3468.56
+  math_cos: |
+    Math.cos 3468.56
+loop_count: 1000000

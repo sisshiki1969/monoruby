@@ -1,4 +1,0 @@
-benchmark:
-  math_sqrt: |
-    Math.sqrt 3468.56
-loop_count: 1000000
