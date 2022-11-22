@@ -22,6 +22,8 @@ pub use functions::*;
 pub enum InlineMethod {
     IntegerTof,
     MathSqrt,
+    MathCos,
+    MathSin,
 }
 
 ///

@@ -27,6 +27,14 @@ impl Cached {
 }
 
 impl Codegen {
+    extern "C" fn cos(f: f64) -> f64 {
+        f.cos()
+    }
+
+    extern "C" fn sin(f: f64) -> f64 {
+        f.sin()
+    }
+
     pub(super) fn gen_method_call(
         &mut self,
         fnstore: &FnStore,
@@ -70,6 +78,36 @@ impl Codegen {
                                 let fret = ctx.xmm_write(ret);
                                 monoasm!(self.jit,
                                     sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
+                                );
+                            }
+                            InlineMethod::MathCos => {
+                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
+                                let fret = ctx.xmm_write(ret);
+                                let xmm_using = ctx.get_xmm_using();
+                                self.xmm_save(&xmm_using);
+                                monoasm!(self.jit,
+                                    movq xmm0, xmm(fsrc.enc());
+                                    movq rax, (Self::cos as u64);
+                                    call rax;
+                                );
+                                self.xmm_restore(&xmm_using);
+                                monoasm!(self.jit,
+                                    movq xmm(fret.enc()), xmm0;
+                                );
+                            }
+                            InlineMethod::MathSin => {
+                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
+                                let fret = ctx.xmm_write(ret);
+                                let xmm_using = ctx.get_xmm_using();
+                                self.xmm_save(&xmm_using);
+                                monoasm!(self.jit,
+                                    movq xmm0, xmm(fsrc.enc());
+                                    movq rax, (Self::sin as u64);
+                                    call rax;
+                                );
+                                self.xmm_restore(&xmm_using);
+                                monoasm!(self.jit,
+                                    movq xmm(fret.enc()), xmm0;
                                 );
                             }
                         }
@@ -334,9 +372,7 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
-            xorq rax, rax;
-            movw rax, [rdi + 2];    // ObjKind
-            cmpq rax, (ObjKind::OBJECT);
+            cmpw [rdi + 2], (ObjKind::OBJECT);
             jne  no_inline;
             cmpl rsi, (OBJECT_INLINE_IVAR);
             jge no_inline;
@@ -392,9 +428,7 @@ impl Codegen {
             movl rsi, [rip + cached_ivarid];
             cmpl rsi, (-1);
             jeq  slow_path;
-            xorq rax, rax;
-            movw rax, [rdi + 2];    // ObjKind
-            cmpq rax, (ObjKind::OBJECT);
+            cmpw [rdi + 2], (ObjKind::OBJECT);
             jne  no_inline;
             cmpl rsi, (OBJECT_INLINE_IVAR);
             jge no_inline;

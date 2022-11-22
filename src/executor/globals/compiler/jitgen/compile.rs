@@ -19,9 +19,7 @@ impl Codegen {
             if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
                 let no_inline = self.jit.label();
                 monoasm!(self.jit,
-                    xorq rax, rax;
-                    movw rax, [rdi + 2];    // ObjKind
-                    cmpq rax, (ObjKind::OBJECT);
+                    cmpw [rdi + 2], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
                 );
@@ -69,9 +67,7 @@ impl Codegen {
             if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
                 let no_inline = self.jit.label();
                 monoasm!(self.jit,
-                    xorq rax, rax;
-                    movw rax, [rdi + 2];
-                    cmpq rax, (ObjKind::OBJECT);
+                    cmpw [rdi + 2], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [rbp - (conv(src))];   // val: Value
                     movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;

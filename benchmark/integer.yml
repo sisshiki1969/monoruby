@@ -1,4 +1,8 @@
 benchmark:
   to_f: |
     4587.to_f
+    4587.to_f
+    4587.to_f
+    4587.to_f
+    4587.to_f
 loop_count: 1000000
