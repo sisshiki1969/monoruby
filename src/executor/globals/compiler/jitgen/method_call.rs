@@ -35,32 +35,44 @@ impl Codegen {
         pc: BcPc,
     ) {
         let MethodInfo {
-            recv, args, len, ..
+            recv,
+            args,
+            len,
+            callee_codeptr,
         } = method_info;
         match (pc - 1).op1() {
             BcOp::MethodCall(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
                 ctx.write_back_slot(self, recv);
-                if let Some(codeptr) = method_info.callee_codeptr {
+                if let Some(codeptr) = callee_codeptr {
                     let cached = Cached::new(pc, codeptr);
-                    if cached.func_id() == fnstore.tof {
+                    if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
                         let deopt = self.gen_side_deopt(pc - 1, ctx);
-                        let fret = ctx.xmm_write(ret);
+                        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+                        // Thus, we can omit a class guard.
                         monoasm!(self.jit,
-                            movq  rdi, [rbp - (conv(method_info.recv))];
-                            testq rdi, 0b001;
-                            jz    deopt;
-                            sarq  rdi, 1;
-                            cvtsi2sdq xmm(fret.enc()), rdi;
+                            movq rdi, [rbp - (conv(recv))];
                         );
-                        return;
-                    } else if cached.func_id() == fnstore.sqrt {
-                        //let deopt = self.gen_side_deopt(pc - 1, ctx);
-                        let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
-                        let fret = ctx.xmm_write(ret);
-                        monoasm!(self.jit,
-                            sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
-                        );
+                        if !recv.is_zero() {
+                            self.guard_class(cached.class_id, deopt);
+                        }
+                        self.guard_version(cached.version, deopt);
+                        match inline_id {
+                            InlineMethod::IntegerTof => {
+                                let fret = ctx.xmm_write(ret);
+                                monoasm!(self.jit,
+                                    sarq  rdi, 1;
+                                    cvtsi2sdq xmm(fret.enc()), rdi;
+                                );
+                            }
+                            InlineMethod::MathSqrt => {
+                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
+                                let fret = ctx.xmm_write(ret);
+                                monoasm!(self.jit,
+                                    sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
+                                );
+                            }
+                        }
                         return;
                     }
                 }

@@ -9,7 +9,7 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
-    globals.define_builtin_func_tof(INTEGER_CLASS, "to_f", tof, 0);
+    globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", tof, 0, InlineMethod::IntegerTof);
 }
 
 /// ### Integer#times

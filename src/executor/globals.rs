@@ -18,6 +18,12 @@ pub use compiler::*;
 pub use error::*;
 pub use functions::*;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InlineMethod {
+    IntegerTof,
+    MathSqrt,
+}
+
 ///
 /// Global state.
 ///
@@ -317,17 +323,18 @@ impl Globals {
         func_id
     }
 
-    pub(crate) fn define_builtin_func_tof(
+    pub(crate) fn define_builtin_func_inlinable(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         arity: i32,
+        inline_id: InlineMethod,
     ) -> FuncId {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id);
-        self.func.tof = func_id;
+        self.func.inline.insert(func_id, inline_id);
         func_id
     }
 
@@ -345,18 +352,19 @@ impl Globals {
         func_id
     }
 
-    pub(crate) fn define_builtin_singleton_func_sqrt(
+    pub(crate) fn define_builtin_singleton_func_inlinable(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         arity: i32,
+        inline_id: InlineMethod,
     ) -> FuncId {
         let class_id = self.get_singleton_id(class_id);
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id);
-        self.func.sqrt = func_id;
+        self.func.inline.insert(func_id, inline_id);
         func_id
     }
 

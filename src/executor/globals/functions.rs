@@ -107,8 +107,7 @@ pub struct ConstSiteId(pub u32);
 #[derive(Clone, PartialEq)]
 pub(crate) struct FnStore {
     functions: Funcs,
-    pub(crate) tof: FuncId,
-    pub(crate) sqrt: FuncId,
+    pub(crate) inline: HashMap<FuncId, InlineMethod>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
 }
@@ -143,8 +142,7 @@ impl FnStore {
     pub(super) fn new() -> Self {
         Self {
             functions: Funcs::default(),
-            tof: FuncId::default(),
-            sqrt: FuncId::default(),
+            inline: HashMap::default(),
             constsite_info: vec![],
         }
     }
@@ -610,6 +608,13 @@ impl ISeqInfo {
         }
     }
 
+    ///
+    /// Get basic block information.
+    ///
+    /// This returns a Vec which represents whether it is a start of a basic block for each bytecode.
+    ///
+    /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
+    ///
     pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         let mut skip = false;
@@ -664,6 +669,7 @@ impl ISeqInfo {
                 }
             }
         }
+        // a first bytecode is always a start of basic block.
         if bb_info[0].is_none() {
             bb_info[0] = Some((0, vec![]));
         }

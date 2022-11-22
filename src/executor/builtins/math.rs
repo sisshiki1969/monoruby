@@ -7,7 +7,13 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.define_builtin_singleton_func_sqrt(class_id, "sqrt", sqrt, 1);
+    globals.define_builtin_singleton_func_inlinable(
+        class_id,
+        "sqrt",
+        sqrt,
+        1,
+        InlineMethod::MathSqrt,
+    );
     globals.define_builtin_singleton_func(class_id, "cos", cos, 1);
     globals.define_builtin_singleton_func(class_id, "sin", sin, 1);
 }
