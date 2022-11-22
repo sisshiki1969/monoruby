@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct LoopAnalysis {
     /// key: dest_idx, value Vec<(src_idx, reginfo)>
     branch_map: HashMap<usize, Vec<(usize, RegInfo)>>,
+    /// Basic block information
     bb_info: Vec<Option<(usize, Vec<usize>)>>,
     loop_level: usize,
     backedge_info: Option<RegInfo>,
@@ -11,6 +12,9 @@ pub(super) struct LoopAnalysis {
 }
 
 impl LoopAnalysis {
+    ///
+    /// Liveness analysis for loops.
+    ///
     pub(super) fn analyse(func: &ISeqInfo, bb_pos: usize) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();

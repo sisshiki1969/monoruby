@@ -606,6 +606,13 @@ impl ISeqInfo {
         }
     }
 
+    ///
+    /// Get basic block information.
+    ///
+    /// This returns a Vec which represents whether it is a start of a basic block for each bytecode.
+    ///
+    /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
+    ///
     pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         let mut skip = false;
@@ -660,6 +667,7 @@ impl ISeqInfo {
                 }
             }
         }
+        // a first bytecode is always a start of basic block.
         if bb_info[0].is_none() {
             bb_info[0] = Some((0, vec![]));
         }
