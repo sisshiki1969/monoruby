@@ -345,6 +345,32 @@ impl BBContext {
     }
 }
 
+#[derive(Debug)]
+struct InlineCached {
+    codeptr: CodePtr,
+    meta: Meta,
+    class_id: ClassId,
+    version: u32,
+    pc: BcPc,
+}
+
+impl InlineCached {
+    fn new(pc: BcPc, codeptr: CodePtr) -> Self {
+        let (class_id, version) = (pc - 1).class_version();
+        InlineCached {
+            codeptr,
+            meta: (pc + 1).meta(),
+            class_id,
+            version,
+            pc: (pc + 1).pc(),
+        }
+    }
+
+    fn func_id(&self) -> FuncId {
+        self.meta.func_id()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[repr(transparent)]
 struct XmmInfo([Vec<SlotId>; 14]);
@@ -866,7 +892,7 @@ impl Codegen {
         let is_loop = matches!(func.get_pc(cc.bb_pos).op1(), BcOp::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
         let mut ctx = if is_loop {
-            self.gen_merging_branches_loop(func, cc, cc.bb_pos)
+            self.gen_merging_branches_loop(func, fnstore, cc, cc.bb_pos)
         } else {
             self.gen_merging_branches(func, cc, cc.bb_pos)
         };

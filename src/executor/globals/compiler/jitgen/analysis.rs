@@ -15,7 +15,11 @@ impl LoopAnalysis {
     ///
     /// Liveness analysis for loops.
     ///
-    pub(super) fn analyse(func: &ISeqInfo, bb_pos: usize) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+    pub(super) fn analyse(
+        func: &ISeqInfo,
+        fnstore: &FnStore,
+        bb_pos: usize,
+    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<usize> = ctx
@@ -45,7 +49,7 @@ impl LoopAnalysis {
                     acc
                 })
             };
-            if let Some(info) = ctx.scan_bb(func, reg_info, bb_pos) {
+            if let Some(info) = ctx.scan_bb(func, fnstore, reg_info, bb_pos) {
                 exit_info = info;
                 break;
             };
@@ -124,6 +128,7 @@ impl LoopAnalysis {
     fn scan_bb(
         &mut self,
         func: &ISeqInfo,
+        fnstore: &FnStore,
         mut reg_info: RegInfo,
         bb_pos: usize,
     ) -> Option<RegInfo> {
@@ -162,8 +167,11 @@ impl LoopAnalysis {
                     reg_info.def_as(ret, false);
                 }
                 BcOp::LoadConst(dst, _const_id) => {
-                    let is_float =
-                        pc.value().is_some() && pc.value().unwrap().class_id() == FLOAT_CLASS;
+                    let is_float = if let Some(value) = pc.value() {
+                        value.class_id() == FLOAT_CLASS
+                    } else {
+                        false
+                    };
                     reg_info.def_as(dst, is_float);
                 }
                 BcOp::StoreConst(..) => {}
@@ -225,24 +233,46 @@ impl LoopAnalysis {
                 BcOp::MethodCallBlock(..) => {}
                 BcOp::MethodArgs(method_info) => {
                     let MethodInfo {
-                        recv, args, len, ..
+                        recv,
+                        args,
+                        len,
+                        callee_codeptr,
                     } = method_info;
-                    let class = (self.pc - 1).class_version().0;
                     match (self.pc - 1).op1() {
-                        BcOp::MethodCall(ret, name) => {
-                            if class == INTEGER_CLASS && name == IdentId::get_ident_id("to_f") {
-                                reg_info.use_as(recv, false, INTEGER_CLASS);
-                                reg_info.def_as(ret, true);
-                            } else {
-                                reg_info.use_as(recv, class == FLOAT_CLASS, class);
-                                for i in 0..len {
-                                    reg_info.use_non_float(args + i);
+                        BcOp::MethodCall(ret, ..) => {
+                            if let Some(codeptr) = callee_codeptr {
+                                let cached = InlineCached::new(self.pc, codeptr);
+                                if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
+                                    match inline_id {
+                                        InlineMethod::IntegerTof => {
+                                            reg_info.use_non_float(recv);
+                                            reg_info.def_as(ret, true);
+                                        }
+                                        InlineMethod::MathSqrt => {
+                                            reg_info.use_non_float(recv);
+                                            reg_info.use_as(args, true, FLOAT_CLASS);
+                                            reg_info.def_as(ret, true);
+                                        }
+                                        InlineMethod::MathCos => {
+                                            reg_info.use_non_float(recv);
+                                            reg_info.use_as(args, true, FLOAT_CLASS);
+                                            reg_info.def_as(ret, true);
+                                        }
+                                        InlineMethod::MathSin => {
+                                            reg_info.use_non_float(recv);
+                                            reg_info.use_as(args, true, FLOAT_CLASS);
+                                            reg_info.def_as(ret, true);
+                                        }
+                                    }
+                                } else {
+                                    reg_info.call_method(recv, args, len, ret);
                                 }
-                                reg_info.def_as(ret, false);
+                            } else {
+                                reg_info.call_method(recv, args, len, ret);
                             }
                         }
                         BcOp::MethodCallBlock(ret, ..) => {
-                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
+                            reg_info.use_non_float(recv);
                             for i in 0..len + 1 {
                                 reg_info.use_non_float(args + i);
                             }
@@ -253,11 +283,7 @@ impl LoopAnalysis {
                             reg_info.def_as(ret, false);
                         }
                         BcOp::Yield(ret) => {
-                            reg_info.use_as(recv, class == FLOAT_CLASS, class);
-                            for i in 0..len {
-                                reg_info.use_non_float(args + i);
-                            }
-                            reg_info.def_as(ret, false);
+                            reg_info.call_method(recv, args, len, ret);
                         }
                         _ => unreachable!(),
                     };
@@ -332,6 +358,14 @@ impl RegInfo {
             })
             .collect()
     }
+
+    fn call_method(&mut self, recv: SlotId, args: SlotId, len: u16, ret: SlotId) {
+        self.use_non_float(recv);
+        for i in 0..len {
+            self.use_non_float(args + i);
+        }
+        self.def_as(ret, false);
+    }
 }
 
 impl RegInfo {
@@ -348,8 +382,8 @@ impl RegInfo {
         }
     }
 
-    fn use_as(&mut self, slot: SlotId, is_float_op: bool, class: ClassId) {
-        self[slot].xmm_link = if is_float_op {
+    fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
+        self[slot].xmm_link = if use_as_float {
             match self[slot].xmm_link {
                 XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
                 XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),

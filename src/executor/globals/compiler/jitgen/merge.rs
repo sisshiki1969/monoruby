@@ -28,6 +28,7 @@ impl Codegen {
     pub(super) fn gen_merging_branches_loop(
         &mut self,
         func: &ISeqInfo,
+        fnstore: &FnStore,
         cc: &mut JitContext,
         bb_pos: usize,
     ) -> BBContext {
@@ -35,7 +36,7 @@ impl Codegen {
             let pc = func.get_pc(bb_pos);
             #[cfg(feature = "emit-tir")]
             eprintln!("gen_merge bb(loop): {bb_pos}");
-            let (use_set, unused) = analysis::LoopAnalysis::analyse(func, cc.bb_pos);
+            let (use_set, unused) = analysis::LoopAnalysis::analyse(func, fnstore, cc.bb_pos);
             let cur_label = cc.labels[&bb_pos];
 
             #[cfg(feature = "emit-tir")]

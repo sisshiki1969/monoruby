@@ -1,31 +1,5 @@
 use super::*;
 
-#[derive(Debug)]
-struct Cached {
-    codeptr: CodePtr,
-    meta: Meta,
-    class_id: ClassId,
-    version: u32,
-    pc: BcPc,
-}
-
-impl Cached {
-    fn new(pc: BcPc, codeptr: CodePtr) -> Self {
-        let (class_id, version) = (pc - 1).class_version();
-        Cached {
-            codeptr,
-            meta: (pc + 1).meta(),
-            class_id,
-            version,
-            pc: (pc + 1).pc(),
-        }
-    }
-
-    fn func_id(&self) -> FuncId {
-        self.meta.func_id()
-    }
-}
-
 impl Codegen {
     extern "C" fn cos(f: f64) -> f64 {
         f.cos()
@@ -53,7 +27,7 @@ impl Codegen {
                 ctx.dealloc_xmm(ret);
                 ctx.write_back_slot(self, recv);
                 if let Some(codeptr) = callee_codeptr {
-                    let cached = Cached::new(pc, codeptr);
+                    let cached = InlineCached::new(pc, codeptr);
                     if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
                         let deopt = self.gen_side_deopt(pc - 1, ctx);
                         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
@@ -152,7 +126,7 @@ impl Codegen {
             ..
         } = method_info;
         if let Some(codeptr) = callee_codeptr {
-            let cached = Cached::new(pc, codeptr);
+            let cached = InlineCached::new(pc, codeptr);
             if recv.is_zero() && ctx.self_class != cached.class_id {
                 self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
             } else {
@@ -173,7 +147,7 @@ impl Codegen {
         method_info: MethodInfo,
         block: Option<SlotId>,
         ret: SlotId,
-        cached: Cached,
+        cached: InlineCached,
         pc: BcPc,
     ) {
         let deopt = self.gen_side_deopt(pc - 1, ctx);
@@ -560,7 +534,7 @@ impl Codegen {
         method_info: MethodInfo,
         ret: SlotId,
         block: Option<SlotId>,
-        cached: Cached,
+        cached: InlineCached,
         pc: BcPc,
     ) {
         // argument registers:
