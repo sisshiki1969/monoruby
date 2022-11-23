@@ -1007,5 +1007,6 @@ mod test {
                 run_test(&format!("{} && {}", lhs, rhs));
             }
         }
+        run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");
     }
 }

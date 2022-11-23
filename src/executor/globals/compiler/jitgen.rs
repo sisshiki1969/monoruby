@@ -1136,65 +1136,63 @@ impl Codegen {
                     }
                 }
 
-                BcOp::Cmp(kind, ret, lhs, rhs, optimizable) => {
-                    if !optimizable {
-                        if pc.is_float_binop() {
-                            let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
-                            ctx.dealloc_xmm(ret);
-                            monoasm! { self.jit,
-                                xorq rax, rax;
-                                ucomisd xmm(flhs.enc()), xmm(frhs.enc());
-                            };
-                            self.setflag_float(kind);
-                            self.store_rax(ret);
-                        } else if pc.is_integer_binop() {
-                            let deopt = self.gen_side_deopt(pc, &ctx);
-                            ctx.write_back_slot(self, lhs);
-                            ctx.write_back_slot(self, rhs);
-                            ctx.dealloc_xmm(ret);
-                            self.gen_cmp_prep(lhs, rhs, deopt);
-                            self.gen_integer_cmp_kind(kind, ret);
-                        } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
-                        } else {
-                            let generic = self.jit.label();
-                            ctx.write_back_slot(self, lhs);
-                            ctx.write_back_slot(self, rhs);
-                            ctx.dealloc_xmm(ret);
-                            self.gen_cmp_prep(lhs, rhs, generic);
-                            self.gen_cmp_kind(kind, generic, ret, &ctx);
-                        }
+                BcOp::Cmp(kind, ret, lhs, rhs, false) => {
+                    if pc.is_float_binop() {
+                        let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
+                        ctx.dealloc_xmm(ret);
+                        monoasm! { self.jit,
+                            xorq rax, rax;
+                            ucomisd xmm(flhs.enc()), xmm(frhs.enc());
+                        };
+                        self.setflag_float(kind);
+                        self.store_rax(ret);
+                    } else if pc.is_integer_binop() {
+                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        ctx.write_back_slot(self, lhs);
+                        ctx.write_back_slot(self, rhs);
+                        ctx.dealloc_xmm(ret);
+                        self.gen_cmp_prep(lhs, rhs, deopt);
+                        self.gen_integer_cmp_kind(kind, ret);
+                    } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
+                    } else {
+                        let generic = self.jit.label();
+                        ctx.write_back_slot(self, lhs);
+                        ctx.write_back_slot(self, rhs);
+                        ctx.dealloc_xmm(ret);
+                        self.gen_cmp_prep(lhs, rhs, generic);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
-                BcOp::Cmpri(kind, ret, lhs, rhs, optimizable) => {
-                    if !optimizable {
-                        if pc.is_float1() {
-                            let rhs_label = self.jit.const_f64(rhs as f64);
-                            let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
-                            ctx.dealloc_xmm(ret);
-                            monoasm! { self.jit,
-                                xorq rax, rax;
-                                ucomisd xmm(flhs.enc()), [rip + rhs_label];
-                            };
-                            self.setflag_float(kind);
-                            self.store_rax(ret);
-                        } else if pc.is_integer1() {
-                            let deopt = self.gen_side_deopt(pc, &ctx);
-                            ctx.write_back_slot(self, lhs);
-                            ctx.dealloc_xmm(ret);
-                            self.gen_cmpri_prep(lhs, rhs, deopt);
-                            self.gen_integer_cmp_kind(kind, ret);
-                        } else if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
-                        } else {
-                            let generic = self.jit.label();
-                            ctx.write_back_slot(self, lhs);
-                            ctx.dealloc_xmm(ret);
-                            self.gen_cmpri_prep(lhs, rhs, generic);
-                            self.gen_cmp_kind(kind, generic, ret, &ctx);
-                        }
+                BcOp::Cmp(_, _, _, _, true) => {}
+                BcOp::Cmpri(kind, ret, lhs, rhs, false) => {
+                    if pc.is_float1() {
+                        let rhs_label = self.jit.const_f64(rhs as f64);
+                        let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
+                        ctx.dealloc_xmm(ret);
+                        monoasm! { self.jit,
+                            xorq rax, rax;
+                            ucomisd xmm(flhs.enc()), [rip + rhs_label];
+                        };
+                        self.setflag_float(kind);
+                        self.store_rax(ret);
+                    } else if pc.is_integer1() {
+                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        ctx.write_back_slot(self, lhs);
+                        ctx.dealloc_xmm(ret);
+                        self.gen_cmpri_prep(lhs, rhs, deopt);
+                        self.gen_integer_cmp_kind(kind, ret);
+                    } else if pc.classid1().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
+                    } else {
+                        let generic = self.jit.label();
+                        ctx.write_back_slot(self, lhs);
+                        ctx.dealloc_xmm(ret);
+                        self.gen_cmpri_prep(lhs, rhs, generic);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx);
                     }
                 }
+                BcOp::Cmpri(_, _, _, _, true) => {}
                 BcOp::Mov(dst, src) => {
                     ctx.copy_slot(self, src, dst);
                 }

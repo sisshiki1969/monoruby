@@ -124,6 +124,29 @@ impl IrContext {
             Loc::default(),
         );
     }
+
+    fn gen_opt_condnotbr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        cond: Node,
+        else_pos: usize,
+    ) -> Result<()> {
+        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+            let loc = cond.loc;
+            let cond = info.next_reg().into();
+            self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
+            info.pop();
+            self.gen_condnotbr(cond, else_pos, true);
+        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
+            self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
+            self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+        } else {
+            let cond = self.gen_temp_expr(ctx, info, cond)?;
+            self.gen_condnotbr(cond, else_pos, false);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn is_smi(node: &Node) -> Option<i16> {
@@ -695,16 +718,7 @@ impl IrContext {
             } => {
                 let else_pos = self.new_label();
                 let succ_pos = self.new_label();
-                if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
-                    let loc = cond.loc;
-                    let cond = info.next_reg().into();
-                    self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
-                    info.pop();
-                    self.gen_condnotbr(cond, else_pos, true);
-                } else {
-                    let cond = self.gen_temp_expr(ctx, info, cond)?;
-                    self.gen_condnotbr(cond, else_pos, false);
-                }
+                self.gen_opt_condnotbr(ctx, info, cond, else_pos)?;
                 self.gen_expr(ctx, info, then_, use_value, is_ret)?;
                 if !is_ret {
                     self.gen_br(succ_pos);
@@ -1365,16 +1379,7 @@ impl IrContext {
         let loc = body.loc;
         self.apply_label(cond_pos);
         self.push(BcIr::LoopStart, loc);
-        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
-            let loc = cond.loc;
-            let cond = info.next_reg().into();
-            self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
-            info.pop();
-            self.gen_condnotbr(cond, succ_pos, true);
-        } else {
-            let cond = self.gen_temp_expr(ctx, info, cond)?;
-            self.gen_condnotbr(cond, succ_pos, false);
-        }
+        self.gen_opt_condnotbr(ctx, info, cond, succ_pos)?;
         self.gen_expr(ctx, info, body, false, false)?;
         self.gen_br(cond_pos);
         self.apply_label(succ_pos);
