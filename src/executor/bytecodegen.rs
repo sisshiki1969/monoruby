@@ -1580,7 +1580,7 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from_with_class_and_version(
                         enc_ww(129, op1.0, op2.0),
-                        INTEGER_CLASS,
+                        ClassId::default(),
                         -1i32 as u32,
                     )
                 }

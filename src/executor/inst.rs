@@ -556,7 +556,7 @@ impl Bc {
     pub(crate) fn from_with_class2(op1: u64) -> Self {
         Self {
             op1,
-            op2: Bc2::class2(INTEGER_CLASS, INTEGER_CLASS),
+            op2: Bc2::class2(ClassId::default(), ClassId::default()),
         }
     }
 

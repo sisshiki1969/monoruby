@@ -1055,6 +1055,8 @@ impl Codegen {
                         monoasm!(self.jit,
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
+                    } else if pc.classid1().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         ctx.write_back_slot(self, src);
                         ctx.dealloc_xmm(dst);
@@ -1079,6 +1081,8 @@ impl Codegen {
                         let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
+                    } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         ctx.write_back_slot(self, lhs);
                         ctx.write_back_slot(self, rhs);
@@ -1097,6 +1101,8 @@ impl Codegen {
                         let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
+                    } else if pc.classid1().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         ctx.write_back_slot(self, lhs);
                         ctx.dealloc_xmm(ret);
@@ -1117,6 +1123,8 @@ impl Codegen {
                         let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
+                    } else if pc.classid2().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         ctx.write_back_slot(self, rhs);
                         ctx.dealloc_xmm(ret);
@@ -1146,6 +1154,8 @@ impl Codegen {
                             ctx.dealloc_xmm(ret);
                             self.gen_cmp_prep(lhs, rhs, deopt);
                             self.gen_integer_cmp_kind(kind, ret);
+                        } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
                         } else {
                             let generic = self.jit.label();
                             ctx.write_back_slot(self, lhs);
@@ -1174,6 +1184,8 @@ impl Codegen {
                             ctx.dealloc_xmm(ret);
                             self.gen_cmpri_prep(lhs, rhs, deopt);
                             self.gen_integer_cmp_kind(kind, ret);
+                        } else if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
                         } else {
                             let generic = self.jit.label();
                             ctx.write_back_slot(self, lhs);
@@ -1207,35 +1219,12 @@ impl Codegen {
                 BcOp::MethodCallBlock(..) => {}
                 BcOp::Yield(..) => {}
                 BcOp::MethodArgs(method_info) => {
-                    if method_info.callee_codeptr.is_some() {
+                    if method_info.callee_codeptr.is_some()
+                        || matches!((pc - 1).op1(), BcOp::Yield(_))
+                    {
                         self.gen_method_call(fnstore, &mut ctx, method_info, pc);
                     } else {
-                        let counter = self.jit.const_i32(5);
-                        let deopt = self.gen_side_deopt(pc - 1, &ctx);
-                        monoasm!(self.jit,
-                            movq rdi, (NIL_VALUE);
-                            subl [rip + counter], 1;
-                            jne deopt;
-                            movq rdi, r12;
-                            movl rsi, [rbp - (OFFSET_FUNCID)];
-                            movq rdx, [rbp - (OFFSET_SELF)];
-                        );
-                        if let Some(index) = position {
-                            monoasm!(self.jit,
-                                movq rcx, (index.get_u64());
-                                movq rax, (Self::exec_jit_partial_compile);
-                                call rax;
-                            );
-                        } else {
-                            monoasm!(self.jit,
-                                movq rax, (Self::exec_jit_recompile);
-                                call rax;
-                            );
-                        }
-                        monoasm!(self.jit,
-                            movq rdi, (NIL_VALUE);
-                            jmp deopt;
-                        );
+                        self.recompile_and_deopt(&ctx, position, pc - 1);
                     }
                     skip = true;
                 }
@@ -1319,6 +1308,10 @@ impl Codegen {
                         let branch_dest = self.jit.label();
                         cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                         self.gen_cmp_float_opt(kind, branch_dest, brkind);
+                    //} else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                    //    self.recompile_and_deopt(&ctx, position, pc);
+                    //    let branch_dest = self.jit.label();
+                    //    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     } else {
                         let generic = self.jit.label();
                         let kind = match pc.op1() {
@@ -1360,6 +1353,35 @@ impl Codegen {
             }
         }
         true
+    }
+
+    fn recompile_and_deopt(&mut self, ctx: &BBContext, position: Option<BcPc>, pc: BcPc) {
+        let counter = self.jit.const_i32(5);
+        let deopt = self.gen_side_deopt(pc, &ctx);
+        monoasm!(self.jit,
+            movq rdi, (NIL_VALUE);
+            subl [rip + counter], 1;
+            jne deopt;
+            movq rdi, r12;
+            movl rsi, [rbp - (OFFSET_FUNCID)];
+            movq rdx, [rbp - (OFFSET_SELF)];
+        );
+        if let Some(index) = position {
+            monoasm!(self.jit,
+                movq rcx, (index.get_u64());
+                movq rax, (Self::exec_jit_partial_compile);
+                call rax;
+            );
+        } else {
+            monoasm!(self.jit,
+                movq rax, (Self::exec_jit_recompile);
+                call rax;
+            );
+        }
+        monoasm!(self.jit,
+            movq rdi, (NIL_VALUE);
+            jmp deopt;
+        );
     }
 }
 
