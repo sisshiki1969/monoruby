@@ -665,18 +665,30 @@ impl Codegen {
         globals.codegen.jit.get_label_address(label)
     }
 
+    extern "C" fn exec_jit_recompile(
+        globals: &mut Globals,
+        func_id: FuncId,
+        self_value: Value,
+    ) -> CodePtr {
+        let codeptr = Self::exec_jit_compile(globals, func_id, self_value);
+        let target = globals.func[func_id].data.codeptr.unwrap();
+        let offset = codeptr - target - 5;
+        unsafe { *(target.as_ptr().add(1) as *mut i32) = offset as i32 };
+        codeptr
+    }
+
     ///
     /// Compile the loop.
     ///
     extern "C" fn exec_jit_partial_compile(
         globals: &mut Globals,
         func_id: FuncId,
-        pc: BcPc,
         self_value: Value,
-    ) -> CodePtr {
-        let pc_index = pc - globals.func[func_id].data.pc;
-        let label = globals.jit_compile_ruby(func_id, self_value, Some(pc_index));
-        globals.codegen.jit.get_label_address(label)
+        pc: BcPc,
+    ) {
+        let label = globals.jit_compile_ruby(func_id, self_value, Some(pc));
+        let codeptr = globals.codegen.jit.get_label_address(label);
+        pc.write2(codeptr.as_ptr() as u64);
     }
 }
 
@@ -685,12 +697,12 @@ impl Globals {
         &mut self,
         func_id: FuncId,
         self_value: Value,
-        position: Option<usize>,
+        position: Option<BcPc>,
     ) -> DestLabel {
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
             let func = self.func[func_id].as_ruby_func();
-            let start_pos = position.unwrap_or_default();
+            let start_pos = func.get_pc_index(position);
             eprintln!(
                 "==> start {} compile: {} {:?} self_class:{} start:[{:05}] bytecode:{:?}",
                 if position.is_some() {

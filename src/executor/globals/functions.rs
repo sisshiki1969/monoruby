@@ -528,6 +528,14 @@ impl ISeqInfo {
         BcPc::from(&self.bytecode()[idx])
     }
 
+    pub(crate) fn get_pc_index(&self, pc: Option<BcPc>) -> usize {
+        if let Some(pos) = pc {
+            pos - self.get_pc(0)
+        } else {
+            0
+        }
+    }
+
     /// get bytecode length.
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode().len()

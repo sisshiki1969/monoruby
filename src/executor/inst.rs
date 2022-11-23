@@ -47,6 +47,10 @@ impl BcPc {
     pub(crate) fn get_u64(self) -> u64 {
         self.0 as _
     }
+
+    pub(crate) fn write2(self, data: u64) {
+        unsafe { *((self.0 as *mut u64).add(1)) = data }
+    }
 }
 
 impl std::ops::Sub<BcPcBase> for BcPc {

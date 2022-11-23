@@ -537,10 +537,10 @@ impl Codegen {
         fnstore: &FnStore,
         func_id: FuncId,
         self_value: Value,
-        position: Option<usize>,
+        position: Option<BcPc>,
     ) -> (DestLabel, Vec<(usize, usize)>) {
         let func = fnstore[func_id].as_ruby_func();
-        let start_pos = position.unwrap_or_default();
+        let start_pos = func.get_pc_index(position);
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = std::time::Instant::now();
@@ -571,7 +571,7 @@ impl Codegen {
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
             self.prologue(func);
-            let pc = func.get_pc(position.unwrap_or_default());
+            let pc = func.get_pc(0);
             let side_exit = self.gen_side_deopt_without_writeback(pc);
             monoasm!(self.jit,
                 movq rdi, [rbp - (OFFSET_SELF)];
@@ -589,7 +589,7 @@ impl Codegen {
         );
         for i in bb_start_pos {
             cc.bb_pos = i;
-            if self.compile_bb(fnstore, func, &mut cc) {
+            if self.compile_bb(fnstore, func, &mut cc, position) {
                 break;
             };
         }
@@ -887,7 +887,13 @@ impl Codegen {
         );
     }
 
-    fn compile_bb(&mut self, fnstore: &FnStore, func: &ISeqInfo, cc: &mut JitContext) -> bool {
+    fn compile_bb(
+        &mut self,
+        fnstore: &FnStore,
+        func: &ISeqInfo,
+        cc: &mut JitContext,
+        position: Option<BcPc>,
+    ) -> bool {
         let mut skip = false;
         let is_loop = matches!(func.get_pc(cc.bb_pos).op1(), BcOp::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
@@ -1201,7 +1207,36 @@ impl Codegen {
                 BcOp::MethodCallBlock(..) => {}
                 BcOp::Yield(..) => {}
                 BcOp::MethodArgs(method_info) => {
-                    self.gen_method_call(fnstore, &mut ctx, method_info, pc);
+                    if method_info.callee_codeptr.is_some() {
+                        self.gen_method_call(fnstore, &mut ctx, method_info, pc);
+                    } else {
+                        let counter = self.jit.const_i32(5);
+                        let deopt = self.gen_side_deopt(pc - 1, &ctx);
+                        monoasm!(self.jit,
+                            movq rdi, (NIL_VALUE);
+                            subl [rip + counter], 1;
+                            jne deopt;
+                            movq rdi, r12;
+                            movl rsi, [rbp - (OFFSET_FUNCID)];
+                            movq rdx, [rbp - (OFFSET_SELF)];
+                        );
+                        if let Some(index) = position {
+                            monoasm!(self.jit,
+                                movq rcx, (index.get_u64());
+                                movq rax, (Self::exec_jit_partial_compile);
+                                call rax;
+                            );
+                        } else {
+                            monoasm!(self.jit,
+                                movq rax, (Self::exec_jit_recompile);
+                                call rax;
+                            );
+                        }
+                        monoasm!(self.jit,
+                            movq rdi, (NIL_VALUE);
+                            jmp deopt;
+                        );
+                    }
                     skip = true;
                 }
                 BcOp::MethodDef(name, func) => {
