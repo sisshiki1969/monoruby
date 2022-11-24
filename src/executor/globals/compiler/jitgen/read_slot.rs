@@ -28,7 +28,8 @@ impl Codegen {
         match ctx.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
-                let freg = ctx.alloc_xmm_read(reg);
+                let freg = ctx.alloc_xmm();
+                ctx.link_r_xmm(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];
@@ -59,7 +60,8 @@ impl Codegen {
         match ctx.stack_slot[reg] {
             LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
             _ => {
-                let freg = ctx.alloc_xmm_read(reg);
+                let freg = ctx.alloc_xmm();
+                ctx.link_r_xmm(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 monoasm!(self.jit,
                     movq rdi, [rbp - (conv(reg))];

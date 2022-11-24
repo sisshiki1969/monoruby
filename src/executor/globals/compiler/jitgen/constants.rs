@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn jit_store_constant(&mut self, id: IdentId, src: SlotId, ctx: &BBContext) {
+    pub(super) fn jit_store_constant(&mut self, ctx: &BBContext, id: IdentId, src: SlotId) {
         let const_version = self.const_version;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
@@ -17,22 +17,13 @@ impl Codegen {
         self.xmm_restore(&xmm_using);
     }
 
-    pub(super) fn jit_load_constant(
+    pub(super) fn load_generic_constant(
         &mut self,
-        ctx: &mut BBContext,
+        ctx: &BBContext,
         dst: SlotId,
         id: ConstSiteId,
         pc: BcPc,
     ) {
-        if pc.value().map(|v| v.class_id()) == Some(FLOAT_CLASS) {
-            let fdst = ctx.alloc_xmm_read(dst);
-            self.load_float_constant(ctx, dst, fdst, id, pc);
-        } else {
-            self.load_generic_constant(ctx, dst, id, pc);
-        }
-    }
-
-    fn load_generic_constant(&mut self, ctx: &BBContext, dst: SlotId, id: ConstSiteId, pc: BcPc) {
         let cached_value = self.jit.const_i64(0);
         let cached_const_version = self.jit.const_i64(-1);
         let global_const_version = self.const_version;
@@ -60,7 +51,7 @@ impl Codegen {
         self.store_rax(dst);
     }
 
-    fn load_float_constant(
+    pub(super) fn load_float_constant(
         &mut self,
         ctx: &BBContext,
         dst: SlotId,

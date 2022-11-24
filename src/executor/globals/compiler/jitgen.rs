@@ -230,20 +230,6 @@ impl BBContext {
         }
     }
 
-    ///
-    /// Allocate new xmm register to the given stack slot for read f64.
-    ///
-    fn alloc_xmm_read(&mut self, reg: SlotId) -> Xmm {
-        match self.stack_slot[reg] {
-            LinkMode::None => {
-                let freg = self.alloc_xmm();
-                self.link_r_xmm(reg, freg);
-                freg
-            }
-            _ => unreachable!(),
-        }
-    }
-
     fn get_write_back(&self) -> WriteBack {
         self.xmm
             .0
@@ -994,11 +980,17 @@ impl Codegen {
                 }
                 BcOp::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    self.jit_load_constant(&mut ctx, dst, id, pc);
+                    if pc.value().map(|v| v.class_id()) == Some(FLOAT_CLASS) {
+                        let fdst = ctx.alloc_xmm();
+                        ctx.link_r_xmm(dst, fdst);
+                        self.load_float_constant(&ctx, dst, fdst, id, pc);
+                    } else {
+                        self.load_generic_constant(&ctx, dst, id, pc);
+                    }
                 }
                 BcOp::StoreConst(src, id) => {
                     self.write_back_slot(&mut ctx, src);
-                    self.jit_store_constant(id, src, &ctx);
+                    self.jit_store_constant(&ctx, id, src);
                 }
                 BcOp::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);
