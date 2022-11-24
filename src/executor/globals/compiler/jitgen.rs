@@ -216,16 +216,18 @@ impl BBContext {
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
     fn xmm_write(&mut self, reg: SlotId) -> Xmm {
-        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
-            if self.xmm[freg].len() == 1 {
+        match self.stack_slot[reg] {
+            LinkMode::XmmRW(freg) if self.xmm[freg].len() == 1 => {
                 assert_eq!(reg, self.xmm[freg][0]);
-                return freg;
+                freg
             }
-        };
-        self.dealloc_xmm(reg);
-        let freg = self.alloc_xmm();
-        self.link_rw_xmm(reg, freg);
-        freg
+            _ => {
+                self.dealloc_xmm(reg);
+                let freg = self.alloc_xmm();
+                self.link_rw_xmm(reg, freg);
+                freg
+            }
+        }
     }
 
     ///
@@ -239,47 +241,6 @@ impl BBContext {
                 freg
             }
             _ => unreachable!(),
-        }
-    }
-
-    ///
-    /// Copy *src* to *dst*.
-    ///
-    fn copy_slot(&mut self, codegen: &mut Codegen, src: SlotId, dst: SlotId) {
-        self.dealloc_xmm(dst);
-        match self.stack_slot[src] {
-            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
-                self.link_rw_xmm(dst, freg);
-            }
-            LinkMode::None => {
-                monoasm!(codegen.jit,
-                  movq rax, [rbp - (conv(src))];
-                  movq [rbp - (conv(dst))], rax;
-                );
-            }
-        }
-    }
-
-    ///
-    /// Write back a corresponding xmm register to the stack slot *reg*.
-    ///
-    /// the xmm will be deallocated.
-    ///
-    fn write_back_slot(&mut self, codegen: &mut Codegen, reg: SlotId) {
-        if let LinkMode::XmmRW(freg) = self.stack_slot[reg] {
-            let f64_to_val = codegen.f64_to_val;
-            monoasm!(codegen.jit,
-                movq xmm0, xmm(freg.enc());
-                call f64_to_val;
-            );
-            codegen.store_rax(reg);
-            self.stack_slot[reg] = LinkMode::XmmR(freg);
-        }
-    }
-
-    fn write_back_range(&mut self, codegen: &mut Codegen, arg: SlotId, len: u16) {
-        for reg in arg.0..arg.0 + len {
-            self.write_back_slot(codegen, SlotId::new(reg))
         }
     }
 
@@ -887,6 +848,47 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Copy *src* to *dst*.
+    ///
+    fn copy_slot(&mut self, ctx: &mut BBContext, src: SlotId, dst: SlotId) {
+        ctx.dealloc_xmm(dst);
+        match ctx.stack_slot[src] {
+            LinkMode::XmmRW(freg) | LinkMode::XmmR(freg) => {
+                ctx.link_rw_xmm(dst, freg);
+            }
+            LinkMode::None => {
+                monoasm!(self.jit,
+                  movq rax, [rbp - (conv(src))];
+                  movq [rbp - (conv(dst))], rax;
+                );
+            }
+        }
+    }
+
+    ///
+    /// Write back a corresponding xmm register to the stack slot *reg*.
+    ///
+    /// the xmm will be deallocated.
+    ///
+    fn write_back_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        if let LinkMode::XmmRW(freg) = ctx.stack_slot[reg] {
+            let f64_to_val = self.f64_to_val;
+            monoasm!(self.jit,
+                movq xmm0, xmm(freg.enc());
+                call f64_to_val;
+            );
+            self.store_rax(reg);
+            ctx.stack_slot[reg] = LinkMode::XmmR(freg);
+        }
+    }
+
+    fn write_back_range(&mut self, ctx: &mut BBContext, arg: SlotId, len: u16) {
+        for reg in arg.0..arg.0 + len {
+            self.write_back_slot(ctx, SlotId::new(reg))
+        }
+    }
+
     fn compile_bb(
         &mut self,
         fnstore: &FnStore,
@@ -968,7 +970,7 @@ impl Codegen {
                     }
                 }
                 BcOp::Array(ret, src, len) => {
-                    ctx.write_back_range(self, src, len);
+                    self.write_back_range(&mut ctx, src, len);
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
                         lea  rdi, [rbp - (conv(src))];
@@ -979,15 +981,15 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 BcOp::Index(ret, base, idx) => {
-                    ctx.write_back_slot(self, base);
-                    ctx.write_back_slot(self, idx);
+                    self.write_back_slot(&mut ctx, base);
+                    self.write_back_slot(&mut ctx, idx);
                     ctx.dealloc_xmm(ret);
                     self.jit_get_index(ret, base, idx, pc, &ctx);
                 }
                 BcOp::IndexAssign(src, base, idx) => {
-                    ctx.write_back_slot(self, base);
-                    ctx.write_back_slot(self, idx);
-                    ctx.write_back_slot(self, src);
+                    self.write_back_slot(&mut ctx, base);
+                    self.write_back_slot(&mut ctx, idx);
+                    self.write_back_slot(&mut ctx, src);
                     self.jit_index_assign(src, base, idx, pc, &ctx);
                 }
                 BcOp::LoadConst(dst, id) => {
@@ -995,7 +997,7 @@ impl Codegen {
                     self.jit_load_constant(&mut ctx, dst, id, pc);
                 }
                 BcOp::StoreConst(src, id) => {
-                    ctx.write_back_slot(self, src);
+                    self.write_back_slot(&mut ctx, src);
                     self.jit_store_constant(id, src, &ctx);
                 }
                 BcOp::LoadIvar(ret, id, cached_class, cached_ivarid) => {
@@ -1003,7 +1005,7 @@ impl Codegen {
                     self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
                 }
                 BcOp::StoreIvar(src, id, cached_class, cached_ivarid) => {
-                    ctx.write_back_slot(self, src);
+                    self.write_back_slot(&mut ctx, src);
                     self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
                 BcOp::LoadDynVar(ret, src) => {
@@ -1025,7 +1027,7 @@ impl Codegen {
                     }
                 }
                 BcOp::StoreDynVar(dst, src) => {
-                    ctx.write_back_slot(self, src);
+                    self.write_back_slot(&mut ctx, src);
                     monoasm!(self.jit,
                         movq rax, [rbp - (OFFSET_OUTER)];
                     );
@@ -1058,7 +1060,7 @@ impl Codegen {
                     } else if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
-                        ctx.write_back_slot(self, src);
+                        self.write_back_slot(&mut ctx, src);
                         ctx.dealloc_xmm(dst);
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
@@ -1073,8 +1075,8 @@ impl Codegen {
                 }
                 BcOp::BinOp(kind, ret, lhs, rhs) => {
                     if pc.is_integer_binop() {
-                        ctx.write_back_slot(self, lhs);
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, lhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_binop_integer(pc, kind, ret, BinOpMode::RR(lhs, rhs), &ctx);
                     } else if pc.is_float_binop() {
@@ -1084,8 +1086,8 @@ impl Codegen {
                     } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
-                        ctx.write_back_slot(self, lhs);
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, lhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.load_binary_args(lhs, rhs);
                         self.gen_generic_binop(&ctx, pc, kind, ret);
@@ -1094,7 +1096,7 @@ impl Codegen {
 
                 BcOp::BinOpRi(kind, ret, lhs, rhs) => {
                     if pc.is_integer1() {
-                        ctx.write_back_slot(self, lhs);
+                        self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_binop_integer(pc, kind, ret, BinOpMode::RI(lhs, rhs), &ctx);
                     } else if pc.is_float1() {
@@ -1104,7 +1106,7 @@ impl Codegen {
                     } else if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
-                        ctx.write_back_slot(self, lhs);
+                        self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         monoasm!(self.jit,
                             movq rdi, [rbp - (conv(lhs))];
@@ -1116,7 +1118,7 @@ impl Codegen {
 
                 BcOp::BinOpIr(kind, ret, lhs, rhs) => {
                     if pc.is_integer2() {
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_binop_integer(pc, kind, ret, BinOpMode::IR(lhs, rhs), &ctx);
                     } else if pc.is_float2() {
@@ -1126,7 +1128,7 @@ impl Codegen {
                     } else if pc.classid2().0 == 0 {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         monoasm!(self.jit,
                             movq rdi, (Value::int32(lhs as i32).get());
@@ -1148,8 +1150,8 @@ impl Codegen {
                         self.store_rax(ret);
                     } else if pc.is_integer_binop() {
                         let deopt = self.gen_side_deopt(pc, &ctx);
-                        ctx.write_back_slot(self, lhs);
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, lhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, deopt);
                         self.gen_integer_cmp_kind(kind, ret);
@@ -1157,8 +1159,8 @@ impl Codegen {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         let generic = self.jit.label();
-                        ctx.write_back_slot(self, lhs);
-                        ctx.write_back_slot(self, rhs);
+                        self.write_back_slot(&mut ctx, lhs);
+                        self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, generic);
                         self.gen_cmp_kind(kind, generic, ret, &ctx);
@@ -1178,7 +1180,7 @@ impl Codegen {
                         self.store_rax(ret);
                     } else if pc.is_integer1() {
                         let deopt = self.gen_side_deopt(pc, &ctx);
-                        ctx.write_back_slot(self, lhs);
+                        self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, deopt);
                         self.gen_integer_cmp_kind(kind, ret);
@@ -1186,7 +1188,7 @@ impl Codegen {
                         self.recompile_and_deopt(&ctx, position, pc);
                     } else {
                         let generic = self.jit.label();
-                        ctx.write_back_slot(self, lhs);
+                        self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, generic);
                         self.gen_cmp_kind(kind, generic, ret, &ctx);
@@ -1194,10 +1196,10 @@ impl Codegen {
                 }
                 BcOp::Cmpri(_, _, _, _, true) => {}
                 BcOp::Mov(dst, src) => {
-                    ctx.copy_slot(self, src, dst);
+                    self.copy_slot(&mut ctx, src, dst);
                 }
                 BcOp::ConcatStr(ret, arg, len) => {
-                    ctx.write_back_range(self, arg, len);
+                    self.write_back_range(&mut ctx, arg, len);
                     ctx.dealloc_xmm(ret);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1250,7 +1252,7 @@ impl Codegen {
                     self.jit_class_def(&ctx, ret, superclass, name, func_id);
                 }
                 BcOp::Ret(lhs) => {
-                    ctx.write_back_slot(self, lhs);
+                    self.write_back_slot(&mut ctx, lhs);
                     monoasm!(self.jit,
                         movq rax, [rbp - (conv(lhs))];
                     );
@@ -1314,14 +1316,14 @@ impl Codegen {
                         let generic = self.jit.label();
                         let kind = match pc.op1() {
                             BcOp::Cmp(kind, ret, lhs, rhs, true) => {
-                                ctx.write_back_slot(self, lhs);
-                                ctx.write_back_slot(self, rhs);
+                                self.write_back_slot(&mut ctx, lhs);
+                                self.write_back_slot(&mut ctx, rhs);
                                 ctx.dealloc_xmm(ret);
                                 self.gen_cmp_prep(lhs, rhs, generic);
                                 kind
                             }
                             BcOp::Cmpri(kind, ret, lhs, rhs, true) => {
-                                ctx.write_back_slot(self, lhs);
+                                self.write_back_slot(&mut ctx, lhs);
                                 ctx.dealloc_xmm(ret);
                                 self.gen_cmpri_prep(lhs, rhs, generic);
                                 kind

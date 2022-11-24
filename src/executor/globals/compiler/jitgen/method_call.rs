@@ -25,7 +25,7 @@ impl Codegen {
         match (pc - 1).op1() {
             BcOp::MethodCall(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
-                ctx.write_back_slot(self, recv);
+                self.write_back_slot(ctx, recv);
                 if let Some(codeptr) = callee_codeptr {
                     let cached = InlineCached::new(pc, codeptr);
                     if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
@@ -88,12 +88,12 @@ impl Codegen {
                         return;
                     }
                 }
-                ctx.write_back_range(self, args, len);
+                self.write_back_range(ctx, args, len);
                 self.gen_call(fnstore, ctx, method_info, name, None, ret, pc);
             }
             BcOp::MethodCallBlock(ret, name, ..) => {
                 ctx.dealloc_xmm(ret);
-                ctx.write_back_range(self, args, len + 1);
+                self.write_back_range(ctx, args, len + 1);
                 // We must write back and unlink all local vars since they may be accessed from block.
                 let wb = ctx.get_locals_write_back();
                 self.gen_write_back(wb);
@@ -103,7 +103,7 @@ impl Codegen {
             }
             BcOp::Yield(ret) => {
                 ctx.dealloc_xmm(ret);
-                ctx.write_back_range(self, args, len);
+                self.write_back_range(ctx, args, len);
                 self.gen_yield(ctx, method_info, ret, pc);
             }
             _ => unreachable!(),
