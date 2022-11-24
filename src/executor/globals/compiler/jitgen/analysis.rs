@@ -159,7 +159,11 @@ impl LoopAnalysis {
                     reg_info.def_as(ret, false);
                 }
                 BcOp::Literal(dst, val) => {
-                    reg_info.def_as(dst, val.class_id() == FLOAT_CLASS);
+                    if val.class_id() == FLOAT_CLASS {
+                        reg_info.def_float_const(dst);
+                    } else {
+                        reg_info.def_as(dst, false);
+                    }
                 }
                 BcOp::IndexAssign(..) => {}
                 BcOp::MethodDef(..) => {}
@@ -414,6 +418,16 @@ impl RegInfo {
             return;
         }
         self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
+        if self[slot].is_used == IsUsed::ND {
+            self[slot].is_used = IsUsed::NotUsed;
+        }
+    }
+
+    fn def_float_const(&mut self, slot: SlotId) {
+        if slot.is_zero() {
+            return;
+        }
+        self[slot].xmm_link = XmmLink::R(true);
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
         }

@@ -932,10 +932,13 @@ impl Codegen {
                 BcOp::Literal(dst, val) => {
                     ctx.dealloc_xmm(dst);
                     if let RV::Float(f) = val.unpack() {
-                        let fdst = ctx.xmm_write(dst);
+                        let freg = ctx.alloc_xmm();
+                        ctx.link_r_xmm(dst, freg);
                         let imm = self.jit.const_f64(f);
                         monoasm!(self.jit,
-                            movq xmm(fdst.enc()), [rip + imm];
+                            movq xmm(freg.enc()), [rip + imm];
+                            movq rax, (Value::new_float(f).get());
+                            movq [rbp - (conv(dst))], rax;
                         );
                     } else {
                         if val.is_packed_value() {
