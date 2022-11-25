@@ -142,35 +142,35 @@ impl LoopAnalysis {
             }
 
             match self.pc.op1() {
-                BcOp::LoopStart(_) => {
+                TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }
-                BcOp::LoopEnd => {
+                TraceIr::LoopEnd => {
                     self.loop_level -= 1;
                     if self.loop_level == 0 {
                         return Some(reg_info);
                     }
                 }
-                BcOp::Integer(ret, ..)
-                | BcOp::Symbol(ret, ..)
-                | BcOp::Array(ret, ..)
-                | BcOp::Index(ret, ..)
-                | BcOp::Nil(ret) => {
+                TraceIr::Integer(ret, ..)
+                | TraceIr::Symbol(ret, ..)
+                | TraceIr::Array(ret, ..)
+                | TraceIr::Index(ret, ..)
+                | TraceIr::Nil(ret) => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::Literal(dst, val) => {
+                TraceIr::Literal(dst, val) => {
                     if val.class_id() == FLOAT_CLASS {
                         reg_info.def_float_const(dst);
                     } else {
                         reg_info.def_as(dst, false);
                     }
                 }
-                BcOp::IndexAssign(..) => {}
-                BcOp::MethodDef(..) => {}
-                BcOp::ClassDef { ret, .. } => {
+                TraceIr::IndexAssign(..) => {}
+                TraceIr::MethodDef(..) => {}
+                TraceIr::ClassDef { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
-                BcOp::LoadConst(dst, _const_id) => {
+                TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
                         value.class_id() == FLOAT_CLASS
                     } else {
@@ -178,64 +178,74 @@ impl LoopAnalysis {
                     };
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::StoreConst(..) => {}
-                BcOp::LoadDynVar(dst, ..) => {
+                TraceIr::StoreConst(..) => {}
+                TraceIr::LoadDynVar(dst, ..) => {
                     reg_info.def_as(dst, false);
                 }
-                BcOp::StoreDynVar(_dst, src) => {
+                TraceIr::StoreDynVar(_dst, src) => {
                     reg_info.use_non_float(src);
                 }
-                BcOp::LoadIvar(dst, ..) => {
+                TraceIr::LoadIvar(dst, ..) => {
                     reg_info.def_as(dst, false);
                 }
-                BcOp::StoreIvar(src, ..) => {
+                TraceIr::StoreIvar(src, ..) => {
                     reg_info.use_non_float(src);
                 }
-                BcOp::Neg(dst, src) => {
+                TraceIr::Neg(dst, src) => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(src, is_float, pc.classid1());
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::BinOp(_kind, dst, lhs, rhs) => {
+                TraceIr::BinOp {
+                    kind: _,
+                    ret,
+                    lhs,
+                    rhs,
+                } => {
                     let is_float = pc.is_float_binop();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
-                    reg_info.def_as(dst, is_float);
+                    reg_info.def_as(ret, is_float);
                 }
-                BcOp::BinOpRi(_kind, dst, lhs, _rhs) => {
+                TraceIr::BinOpRi(_kind, dst, lhs, _rhs) => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::BinOpIr(_kind, dst, _lhs, rhs) => {
+                TraceIr::BinOpIr(_kind, dst, _lhs, rhs) => {
                     let is_float = pc.is_float2();
                     reg_info.use_as(rhs, is_float, pc.classid2());
                     reg_info.def_as(dst, is_float);
                 }
-                BcOp::Cmp(_kind, dst, lhs, rhs, _opt) => {
+                TraceIr::Cmp(_kind, dst, lhs, rhs, _opt) => {
                     let is_float = pc.is_float_binop();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
                     reg_info.def_as(dst, false);
                 }
-                BcOp::Cmpri(_kind, dst, lhs, _rhs, _opt) => {
+                TraceIr::Cmpri(_kind, dst, lhs, _rhs, _opt) => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.def_as(dst, false);
                 }
-                BcOp::Mov(dst, src) => {
+                TraceIr::Mov(dst, src) => {
                     reg_info.copy(dst, src);
                 }
-                BcOp::ConcatStr(dst, arg, len) => {
+                TraceIr::ConcatStr(dst, arg, len) => {
                     for r in arg.0..arg.0 + len {
                         reg_info.use_as(SlotId(r), false, STRING_CLASS);
                     }
                     reg_info.def_as(dst, false);
                 }
-                BcOp::MethodCall(..) => {}
-                BcOp::Yield(..) => {}
-                BcOp::MethodCallBlock(..) => {}
-                BcOp::MethodArgs(method_info) => {
+                TraceIr::Yield { ret, args, len } => {
+                    for i in 0..len {
+                        reg_info.use_non_float(args + i);
+                    }
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::MethodCall { .. } => {}
+                TraceIr::MethodCallBlock { .. } => {}
+                TraceIr::MethodArgs(method_info) => {
                     let MethodInfo {
                         recv,
                         args,
@@ -243,7 +253,7 @@ impl LoopAnalysis {
                         callee_codeptr,
                     } = method_info;
                     match (self.pc - 1).op1() {
-                        BcOp::MethodCall(ret, ..) => {
+                        TraceIr::MethodCall { ret, .. } => {
                             if let Some(codeptr) = callee_codeptr {
                                 let cached = InlineCached::new(self.pc, codeptr);
                                 if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
@@ -275,7 +285,7 @@ impl LoopAnalysis {
                                 reg_info.call_method(recv, args, len, ret);
                             }
                         }
-                        BcOp::MethodCallBlock(ret, ..) => {
+                        TraceIr::MethodCallBlock { ret, .. } => {
                             reg_info.use_non_float(recv);
                             for i in 0..len + 1 {
                                 reg_info.use_non_float(args + i);
@@ -286,18 +296,15 @@ impl LoopAnalysis {
                             }
                             reg_info.def_as(ret, false);
                         }
-                        BcOp::Yield(ret) => {
-                            reg_info.call_method(recv, args, len, ret);
-                        }
                         _ => unreachable!(),
                     };
                     skip = true;
                 }
-                BcOp::Ret(_ret) => {
+                TraceIr::Ret(_ret) => {
                     self.add_return(&reg_info);
                     return None;
                 }
-                BcOp::Br(disp) => {
+                TraceIr::Br(disp) => {
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info, dest_idx);
@@ -306,7 +313,7 @@ impl LoopAnalysis {
                     }
                     return None;
                 }
-                BcOp::CondBr(cond_, disp, _opt, _brkind) => {
+                TraceIr::CondBr(cond_, disp, _opt, _brkind) => {
                     reg_info.use_as(cond_, false, TRUE_CLASS);
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {

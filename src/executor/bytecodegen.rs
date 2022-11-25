@@ -1137,9 +1137,14 @@ impl IrContext {
         self.gen_args(ctx, info, args)?;
         info.temp = old_temp;
 
-        self.push(BcIr::Yield(ret), loc);
-        self.push(BcIr::MethodArgs(BcReg::Self_, arg.into(), len), loc);
-        self.push(BcIr::InlineCache, loc);
+        self.push(
+            BcIr::Yield {
+                ret,
+                args: arg.into(),
+                len,
+            },
+            loc,
+        );
 
         if is_ret {
             self.gen_ret(info, None);
@@ -1657,12 +1662,13 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
-                BcIr::Yield(ret) => {
+                BcIr::Yield { ret, args, len } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
-                    Bc::from_with_class_and_version(enc_wl(20, op1.0, 0), ClassId::new(0), 0)
+                    let op2 = info.get_index(args);
+                    Bc::from(enc_www(152, op1.0, op2.0, *len as u16))
                 }
                 BcIr::MethodArgs(recv, args, len) => {
                     let op1 = info.get_index(recv);

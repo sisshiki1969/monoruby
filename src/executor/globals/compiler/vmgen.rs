@@ -223,7 +223,6 @@ impl Codegen {
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
         self.dispatch[19] = self.vm_method_call(true);
-        self.dispatch[20] = self.vm_yield();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -248,6 +247,7 @@ impl Codegen {
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
+        self.dispatch[152] = self.vm_yield();
         self.dispatch[155] = self.vm_concat();
 
         self.dispatch[156] = self.vm_eqrr();
@@ -918,40 +918,28 @@ impl Codegen {
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         let vm_return = self.vm_return;
-        //
-        //      +------+------+------+------+
-        //      |    Yield    |             |
-        //      +------+------+------+------+
-        // r13->| MethodArgs  |   CodePtr   |
-        //      +------+------+------+------+
-        //      |     Meta    |     PC      |
-        //      +------+------+------+------+
-        //
-        // rdi: IdentId
         // r15: %ret
-        // [r13 +  0]; len
-        // [r13 +  2]; %args
-        // [r13 +  4]: %recv
-        // [r13 +  8]: CodePtr
-        // [r13 + 16]: Meta
-        // [r13 + 24]: PC
+        // rdi: %args
+        // rsi: len
 
         monoasm! { self.jit,
             pushq r15;
             pushq r13; // push pc
             // rsp + 08:[%ret]
             // rsp + 00:[pc]
+            pushq rdi;
+            pushq rsi;
             movq rdi, r12;
             movq rsi, [rbp - (OFFSET_BLOCK)];
             movq rax, (vm_get_block_data);
             call rax;
+            popq r10;  // r10 <- len
+            popq rcx;  // rcx <- %args
             // r9 <- CodePtr
             movq r9, [rax + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
             movq rdi, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + OFFSET_META)], rdi;
-            movzxw rcx, [r13 + 2]; // rcx <- args
-            movzxw r10, [r13 + 0];  // r10 <- len
             // set pc
             movq r13, [rax + (FUNCDATA_OFFSET_PC)];
             // set self
@@ -1011,7 +999,6 @@ impl Codegen {
         monoasm! { self.jit,
             popq r13;   // pop pc
             popq r15;   // pop %ret
-            addq r13, 32;
             testq rax, rax;
             jeq vm_return;
         };

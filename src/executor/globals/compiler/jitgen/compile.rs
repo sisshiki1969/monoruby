@@ -16,22 +16,14 @@ impl Codegen {
             movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
         if ctx.self_class == cached_class {
-            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                let no_inline = self.jit.label();
+            if ctx.self_kind == Some(ObjKind::OBJECT)
+                && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
+            {
                 monoasm!(self.jit,
-                    cmpw [rdi + 2], (ObjKind::OBJECT);
-                    jne  no_inline;
                     movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
                 );
-                self.jit.select_page(1);
-                self.jit.bind_label(no_inline);
-                self.get_ivar(cached_ivarid, &xmm_using);
-                monoasm!(self.jit,
-                    jmp exit;
-                );
-                self.jit.select_page(0);
             } else {
-                self.get_ivar(cached_ivarid, &xmm_using)
+                self.get_ivar(cached_ivarid, &xmm_using);
             }
         } else {
             // ctx.self_class != cached_class merely happens, but possible.
@@ -64,21 +56,13 @@ impl Codegen {
             movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
         );
         if ctx.self_class == cached_class {
-            if cached_ivarid.get() < OBJECT_INLINE_IVAR as u32 {
-                let no_inline = self.jit.label();
+            if ctx.self_kind == Some(ObjKind::OBJECT)
+                && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
+            {
                 monoasm!(self.jit,
-                    cmpw [rdi + 2], (ObjKind::OBJECT);
-                    jne  no_inline;
                     movq rax, [rbp - (conv(src))];   // val: Value
                     movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
-                self.jit.select_page(1);
-                self.jit.bind_label(no_inline);
-                self.set_ivar(src, cached_ivarid, &xmm_using);
-                monoasm!(self.jit,
-                    jmp exit;
-                );
-                self.jit.select_page(0);
             } else {
                 self.set_ivar(src, cached_ivarid, &xmm_using);
             }

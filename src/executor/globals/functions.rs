@@ -403,7 +403,7 @@ impl FuncInfo {
                 continue;
             }
             let bcop1 = pc.op1();
-            if let BcOp::MethodArgs(..) = bcop1 {
+            if let TraceIr::MethodArgs(..) = bcop1 {
                 skip = true;
                 continue;
             };
@@ -633,10 +633,10 @@ impl ISeqInfo {
                 continue;
             }
             match pc.op1() {
-                BcOp::MethodArgs(..) => {
+                TraceIr::MethodArgs(..) => {
                     skip = true;
                 }
-                BcOp::Br(disp) | BcOp::CondBr(_, disp, _, _) => {
+                TraceIr::Br(disp) | TraceIr::CondBr(_, disp, _, _) => {
                     info[((idx + 1) as i32 + disp) as usize].push(idx);
                 }
                 _ => {}
@@ -663,13 +663,13 @@ impl ISeqInfo {
                 continue;
             }
             match pc.op1() {
-                BcOp::MethodArgs(..) => {
+                TraceIr::MethodArgs(..) => {
                     skip = true;
                     if let Some(ref mut elem) = bb_info[idx + 2] {
                         elem.1.push(idx);
                     }
                 }
-                BcOp::Br(_) | BcOp::Ret(_) => {}
+                TraceIr::Br(_) | TraceIr::Ret(_) => {}
                 _ => {
                     if let Some(ref mut elem) = bb_info[idx + 1] {
                         elem.1.push(idx);

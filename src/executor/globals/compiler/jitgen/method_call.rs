@@ -23,7 +23,12 @@ impl Codegen {
             callee_codeptr,
         } = method_info;
         match (pc - 1).op1() {
-            BcOp::MethodCall(ret, name, ..) => {
+            TraceIr::MethodCall {
+                ret,
+                name,
+                class,
+                version,
+            } => {
                 ctx.dealloc_xmm(ret);
                 self.write_back_slot(ctx, recv);
                 if let Some(codeptr) = callee_codeptr {
@@ -36,9 +41,9 @@ impl Codegen {
                             movq rdi, [rbp - (conv(recv))];
                         );
                         if !recv.is_zero() {
-                            self.guard_class(cached.class_id, deopt);
+                            self.guard_class(class, deopt);
                         }
-                        self.guard_version(cached.version, deopt);
+                        self.guard_version(version, deopt);
                         match inline_id {
                             InlineMethod::IntegerTof => {
                                 let fret = ctx.xmm_write(ret);
@@ -91,7 +96,7 @@ impl Codegen {
                 self.write_back_range(ctx, args, len);
                 self.gen_call(fnstore, ctx, method_info, name, None, ret, pc);
             }
-            BcOp::MethodCallBlock(ret, name, ..) => {
+            TraceIr::MethodCallBlock { ret, name, .. } => {
                 ctx.dealloc_xmm(ret);
                 self.write_back_range(ctx, args, len + 1);
                 // We must write back and unlink all local vars since they may be accessed from block.
@@ -100,11 +105,6 @@ impl Codegen {
                 ctx.dealloc_locals();
                 method_info.args = method_info.args + 1;
                 self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
-            }
-            BcOp::Yield(ret) => {
-                ctx.dealloc_xmm(ret);
-                self.write_back_range(ctx, args, len);
-                self.gen_yield(ctx, method_info, ret, pc);
             }
             _ => unreachable!(),
         }
@@ -566,7 +566,14 @@ impl Codegen {
         }
     }
 
-    fn gen_yield(&mut self, ctx: &BBContext, method_info: MethodInfo, ret: SlotId, pc: BcPc) {
+    pub(super) fn gen_yield(
+        &mut self,
+        ctx: &BBContext,
+        args: SlotId,
+        len: u16,
+        ret: SlotId,
+        pc: BcPc,
+    ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
@@ -593,7 +600,7 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
         };
         // set arguments
-        self.set_args(method_info.args, method_info.len);
+        self.set_args(args, len);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -603,7 +610,7 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rdi, (method_info.len);
+            movq rdi, (len);
             call rsi;
         };
         self.pop_frame();

@@ -107,8 +107,8 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    pub(super) fn op1(&self) -> BcOp {
-        BcOp::from_bc(*self)
+    pub(super) fn op1(&self) -> TraceIr {
+        TraceIr::from_bc(*self)
     }
 }
 
@@ -122,10 +122,10 @@ impl BcPc {
             }
         }
         let s = match self.op1() {
-            BcOp::Br(disp) => {
+            TraceIr::Br(disp) => {
                 format!("br =>:{:05}", i as i32 + 1 + disp)
             }
-            BcOp::CondBr(reg, disp, opt, kind) => {
+            TraceIr::CondBr(reg, disp, opt, kind) => {
                 format!(
                     "cond{}br {}{:?} =>:{:05}",
                     kind.to_s(),
@@ -134,21 +134,21 @@ impl BcPc {
                     i as i32 + 1 + disp
                 )
             }
-            BcOp::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            BcOp::Symbol(reg, id) => format!("{:?} = :{}", reg, IdentId::get_name(id)),
-            BcOp::Literal(reg, val) => {
+            TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
+            TraceIr::Symbol(reg, id) => format!("{:?} = :{}", reg, IdentId::get_name(id)),
+            TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
             }
-            BcOp::Array(ret, src, len) => {
+            TraceIr::Array(ret, src, len) => {
                 format!("{:?} = array[{:?}; {}]", ret, src, len)
             }
-            BcOp::Index(ret, base, idx) => {
+            TraceIr::Index(ret, base, idx) => {
                 format!("{:?} = {:?}.[{:?}]", ret, base, idx)
             }
-            BcOp::IndexAssign(src, base, idx) => {
+            TraceIr::IndexAssign(src, base, idx) => {
                 format!("{:?}.[{:?}] = {:?}", base, idx, src)
             }
-            BcOp::LoadConst(reg, id) => {
+            TraceIr::LoadConst(reg, id) => {
                 let ConstSiteInfo {
                     name,
                     prefix,
@@ -170,16 +170,16 @@ impl BcPc {
                     }
                 )
             }
-            BcOp::StoreConst(reg, id) => {
+            TraceIr::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
-            BcOp::LoadDynVar(ret, src) => {
+            TraceIr::LoadDynVar(ret, src) => {
                 format!("{:?} = {:?}", ret, src)
             }
-            BcOp::StoreDynVar(dst, src) => {
+            TraceIr::StoreDynVar(dst, src) => {
                 format!("{:?} = {:?}", dst, src)
             }
-            BcOp::LoadIvar(reg, id, class_id, ivar_id) => {
+            TraceIr::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
                     "{:?} = {}: {}[{:?}]",
                     reg,
@@ -188,7 +188,7 @@ impl BcPc {
                     ivar_id,
                 )
             }
-            BcOp::StoreIvar(reg, id, class_id, ivar_id) => {
+            TraceIr::StoreIvar(reg, id, class_id, ivar_id) => {
                 format!(
                     "{}: {}[{:?}] = {:?}",
                     IdentId::get_name(id),
@@ -197,13 +197,18 @@ impl BcPc {
                     reg
                 )
             }
-            BcOp::Nil(reg) => format!("{:?} = nil", reg),
-            BcOp::Neg(dst, src) => {
+            TraceIr::Nil(reg) => format!("{:?} = nil", reg),
+            TraceIr::Neg(dst, src) => {
                 let op1 = format!("{:?} = neg {:?}", dst, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
-            BcOp::BinOp(kind, dst, lhs, rhs) => {
-                let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
+            TraceIr::BinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
+                let op1 = format!("{:?} = {:?} {} {:?}", ret, lhs, kind, rhs);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -211,7 +216,7 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpRi(kind, dst, lhs, rhs) => {
                 let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
@@ -220,7 +225,7 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpIr(kind, dst, lhs, rhs) => {
                 let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
@@ -229,7 +234,7 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+            TraceIr::Cmp(kind, dst, lhs, rhs, opt) => {
                 let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
@@ -238,7 +243,7 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+            TraceIr::Cmpri(kind, dst, lhs, rhs, opt) => {
                 let op1 = format!(
                     "{}{:?} = {:?} {:?} {}: i16",
                     optstr(opt),
@@ -255,12 +260,14 @@ impl BcPc {
                 )
             }
 
-            BcOp::Ret(reg) => format!("ret {:?}", reg),
-            BcOp::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
-            BcOp::MethodCall(ret, name) => {
+            TraceIr::Ret(reg) => format!("ret {:?}", reg),
+            TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
+            TraceIr::MethodCall {
+                ret, name, class, ..
+            } => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
-                    BcOp::MethodArgs(method_info) => {
+                    TraceIr::MethodArgs(method_info) => {
                         let MethodInfo {
                             recv, args, len, ..
                         } = method_info;
@@ -281,27 +288,21 @@ impl BcPc {
                         len,
                     )
                 };
-                format!("{:36} [{}]", op1, self.class_version().0.get_name(globals))
+                format!("{:36} [{}]", op1, class.get_name(globals))
             }
-            BcOp::Yield(ret) => {
-                let args_pc = *self + 1;
-                let (args, len) = match args_pc.op1() {
-                    BcOp::MethodArgs(method_info) => {
-                        let MethodInfo { args, len, .. } = method_info;
-                        (args, len)
-                    }
-                    _ => unreachable!(),
-                };
+            TraceIr::Yield { ret, args, len } => {
                 if len == 0 {
                     format!("{} = yield", ret.ret_str())
                 } else {
                     format!("{} = yield({:?}; {})", ret.ret_str(), args, len)
                 }
             }
-            BcOp::MethodCallBlock(ret, name) => {
+            TraceIr::MethodCallBlock {
+                ret, name, class, ..
+            } => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
-                    BcOp::MethodArgs(method_info) => {
+                    TraceIr::MethodArgs(method_info) => {
                         let MethodInfo {
                             recv, args, len, ..
                         } = method_info;
@@ -323,14 +324,14 @@ impl BcPc {
                         args,
                     )
                 };
-                format!("{:36} [{}]", op1, self.class_version().0.get_name(globals))
+                format!("{:36} [{}]", op1, class.get_name(globals))
             }
-            BcOp::MethodArgs(..) => return None,
-            BcOp::MethodDef(name, func_id) => {
+            TraceIr::MethodArgs(..) => return None,
+            TraceIr::MethodDef(name, func_id) => {
                 let name = IdentId::get_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
             }
-            BcOp::ClassDef {
+            TraceIr::ClassDef {
                 ret,
                 superclass,
                 name,
@@ -345,15 +346,15 @@ impl BcPc {
                     func_id
                 )
             }
-            BcOp::ConcatStr(ret, args, len) => {
+            TraceIr::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
-            BcOp::LoopStart(count) => format!(
+            TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
                 self.into_jit_addr()
             ),
-            BcOp::LoopEnd => "loop_end".to_string(),
+            TraceIr::LoopEnd => "loop_end".to_string(),
         };
         Some(s)
     }
@@ -502,8 +503,12 @@ pub(super) enum BcIr {
     Mov(BcReg, BcReg),                       // dst, offset
     MethodCall(Option<BcReg>, IdentId),      // (ret, id)
     MethodCallBlock(Option<BcReg>, IdentId), // (ret, id)
-    Yield(Option<BcReg>),                    // ret
-    MethodArgs(BcReg, BcReg, usize),         // (recv, args, args_len)
+    Yield {
+        ret: Option<BcReg>,
+        args: BcReg,
+        len: usize,
+    },
+    MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
     ClassDef {
@@ -648,10 +653,10 @@ impl std::fmt::Debug for Bc {
         }
         let pc = BcPc::from(self);
         match pc.op1() {
-            BcOp::Br(disp) => {
+            TraceIr::Br(disp) => {
                 write!(f, "br => {}", disp_str(disp))
             }
-            BcOp::CondBr(reg, disp, opt, kind) => {
+            TraceIr::CondBr(reg, disp, opt, kind) => {
                 write!(
                     f,
                     "cond{}br {}{:?} => {}",
@@ -661,67 +666,72 @@ impl std::fmt::Debug for Bc {
                     disp_str(disp)
                 )
             }
-            BcOp::Integer(reg, num) => write!(f, "{:?} = {}: i32", reg, num),
-            BcOp::Symbol(reg, id) => {
+            TraceIr::Integer(reg, num) => write!(f, "{:?} = {}: i32", reg, num),
+            TraceIr::Symbol(reg, id) => {
                 write!(f, "{:?} = {:?}", reg, id)
             }
-            BcOp::Literal(reg, id) => {
+            TraceIr::Literal(reg, id) => {
                 write!(f, "{:?} = literal[#{:?}]", reg, id)
             }
-            BcOp::Array(ret, src, len) => {
+            TraceIr::Array(ret, src, len) => {
                 write!(f, "{:?} = array[{:?}; {}]", ret, src, len)
             }
-            BcOp::Index(ret, base, idx) => {
+            TraceIr::Index(ret, base, idx) => {
                 write!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
             }
-            BcOp::IndexAssign(src, base, idx) => {
+            TraceIr::IndexAssign(src, base, idx) => {
                 write!(f, "{:?}.[{:?}] = {:?}", base, idx, src)
             }
-            BcOp::LoadConst(reg, id) => {
+            TraceIr::LoadConst(reg, id) => {
                 write!(f, "{:?} = const[{:?}]", reg, id)
             }
-            BcOp::StoreConst(reg, id) => {
+            TraceIr::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
-            BcOp::LoadDynVar(ret, src) => {
+            TraceIr::LoadDynVar(ret, src) => {
                 write!(f, "{:?} = {:?}", ret, src)
             }
-            BcOp::StoreDynVar(dst, src) => {
+            TraceIr::StoreDynVar(dst, src) => {
                 write!(f, "{:?} = {:?}", dst, src)
             }
-            BcOp::LoadIvar(reg, id, ..) => {
+            TraceIr::LoadIvar(reg, id, ..) => {
                 write!(f, "{:?} = @[{:?}]", reg, id)
             }
-            BcOp::StoreIvar(reg, id, ..) => {
+            TraceIr::StoreIvar(reg, id, ..) => {
                 write!(f, "@[{:?}] = {:?}", id, reg)
             }
-            BcOp::Nil(reg) => write!(f, "{:?} = nil", reg),
-            BcOp::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
-            BcOp::BinOp(kind, dst, lhs, rhs) => {
+            TraceIr::Nil(reg) => write!(f, "{:?} = nil", reg),
+            TraceIr::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
+            TraceIr::BinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
-                let op1 = format!("{:?} = {:?} {} {:?}", dst, lhs, kind, rhs);
+                let op1 = format!("{:?} = {:?} {} {:?}", ret, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            BcOp::BinOpRi(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpRi(kind, dst, lhs, rhs) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            BcOp::BinOpIr(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpIr(kind, dst, lhs, rhs) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            BcOp::Cmp(kind, dst, lhs, rhs, opt) => {
+            TraceIr::Cmp(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            BcOp::Cmpri(kind, dst, lhs, rhs, opt) => {
+            TraceIr::Cmpri(kind, dst, lhs, rhs, opt) => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
                 let op1 = format!(
@@ -735,43 +745,47 @@ impl std::fmt::Debug for Bc {
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
 
-            BcOp::Ret(reg) => write!(f, "ret {:?}", reg),
-            BcOp::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
-            BcOp::MethodCall(ret, name) => {
+            TraceIr::Ret(reg) => write!(f, "ret {:?}", reg),
+            TraceIr::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
+            TraceIr::MethodCall {
+                ret, name, class, ..
+            } => {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                write!(f, "{:28} {:?}", op1, self.class_version().0)
+                write!(f, "{:28} {:?}", op1, class)
             }
-            BcOp::MethodCallBlock(ret, name) => {
+            TraceIr::MethodCallBlock {
+                ret, name, class, ..
+            } => {
                 let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
-                write!(f, "{:28} {:?}", op1, self.class_version().0)
+                write!(f, "{:28} {:?}", op1, class)
             }
-            BcOp::Yield(ret) => {
-                let op1 = format!("{} = yield", ret.ret_str());
+            TraceIr::Yield { ret, args, len } => {
+                let op1 = format!("{} = yield ({:?}; {})", ret.ret_str(), args, len);
                 write!(f, "{:28}", op1)
             }
-            BcOp::MethodArgs(method_info) => {
+            TraceIr::MethodArgs(method_info) => {
                 write!(
                     f,
                     "{:?}.call_args ({:?}; {})",
                     method_info.recv, method_info.args, method_info.len
                 )
             }
-            BcOp::MethodDef(name, _) => {
+            TraceIr::MethodDef(name, _) => {
                 write!(f, "method_def {:?}", name)
             }
-            BcOp::ClassDef { ret, name, .. } => {
+            TraceIr::ClassDef { ret, name, .. } => {
                 write!(f, "{} = class_def {:?}", ret.ret_str(), name)
             }
-            BcOp::ConcatStr(ret, args, len) => {
+            TraceIr::ConcatStr(ret, args, len) => {
                 write!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
-            BcOp::LoopStart(count) => writeln!(
+            TraceIr::LoopStart(count) => writeln!(
                 f,
                 "loop_start counter={} jit-addr={:016x}",
                 count,
                 self.into_jit_addr()
             ),
-            BcOp::LoopEnd => write!(f, "loop_end"),
+            TraceIr::LoopEnd => write!(f, "loop_end"),
         }
     }
 }
@@ -805,7 +819,7 @@ impl Bc2 {
 /// Bytecode instructions.
 ///
 #[derive(Debug, Clone)]
-pub(super) enum BcOp {
+pub(super) enum TraceIr {
     /// branch(dest)
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
@@ -833,7 +847,12 @@ pub(super) enum BcOp {
     /// negate(%ret, %src)
     Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
-    BinOp(BinOpK, SlotId, SlotId, SlotId),
+    BinOp {
+        kind: BinOpK,
+        ret: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+    },
     /// binop with small integer(kind, %ret, %lhs, rhs)
     BinOpRi(BinOpK, SlotId, SlotId, i16),
     /// binop with small integer(kind, %ret, lhs, %rhs)
@@ -855,9 +874,23 @@ pub(super) enum BcOp {
     //                |      Meta     |      PC       |
     //                +-------+-------+-------+-------+
     /// func call(%ret, name)
-    MethodCall(SlotId, IdentId),
-    MethodCallBlock(SlotId, IdentId),
-    Yield(SlotId),
+    MethodCall {
+        ret: SlotId,
+        name: IdentId,
+        class: ClassId,
+        version: u32,
+    },
+    MethodCallBlock {
+        ret: SlotId,
+        name: IdentId,
+        class: ClassId,
+        version: u32,
+    },
+    Yield {
+        ret: SlotId,
+        args: SlotId,
+        len: u16,
+    },
     /// func call 2nd opecode(%recv, %args, len)
     MethodArgs(MethodInfo),
     /// method definition(method_name, func_id)
@@ -926,14 +959,22 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
     ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
-impl BcOp {
+impl TraceIr {
     pub(crate) fn from_bc(pc: BcPc) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => Self::MethodCall(SlotId::new(op1), IdentId::from(op2)),
+                1 => {
+                    let (class, version) = pc.class_version();
+                    Self::MethodCall {
+                        ret: SlotId::new(op1),
+                        name: IdentId::from(op2),
+                        class,
+                        version,
+                    }
+                }
                 2 => Self::MethodDef(
                     IdentId::from((pc.op2.0) as u32),
                     FuncId((pc.op2.0 >> 32) as u32),
@@ -979,8 +1020,16 @@ impl BcOp {
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
-                19 => Self::MethodCallBlock(SlotId::new(op1), IdentId::from(op2)),
-                20 => Self::Yield(SlotId::new(op1)),
+                19 => {
+                    let (class, version) = pc.class_version();
+                    Self::MethodCallBlock {
+                        ret: SlotId::new(op1),
+                        name: IdentId::from(op2),
+                        class,
+                        version,
+                    }
+                }
+
                 _ => unreachable!("{:016x}", op),
             }
         } else {
@@ -1026,6 +1075,11 @@ impl BcOp {
                     },
                     SlotId::new(op3),
                 ),
+                152 => Self::Yield {
+                    ret: SlotId::new(op1),
+                    args: SlotId::new(op2),
+                    len: op3,
+                },
                 155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 156..=161 => Self::Cmp(
                     CmpKind::from(opcode - 156),
@@ -1047,12 +1101,12 @@ impl BcOp {
                     op2 as i16,
                     SlotId::new(op3),
                 ),
-                200..=219 => Self::BinOp(
-                    BinOpK::from(opcode - 200),
-                    SlotId::new(op1),
-                    SlotId::new(op2),
-                    SlotId::new(op3),
-                ),
+                200..=219 => Self::BinOp {
+                    kind: BinOpK::from(opcode - 200),
+                    ret: SlotId::new(op1),
+                    lhs: SlotId::new(op2),
+                    rhs: SlotId::new(op3),
+                },
                 220..=239 => Self::BinOpRi(
                     BinOpK::from(opcode - 220),
                     SlotId::new(op1),
