@@ -216,8 +216,13 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::BinOpRi(kind, dst, lhs, rhs) => {
-                let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs,);
+            TraceIr::BinOpRi {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
+                let op1 = format!("{:?} = {:?} {} {}: i16", ret, lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -225,8 +230,13 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::BinOpIr(kind, dst, lhs, rhs) => {
-                let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs,);
+            TraceIr::BinOpIr {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
+                let op1 = format!("{:?} = {}: i16 {} {:?}", ret, lhs, kind, rhs,);
                 format!(
                     "{:36} [{}][{}]",
                     op1,
@@ -713,16 +723,26 @@ impl std::fmt::Debug for Bc {
                 let op1 = format!("{:?} = {:?} {} {:?}", ret, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            TraceIr::BinOpRi(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpRi {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
-                let op1 = format!("{:?} = {:?} {} {}: i16", dst, lhs, kind, rhs);
+                let op1 = format!("{:?} = {:?} {} {}: i16", ret, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
-            TraceIr::BinOpIr(kind, dst, lhs, rhs) => {
+            TraceIr::BinOpIr {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            } => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
-                let op1 = format!("{:?} = {}: i16 {} {:?}", dst, lhs, kind, rhs);
+                let op1 = format!("{:?} = {}: i16 {} {:?}", ret, lhs, kind, rhs);
                 write!(f, "{:28} [{:?}][{:?}]", op1, class_id, class_id2)
             }
             TraceIr::Cmp(kind, dst, lhs, rhs, opt) => {
@@ -854,9 +874,19 @@ pub(super) enum TraceIr {
         rhs: SlotId,
     },
     /// binop with small integer(kind, %ret, %lhs, rhs)
-    BinOpRi(BinOpK, SlotId, SlotId, i16),
+    BinOpRi {
+        kind: BinOpK,
+        ret: SlotId,
+        lhs: SlotId,
+        rhs: i16,
+    },
     /// binop with small integer(kind, %ret, lhs, %rhs)
-    BinOpIr(BinOpK, SlotId, i16, SlotId),
+    BinOpIr {
+        kind: BinOpK,
+        ret: SlotId,
+        lhs: i16,
+        rhs: SlotId,
+    },
     /// cmp(%ret, %lhs, %rhs, optimizable)
     Cmp(CmpKind, SlotId, SlotId, SlotId, bool),
     /// cmpri(%ret, %lhs, rhs: i16, optimizable)
@@ -1095,24 +1125,24 @@ impl TraceIr {
                     op3 as i16,
                     true,
                 ),
-                180..=199 => Self::BinOpIr(
-                    BinOpK::from(opcode - 180),
-                    SlotId::new(op1),
-                    op2 as i16,
-                    SlotId::new(op3),
-                ),
+                180..=199 => Self::BinOpIr {
+                    kind: BinOpK::from(opcode - 180),
+                    ret: SlotId::new(op1),
+                    lhs: op2 as i16,
+                    rhs: SlotId::new(op3),
+                },
                 200..=219 => Self::BinOp {
                     kind: BinOpK::from(opcode - 200),
                     ret: SlotId::new(op1),
                     lhs: SlotId::new(op2),
                     rhs: SlotId::new(op3),
                 },
-                220..=239 => Self::BinOpRi(
-                    BinOpK::from(opcode - 220),
-                    SlotId::new(op1),
-                    SlotId::new(op2),
-                    op3 as i16,
-                ),
+                220..=239 => Self::BinOpRi {
+                    kind: BinOpK::from(opcode - 220),
+                    ret: SlotId::new(op1),
+                    lhs: SlotId::new(op2),
+                    rhs: op3 as i16,
+                },
                 _ => unreachable!("{:016x}", op),
             }
         }

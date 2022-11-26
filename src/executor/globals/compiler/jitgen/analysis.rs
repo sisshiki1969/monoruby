@@ -196,26 +196,21 @@ impl LoopAnalysis {
                     reg_info.use_as(src, is_float, pc.classid1());
                     reg_info.def_as(dst, is_float);
                 }
-                TraceIr::BinOp {
-                    kind: _,
-                    ret,
-                    lhs,
-                    rhs,
-                } => {
+                TraceIr::BinOp { ret, lhs, rhs, .. } => {
                     let is_float = pc.is_float_binop();
                     reg_info.use_as(lhs, is_float, pc.classid1());
                     reg_info.use_as(rhs, is_float, pc.classid2());
                     reg_info.def_as(ret, is_float);
                 }
-                TraceIr::BinOpRi(_kind, dst, lhs, _rhs) => {
+                TraceIr::BinOpRi { ret, lhs, .. } => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(lhs, is_float, pc.classid1());
-                    reg_info.def_as(dst, is_float);
+                    reg_info.def_as(ret, is_float);
                 }
-                TraceIr::BinOpIr(_kind, dst, _lhs, rhs) => {
+                TraceIr::BinOpIr { ret, rhs, .. } => {
                     let is_float = pc.is_float2();
                     reg_info.use_as(rhs, is_float, pc.classid2());
-                    reg_info.def_as(dst, is_float);
+                    reg_info.def_as(ret, is_float);
                 }
                 TraceIr::Cmp(_kind, dst, lhs, rhs, _opt) => {
                     let is_float = pc.is_float_binop();

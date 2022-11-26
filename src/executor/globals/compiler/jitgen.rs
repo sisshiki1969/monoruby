@@ -1052,9 +1052,10 @@ impl Codegen {
                         monoasm!(self.jit,
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
-                    } else if pc.classid1().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         self.write_back_slot(&mut ctx, src);
                         ctx.dealloc_xmm(dst);
                         let xmm_using = ctx.get_xmm_using();
@@ -1084,9 +1085,10 @@ impl Codegen {
                         let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
-                    } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         self.write_back_slot(&mut ctx, lhs);
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
@@ -1095,7 +1097,12 @@ impl Codegen {
                     }
                 }
 
-                TraceIr::BinOpRi(kind, ret, lhs, rhs) => {
+                TraceIr::BinOpRi {
+                    kind,
+                    ret,
+                    lhs,
+                    rhs,
+                } => {
                     if pc.is_integer1() {
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
@@ -1104,9 +1111,10 @@ impl Codegen {
                         let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
-                    } else if pc.classid1().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         monoasm!(self.jit,
@@ -1117,7 +1125,12 @@ impl Codegen {
                     }
                 }
 
-                TraceIr::BinOpIr(kind, ret, lhs, rhs) => {
+                TraceIr::BinOpIr {
+                    kind,
+                    ret,
+                    lhs,
+                    rhs,
+                } => {
                     if pc.is_integer2() {
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
@@ -1126,9 +1139,10 @@ impl Codegen {
                         let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
                         let fret = ctx.xmm_write(ret);
                         self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
-                    } else if pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid2().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         monoasm!(self.jit,
@@ -1156,9 +1170,10 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, deopt);
                         self.gen_integer_cmp_kind(kind, ret);
-                    } else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         let generic = self.jit.label();
                         self.write_back_slot(&mut ctx, lhs);
                         self.write_back_slot(&mut ctx, rhs);
@@ -1185,9 +1200,10 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, deopt);
                         self.gen_integer_cmp_kind(kind, ret);
-                    } else if pc.classid1().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
                     } else {
+                        if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
                         let generic = self.jit.label();
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
@@ -1224,11 +1240,10 @@ impl Codegen {
                     self.gen_yield(&mut ctx, args, len, ret, pc);
                 }
                 TraceIr::MethodArgs(method_info) => {
-                    if method_info.callee_codeptr.is_some() {
-                        self.gen_method_call(fnstore, &mut ctx, method_info, pc);
-                    } else {
+                    if method_info.callee_codeptr.is_none() {
                         self.recompile_and_deopt(&ctx, position, pc - 1);
                     }
+                    self.gen_method_call(fnstore, &mut ctx, method_info, pc);
                     skip = true;
                 }
                 TraceIr::MethodDef(name, func) => {
@@ -1359,12 +1374,13 @@ impl Codegen {
     }
 
     fn recompile_and_deopt(&mut self, ctx: &BBContext, position: Option<BcPc>, pc: BcPc) {
+        let cont = self.jit.label();
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, &ctx);
         monoasm!(self.jit,
             movq rdi, (NIL_VALUE);
             subl [rip + counter], 1;
-            jne deopt;
+            jne cont;
             movq rdi, r12;
             movl rsi, [rbp - (OFFSET_FUNCID)];
             movq rdx, [rbp - (OFFSET_SELF)];
@@ -1384,6 +1400,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, (NIL_VALUE);
             jmp deopt;
+        cont:
         );
     }
 }
