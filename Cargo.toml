@@ -6,6 +6,13 @@ description = "a toy Ruby interpreter with JIT compilation."
 repository = "https://github.com/sisshiki1969/monoruby"
 edition = "2021"
 license = "MIT"
+default-run = "monoruby"
+
+[[bin]]
+name = "monoruby"
+
+[[bin]]
+name = "irm"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

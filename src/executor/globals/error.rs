@@ -165,17 +165,22 @@ impl MonorubyErr {
         }
     }
 
-    /*pub(crate) fn show_loc(&self) {
+    fn show_loc(&self) {
         if let Some((loc, sourceinfo)) = self.loc.first() {
             sourceinfo.show_loc(loc);
         } else {
             eprintln!("location not defined.");
         }
-    }*/
+    }
 
     pub fn show_error_message_and_all_loc(&self, globals: &Globals) {
         eprintln!("{}", self.get_error_message(globals));
         self.show_all_loc();
+    }
+
+    pub fn show_error_message_and_loc(&self, globals: &Globals) {
+        eprintln!("{}", self.get_error_message(globals));
+        self.show_loc();
     }
 
     pub fn get_error_message(&self, globals: &Globals) -> String {

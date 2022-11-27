@@ -950,13 +950,13 @@ pub(super) enum TraceIr {
         ret: SlotId,
         name: IdentId,
         class: ClassId,
-        version: u32,
+        _version: u32,
     },
     MethodCallBlock {
         ret: SlotId,
         name: IdentId,
         class: ClassId,
-        version: u32,
+        _version: u32,
     },
     Yield {
         ret: SlotId,
@@ -1039,12 +1039,12 @@ impl TraceIr {
             let (op1, op2) = dec_wl(op);
             match opcode {
                 1 => {
-                    let (class, version) = pc.class_version();
+                    let (class, _version) = pc.class_version();
                     Self::MethodCall {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         class,
-                        version,
+                        _version,
                     }
                 }
                 2 => Self::MethodDef(
@@ -1093,12 +1093,12 @@ impl TraceIr {
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
                 19 => {
-                    let (class, version) = pc.class_version();
+                    let (class, _version) = pc.class_version();
                     Self::MethodCallBlock {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         class,
-                        version,
+                        _version,
                     }
                 }
 

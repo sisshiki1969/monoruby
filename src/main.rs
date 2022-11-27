@@ -1,9 +1,6 @@
 use std::fs::File;
 use std::io::Read;
 
-use rustyline::error::ReadlineError;
-use rustyline::Editor;
-
 use monoruby::*;
 
 #[derive(clap::Parser, Debug)]
@@ -56,72 +53,24 @@ fn main() {
             );
         }
         None => {
-            let mut rl = Editor::<()>::new().unwrap();
             let mut globals = Globals::new(args.warning, args.no_jit);
-
-            globals.exec_startup();
-
-            let mut cont_mode = false;
-            let mut buf = String::new();
-            let mut script_line = 0;
-            let mut context = None;
             let mut interp = Executor::default();
-            loop {
-                let prompt = format!(
-                    "monoruby:{:03}{} ",
-                    script_line,
-                    if cont_mode { "*" } else { ">" }
-                );
-                let readline = rl.readline(&prompt);
-                match readline {
-                    Ok(code) => {
-                        buf = if cont_mode {
-                            format!("{}\n{}", buf, code)
-                        } else {
-                            code.clone()
-                        };
-                        let main_fid = match globals.compile_script_with_binding(
-                            buf.clone(),
-                            std::path::Path::new(&format!("REPL:{:03}", script_line)),
-                            context.clone(),
-                        ) {
-                            Ok((fid, collector)) => {
-                                context = Some(collector);
-                                fid
-                            }
-                            Err(err) => {
-                                if err.is_eof() {
-                                    rl.add_history_entry(code.as_str());
-                                    cont_mode = true;
-                                } else {
-                                    err.show_error_message_and_all_loc(&globals);
-                                    cont_mode = false;
-                                };
-                                continue;
-                            }
-                        };
-                        rl.add_history_entry(code.as_str());
-                        cont_mode = false;
-                        match interp.eval(&mut globals, main_fid) {
-                            Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
-                            Err(err) => err.show_error_message_and_all_loc(&globals),
-                        };
-                        script_line += 1;
-                    }
-                    Err(ReadlineError::Interrupted) => {
-                        // Ctrl-C
-                        cont_mode = false;
-                    }
-                    Err(ReadlineError::Eof) => {
-                        // Ctrl-D
-                        break;
-                    }
-                    Err(err) => {
-                        println!("Error: {:?}", err);
-                        break;
-                    }
+            let path = std::path::Path::new("-");
+            globals.exec_startup();
+            let mut stdin = std::io::stdin();
+            let mut code = String::new();
+            stdin.read_to_string(&mut code).unwrap();
+            match globals.compile_script(code, path) {
+                Ok(fid) => {
+                    match interp.eval(&mut globals, fid) {
+                        Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
+                        Err(err) => err.show_error_message_and_loc(&globals),
+                    };
                 }
-            }
+                Err(err) => {
+                    err.show_error_message_and_loc(&globals);
+                }
+            };
         }
     }
 }
