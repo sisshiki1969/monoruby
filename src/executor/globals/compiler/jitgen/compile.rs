@@ -97,6 +97,7 @@ impl Codegen {
             movq rcx, [rbp - (conv(idx))]; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
+            movq r8, (pc.get_u64() + 8);
             movq rax, (get_index);
             call rax;
         };

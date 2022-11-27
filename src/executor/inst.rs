@@ -143,10 +143,16 @@ impl BcPc {
                 format!("{:?} = array[{:?}; {}]", ret, src, len)
             }
             TraceIr::Index(ret, base, idx) => {
-                format!("{:?} = {:?}.[{:?}]", ret, base, idx)
+                let op1 = format!("{:?} = {:?}.[{:?}]", ret, base, idx);
+                format!(
+                    "{:36} [{}][{}]",
+                    op1,
+                    self.classid1().get_name(globals),
+                    self.classid2().get_name(globals)
+                )
             }
             TraceIr::IndexAssign(src, base, idx) => {
-                format!("{:?}.[{:?}] = {:?}", base, idx, src)
+                format!("{:?}:.[{:?}:] = {:?}", base, idx, src,)
             }
             TraceIr::LoadConst(reg, id) => {
                 let ConstSiteInfo {
@@ -203,6 +209,18 @@ impl BcPc {
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
             TraceIr::BinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            }
+            | TraceIr::IntegerBinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            }
+            | TraceIr::FloatBinOp {
                 kind,
                 ret,
                 lhs,
@@ -717,6 +735,18 @@ impl std::fmt::Debug for Bc {
                 ret,
                 lhs,
                 rhs,
+            }
+            | TraceIr::IntegerBinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
+            }
+            | TraceIr::FloatBinOp {
+                kind,
+                ret,
+                lhs,
+                rhs,
             } => {
                 let class_id = self.classid1();
                 let class_id2 = self.classid2();
@@ -868,6 +898,18 @@ pub(super) enum TraceIr {
     Neg(SlotId, SlotId),
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp {
+        kind: BinOpK,
+        ret: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+    },
+    IntegerBinOp {
+        kind: BinOpK,
+        ret: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+    },
+    FloatBinOp {
         kind: BinOpK,
         ret: SlotId,
         lhs: SlotId,
@@ -1131,12 +1173,30 @@ impl TraceIr {
                     lhs: op2 as i16,
                     rhs: SlotId::new(op3),
                 },
-                200..=219 => Self::BinOp {
-                    kind: BinOpK::from(opcode - 200),
-                    ret: SlotId::new(op1),
-                    lhs: SlotId::new(op2),
-                    rhs: SlotId::new(op3),
-                },
+                200..=219 => {
+                    if pc.is_integer_binop() {
+                        Self::IntegerBinOp {
+                            kind: BinOpK::from(opcode - 200),
+                            ret: SlotId::new(op1),
+                            lhs: SlotId::new(op2),
+                            rhs: SlotId::new(op3),
+                        }
+                    } else if pc.is_float_binop() {
+                        Self::FloatBinOp {
+                            kind: BinOpK::from(opcode - 200),
+                            ret: SlotId::new(op1),
+                            lhs: SlotId::new(op2),
+                            rhs: SlotId::new(op3),
+                        }
+                    } else {
+                        Self::BinOp {
+                            kind: BinOpK::from(opcode - 200),
+                            ret: SlotId::new(op1),
+                            lhs: SlotId::new(op2),
+                            rhs: SlotId::new(op3),
+                        }
+                    }
+                }
                 220..=239 => Self::BinOpRi {
                     kind: BinOpK::from(opcode - 220),
                     ret: SlotId::new(op1),

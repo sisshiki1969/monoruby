@@ -1,9 +1,9 @@
-def fib(x)
-  if x<3 then
-      1
+def fib n
+  if n < 3
+    1
   else
-      fib(x-1)+fib(x-2)
+    fib(n-1) + fib(n-2)
   end
-end;
+end
 
-puts fib 34
+fib(34)

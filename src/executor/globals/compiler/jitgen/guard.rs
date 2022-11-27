@@ -22,13 +22,13 @@ impl Codegen {
     pub(super) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
             INTEGER_CLASS => {
-                let exit = self.jit.label();
+                //let exit = self.jit.label();
                 monoasm!(self.jit,
                     testq rdi, 0b001;
-                    jnz exit;
+                    jz side_exit;
                 );
-                self.guard_unpacked_class(class_id, side_exit);
-                self.jit.bind_label(exit);
+                //self.guard_unpacked_class(class_id, side_exit);
+                //self.jit.bind_label(exit);
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
@@ -90,8 +90,8 @@ mod test {
 
         for (class, value) in [
             (INTEGER_CLASS, Value::new_integer(-2558)),
-            (INTEGER_CLASS, Value::new_integer(i64::MAX)),
-            (INTEGER_CLASS, Value::new_integer(i64::MIN)),
+            (INTEGER_CLASS, Value::new_integer(i32::MAX as i64)),
+            (INTEGER_CLASS, Value::new_integer(i32::MIN as i64)),
             (FLOAT_CLASS, Value::new_float(1.44e-17)),
             (FLOAT_CLASS, Value::new_float(0.0)),
             (FLOAT_CLASS, Value::new_float(f64::MAX)),

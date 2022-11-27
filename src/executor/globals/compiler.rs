@@ -89,16 +89,26 @@ extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     Value::new_array(v)
 }
 
+#[repr(C)]
+struct ClassIdSlot {
+    base: ClassId,
+    idx: ClassId,
+}
+
 extern "C" fn get_index(
     interp: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     index: Value,
+    class_slot: &mut ClassIdSlot,
 ) -> Option<Value> {
-    match base.class_id() {
+    let base_classid = base.class_id();
+    class_slot.base = base_classid;
+    match base_classid {
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
                 let v = base.as_array_mut();
+                class_slot.idx = INTEGER_CLASS;
                 return Some(if idx >= 0 {
                     v.get(idx as usize).cloned().unwrap_or_default()
                 } else {
@@ -113,6 +123,7 @@ extern "C" fn get_index(
         }
         _ => {}
     }
+    class_slot.idx = index.class_id();
     interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 

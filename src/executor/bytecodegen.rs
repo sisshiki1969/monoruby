@@ -1548,7 +1548,7 @@ impl IrContext {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(base);
                     let op3 = info.get_index(idx);
-                    Bc::from(enc_www(132, op1.0, op2.0, op3.0))
+                    Bc::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
                 }
                 BcIr::StoreIndex(src, base, idx) => {
                     let op1 = info.get_index(src);

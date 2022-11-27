@@ -18,6 +18,8 @@ struct CommandLineArgs {
     /// switch just-in-time compilation.
     #[arg(short, long)]
     no_jit: bool,
+    #[arg(short = 'I')]
+    import: Vec<String>,
     #[arg(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.

@@ -13,7 +13,9 @@ impl Codegen {
         &mut self,
         fnstore: &FnStore,
         ctx: &mut BBContext,
-        mut method_info: MethodInfo,
+        method_info: MethodInfo,
+        ret: SlotId,
+        name: IdentId,
         pc: BcPc,
     ) {
         let MethodInfo {
@@ -22,92 +24,106 @@ impl Codegen {
             len,
             callee_codeptr,
         } = method_info;
-        match (pc - 1).op1() {
-            TraceIr::MethodCall {
-                ret,
-                name,
-                class,
-                version,
-            } => {
-                ctx.dealloc_xmm(ret);
-                self.write_back_slot(ctx, recv);
-                if let Some(codeptr) = callee_codeptr {
-                    let cached = InlineCached::new(pc, codeptr);
-                    if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
-                        let deopt = self.gen_side_deopt(pc - 1, ctx);
-                        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-                        // Thus, we can omit a class guard.
-                        monoasm!(self.jit,
-                            movq rdi, [rbp - (conv(recv))];
-                        );
-                        if !recv.is_zero() {
-                            self.guard_class(class, deopt);
-                        }
-                        self.guard_version(version, deopt);
-                        match inline_id {
-                            InlineMethod::IntegerTof => {
-                                let fret = ctx.xmm_write(ret);
-                                monoasm!(self.jit,
-                                    sarq  rdi, 1;
-                                    cvtsi2sdq xmm(fret.enc()), rdi;
-                                );
-                            }
-                            InlineMethod::MathSqrt => {
-                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
-                                let fret = ctx.xmm_write(ret);
-                                monoasm!(self.jit,
-                                    sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
-                                );
-                            }
-                            InlineMethod::MathCos => {
-                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
-                                let fret = ctx.xmm_write(ret);
-                                let xmm_using = ctx.get_xmm_using();
-                                self.xmm_save(&xmm_using);
-                                monoasm!(self.jit,
-                                    movq xmm0, xmm(fsrc.enc());
-                                    movq rax, (Self::cos as u64);
-                                    call rax;
-                                );
-                                self.xmm_restore(&xmm_using);
-                                monoasm!(self.jit,
-                                    movq xmm(fret.enc()), xmm0;
-                                );
-                            }
-                            InlineMethod::MathSin => {
-                                let fsrc = self.xmm_read_assume_float(ctx, args, pc - 1);
-                                let fret = ctx.xmm_write(ret);
-                                let xmm_using = ctx.get_xmm_using();
-                                self.xmm_save(&xmm_using);
-                                monoasm!(self.jit,
-                                    movq xmm0, xmm(fsrc.enc());
-                                    movq rax, (Self::sin as u64);
-                                    call rax;
-                                );
-                                self.xmm_restore(&xmm_using);
-                                monoasm!(self.jit,
-                                    movq xmm(fret.enc()), xmm0;
-                                );
-                            }
-                        }
-                        return;
-                    }
-                }
-                self.write_back_range(ctx, args, len);
-                self.gen_call(fnstore, ctx, method_info, name, None, ret, pc);
+        ctx.dealloc_xmm(ret);
+        self.write_back_slot(ctx, recv);
+        if let Some(codeptr) = callee_codeptr {
+            let cached = InlineCached::new(pc + 1, codeptr);
+            if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
+                self.gen_inlinable(ctx, &method_info, inline_id, ret, pc);
+                return;
             }
-            TraceIr::MethodCallBlock { ret, name, .. } => {
-                ctx.dealloc_xmm(ret);
-                self.write_back_range(ctx, args, len + 1);
-                // We must write back and unlink all local vars since they may be accessed from block.
-                let wb = ctx.get_locals_write_back();
-                self.gen_write_back(wb);
-                ctx.dealloc_locals();
-                method_info.args = method_info.args + 1;
-                self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc);
-            }
-            _ => unreachable!(),
         }
+        self.write_back_range(ctx, args, len);
+        self.gen_call(fnstore, ctx, method_info, name, None, ret, pc + 1);
+    }
+
+    fn gen_inlinable(
+        &mut self,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        inline_id: &InlineMethod,
+        ret: SlotId,
+        pc: BcPc,
+    ) {
+        let MethodInfo { recv, args, .. } = method_info;
+        let (class, version) = pc.class_version();
+        let deopt = self.gen_side_deopt(pc, ctx);
+        // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
+        // Thus, we can omit a class guard.
+        monoasm!(self.jit,
+            movq rdi, [rbp - (conv(*recv))];
+        );
+        if !recv.is_zero() {
+            self.guard_class(class, deopt);
+        }
+        self.guard_version(version, deopt);
+        match inline_id {
+            InlineMethod::IntegerTof => {
+                let fret = ctx.xmm_write(ret);
+                monoasm!(self.jit,
+                    sarq  rdi, 1;
+                    cvtsi2sdq xmm(fret.enc()), rdi;
+                );
+            }
+            InlineMethod::MathSqrt => {
+                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
+                let fret = ctx.xmm_write(ret);
+                monoasm!(self.jit,
+                    sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
+                );
+            }
+            InlineMethod::MathCos => {
+                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
+                let fret = ctx.xmm_write(ret);
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm0, xmm(fsrc.enc());
+                    movq rax, (Self::cos as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm(fret.enc()), xmm0;
+                );
+            }
+            InlineMethod::MathSin => {
+                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
+                let fret = ctx.xmm_write(ret);
+                let xmm_using = ctx.get_xmm_using();
+                self.xmm_save(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm0, xmm(fsrc.enc());
+                    movq rax, (Self::sin as u64);
+                    call rax;
+                );
+                self.xmm_restore(&xmm_using);
+                monoasm!(self.jit,
+                    movq xmm(fret.enc()), xmm0;
+                );
+            }
+        }
+        return;
+    }
+
+    pub(super) fn gen_method_call_with_block(
+        &mut self,
+        fnstore: &FnStore,
+        ctx: &mut BBContext,
+        mut method_info: MethodInfo,
+        ret: SlotId,
+        name: IdentId,
+        pc: BcPc,
+    ) {
+        let MethodInfo { args, len, .. } = method_info;
+        ctx.dealloc_xmm(ret);
+        self.write_back_range(ctx, args, len + 1);
+        // We must write back and unlink all local vars since they may be accessed from block.
+        let wb = ctx.get_locals_write_back();
+        self.gen_write_back(wb);
+        ctx.dealloc_locals();
+        method_info.args = args + 1;
+        self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc + 1);
     }
 
     fn gen_call(

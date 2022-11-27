@@ -1105,6 +1105,11 @@ impl Codegen {
         label
     }
 
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|ret|bas|idx||basecls|idxclas|
+    // +---+---+---+---++---+---+---+---+
+    //
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -1115,6 +1120,7 @@ impl Codegen {
             movq rcx, rsi; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
+            lea  r8, [r13 - 8]; // &mut ClassId
             movq rax, (get_index);
             call rax;
         };

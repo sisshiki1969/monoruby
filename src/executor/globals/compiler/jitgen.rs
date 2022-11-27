@@ -1069,6 +1069,29 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
+                TraceIr::IntegerBinOp {
+                    kind,
+                    ret,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    self.write_back_slot(&mut ctx, lhs);
+                    self.write_back_slot(&mut ctx, rhs);
+                    ctx.dealloc_xmm(ret);
+                    self.gen_binop_integer(pc, kind, ret, BinOpMode::RR(lhs, rhs), &ctx);
+                }
+                TraceIr::FloatBinOp {
+                    kind,
+                    ret,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
+                    let fret = ctx.xmm_write(ret);
+                    self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
+                }
                 TraceIr::BinOp {
                     kind,
                     ret,
@@ -1076,25 +1099,14 @@ impl Codegen {
                     rhs,
                     ..
                 } => {
-                    if pc.is_integer_binop() {
-                        self.write_back_slot(&mut ctx, lhs);
-                        self.write_back_slot(&mut ctx, rhs);
-                        ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(pc, kind, ret, BinOpMode::RR(lhs, rhs), &ctx);
-                    } else if pc.is_float_binop() {
-                        let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
-                        let fret = ctx.xmm_write(ret);
-                        self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
-                    } else {
-                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
-                        }
-                        self.write_back_slot(&mut ctx, lhs);
-                        self.write_back_slot(&mut ctx, rhs);
-                        ctx.dealloc_xmm(ret);
-                        self.load_binary_args(lhs, rhs);
-                        self.gen_generic_binop(&ctx, pc, kind, ret);
+                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        self.recompile_and_deopt(&ctx, position, pc);
                     }
+                    self.write_back_slot(&mut ctx, lhs);
+                    self.write_back_slot(&mut ctx, rhs);
+                    ctx.dealloc_xmm(ret);
+                    self.load_binary_args(lhs, rhs);
+                    self.gen_generic_binop(&ctx, pc, kind, ret);
                 }
 
                 TraceIr::BinOpRi {
@@ -1232,18 +1244,39 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
-                TraceIr::MethodCall { .. } => {}
-                TraceIr::MethodCallBlock { .. } => {}
+                TraceIr::MethodCall { ret, name, .. } => {
+                    if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
+                        if method_info.callee_codeptr.is_none() {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
+                        self.gen_method_call(fnstore, &mut ctx, method_info, ret, name, pc);
+                    } else {
+                        unreachable!()
+                    }
+                }
+                TraceIr::MethodCallBlock { ret, name, .. } => {
+                    if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
+                        if method_info.callee_codeptr.is_none() {
+                            self.recompile_and_deopt(&ctx, position, pc);
+                        }
+                        self.gen_method_call_with_block(
+                            fnstore,
+                            &mut ctx,
+                            method_info,
+                            ret,
+                            name,
+                            pc,
+                        );
+                    } else {
+                        unreachable!()
+                    }
+                }
                 TraceIr::Yield { ret, args, len } => {
                     ctx.dealloc_xmm(ret);
                     self.write_back_range(&mut ctx, args, len);
                     self.gen_yield(&mut ctx, args, len, ret, pc);
                 }
-                TraceIr::MethodArgs(method_info) => {
-                    if method_info.callee_codeptr.is_none() {
-                        self.recompile_and_deopt(&ctx, position, pc - 1);
-                    }
-                    self.gen_method_call(fnstore, &mut ctx, method_info, pc);
+                TraceIr::MethodArgs(_) => {
                     skip = true;
                 }
                 TraceIr::MethodDef(name, func) => {
@@ -1374,13 +1407,16 @@ impl Codegen {
     }
 
     fn recompile_and_deopt(&mut self, ctx: &BBContext, position: Option<BcPc>, pc: BcPc) {
-        let cont = self.jit.label();
+        let recompile = self.jit.label();
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, &ctx);
         monoasm!(self.jit,
-            movq rdi, (NIL_VALUE);
             subl [rip + counter], 1;
-            jne cont;
+            jeq recompile;
+        );
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        recompile:
             movq rdi, r12;
             movl rsi, [rbp - (OFFSET_FUNCID)];
             movq rdx, [rbp - (OFFSET_SELF)];
@@ -1400,8 +1436,8 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, (NIL_VALUE);
             jmp deopt;
-        cont:
         );
+        self.jit.select_page(0);
     }
 }
 

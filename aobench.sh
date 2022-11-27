@@ -6,4 +6,4 @@ cargo build --release
 #ruby benchmark/app_aobench.rb > ruby.ppm
 target/release/monoruby benchmark/app_aobench.rb > monoruby.ppm
 convert monoruby.ppm monoruby.jpg
-benchmark-driver benchmark/app_aobench.rb --rbenv '3.2.0-preview3; 3.2.0-preview3 --yjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 1
+benchmark-driver benchmark/app_aobench.rb --rbenv '3.2.0-preview3; 3.2.0-preview3 --yjit; 3.2.0-preview3 --mjit' -e 'target/release/monoruby' -e 'target/release/monoruby --no-jit' --repeat-count 1
