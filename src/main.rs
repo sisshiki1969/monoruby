@@ -63,7 +63,7 @@ fn main() {
             match globals.compile_script(code, path) {
                 Ok(fid) => {
                     match interp.eval(&mut globals, fid) {
-                        Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
+                        Ok(_val) => {}
                         Err(err) => err.show_error_message_and_loc(&globals),
                     };
                 }

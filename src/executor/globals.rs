@@ -99,6 +99,20 @@ impl Globals {
                 err.show_error_message_and_all_loc(self);
             }
         };
+        let pcg_name = env!("CARGO_PKG_NAME");
+        let pcg_version = env!("CARGO_PKG_VERSION");
+        let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
+        let val = Value::new_string_from_str(&description);
+        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_DESCRIPTION"), val);
+        let val = Value::new_string_from_str(pcg_name);
+        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_ENGINE"), val);
+        let val = Value::new_string_from_str(pcg_version);
+        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_VERSION"), val);
+        self.set_constant(
+            OBJECT_CLASS,
+            IdentId::get_ident_id("RUBY_ENGINE_VERSION"),
+            val,
+        );
     }
 
     ///
