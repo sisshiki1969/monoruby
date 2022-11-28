@@ -4,7 +4,7 @@ use super::*;
 // error handlers
 //
 impl Globals {
-    fn set_error(&mut self, err: MonorubyErr) {
+    pub fn set_error(&mut self, err: MonorubyErr) {
         self.error = Some(err);
     }
 
@@ -73,6 +73,17 @@ impl Globals {
     }
 
     ///
+    /// Set TypeError with message "no_implicit_conversion of {} into {}".
+    ///
+    pub(crate) fn err_no_implicit_conversion(&mut self, val: Value, target_class: ClassId) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "no_implicit_conversion of {} into {}",
+            val.get_real_class_name(self),
+            target_class.get_name(self),
+        )));
+    }
+
+    ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
     pub(crate) fn err_cant_conert_into_float(&mut self, val: Value) {
@@ -105,6 +116,16 @@ impl Globals {
             val.get_real_class_name(self),
             self.val_tos(val),
         )));
+    }
+
+    ///
+    /// Set LoadError with message "can't load '*file*'".
+    ///
+    pub(crate) fn err_cant_load(&mut self, err: Option<std::io::Error>, path: &std::path::Path) {
+        self.set_error(MonorubyErr::loaderr(match err {
+            Some(err) => format!("can't load {:?}. {}", path, err,),
+            None => format!("can't load {:?}", path),
+        }));
     }
 
     pub(crate) fn take_error(&mut self) -> Option<MonorubyErr> {
@@ -141,6 +162,7 @@ pub enum MonorubyErrKind {
     Type(String),
     Index(String),
     Frozen(String),
+    Load(String),
 }
 
 impl MonorubyErr {
@@ -211,6 +233,7 @@ impl MonorubyErr {
             MonorubyErrKind::Type(msg) => msg.to_string(),
             MonorubyErrKind::Index(msg) => msg.to_string(),
             MonorubyErrKind::Frozen(msg) => msg.to_string(),
+            MonorubyErrKind::Load(msg) => msg.to_string(),
         }
     }
 }
@@ -324,5 +347,9 @@ impl MonorubyErr {
 
     pub(crate) fn frozenerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Frozen(msg))
+    }
+
+    pub(crate) fn loaderr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Load(msg))
     }
 }

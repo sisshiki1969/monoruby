@@ -40,14 +40,18 @@ pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let mut globals = Globals::new(1, false);
-    compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap_err();
+    globals
+        .compile_and_run(code, std::path::Path::new(""))
+        .unwrap_err();
 }
 
 fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
-    let res = compile_and_run(&mut globals, code, std::path::Path::new("")).unwrap();
+    let res = globals
+        .compile_and_run(code, std::path::Path::new(""))
+        .unwrap();
     let jit_str = res.inspect(&globals);
     #[cfg(not(debug_assertions))]
     eprintln!("jit:  {jit_str} elapsed:{:?}", now.elapsed());
@@ -642,6 +646,19 @@ mod test {
             r#"
             i = 0
             while i < 1000
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
+    fn bench_until() {
+        run_test2(
+            r#"
+            i = 0
+            until i == 1000
               i = i + 1
             end
             i

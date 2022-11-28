@@ -3,8 +3,8 @@ use ruruby_parse::{
     BinOp, BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind,
     Parser, SourceInfoRef,
 };
-use std::io::Write;
 use std::io::{stdout, BufWriter, Stdout};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use super::*;
@@ -42,6 +42,8 @@ pub struct Globals {
     pub no_jit: bool,
     /// stdout.
     stdout: BufWriter<Stdout>,
+    /// library directries.
+    pub lib_directories: Vec<String>,
     #[cfg(feature = "log-jit")]
     pub deopt_stats: HashMap<(FuncId, usize), usize>,
 }
@@ -57,6 +59,7 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
+            lib_directories: vec![],
             #[cfg(feature = "log-jit")]
             deopt_stats: HashMap::default(),
         };
@@ -67,6 +70,14 @@ impl Globals {
             Value::new_string_from_str("main"),
         );
         globals
+    }
+
+    pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
+        let mut executor = Executor::default();
+        match executor.eval_script(self, code.to_string(), path) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error().unwrap()),
+        }
     }
 
     pub(crate) fn flush_stdout(&mut self) {
@@ -84,19 +95,13 @@ impl Globals {
     pub fn exec_startup(&mut self) {
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../../startup/startup.rb").to_string();
-        let startup_fid = match self.compile_script(code, path) {
-            Ok(func_id) => func_id,
-            Err(err) => {
-                eprintln!("error occured in compiling startup.rb.");
+        let mut executor = Executor::default();
+        match executor.eval_script(self, code, path) {
+            Some(_) => {}
+            None => {
+                let err = self.take_error().unwrap();
                 err.show_error_message_and_all_loc(self);
-                return;
-            }
-        };
-        match Executor::eval_toplevel(self, startup_fid) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("error occured in executing startup.rb.");
-                err.show_error_message_and_all_loc(self);
+                panic!("error occured in startup.");
             }
         };
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -113,6 +118,45 @@ impl Globals {
             IdentId::get_ident_id("RUBY_ENGINE_VERSION"),
             val,
         );
+    }
+
+    pub fn load_lib(&mut self, path: &std::path::Path) -> Option<String> {
+        for lib in self.lib_directories.clone() {
+            let mut lib = std::path::PathBuf::from(lib);
+            lib.push(path);
+            //if lib.is_absolute() {
+            lib.set_extension("rb");
+            dbg!(&lib);
+            if lib.exists() {
+                return self.load_file(&lib);
+            }
+            lib.set_extension("so");
+            if path.exists() {
+                eprintln!("Warning: currently, can not require .so file. {:?}", lib);
+            }
+            //}
+        }
+        self.err_cant_load(None, path);
+        None
+    }
+
+    pub fn load_file(&mut self, path: &std::path::Path) -> Option<String> {
+        let mut file_body = String::new();
+        match std::fs::OpenOptions::new().read(true).open(path) {
+            Ok(mut file) => match file.read_to_string(&mut file_body) {
+                Ok(_) => {}
+                Err(err) => {
+                    self.err_cant_load(Some(err), path);
+                    return None;
+                }
+            },
+            Err(err) => {
+                self.err_cant_load(Some(err), path);
+                return None;
+            }
+        };
+
+        Some(file_body)
     }
 
     ///

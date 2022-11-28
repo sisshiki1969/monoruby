@@ -68,6 +68,28 @@ impl Executor {
         res.ok_or_else(|| globals.take_error().unwrap())
     }
 
+    pub fn eval_script(
+        &mut self,
+        globals: &mut Globals,
+        code: String,
+        path: &std::path::Path,
+    ) -> Option<Value> {
+        let fid = match globals.compile_script(code, path) {
+            Ok(fid) => fid,
+            Err(err) => {
+                globals.set_error(err);
+                return None;
+            }
+        };
+        match self.eval(globals, fid) {
+            Ok(val) => Some(val),
+            Err(err) => {
+                globals.set_error(err);
+                None
+            }
+        }
+    }
+
     pub(crate) fn push_class_context(&mut self, class_id: ClassId) {
         self.lexical_class.push(class_id);
     }
@@ -82,12 +104,6 @@ impl Executor {
 
     pub(crate) fn class_context_stack(&self) -> &[ClassId] {
         &self.lexical_class
-    }
-
-    /// Execute top level method.
-    pub(crate) fn eval_toplevel(globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let mut executer = Self::default();
-        executer.eval(globals, func_id)
     }
 }
 

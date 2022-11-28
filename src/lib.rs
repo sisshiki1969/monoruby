@@ -20,22 +20,3 @@ use rvalue::*;
 use value::*;
 
 pub const STRING_INLINE_CAP: usize = 39;
-
-pub fn compile_and_run(
-    globals: &mut Globals,
-    code: &str,
-    path: &std::path::Path,
-) -> Result<Value, MonorubyErr> {
-    let fid = match globals.compile_script(code.to_string(), path) {
-        Ok(fid) => fid,
-        Err(err) => {
-            err.show_error_message_and_all_loc(globals);
-            return Err(err);
-        }
-    };
-    let res = Executor::eval_toplevel(globals, fid);
-    if let Err(err) = &res {
-        err.show_error_message_and_all_loc(globals);
-    }
-    res
-}

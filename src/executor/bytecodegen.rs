@@ -125,6 +125,29 @@ impl IrContext {
         );
     }
 
+    fn gen_opt_condbr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        cond: Node,
+        else_pos: usize,
+    ) -> Result<()> {
+        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+            let loc = cond.loc;
+            let cond = info.next_reg().into();
+            self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
+            info.pop();
+            self.gen_condbr(cond, else_pos, true);
+        //} else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
+        //    self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
+        //    self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+        } else {
+            let cond = self.gen_temp_expr(ctx, info, cond)?;
+            self.gen_condbr(cond, else_pos, false);
+        }
+        Ok(())
+    }
+
     fn gen_opt_condnotbr(
         &mut self,
         ctx: &mut FnStore,
@@ -736,8 +759,8 @@ impl IrContext {
                 box body,
                 cond_op,
             } => {
-                assert!(cond_op);
-                self.gen_while(ctx, info, cond, body, use_value)?;
+                //assert!(cond_op);
+                self.gen_while(ctx, info, cond_op, cond, body, use_value)?;
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -1366,6 +1389,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
+        cond_op: bool,
         cond: Node,
         body: Node,
         use_value: bool,
@@ -1384,7 +1408,11 @@ impl IrContext {
         let loc = body.loc;
         self.apply_label(cond_pos);
         self.push(BcIr::LoopStart, loc);
-        self.gen_opt_condnotbr(ctx, info, cond, succ_pos)?;
+        if cond_op {
+            self.gen_opt_condnotbr(ctx, info, cond, succ_pos)?
+        } else {
+            self.gen_opt_condbr(ctx, info, cond, succ_pos)?
+        };
         self.gen_expr(ctx, info, body, false, false)?;
         self.gen_br(cond_pos);
         self.apply_label(succ_pos);

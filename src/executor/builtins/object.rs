@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
     globals.define_builtin_func(
         OBJECT_CLASS,
         "instance_variable_defined?",
@@ -329,6 +330,24 @@ extern "C" fn kernel_integer(
     };
     globals.err_no_implict_conv(arg0, INTEGER_CLASS);
     None
+}
+
+/// ### Kernel.#require
+/// - require(feature) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
+extern "C" fn require(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<Value>,
+) -> Option<Value> {
+    let feature = arg[0].expect_string(globals)?;
+    let path = std::path::Path::new(&feature);
+    let file_body = globals.load_lib(path)?;
+    executor.eval_script(globals, file_body, path)
 }
 
 #[cfg(test)]

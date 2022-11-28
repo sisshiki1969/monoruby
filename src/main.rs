@@ -26,61 +26,49 @@ struct CommandLineArgs {
 
 fn main() {
     use clap::Parser;
-    let args = CommandLineArgs::parse();
+    let mut args = CommandLineArgs::parse();
+    let mut globals = Globals::new(args.warning, args.no_jit);
+    globals.lib_directories.append(&mut args.import);
+    globals.exec_startup();
 
     if !args.exec.is_empty() {
+        let path = std::path::Path::new("REPL");
         for code in args.exec {
-            exec(
-                &code,
-                args.no_jit,
-                args.warning,
-                std::path::Path::new("REPL"),
-            );
+            let res = globals.compile_and_run(&code, path);
+            if let Ok(_val) = res {
+                #[cfg(debug_assertions)]
+                eprintln!("=> {:?}", _val)
+            };
         }
         return;
     }
 
-    match args.file {
+    let mut executor = Executor::default();
+    let (code, path) = match args.file {
         Some(file_name) => {
+            let path = std::path::PathBuf::from(&file_name);
             let mut file = File::open(file_name.clone()).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            exec(
-                &code,
-                args.no_jit,
-                args.warning,
-                std::path::Path::new(&file_name),
-            );
+            (code, path)
         }
         None => {
-            let mut globals = Globals::new(args.warning, args.no_jit);
-            let mut interp = Executor::default();
-            let path = std::path::Path::new("-");
-            globals.exec_startup();
+            let path = std::path::PathBuf::from("-");
             let mut stdin = std::io::stdin();
             let mut code = String::new();
             stdin.read_to_string(&mut code).unwrap();
-            match globals.compile_script(code, path) {
-                Ok(fid) => {
-                    match interp.eval(&mut globals, fid) {
-                        Ok(_val) => {}
-                        Err(err) => err.show_error_message_and_loc(&globals),
-                    };
-                }
-                Err(err) => {
-                    err.show_error_message_and_loc(&globals);
-                }
+            (code, path)
+        }
+    };
+    match globals.compile_script(code, path) {
+        Ok(fid) => {
+            match executor.eval(&mut globals, fid) {
+                Ok(_val) => {}
+                Err(err) => err.show_error_message_and_loc(&globals),
             };
         }
-    }
-}
-
-fn exec(code: &str, no_jit_flag: bool, warning: u8, path: &std::path::Path) {
-    let mut globals = Globals::new(warning, no_jit_flag);
-    globals.exec_startup();
-    let res = compile_and_run(&mut globals, code, path);
-    if let Ok(_val) = res {
-        #[cfg(debug_assertions)]
-        eprintln!("=> {:?}", _val)
+        Err(err) => {
+            err.show_error_message_and_loc(&globals);
+        }
     };
 }
