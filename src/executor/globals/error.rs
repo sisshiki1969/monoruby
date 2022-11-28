@@ -197,7 +197,10 @@ impl MonorubyErr {
                 )
             }
             MonorubyErrKind::WrongArguments(name) => name.to_string(),
-            MonorubyErrKind::Syntax(kind) => format!("{:?}", kind),
+            MonorubyErrKind::Syntax(kind) => match kind {
+                ParseErrKind::SyntaxError(msg) => msg.to_string(),
+                ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
+            },
             MonorubyErrKind::Syntax2(msg) => msg.to_string(),
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
             MonorubyErrKind::UninitConst(name) => {
