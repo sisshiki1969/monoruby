@@ -248,6 +248,8 @@ impl Codegen {
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
         self.dispatch[152] = self.vm_yield();
+        self.dispatch[153] = self.vm_range(false);
+        self.dispatch[154] = self.vm_range(true);
         self.dispatch[155] = self.vm_concat();
 
         self.dispatch[156] = self.vm_eqrr();
@@ -1083,7 +1085,9 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rax, [r13 - 8];
+            movq rdi, [r13 - 8];
+            movq rax, (Value::deep_copy);
+            call rax;
         };
         self.vm_store_r15();
         self.fetch_and_dispatch();
@@ -1100,6 +1104,23 @@ impl Codegen {
             movq rax, (gen_array);
             call rax;
         };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_range(&mut self, exclude_end: bool) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        self.vm_get_rdi();
+        self.vm_get_rsi();
+        monoasm! { self.jit,
+            movq rdx, r12;
+            movl rcx, (if exclude_end {1} else {0});
+            movq rax, (gen_range);
+            call rax;
+        };
+        self.vm_handle_error();
         self.vm_store_r15();
         self.fetch_and_dispatch();
         label

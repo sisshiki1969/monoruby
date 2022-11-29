@@ -20,6 +20,10 @@ impl Globals {
         self.set_error(MonorubyErr::uninitialized_constant(name));
     }
 
+    pub(crate) fn err_bad_range(&mut self, start: Value, end: Value) {
+        self.set_error(MonorubyErr::bad_range(start, end));
+    }
+
     ///
     /// Set RangeError with message "*val* out of char range".
     ///
@@ -97,6 +101,17 @@ impl Globals {
         self.set_error(MonorubyErr::argumenterr(msg.to_string()));
     }
 
+    pub(crate) fn err_wrong_number_of_arguments_range(
+        &mut self,
+        given: usize,
+        range: std::ops::Range<usize>,
+    ) {
+        self.err_argument(&format!(
+            "wrong number of arguments (given {given}, expeted {:?})",
+            range
+        ));
+    }
+
     ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///
@@ -152,7 +167,7 @@ pub struct MonorubyErr {
 pub enum MonorubyErrKind {
     //UndefinedLocal(String),
     MethodNotFound(IdentId, Value),
-    WrongArguments(String),
+    Arguments(String),
     Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
@@ -218,7 +233,7 @@ impl MonorubyErr {
                     obj.get_real_class_name(globals)
                 )
             }
-            MonorubyErrKind::WrongArguments(name) => name.to_string(),
+            MonorubyErrKind::Arguments(name) => name.to_string(),
             MonorubyErrKind::Syntax(kind) => match kind {
                 ParseErrKind::SyntaxError(msg) => msg.to_string(),
                 ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
@@ -315,9 +330,16 @@ impl MonorubyErr {
     }
 
     pub(crate) fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::WrongArguments(format!(
+        MonorubyErr::new(MonorubyErrKind::Arguments(format!(
             "number of arguments mismatch. expected:{} actual:{}",
             expected, actual
+        )))
+    }
+
+    pub(crate) fn bad_range(start: Value, end: Value) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Arguments(format!(
+            "bad value for range. start:{:?} end:{:?}",
+            start, end
         )))
     }
 
@@ -338,7 +360,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn argumenterr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::WrongArguments(msg))
+        MonorubyErr::new(MonorubyErrKind::Arguments(msg))
     }
 
     pub(crate) fn indexerr(msg: String) -> MonorubyErr {

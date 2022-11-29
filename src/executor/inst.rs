@@ -136,6 +136,18 @@ impl BcPc {
             }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
             TraceIr::Symbol(reg, id) => format!("{:?} = :{}", reg, IdentId::get_name(id)),
+            TraceIr::Range {
+                ret,
+                start,
+                end,
+                exclude_end,
+            } => format!(
+                "{:?} = {:?} {} {:?}",
+                ret,
+                start,
+                if exclude_end { "..." } else { ".." },
+                end
+            ),
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
             }
@@ -492,12 +504,17 @@ impl BinOpK {
 ///
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum BcIr {
-    Br(usize),
-    CondBr(BcReg, usize, bool, BrKind),
+    Nil(BcReg),
     Integer(BcReg, i32),
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
     Array(BcReg, BcReg, u16),
+    Range {
+        ret: BcReg,
+        start: BcReg,
+        end: BcReg,
+        exclude_end: bool,
+    },
     Index(BcReg, BcReg, BcReg),      // ret, base, index
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
@@ -518,17 +535,18 @@ pub(super) enum BcIr {
         /// source register of the current frame.
         src: BcReg,
     },
-    LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
-    StoreIvar(BcReg, IdentId), // src, id  - @id = %src
-    Nil(BcReg),
+    LoadIvar(BcReg, IdentId),                // ret, id  - %ret = @id
+    StoreIvar(BcReg, IdentId),               // src, id  - @id = %src
     Neg(BcReg, BcReg),                       // ret, src
     BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
     BinOpRi(BinOpK, BcReg, BcReg, i16),      // kind, ret, lhs, rhs
     BinOpIr(BinOpK, BcReg, i16, BcReg),      // kind, ret, lhs, rhs
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
-    Ret(BcReg),
     Mov(BcReg, BcReg),                       // dst, offset
+    Br(usize),
+    CondBr(BcReg, usize, bool, BrKind),
+    Ret(BcReg),
     MethodCall(Option<BcReg>, IdentId),      // (ret, id)
     MethodCallBlock(Option<BcReg>, IdentId), // (ret, id)
     Yield {
@@ -704,6 +722,19 @@ impl std::fmt::Debug for Bc {
             TraceIr::Array(ret, src, len) => {
                 write!(f, "{:?} = array[{:?}; {}]", ret, src, len)
             }
+            TraceIr::Range {
+                ret,
+                start,
+                end,
+                exclude_end,
+            } => write!(
+                f,
+                "{:?} = {:?} {} {:?}",
+                ret,
+                start,
+                if exclude_end { "..." } else { ".." },
+                end
+            ),
             TraceIr::Index(ret, base, idx) => {
                 write!(f, "{:?} = {:?}.[{:?}]", ret, base, idx)
             }
@@ -882,6 +913,12 @@ pub(super) enum TraceIr {
     Literal(SlotId, Value),
     /// array(%ret, %src, len)
     Array(SlotId, SlotId, u16),
+    Range {
+        ret: SlotId,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+    },
     /// index(%ret, %base, %idx)
     Index(SlotId, SlotId, SlotId),
     /// index(%src, %base, %idx)
@@ -1151,6 +1188,16 @@ impl TraceIr {
                     ret: SlotId::new(op1),
                     args: SlotId::new(op2),
                     len: op3,
+                },
+                153..=154 => Self::Range {
+                    ret: SlotId::new(op1),
+                    start: SlotId::new(op2),
+                    end: SlotId::new(op3),
+                    exclude_end: match opcode - 153 {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    },
                 },
                 155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 156..=161 => Self::Cmp(

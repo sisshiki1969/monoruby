@@ -1,5 +1,5 @@
 use super::*;
-use ruruby_parse::{Node, NodeKind, Parser};
+use ruruby_parse::Parser;
 use std::io::Write;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -92,7 +92,7 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
                 .unwrap()
                 .node;
 
-            from_ast(&nodes, globals)
+            Value::from_ast(&nodes, globals)
         }
         Err(err) => {
             panic!("Error occured in executing Ruby. {:?}", err);
@@ -101,39 +101,6 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
     #[cfg(debug_assertions)]
     eprintln!("ruby: {}", res.inspect(&globals));
     res
-}
-
-fn from_ast(node: &Node, globals: &mut Globals) -> Value {
-    match &node.kind {
-        NodeKind::CompStmt(stmts) => {
-            assert_eq!(1, stmts.len());
-            from_ast(&stmts[0], globals)
-        }
-        NodeKind::Integer(num) => Value::new_integer(*num),
-        NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
-        NodeKind::Float(num) => Value::new_float(*num),
-        NodeKind::Bool(b) => Value::bool(*b),
-        NodeKind::Nil => Value::nil(),
-        NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
-        NodeKind::String(s) => Value::new_string_from_str(s),
-        NodeKind::Array(v, _) => {
-            let v = v.iter().map(|node| from_ast(node, globals)).collect();
-            Value::new_array(v)
-        }
-        NodeKind::Const {
-            toplevel,
-            parent,
-            prefix,
-            name,
-        } => {
-            assert_eq!(false, *toplevel);
-            assert_eq!(None, *parent);
-            assert_eq!(0, prefix.len());
-            let constant = IdentId::get_ident_id(name);
-            globals.get_constant(OBJECT_CLASS, constant).unwrap()
-        }
-        _ => unimplemented!(),
-    }
 }
 
 #[cfg(test)]
@@ -161,6 +128,8 @@ mod test {
         run_test("a = 42.0; if a < 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0; if a > 52.0 then 1.1 else 2.2 end");
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
+        run_test("4..173");
+        run_test("4...173");
     }
 
     #[test]
@@ -203,6 +172,7 @@ mod test {
         run_test_error("joke");
         run_test_error("Joke");
         run_test_error("91552338.chr");
+        run_test_error(r#"9155.."s""#);
     }
 
     #[test]

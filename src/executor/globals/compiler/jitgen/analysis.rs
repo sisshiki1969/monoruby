@@ -165,6 +165,13 @@ impl LoopAnalysis {
                         reg_info.def_as(dst, false);
                     }
                 }
+                TraceIr::Range {
+                    ret, start, end, ..
+                } => {
+                    reg_info.def_as(ret, false);
+                    reg_info.use_non_float(start);
+                    reg_info.use_non_float(end);
+                }
                 TraceIr::IndexAssign(..) => {}
                 TraceIr::MethodDef(..) => {}
                 TraceIr::ClassDef { ret, .. } => {

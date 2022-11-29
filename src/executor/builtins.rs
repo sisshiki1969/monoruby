@@ -7,6 +7,7 @@ mod float;
 mod integer;
 mod math;
 mod object;
+mod range;
 mod string;
 mod time;
 
@@ -83,6 +84,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Array", ARRAY_CLASS)
             .as_class()
     );
+    assert_eq!(
+        RANGE_CLASS,
+        globals
+            .define_builtin_class_under_obj("Range", RANGE_CLASS)
+            .as_class()
+    );
     let math_class = globals.define_class_under_obj("Math").as_class();
     let file_class = globals.define_class_under_obj("File").as_class();
 
@@ -92,6 +99,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     class::init(globals);
     string::init(globals);
     array::init(globals);
+    range::init(globals);
     time::init(globals);
     file::init(globals, file_class);
     math::init(globals, math_class);
