@@ -38,7 +38,10 @@ pub struct Executor {
 }
 
 impl Executor {
+    ///
     /// Execute top level method.
+    ///
+    /// *main* object is set to *self*.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
         let main_data = globals.compile_on_demand(func_id) as *const _;
 

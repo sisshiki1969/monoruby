@@ -654,6 +654,42 @@ mod test {
     }
 
     #[test]
+    fn bench_while_postfix() {
+        run_test2(
+            r#"
+            i = 0
+            begin
+              i = i + 1
+            end while i < 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            i += 1 while i < 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            begin
+              i += 1
+            end while i > 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            i += 1 while i > 10
+            i
+            "#,
+        );
+    }
+
+    #[test]
     fn bench_while_and() {
         run_test2(
             r#"
@@ -705,6 +741,42 @@ mod test {
             until i == 1000
               i = i + 1
             end
+            i
+            "#,
+        );
+    }
+
+    #[test]
+    fn bench_until_postfix() {
+        run_test2(
+            r#"
+            i = 0
+            begin
+              i = i + 1
+            end until i > 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            i += 1 until i > 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            begin
+              i += 1
+            end until i < 10
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            i += 1 until i < 10
             i
             "#,
         );

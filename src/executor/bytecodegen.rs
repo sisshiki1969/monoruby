@@ -783,9 +783,13 @@ impl IrContext {
                 box cond,
                 box body,
                 cond_op,
+                postfix,
             } => {
-                //assert!(cond_op);
-                self.gen_while(ctx, info, cond_op, cond, body, use_value)?;
+                if postfix && matches!(body.kind, NodeKind::Begin { .. }) {
+                    self.gen_while_begin_postfix(ctx, info, cond_op, cond, body, use_value)?;
+                } else {
+                    self.gen_while(ctx, info, cond_op, cond, body, use_value)?;
+                }
                 if is_ret {
                     self.gen_ret(info, None);
                 }
@@ -1457,6 +1461,41 @@ impl IrContext {
         self.gen_expr(ctx, info, body, false, false)?;
         self.gen_br(cond_pos);
         self.apply_label(succ_pos);
+
+        if use_value {
+            self.gen_nil(info, None);
+        }
+        self.loops.pop().unwrap();
+        self.apply_label(break_pos);
+        self.push(BcIr::LoopEnd, loc);
+
+        Ok(())
+    }
+
+    fn gen_while_begin_postfix(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        cond_op: bool,
+        cond: Node,
+        body: Node,
+        use_value: bool,
+    ) -> Result<()> {
+        let loop_pos = self.new_label();
+        let break_pos = self.new_label();
+        self.loops.push((
+            LoopKind::While,
+            break_pos,
+            match use_value {
+                true => Some(info.next_reg().into()),
+                false => None,
+            },
+        ));
+        let loc = body.loc;
+        self.apply_label(loop_pos);
+        self.push(BcIr::LoopStart, loc);
+        self.gen_expr(ctx, info, body, false, false)?;
+        self.gen_opt_condbr(ctx, info, cond_op, cond, loop_pos)?;
 
         if use_value {
             self.gen_nil(info, None);

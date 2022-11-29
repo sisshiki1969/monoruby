@@ -346,8 +346,8 @@ extern "C" fn require(
 ) -> Option<Value> {
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
-    let file_body = globals.load_lib(path)?;
-    executor.eval_script(globals, file_body, path)
+    let (file_body, path) = globals.load_lib(path)?;
+    executor.eval_script(globals, file_body, &path)
 }
 
 #[cfg(test)]

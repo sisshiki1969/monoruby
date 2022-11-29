@@ -120,7 +120,7 @@ impl Globals {
         );
     }
 
-    pub fn load_lib(&mut self, path: &std::path::Path) -> Option<String> {
+    pub fn load_lib(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
         for lib in self.lib_directories.clone() {
             let mut lib = std::path::PathBuf::from(lib);
             lib.push(path);
@@ -139,7 +139,7 @@ impl Globals {
         None
     }
 
-    pub fn load_file(&mut self, path: &std::path::Path) -> Option<String> {
+    pub fn load_file(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
         let mut file_body = String::new();
         match std::fs::OpenOptions::new().read(true).open(path) {
             Ok(mut file) => match file.read_to_string(&mut file_body) {
@@ -155,7 +155,7 @@ impl Globals {
             }
         };
 
-        Some(file_body)
+        Some((file_body, path.into()))
     }
 
     ///
