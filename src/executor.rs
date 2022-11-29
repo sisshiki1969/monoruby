@@ -357,3 +357,45 @@ fn meta_test() {
     assert_eq!(8, std::mem::size_of::<BcPc>());
     assert_eq!(8, std::mem::size_of::<Meta>());
 }
+
+pub fn array_set_index(
+    globals: &mut Globals,
+    mut base: Value,
+    idx: i64,
+    src: Value,
+) -> Option<Value> {
+    let v = base.as_array_mut();
+    if idx >= 0 {
+        match v.get_mut(idx as usize) {
+            Some(v) => *v = src,
+            None => {
+                let idx = idx as usize;
+                v.extend((v.len()..idx).into_iter().map(|_| Value::nil()));
+                v.push(src);
+            }
+        }
+    } else {
+        let idx_positive = v.len() as i64 + idx;
+        if idx_positive < 0 {
+            globals.err_index_too_small(idx, -(v.len() as i64));
+            return None;
+        } else {
+            v[idx_positive as usize] = src;
+        }
+    };
+    return Some(src);
+}
+
+pub fn array_get_index(mut base: Value, idx: i64) -> Option<Value> {
+    let v = base.as_array_mut();
+    return Some(if idx >= 0 {
+        v.get(idx as usize).cloned().unwrap_or_default()
+    } else {
+        let idx = v.len() as i64 + idx;
+        if idx < 0 {
+            Value::nil()
+        } else {
+            v.get(idx as usize).cloned().unwrap_or_default()
+        }
+    });
+}

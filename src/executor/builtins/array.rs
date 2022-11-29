@@ -109,31 +109,11 @@ extern "C" fn index_assign(
 ) -> Option<Value> {
     let i = arg[0];
     let val = arg[1];
-    let mut self_val = self_val;
-    let v = self_val.as_array_mut();
     if let Some(idx) = i.try_fixnum() {
-        if idx >= 0 {
-            match v.get_mut(idx as usize) {
-                Some(v) => *v = val,
-                None => {
-                    let idx = idx as usize;
-                    v.extend((v.len()..idx).into_iter().map(|_| Value::nil()));
-                    v.push(val);
-                }
-            }
-        } else {
-            let idx_positive = v.len() as i64 + idx;
-            if idx_positive < 0 {
-                globals.err_index_too_small(idx, -(v.len() as i64));
-                return None;
-            } else {
-                v[idx_positive as usize] = val;
-            }
-        };
+        return executor::array_set_index(globals, self_val, idx, val);
     } else {
         unimplemented!()
     }
-    Some(val)
 }
 
 #[cfg(test)]

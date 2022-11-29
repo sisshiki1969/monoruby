@@ -98,7 +98,7 @@ struct ClassIdSlot {
 extern "C" fn get_index(
     interp: &mut Executor,
     globals: &mut Globals,
-    mut base: Value,
+    base: Value,
     index: Value,
     class_slot: &mut ClassIdSlot,
 ) -> Option<Value> {
@@ -107,18 +107,8 @@ extern "C" fn get_index(
     match base_classid {
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
-                let v = base.as_array_mut();
                 class_slot.idx = INTEGER_CLASS;
-                return Some(if idx >= 0 {
-                    v.get(idx as usize).cloned().unwrap_or_default()
-                } else {
-                    let idx = v.len() as i64 + idx;
-                    if idx < 0 {
-                        Value::nil()
-                    } else {
-                        v.get(idx as usize).cloned().unwrap_or_default()
-                    }
-                });
+                return executor::array_get_index(base, idx);
             }
         }
         _ => {}
@@ -130,33 +120,14 @@ extern "C" fn get_index(
 extern "C" fn set_index(
     interp: &mut Executor,
     globals: &mut Globals,
-    mut base: Value,
+    base: Value,
     index: Value,
     src: Value,
 ) -> Option<Value> {
     match base.class_id() {
         ARRAY_CLASS => {
-            let v = base.as_array_mut();
             if let Some(idx) = index.try_fixnum() {
-                if idx >= 0 {
-                    match v.get_mut(idx as usize) {
-                        Some(v) => *v = src,
-                        None => {
-                            let idx = idx as usize;
-                            v.extend((v.len()..idx).into_iter().map(|_| Value::nil()));
-                            v.push(src);
-                        }
-                    }
-                } else {
-                    let idx_positive = v.len() as i64 + idx;
-                    if idx_positive < 0 {
-                        globals.err_index_too_small(idx, -(v.len() as i64));
-                        return None;
-                    } else {
-                        v[idx_positive as usize] = src;
-                    }
-                };
-                return Some(src);
+                return executor::array_set_index(globals, base, idx, src);
             }
         }
         _ => {}
