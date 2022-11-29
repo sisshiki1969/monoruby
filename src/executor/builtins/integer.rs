@@ -25,14 +25,6 @@ extern "C" fn times(
     _: usize,
     block: Option<Value>,
 ) -> Option<Value> {
-    /*let mut bp: u64;
-    unsafe {
-        std::arch::asm!(
-            "mov {bp}, rbp",
-            bp = out(reg) bp,
-        );
-    }
-    dbg!(bp as *const u8);*/
     let count = match self_val.try_fixnum() {
         Some(i) => i,
         None => unimplemented!(),

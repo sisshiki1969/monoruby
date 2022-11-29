@@ -126,7 +126,6 @@ impl Globals {
             lib.push(path);
             //if lib.is_absolute() {
             lib.set_extension("rb");
-            dbg!(&lib);
             if lib.exists() {
                 return self.load_file(&lib);
             }
