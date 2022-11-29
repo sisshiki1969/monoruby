@@ -130,20 +130,22 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         cond: Node,
-        else_pos: usize,
+        then_pos: usize,
     ) -> Result<()> {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
             let cond = info.next_reg().into();
             self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
             info.pop();
-            self.gen_condbr(cond, else_pos, true);
-        //} else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
-        //    self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
-        //    self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+            self.gen_condbr(cond, then_pos, true);
+        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
+            let cont_pos = self.new_label();
+            self.gen_opt_condnotbr(ctx, info, lhs, cont_pos)?;
+            self.gen_opt_condbr(ctx, info, rhs, then_pos)?;
+            self.apply_label(cont_pos);
         } else {
             let cond = self.gen_temp_expr(ctx, info, cond)?;
-            self.gen_condbr(cond, else_pos, false);
+            self.gen_condbr(cond, then_pos, false);
         }
         Ok(())
     }
@@ -162,12 +164,40 @@ impl IrContext {
             info.pop();
             self.gen_condnotbr(cond, else_pos, true);
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
-            self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
-            self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+            self.gen_opt_land_condnotbr(ctx, info, lhs, rhs, else_pos)?;
+        } else if let NodeKind::BinOp(BinOp::LOr, box lhs, box rhs) = cond.kind {
+            self.gen_opt_lor_condnotbr(ctx, info, lhs, rhs, else_pos)?;
         } else {
             let cond = self.gen_temp_expr(ctx, info, cond)?;
             self.gen_condnotbr(cond, else_pos, false);
         }
+        Ok(())
+    }
+
+    fn gen_opt_land_condnotbr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        lhs: Node,
+        rhs: Node,
+        else_pos: usize,
+    ) -> Result<()> {
+        self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
+        self.gen_opt_condnotbr(ctx, info, rhs, else_pos)
+    }
+
+    fn gen_opt_lor_condnotbr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        lhs: Node,
+        rhs: Node,
+        else_pos: usize,
+    ) -> Result<()> {
+        let cont_pos = self.new_label();
+        self.gen_opt_condbr(ctx, info, lhs, cont_pos)?;
+        self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+        self.apply_label(cont_pos);
         Ok(())
     }
 }
@@ -534,6 +564,7 @@ impl IrContext {
             BinOp::Shr => self.gen_shr(ctx, info, dst, lhs, rhs, loc),
             BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
             BinOp::LAnd => self.gen_land(ctx, info, dst, lhs, rhs),
+            BinOp::LOr => self.gen_lor(ctx, info, dst, lhs, rhs),
             BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
             _ => Err(MonorubyErr::unsupported_operator(
                 op,
@@ -1225,6 +1256,26 @@ impl IrContext {
         };
         self.gen_store_expr(ctx, info, dst, lhs)?;
         self.gen_condnotbr(dst, exit_pos, false);
+        self.gen_store_expr(ctx, info, dst, rhs)?;
+        self.apply_label(exit_pos);
+        Ok(dst)
+    }
+
+    fn gen_lor(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        dst: Option<BcReg>,
+        lhs: Node,
+        rhs: Node,
+    ) -> Result<BcReg> {
+        let exit_pos = self.new_label();
+        let dst = match dst {
+            None => info.push().into(),
+            Some(reg) => reg,
+        };
+        self.gen_store_expr(ctx, info, dst, lhs)?;
+        self.gen_condbr(dst, exit_pos, false);
         self.gen_store_expr(ctx, info, dst, rhs)?;
         self.apply_label(exit_pos);
         Ok(dst)

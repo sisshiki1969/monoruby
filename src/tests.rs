@@ -654,11 +654,99 @@ mod test {
     }
 
     #[test]
+    fn bench_while_and() {
+        run_test2(
+            r#"
+            i = 0
+            while i < 1000 && i < 120
+              i = i + 1
+            end
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            while i < 120 && i < 1000 
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
+    fn bench_while_or() {
+        run_test2(
+            r#"
+            i = 0
+            while i < 1000 || i < 120
+              i = i + 1
+            end
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            while i < 120 || i < 1000 
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
     fn bench_until() {
         run_test2(
             r#"
             i = 0
             until i == 1000
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
+    fn bench_until_and() {
+        run_test2(
+            r#"
+            i = 0
+            until i > 1000 && i > 120
+              i = i + 1
+            end
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            until i > 120 && i > 1000 
+              i = i + 1
+            end
+            i
+            "#,
+        );
+    }
+
+    #[test]
+    fn bench_until_or() {
+        run_test2(
+            r#"
+            i = 0
+            until i > 1000 || i > 120
+              i = i + 1
+            end
+            i
+            "#,
+        );
+        run_test2(
+            r#"
+            i = 0
+            until i > 120 || i > 1000 
               i = i + 1
             end
             i
