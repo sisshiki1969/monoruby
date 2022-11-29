@@ -969,6 +969,26 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
+                TraceIr::Range {
+                    ret,
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm! { self.jit,
+                        movq rdi, [rbp - (conv(start))]; // base: Value
+                        movq rsi, [rbp - (conv(end))]; // idx: Value
+                        movq rdx, r12; // &mut Globals
+                        movl rcx, (if exclude_end {1} else {0});
+                        movq rax, (gen_range);
+                        call rax;
+                    };
+                    self.xmm_restore(&xmm_using);
+                    self.handle_error(pc);
+                    self.store_rax(ret);
+                }
                 TraceIr::Index(ret, base, idx) => {
                     self.write_back_slot(&mut ctx, base);
                     self.write_back_slot(&mut ctx, idx);

@@ -89,6 +89,15 @@ extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     Value::new_array(v)
 }
 
+extern "C" fn gen_range(
+    start: Value,
+    end: Value,
+    globals: &mut Globals,
+    exclude_end: bool,
+) -> Option<Value> {
+    globals.generate_range(start, end, exclude_end)
+}
+
 #[repr(C)]
 struct ClassIdSlot {
     base: ClassId,

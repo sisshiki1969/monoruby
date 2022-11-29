@@ -15,6 +15,7 @@ pub const STRING_CLASS: ClassId = ClassId::new(8);
 pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
 pub const ARRAY_CLASS: ClassId = ClassId::new(11);
+pub const RANGE_CLASS: ClassId = ClassId::new(12);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(transparent)]
@@ -28,14 +29,14 @@ impl ClassId {
     pub(crate) fn is_always_frozen(&self) -> bool {
         matches!(
             *self,
-            NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS
+            NIL_CLASS
+                | TRUE_CLASS
+                | FALSE_CLASS
+                | INTEGER_CLASS
+                | FLOAT_CLASS
+                | SYMBOL_CLASS
+                | RANGE_CLASS
         )
-        /*match *self {
-            NIL_CLASS | TRUE_CLASS | FALSE_CLASS | INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
-                true
-            }
-            _ => false,
-        }*/
     }
 }
 
@@ -52,6 +53,7 @@ impl std::fmt::Debug for ClassId {
             8 => write!(f, "STRING"),
             9 => write!(f, "SYMBOL"),
             10 => write!(f, "TIME"),
+            11 => write!(f, "RANGE"),
             n => write!(f, "ClassId({})", n),
         }
     }

@@ -1,5 +1,6 @@
 use crate::*;
 use num::{BigInt, ToPrimitive};
+use ruruby_parse::{Node, NodeKind};
 
 use crate::alloc::{Allocator, GC};
 
@@ -35,6 +36,7 @@ impl GC<RValue> for Value {
 }
 
 impl Value {
+    /// This function is only used for system assertion.
     pub(crate) fn eq(lhs: Self, rhs: Self) -> bool {
         if lhs == rhs {
             return true;
@@ -49,6 +51,7 @@ impl Value {
                     .iter()
                     .zip(rhs.as_array().iter())
                     .all(|(lhs, rhs)| Value::eq(*lhs, *rhs)),
+                (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
                 _ => false,
             },
             _ => false,
@@ -226,6 +229,10 @@ impl Value {
 
     pub(crate) fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
+    }
+
+    pub(crate) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
+        RValue::new_range(start, end, exclude_end).pack()
     }
 
     pub(crate) fn new_time(time: TimeInfo) -> Self {
@@ -445,6 +452,84 @@ impl Value {
     pub(crate) fn as_string(&self) -> String {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_string()
+    }
+
+    pub(crate) fn as_range(&self) -> &Range {
+        assert_eq!(ObjKind::RANGE, self.rvalue().kind());
+        self.rvalue().as_range()
+    }
+}
+
+impl Value {
+    #[cfg(test)]
+    pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
+        match &node.kind {
+            NodeKind::CompStmt(stmts) => {
+                assert_eq!(1, stmts.len());
+                Self::from_ast(&stmts[0], globals)
+            }
+            NodeKind::Integer(num) => Value::new_integer(*num),
+            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
+            NodeKind::Float(num) => Value::new_float(*num),
+            NodeKind::Bool(b) => Value::bool(*b),
+            NodeKind::Nil => Value::nil(),
+            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
+            NodeKind::String(s) => Value::new_string_from_str(s),
+            NodeKind::Array(v, ..) => {
+                let v = v.iter().map(|node| Self::from_ast(node, globals)).collect();
+                Value::new_array(v)
+            }
+            NodeKind::Const {
+                toplevel,
+                parent,
+                prefix,
+                name,
+            } => {
+                assert_eq!(false, *toplevel);
+                assert_eq!(None, *parent);
+                assert_eq!(0, prefix.len());
+                let constant = IdentId::get_ident_id(name);
+                globals.get_constant(OBJECT_CLASS, constant).unwrap()
+            }
+            NodeKind::Range {
+                box start,
+                box end,
+                exclude_end,
+                ..
+            } => {
+                let start = Self::from_ast(start, globals);
+                let end = Self::from_ast(end, globals);
+                Value::new_range(start, end, *exclude_end)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn from_ast2(node: &Node) -> Value {
+        match &node.kind {
+            NodeKind::Integer(num) => Value::new_integer(*num),
+            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
+            NodeKind::Float(num) => Value::new_float(*num),
+            NodeKind::Bool(b) => Value::bool(*b),
+            NodeKind::Nil => Value::nil(),
+            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
+            NodeKind::String(s) => Value::new_string_from_str(s),
+            NodeKind::Array(v, true) => {
+                let v = v.iter().map(|node| Self::from_ast2(node)).collect();
+                Value::new_array(v)
+            }
+            NodeKind::Range {
+                box start,
+                box end,
+                exclude_end,
+                is_const: true,
+            } => {
+                let start = Self::from_ast2(start);
+                let end = Self::from_ast2(end);
+                Value::new_range(start, end, *exclude_end)
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

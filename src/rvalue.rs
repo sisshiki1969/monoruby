@@ -38,6 +38,7 @@ impl std::fmt::Debug for RValue {
                     ),
                     7 => format!("TIME({:?})", self.kind.time),
                     8 => format!("ARRAY({:?})", self.kind.array),
+                    9 => format!("RANGE({:?})", self.kind.range),
                     _ => unreachable!(),
                 }
             },
@@ -112,7 +113,15 @@ impl RValue {
     pub(crate) fn deep_copy(&self) -> Self {
         RValue {
             flags: self.flags,
-            var_table: self.var_table.clone(),
+            var_table: match &self.var_table {
+                Some(box table) => Some(Box::new(
+                    table
+                        .iter()
+                        .map(|v| v.map(|v| Value::deep_copy(v)))
+                        .collect(),
+                )),
+                None => None,
+            },
             kind: match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS => ObjKind::class(self.as_class()),
@@ -129,6 +138,14 @@ impl RValue {
                         .map(|v| Value::deep_copy(*v))
                         .collect(),
                 ),
+                ObjKind::RANGE => {
+                    let lhs = self.as_range();
+                    ObjKind::range(
+                        Value::deep_copy(lhs.start),
+                        Value::deep_copy(lhs.end),
+                        lhs.exclude_end != 0,
+                    )
+                }
                 _ => unreachable!("clone()"),
             },
         }
@@ -270,6 +287,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(crate) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
+        RValue {
+            flags: RVFlag::new(RANGE_CLASS, ObjKind::RANGE),
+            kind: ObjKind::range(start, end, exclude_end),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -334,6 +359,7 @@ pub union ObjKind {
     pub string: ManuallyDrop<StringInner>,
     pub time: ManuallyDrop<TimeInfo>,
     pub array: ManuallyDrop<Vec<Value>>,
+    pub range: ManuallyDrop<Range>,
 }
 
 impl ObjKind {
@@ -346,11 +372,26 @@ impl ObjKind {
     pub const BYTES: u8 = 6;
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
+    pub const RANGE: u8 = 9;
 }
 
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
+
+#[derive(Debug, PartialEq)]
+#[repr(C)]
+pub struct Range {
+    pub start: Value,
+    pub end: Value,
+    pub exclude_end: u32,
+}
+
+impl Range {
+    pub fn exclude_end(&self) -> bool {
+        self.exclude_end != 0
+    }
+}
 
 impl ObjKind {
     fn invalid() -> Self {
@@ -392,6 +433,16 @@ impl ObjKind {
     fn array(v: Vec<Value>) -> Self {
         Self {
             array: ManuallyDrop::new(v),
+        }
+    }
+
+    fn range(start: Value, end: Value, exclude_end: bool) -> Self {
+        Self {
+            range: ManuallyDrop::new(Range {
+                start,
+                end,
+                exclude_end: if exclude_end { 1 } else { 0 },
+            }),
         }
     }
 
@@ -441,6 +492,10 @@ impl RValue {
 
     pub(crate) fn as_array_mut(&mut self) -> &mut Vec<Value> {
         unsafe { &mut self.kind.array }
+    }
+
+    pub(crate) fn as_range(&self) -> &Range {
+        unsafe { &self.kind.range }
     }
 
     pub(crate) fn as_time(&self) -> &TimeInfo {

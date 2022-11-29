@@ -278,6 +278,16 @@ impl Globals {
         }
     }
 
+    fn range_inspect(&self, val: Value) -> String {
+        let range = val.as_range();
+        format!(
+            "{}{}{}",
+            self.val_inspect(range.start),
+            if range.exclude_end() { "..." } else { ".." },
+            self.val_inspect(range.end),
+        )
+    }
+
     pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::Nil => "nil".to_string(),
@@ -324,9 +334,18 @@ impl Globals {
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
+                ObjKind::RANGE => self.range_inspect(val),
                 _ => unreachable!(),
             },
         }
+    }
+
+    pub fn generate_range(&mut self, start: Value, end: Value, exclude_end: bool) -> Option<Value> {
+        if start.get_real_class_id(self) != end.get_real_class_id(self) {
+            self.err_bad_range(start, end);
+            return None;
+        }
+        Some(Value::new_range(start, end, exclude_end))
     }
 
     pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {

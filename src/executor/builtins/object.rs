@@ -211,9 +211,7 @@ extern "C" fn rand(
             _ => unimplemented!(),
         },
         n => {
-            globals.err_argument(&format!(
-                "wrong number of arguments (given {n}, expeted 0..1)"
-            ));
+            globals.err_wrong_number_of_arguments_range(n, 0..1);
             return None;
         }
     };

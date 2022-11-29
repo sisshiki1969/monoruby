@@ -311,6 +311,32 @@ impl IrContext {
         self.emit_array(ret, src, len, loc);
         Ok(())
     }
+    fn gen_range(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        ret: Option<BcReg>,
+        start: Node,
+        end: Node,
+        exclude_end: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        let ret = match ret {
+            Some(local) => local,
+            None => info.push().into(),
+        };
+        let (start, end) = self.gen_binary_temp_expr(ctx, info, start, end)?;
+        self.push(
+            BcIr::Range {
+                ret,
+                start,
+                end,
+                exclude_end,
+            },
+            loc,
+        );
+        Ok(())
+    }
 
     fn gen_index(
         &mut self,
@@ -611,7 +637,21 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
             NodeKind::Float(f) => self.gen_float(info, None, f),
             NodeKind::String(s) => self.gen_string(info, None, s),
-            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, None, nodes, loc)?,
+            NodeKind::Array(_, true) => {
+                let val = Value::from_ast2(&expr);
+                self.gen_literal(info, None, val);
+            }
+            NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
+            NodeKind::Range { is_const: true, .. } => {
+                let val = Value::from_ast2(&expr);
+                self.gen_literal(info, None, val);
+            }
+            NodeKind::Range {
+                box start,
+                box end,
+                exclude_end,
+                is_const: false,
+            } => self.gen_range(ctx, info, None, start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -922,7 +962,21 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(dst), bigint),
             NodeKind::Float(f) => self.gen_float(info, Some(dst), f),
             NodeKind::String(s) => self.gen_string(info, Some(dst), s),
-            NodeKind::Array(nodes, _) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
+            NodeKind::Array(_, true) => {
+                let val = Value::from_ast2(&rhs);
+                self.gen_literal(info, Some(dst), val);
+            }
+            NodeKind::Array(nodes, false) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
+            NodeKind::Range { is_const: true, .. } => {
+                let val = Value::from_ast2(&rhs);
+                self.gen_literal(info, Some(dst), val);
+            }
+            NodeKind::Range {
+                box start,
+                box end,
+                exclude_end,
+                is_const: false,
+            } => self.gen_range(ctx, info, Some(dst), start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -1651,6 +1705,22 @@ impl IrContext {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
                     Bc::from(enc_www(131, op1.0, op2.0, *len))
+                }
+                BcIr::Range {
+                    ret,
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(start);
+                    let op3 = info.get_index(end);
+                    Bc::from(enc_www(
+                        153 + if *exclude_end { 1 } else { 0 },
+                        op1.0,
+                        op2.0,
+                        op3.0,
+                    ))
                 }
                 BcIr::Index(ret, base, idx) => {
                     let op1 = info.get_index(ret);
