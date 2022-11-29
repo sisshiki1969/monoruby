@@ -129,31 +129,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        cond: Node,
-        then_pos: usize,
-    ) -> Result<()> {
-        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
-            let loc = cond.loc;
-            let cond = info.next_reg().into();
-            self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
-            info.pop();
-            self.gen_condbr(cond, then_pos, true);
-        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
-            let cont_pos = self.new_label();
-            self.gen_opt_condnotbr(ctx, info, lhs, cont_pos)?;
-            self.gen_opt_condbr(ctx, info, rhs, then_pos)?;
-            self.apply_label(cont_pos);
-        } else {
-            let cond = self.gen_temp_expr(ctx, info, cond)?;
-            self.gen_condbr(cond, then_pos, false);
-        }
-        Ok(())
-    }
-
-    fn gen_opt_condnotbr(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
+        jmp_if_true: bool,
         cond: Node,
         else_pos: usize,
     ) -> Result<()> {
@@ -162,41 +138,59 @@ impl IrContext {
             let cond = info.next_reg().into();
             self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
             info.pop();
-            self.gen_condnotbr(cond, else_pos, true);
+            if jmp_if_true {
+                self.gen_condbr(cond, else_pos, true);
+            } else {
+                self.gen_condnotbr(cond, else_pos, true);
+            }
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
-            self.gen_opt_land_condnotbr(ctx, info, lhs, rhs, else_pos)?;
+            if jmp_if_true {
+                self.gen_opt_lor_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
+            } else {
+                self.gen_opt_land_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
+            }
         } else if let NodeKind::BinOp(BinOp::LOr, box lhs, box rhs) = cond.kind {
-            self.gen_opt_lor_condnotbr(ctx, info, lhs, rhs, else_pos)?;
+            if jmp_if_true {
+                self.gen_opt_land_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
+            } else {
+                self.gen_opt_lor_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
+            }
         } else {
             let cond = self.gen_temp_expr(ctx, info, cond)?;
-            self.gen_condnotbr(cond, else_pos, false);
+            if jmp_if_true {
+                self.gen_condbr(cond, else_pos, false);
+            } else {
+                self.gen_condnotbr(cond, else_pos, false);
+            }
         }
         Ok(())
     }
 
-    fn gen_opt_land_condnotbr(
+    fn gen_opt_land_condbr(
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
+        jmp_if_true: bool,
         lhs: Node,
         rhs: Node,
         else_pos: usize,
     ) -> Result<()> {
-        self.gen_opt_condnotbr(ctx, info, lhs, else_pos)?;
-        self.gen_opt_condnotbr(ctx, info, rhs, else_pos)
+        self.gen_opt_condbr(ctx, info, jmp_if_true, lhs, else_pos)?;
+        self.gen_opt_condbr(ctx, info, jmp_if_true, rhs, else_pos)
     }
 
-    fn gen_opt_lor_condnotbr(
+    fn gen_opt_lor_condbr(
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
+        jmp_if_true: bool,
         lhs: Node,
         rhs: Node,
         else_pos: usize,
     ) -> Result<()> {
         let cont_pos = self.new_label();
-        self.gen_opt_condbr(ctx, info, lhs, cont_pos)?;
-        self.gen_opt_condnotbr(ctx, info, rhs, else_pos)?;
+        self.gen_opt_condbr(ctx, info, !jmp_if_true, lhs, cont_pos)?;
+        self.gen_opt_condbr(ctx, info, jmp_if_true, rhs, else_pos)?;
         self.apply_label(cont_pos);
         Ok(())
     }
@@ -772,7 +766,7 @@ impl IrContext {
             } => {
                 let else_pos = self.new_label();
                 let succ_pos = self.new_label();
-                self.gen_opt_condnotbr(ctx, info, cond, else_pos)?;
+                self.gen_opt_condbr(ctx, info, false, cond, else_pos)?;
                 self.gen_expr(ctx, info, then_, use_value, is_ret)?;
                 if !is_ret {
                     self.gen_br(succ_pos);
@@ -1459,11 +1453,7 @@ impl IrContext {
         let loc = body.loc;
         self.apply_label(cond_pos);
         self.push(BcIr::LoopStart, loc);
-        if cond_op {
-            self.gen_opt_condnotbr(ctx, info, cond, succ_pos)?
-        } else {
-            self.gen_opt_condbr(ctx, info, cond, succ_pos)?
-        };
+        self.gen_opt_condbr(ctx, info, !cond_op, cond, succ_pos)?;
         self.gen_expr(ctx, info, body, false, false)?;
         self.gen_br(cond_pos);
         self.apply_label(succ_pos);
