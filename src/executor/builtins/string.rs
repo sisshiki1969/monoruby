@@ -138,7 +138,7 @@ extern "C" fn rem(
     _: Option<Value>,
 ) -> Option<Value> {
     let arguments = match arg[0].is_array() {
-        Some(ary) => ary.clone(),
+        Some(ary) => ary.to_vec(),
         None => vec![arg[0]],
     };
     let mut arg_no = 0;

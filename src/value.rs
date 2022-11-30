@@ -219,8 +219,12 @@ impl Value {
         RValue::new_bytes_from_slice(b).pack()
     }
 
-    pub(crate) fn new_array(v: Vec<Value>) -> Self {
-        RValue::new_array(v).pack()
+    pub(crate) fn new_array(ary: ArrayInner) -> Self {
+        RValue::new_array(ary).pack()
+    }
+
+    pub(crate) fn new_array_from_vec(v: Vec<Value>) -> Self {
+        RValue::new_array(ArrayInner::new(v)).pack()
     }
 
     pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
@@ -383,12 +387,17 @@ impl Value {
         }
     }*/
 
-    pub(crate) fn as_array_mut(&mut self) -> &mut Vec<Value> {
+    pub(crate) fn as_array(&self) -> &ArrayInner {
+        assert_eq!(ObjKind::ARRAY, self.rvalue().kind());
+        self.rvalue().as_array()
+    }
+
+    pub(crate) fn as_array_mut(&mut self) -> &mut ArrayInner {
         assert_eq!(ObjKind::ARRAY, self.rvalue().kind());
         self.rvalue_mut().as_array_mut()
     }
 
-    pub(crate) fn is_array(&self) -> Option<&Vec<Value>> {
+    pub(crate) fn is_array(&self) -> Option<&ArrayInner> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
             ObjKind::ARRAY => Some(rv.as_array()),
@@ -477,7 +486,7 @@ impl Value {
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, ..) => {
                 let v = v.iter().map(|node| Self::from_ast(node, globals)).collect();
-                Value::new_array(v)
+                Value::new_array_from_vec(v)
             }
             NodeKind::Const {
                 toplevel,
@@ -516,7 +525,7 @@ impl Value {
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, true) => {
                 let v = v.iter().map(|node| Self::from_ast2(node)).collect();
-                Value::new_array(v)
+                Value::new_array_from_vec(v)
             }
             NodeKind::Range {
                 box start,

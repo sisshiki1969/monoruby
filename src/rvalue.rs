@@ -132,12 +132,12 @@ impl RValue {
                 },
                 ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
-                ObjKind::ARRAY => ObjKind::array(
+                ObjKind::ARRAY => ObjKind::array(ArrayInner::new(
                     self.as_array()
                         .iter()
                         .map(|v| Value::deep_copy(*v))
                         .collect(),
-                ),
+                )),
                 ObjKind::RANGE => {
                     let lhs = self.as_range();
                     ObjKind::range(
@@ -264,10 +264,10 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_array(v: Vec<Value>) -> Self {
+    pub(crate) fn new_array(ary: ArrayInner) -> Self {
         RValue {
             flags: RVFlag::new(ARRAY_CLASS, ObjKind::ARRAY),
-            kind: ObjKind::array(v),
+            kind: ObjKind::array(ary),
             var_table: None,
         }
     }
@@ -275,7 +275,7 @@ impl RValue {
     pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::ARRAY),
-            kind: ObjKind::array(v),
+            kind: ObjKind::array(ArrayInner::new(v)),
             var_table: None,
         }
     }
@@ -295,6 +295,60 @@ impl RValue {
             var_table: None,
         }
     }
+}
+
+impl RValue {
+    pub(crate) fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
+        unsafe { &self.kind.object }
+    }
+
+    pub(crate) fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
+        unsafe { &mut self.kind.object }
+    }
+
+    pub(crate) fn as_class(&self) -> ClassId {
+        unsafe { self.kind.class }
+    }
+
+    pub(crate) fn as_float(&self) -> f64 {
+        unsafe { self.kind.float }
+    }
+
+    pub(crate) fn as_bignum(&self) -> &BigInt {
+        unsafe { &self.kind.bignum }
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        unsafe { self.kind.string.0.as_ref() }
+    }
+
+    pub(crate) fn as_string(&self) -> String {
+        unsafe { String::from_utf8_lossy(&self.kind.string.0).to_string() }
+    }
+
+    /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
+        unsafe { &mut *self.kind.bytes }
+    }*/
+
+    pub(crate) fn as_array(&self) -> &ArrayInner {
+        unsafe { &self.kind.array }
+    }
+
+    pub(crate) fn as_array_mut(&mut self) -> &mut ArrayInner {
+        unsafe { &mut self.kind.array }
+    }
+
+    pub(crate) fn as_range(&self) -> &Range {
+        unsafe { &self.kind.range }
+    }
+
+    pub(crate) fn as_time(&self) -> &TimeInfo {
+        unsafe { &self.kind.time }
+    }
+
+    /*pub(crate) fn as_time_mut(&mut self) -> &mut TimeInfo {
+        unsafe { &mut *self.kind.time }
+    }*/
 }
 
 impl RValue {
@@ -358,7 +412,7 @@ pub union ObjKind {
     pub float: f64,
     pub string: ManuallyDrop<StringInner>,
     pub time: ManuallyDrop<TimeInfo>,
-    pub array: ManuallyDrop<Vec<Value>>,
+    pub array: ManuallyDrop<ArrayInner>,
     pub range: ManuallyDrop<Range>,
 }
 
@@ -430,9 +484,9 @@ impl ObjKind {
         }
     }
 
-    fn array(v: Vec<Value>) -> Self {
+    fn array(ary: ArrayInner) -> Self {
         Self {
-            array: ManuallyDrop::new(v),
+            array: ManuallyDrop::new(ary),
         }
     }
 
@@ -453,56 +507,94 @@ impl ObjKind {
     }
 }
 
-impl RValue {
-    pub(crate) fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
-        unsafe { &self.kind.object }
+#[derive(Debug, Clone)]
+pub struct ArrayInner(Vec<Value>);
+
+impl std::ops::Deref for ArrayInner {
+    type Target = [Value];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ArrayInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl ArrayInner {
+    pub fn new(v: Vec<Value>) -> Self {
+        ArrayInner(v)
     }
 
-    pub(crate) fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
-        unsafe { &mut self.kind.object }
-    }
-
-    pub(crate) fn as_class(&self) -> ClassId {
-        unsafe { self.kind.class }
-    }
-
-    pub(crate) fn as_float(&self) -> f64 {
-        unsafe { self.kind.float }
-    }
-
-    pub(crate) fn as_bignum(&self) -> &BigInt {
-        unsafe { &self.kind.bignum }
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        unsafe { self.kind.string.0.as_ref() }
-    }
-
-    pub(crate) fn as_string(&self) -> String {
-        unsafe { String::from_utf8_lossy(&self.kind.string.0).to_string() }
-    }
-
-    /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
-        unsafe { &mut *self.kind.bytes }
+    /*pub fn clear(&mut self) {
+        self.0.clear();
     }*/
 
-    pub(crate) fn as_array(&self) -> &Vec<Value> {
-        unsafe { &self.kind.array }
+    pub fn push(&mut self, value: Value) {
+        self.0.push(value);
     }
 
-    pub(crate) fn as_array_mut(&mut self) -> &mut Vec<Value> {
-        unsafe { &mut self.kind.array }
+    /*pub fn pop(&mut self) -> Option<Value> {
+        self.0.pop()
     }
 
-    pub(crate) fn as_range(&self) -> &Range {
-        unsafe { &self.kind.range }
+    pub fn truncate(&mut self, new_len: usize) {
+        self.0.truncate(new_len);
     }
 
-    pub(crate) fn as_time(&self) -> &TimeInfo {
-        unsafe { &self.kind.time }
-    }
-
-    /*pub(crate) fn as_time_mut(&mut self) -> &mut TimeInfo {
-        unsafe { &mut *self.kind.time }
+    pub fn resize(&mut self, new_len: usize, value: Value) {
+        self.0.resize(new_len, value)
     }*/
+
+    pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
+        self.0.extend(iter);
+    }
+
+    pub fn extend_from_slice(&mut self, slice: &[Value]) {
+        self.0.extend_from_slice(slice);
+    }
+
+    /*pub fn drain(&mut self, range: std::ops::Range<usize>) -> Vec<Value> {
+        self.0.drain(range).collect()
+    }*/
+}
+
+impl ArrayInner {
+    pub fn set_index(&mut self, globals: &mut Globals, idx: i64, src: Value) -> Option<Value> {
+        if idx >= 0 {
+            match self.get_mut(idx as usize) {
+                Some(v) => *v = src,
+                None => {
+                    let idx = idx as usize;
+                    self.extend((self.len()..idx).into_iter().map(|_| Value::nil()));
+                    self.push(src);
+                }
+            }
+        } else {
+            let len = self.len();
+            let idx_positive = len as i64 + idx;
+            if idx_positive < 0 {
+                globals.err_index_too_small(idx, -(len as i64));
+                return None;
+            } else {
+                self[idx_positive as usize] = src;
+            }
+        };
+        return Some(src);
+    }
+
+    pub fn get_index(&self, idx: i64) -> Option<Value> {
+        return Some(if idx >= 0 {
+            self.get(idx as usize).cloned().unwrap_or_default()
+        } else {
+            let idx = self.len() as i64 + idx;
+            if idx < 0 {
+                Value::nil()
+            } else {
+                self.get(idx as usize).cloned().unwrap_or_default()
+            }
+        });
+    }
 }

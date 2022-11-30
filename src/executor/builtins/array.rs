@@ -67,7 +67,7 @@ extern "C" fn add(
     _len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    let mut lhs = self_val.is_array().unwrap().clone();
+    let mut lhs = self_val.as_array().clone();
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
@@ -102,7 +102,7 @@ extern "C" fn shl(
 extern "C" fn index_assign(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    mut self_val: Value,
     arg: Arg,
     _len: usize,
     _: Option<Value>,
@@ -110,7 +110,7 @@ extern "C" fn index_assign(
     let i = arg[0];
     let val = arg[1];
     if let Some(idx) = i.try_fixnum() {
-        return executor::array_set_index(globals, self_val, idx, val);
+        return self_val.as_array_mut().set_index(globals, idx, val);
     } else {
         unimplemented!()
     }

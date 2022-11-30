@@ -110,7 +110,7 @@ extern "C" fn constants(
         .into_iter()
         .map(Value::new_symbol)
         .collect();
-    Some(Value::new_array(v))
+    Some(Value::new_array_from_vec(v))
 }
 
 /// ### Module#instance_methods
@@ -135,7 +135,7 @@ extern "C" fn instance_methods(
         .into_iter()
         .map(Value::new_symbol)
         .collect();
-    Some(Value::new_array(v))
+    Some(Value::new_array_from_vec(v))
 }
 
 /// ### Module#attr_reader
@@ -157,7 +157,7 @@ extern "C" fn attr_reader(
         let method_name = globals.define_attr_reader(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(res))
+    Some(Value::new_array_from_vec(res))
 }
 
 /// ### Module#attr_writer
@@ -179,7 +179,7 @@ extern "C" fn attr_writer(
         let method_name = globals.define_attr_writer(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(res))
+    Some(Value::new_array_from_vec(res))
 }
 
 /// ### Module#attr_accessor
@@ -203,7 +203,7 @@ extern "C" fn attr_accessor(
         let method_name = globals.define_attr_writer(class_id, arg_name);
         res.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(res))
+    Some(Value::new_array_from_vec(res))
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
         unsafe { std::slice::from_raw_parts(src.sub(len - 1), len).to_vec() }
     };
     v.reverse();
-    Value::new_array(v)
+    Value::new_array_from_vec(v)
 }
 
 extern "C" fn gen_range(
@@ -117,7 +117,7 @@ extern "C" fn get_index(
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
                 class_slot.idx = INTEGER_CLASS;
-                return executor::array_get_index(base, idx);
+                return base.as_array().get_index(idx);
             }
         }
         _ => {}
@@ -129,14 +129,14 @@ extern "C" fn get_index(
 extern "C" fn set_index(
     interp: &mut Executor,
     globals: &mut Globals,
-    base: Value,
+    mut base: Value,
     index: Value,
     src: Value,
 ) -> Option<Value> {
     match base.class_id() {
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
-                return executor::array_set_index(globals, base, idx, src);
+                return base.as_array_mut().set_index(globals, idx, src);
             }
         }
         _ => {}

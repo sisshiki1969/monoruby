@@ -235,7 +235,7 @@ impl Globals {
 }
 
 impl Globals {
-    fn array_tos(&self, v: &[Value]) -> String {
+    fn array_tos(&self, v: &ArrayInner) -> String {
         match v.len() {
             0 => "[]".to_string(),
             1 => format!("[{}]", self.val_inspect(v[0])),
