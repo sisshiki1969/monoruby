@@ -93,6 +93,19 @@ impl Globals {
     }
 
     pub fn exec_startup(&mut self) {
+        // load library path
+        let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
+        let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
+            .unwrap()
+            .node;
+
+        let mut lib: Vec<String> = Value::from_ast2(&nodes)
+            .as_array()
+            .to_vec()
+            .into_iter()
+            .map(|v| v.as_string().to_string())
+            .collect();
+        self.lib_directories.append(&mut lib);
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../../startup/startup.rb").to_string();
         let mut executor = Executor::default();

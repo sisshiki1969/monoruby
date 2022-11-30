@@ -26,9 +26,19 @@ struct CommandLineArgs {
 
 fn main() {
     use clap::Parser;
-    let mut args = CommandLineArgs::parse();
+    let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit);
-    globals.lib_directories.append(&mut args.import);
+    let mut lib = args
+        .import
+        .iter()
+        .filter_map(|s| {
+            std::path::Path::new(s)
+                .canonicalize()
+                .map(|p| p.to_string_lossy().to_string())
+                .ok()
+        })
+        .collect();
+    globals.lib_directories.append(&mut lib);
     globals.exec_startup();
 
     if !args.exec.is_empty() {
