@@ -156,10 +156,9 @@ impl FnStore {
         self.functions.0.len()
     }
 
-    pub(crate) fn add_iseq(
+    pub(crate) fn add_method(
         &mut self,
         name: Option<String>,
-        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -176,7 +175,29 @@ impl FnStore {
         }
         Ok(self
             .functions
-            .add_iseq(outer, name, args, *info.body, sourceinfo, false))
+            .add_iseq(None, name, args, *info.body, sourceinfo, false))
+    }
+
+    pub(crate) fn add_block(
+        &mut self,
+        outer: (FuncId, Vec<HashMap<String, u16>>),
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let mut args = vec![];
+        for param in info.params {
+            match param.kind {
+                ParamKind::Param(name) => args.push(name),
+                _ => {
+                    return Err(MonorubyErr::unsupported_parameter_kind(
+                        param.kind, param.loc, sourceinfo,
+                    ))
+                }
+            }
+        }
+        Ok(self
+            .functions
+            .add_iseq(Some(outer), None, args, *info.body, sourceinfo, false))
     }
 
     pub(crate) fn add_classdef(

@@ -148,6 +148,7 @@ impl Codegen {
             movq rdx, rax;  // rdx = reg_num
 
             subq rdx, rdi;
+            jle  loop_exit;
             subq rdx, 1;    // rdx = reg_num - 1 - args_len
             jeq  loop_exit;
             movq rdi, rax;

@@ -240,8 +240,13 @@ impl std::ops::Add<u16> for SlotId {
 /// ~~~
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-#[repr(transparent)]
-pub struct Meta(u64);
+#[repr(C)]
+pub struct Meta {
+    func_id: FuncId,
+    reg_num: u16,
+    kind: u8,
+    mode: u8,
+}
 
 impl std::fmt::Debug for Meta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -267,54 +272,74 @@ impl std::fmt::Debug for Meta {
 
 impl Meta {
     pub(crate) fn new(meta: u64) -> Self {
-        Self(meta)
+        unsafe { std::mem::transmute(meta) }
+    }
+
+    pub(crate) fn get(&self) -> u64 {
+        unsafe { std::mem::transmute(*self) }
     }
 
     pub(crate) fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = method
-        Self(((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
+        let reg_num = reg_num as i16 as u16;
+        Self {
+            func_id,
+            reg_num,
+            kind: 0,
+            mode: 0,
+        }
     }
 
     pub(crate) fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = classdef
-        Self((1 << 56) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
+        let reg_num = reg_num as i16 as u16;
+        Self {
+            func_id,
+            reg_num,
+            kind: 0,
+            mode: 1,
+        }
     }
 
     pub(crate) fn native(func_id: FuncId, reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
-        Self((2 << 48) + ((reg_num as i16 as u16 as u64) << 32) + (func_id.0 as u64))
+        let reg_num = reg_num as i16 as u16;
+        Self {
+            func_id,
+            reg_num,
+            kind: 2,
+            mode: 0,
+        }
     }
 
     pub(crate) fn func_id(&self) -> FuncId {
-        FuncId(self.0 as u32)
+        self.func_id
     }
 
     pub(crate) fn reg_num(&self) -> i64 {
-        (self.0 >> 32) as u16 as i16 as i64
+        self.reg_num as i16 as i64
     }
 
     pub(crate) fn kind(&self) -> u8 {
-        (self.0 >> 48) as u8
+        self.kind
     }
 
     pub(crate) fn mode(&self) -> u8 {
-        (self.0 >> 56) as u8
+        self.mode
     }
 
     ///
     /// Set JIT flag in Meta.
     ///
     pub(crate) fn set_jit(&mut self) {
-        let meta = (self.0 & 0xff00_ffff_ffff_ffff) | (1 << 48);
-        self.0 = meta;
+        self.kind = 1;
     }
 
     ///
     /// Set the number of registers in Meta.
     ///
     pub(crate) fn set_reg_num(&mut self, reg_num: i64) {
-        let meta = (self.0 & 0xffff_0000_ffff_ffff) | ((reg_num as i16 as u16 as u64) << 32);
-        self.0 = meta;
+        self.reg_num = reg_num as i16 as u16;
     }
 }
 

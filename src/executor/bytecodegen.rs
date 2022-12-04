@@ -1084,7 +1084,7 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_iseq(Some(name.clone()), None, block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
@@ -1195,12 +1195,8 @@ impl IrContext {
             match block.kind {
                 NodeKind::Lambda(block) => {
                     let outer_locals = info.get_locals();
-                    let func_id = ctx.add_iseq(
-                        None,
-                        Some((info.id, outer_locals)),
-                        block,
-                        info.sourceinfo.clone(),
-                    )?;
+                    let func_id =
+                        ctx.add_block((info.id, outer_locals), block, info.sourceinfo.clone())?;
                     self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
                 }
                 _ => unimplemented!(),

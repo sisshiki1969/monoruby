@@ -500,7 +500,7 @@ impl Codegen {
             pushq rbp;
             movq rbp, rsp;
             //movq [rbp - (OFFSET_OUTER)], 0;
-            movq rax, (Meta::native(func_id, len as _).0);
+            movq rax, (Meta::native(func_id, len as _).get());
             movq [rbp - (OFFSET_META)], rax;
             movq [rbp - (OFFSET_BLOCK)], r9;
             movq [rbp - (OFFSET_SELF)], rdx;
@@ -564,7 +564,7 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, qword (cached.meta.0);
+            movq rax, qword (cached.meta.get());
             movq [rsp - (16 + OFFSET_META)], rax;
 
             movq r13, qword (cached.pc.get_u64());
