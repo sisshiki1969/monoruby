@@ -126,8 +126,6 @@ impl Codegen {
     ///
     pub(super) fn construct_vm(&mut self, no_jit: bool) {
         let entry = self.jit.label();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
         //
         // VM entry
         //
@@ -144,25 +142,7 @@ impl Codegen {
         entry:
             pushq rbp;
             movq rbp, rsp;
-            movzxw rax, [rbp - (OFFSET_REGNUM)];   // reg_num
-            movq rdx, rax;  // rdx = reg_num
-
-            subq rdx, rdi;
-            jle  loop_exit;
-            subq rdx, 1;    // rdx = reg_num - 1 - args_len
-            jeq  loop_exit;
-            movq rdi, rax;
-            negq rdi;
-            lea  rcx, [rsp + rdi * 8 - (OFFSET_SELF)];
-        loop_:
-            movq [rcx + rdx * 8], (NIL_VALUE);
-            subq rdx, 1;
-            jne  loop_;
-        loop_exit:
-        };
-        self.calc_offset();
-        monoasm! { self.jit,
-            subq rsp, rax;
+            movq rdx, rdi;
         };
         let entry_fetch = self.jit.label();
         self.jit.bind_label(entry_fetch);
@@ -265,6 +245,8 @@ impl Codegen {
         self.dispatch[165] = self.vm_leri();
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
+
+        self.dispatch[170] = self.vm_init();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -452,13 +434,12 @@ impl Codegen {
     /// - *r13*: BcPc
     ///
     /// #### returns:
-    /// - *eax*:  :0
     /// - *r15d*: :1
     /// - *edi*: :2 or *rdi*: :2:3
     /// - *esi*: :3
     ///
     /// ### registers destroyed
-    /// - r8, r9
+    /// - rax, r8
     ///
     fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit.label();
@@ -706,6 +687,41 @@ impl Codegen {
         };
     }
 
+    fn vm_init(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
+        let l3 = self.jit.label();
+        // r15: reg_num
+        // rdi: arg_num
+        // rsi: stack_offset
+        // rdx : number of args passed from caller
+        monoasm! { self.jit,
+            //pushq rbp;
+            //movq rbp, rsp;
+            shlq rsi, 4;
+            subq rsp, rsi;
+            movq rax, r15;  // rax = reg_num
+            cmpl rdx, rdi;
+            jlt  l1;
+            movl rdx, rdi;
+        l1:
+            subq rax, rdx;
+            jle  l3;
+            subq rax, 1;    // rax = reg_num - 1 - args_len
+            jeq  l3;
+            negq r15;
+            lea  r15, [rbp + r15 * 8 - (OFFSET_SELF)];
+        l2:
+            movq [r15 + rax * 8], (NIL_VALUE);
+            subq rax, 1;
+            jne  l2;
+        l3:
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_concat(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
@@ -893,9 +909,9 @@ impl Codegen {
         let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
-            movq rsi, [rsp + 8];  // rdx: IdentId
-            movzxw rdx, [r13];  // rcx: len
-            movq rcx, [rsp]; // r8: receiver:Value
+            movq rsi, [rsp + 8];  // rsi: IdentId
+            movzxw rdx, [r13];  // rdx: len
+            movq rcx, [rsp]; // rcx: receiver:Value
             call entry_find_method; // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;

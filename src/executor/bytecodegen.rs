@@ -216,10 +216,27 @@ enum LvalueKind {
 }
 
 impl IrContext {
-    pub(crate) fn compile(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<IrContext> {
+    pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
+        ir.push(
+            BcIr::Init {
+                reg_num: 0,
+                arg_num: 0,
+                stack_offset: 0,
+            },
+            Loc::default(),
+        );
         ir.gen_expr(ctx, info, ast, true, true)?;
+        let reg_num = info.total_reg_num();
+        ir.ir[0] = (
+            BcIr::Init {
+                reg_num,
+                arg_num: info.total_arg_num() - 1,
+                stack_offset: (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4,
+            },
+            Loc::default(),
+        );
         assert_eq!(0, info.temp);
         Ok(ir)
     }
@@ -1814,6 +1831,16 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_ww(149, op1.0, op2.0))
                 }
+                BcIr::Init {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                } => Bc::from(enc_www(
+                    170,
+                    *reg_num as u16,
+                    *arg_num as u16,
+                    *stack_offset as u16,
+                )),
                 BcIr::MethodCall(ret, name) => {
                     let op1 = match ret {
                         None => SlotId::new(0),

@@ -142,6 +142,7 @@ impl LoopAnalysis {
             }
 
             match self.pc.op1() {
+                TraceIr::Init { .. } => {}
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }

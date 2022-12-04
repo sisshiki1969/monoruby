@@ -1,2 +1,4 @@
-puts 100
-puts self
+def f
+  puts 100
+end
+f

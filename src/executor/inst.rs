@@ -122,6 +122,13 @@ impl BcPc {
             }
         }
         let s = match self.op1() {
+            TraceIr::Init {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => {
+                format!("init reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}")
+            }
             TraceIr::Br(disp) => {
                 format!("br =>:{:05}", i as i32 + 1 + disp)
             }
@@ -554,6 +561,11 @@ pub(super) enum BcIr {
         args: BcReg,
         len: usize,
     },
+    Init {
+        reg_num: usize,
+        arg_num: usize,
+        stack_offset: usize,
+    },
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
@@ -699,6 +711,16 @@ impl std::fmt::Debug for Bc {
         }
         let pc = BcPc::from(self);
         match pc.op1() {
+            TraceIr::Init {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => {
+                write!(
+                    f,
+                    "init reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                )
+            }
             TraceIr::Br(disp) => {
                 write!(f, "br => {}", disp_str(disp))
             }
@@ -974,6 +996,12 @@ pub(super) enum TraceIr {
     Ret(SlotId),
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
+    /// initialize_function
+    Init {
+        reg_num: usize,
+        arg_num: usize,
+        stack_offset: usize,
+    },
     //                0       4       8       12      16
     //                +-------+-------+-------+-------+
     // MethodCall     |   |ret|identid| class |version|
@@ -1214,6 +1242,11 @@ impl TraceIr {
                     op3 as i16,
                     true,
                 ),
+                170 => Self::Init {
+                    reg_num: op1 as usize,
+                    arg_num: op2 as usize,
+                    stack_offset: op3 as usize,
+                },
                 180..=199 => Self::BinOpIr {
                     kind: BinOpK::from(opcode - 180),
                     ret: SlotId::new(op1),

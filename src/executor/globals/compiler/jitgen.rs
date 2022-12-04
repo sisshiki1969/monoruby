@@ -901,6 +901,11 @@ impl Codegen {
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.op1() {
+                TraceIr::Init {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;
                 }
