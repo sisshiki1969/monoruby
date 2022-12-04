@@ -1,4 +1,5 @@
 def f
-  puts 100
+  yield 1,2
 end
-f
+
+8.times { f {|a,b,c,d| e=42; puts a,b,c,d,e} }

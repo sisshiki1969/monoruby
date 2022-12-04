@@ -698,7 +698,22 @@ mod test {
     use super::*;
     #[test]
     fn polymorphic() {
-        tests::run_test(
+        tests::run_test_with_prelude(
+            r##"
+        res = []
+                
+        a = [C1.new, C1.new, C1.new, C1.new, C.new, C.new]
+        for i in 0..a.length - 1
+          res << a[i].f
+        end
+                
+        a = [C.new, C.new, C.new, C.new, C1.new, C1.new]
+        for i in 0..a.length - 1
+          res << a[i].f
+        end
+                
+        res
+        "##,
             r##"
         class C
           attr_accessor :a
@@ -716,20 +731,6 @@ mod test {
             @a=20
           end
         end
-                
-        res = []
-                
-        a = [C1.new, C1.new, C1.new, C1.new, C.new, C.new]
-        for i in 0..a.length - 1
-          res << a[i].f
-        end
-                
-        a = [C.new, C.new, C.new, C.new, C1.new, C1.new]
-        for i in 0..a.length - 1
-          res << a[i].f
-        end
-                
-        res
         "##,
         );
     }

@@ -517,9 +517,9 @@ impl Codegen {
 
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
-            self.prologue(func);
             let pc = func.get_pc(0);
-            let side_exit = self.gen_side_deopt_without_writeback(pc);
+            self.prologue(pc);
+            let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
             monoasm!(self.jit,
                 movq rdi, [rbp - (OFFSET_SELF)];
             );
@@ -901,11 +901,7 @@ impl Codegen {
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.op1() {
-                TraceIr::Init {
-                    reg_num,
-                    arg_num,
-                    stack_offset,
-                } => {}
+                TraceIr::Init { .. } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;
                 }
@@ -1563,31 +1559,59 @@ impl Codegen {
         );
     }
 
-    fn prologue(&mut self, func: &ISeqInfo) {
-        let regs = func.total_reg_num();
-        let args = func.total_arg_num();
-        let offset = (regs * 8 + OFFSET_SELF as usize + 15) & !0xf;
-        let clear_len = regs - args;
+    fn prologue(&mut self, pc: BcPc) {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
-            subq rsp, (offset);
+            // save len in rdx.
+            movq rdx, rdi;
         );
-        if clear_len > 2 {
+        if let TraceIr::Init {
+            reg_num,
+            arg_num,
+            stack_offset,
+        } = pc.op1()
+        {
+            let l1 = self.jit.label();
+            let l2 = self.jit.label();
             monoasm!(self.jit,
-                movq rax, (NIL_VALUE);
+                subq rsp, (stack_offset * 16);
             );
-            for i in 0..clear_len {
+            // fill nil to residual arguments.
+            monoasm!(self.jit,
+                // rdx: len
+                movl rax, rdx;
+                subl rax, (arg_num);
+                jge  l1;
+                negq rdx;
+                lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
+            l2:
+                movq [rdx], (NIL_VALUE);
+                subq rdx, 8;
+                addl rax, 1;
+                jne  l2;
+            l1:
+            );
+            // fill nil to temporary registers.
+            let clear_len = reg_num - arg_num - 1;
+            if clear_len > 2 {
                 monoasm!(self.jit,
-                    movq [rbp - ((args + i) as i32 * 8 + (OFFSET_SELF))], rax;
+                    movq rax, (NIL_VALUE);
                 );
+                for i in 0..clear_len {
+                    monoasm!(self.jit,
+                        movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
+                    );
+                }
+            } else {
+                for i in 0..clear_len {
+                    monoasm!(self.jit,
+                        movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
+                    );
+                }
             }
         } else {
-            for i in 0..clear_len {
-                monoasm!(self.jit,
-                    movq [rbp - ((args + i) as i32 * 8 + (OFFSET_SELF))], (NIL_VALUE);
-                );
-            }
+            unreachable!()
         }
     }
 

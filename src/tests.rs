@@ -23,6 +23,25 @@ pub fn run_test(code: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
+pub fn run_test_with_prelude(code: &str, prelude: &str) {
+    let wrapped = format!(
+        r##"
+      {prelude}
+      res = ({code})
+      for __i in 0..7 do
+          res2 = ({code})
+          __assert(res, res2)
+      end
+      res
+  "##
+    );
+    eprintln!("{}", wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let ruby_res = run_ruby(&(prelude.to_string() + code), &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
 pub fn run_test2(code: &str) {
     let (interp_val, mut globals) = run_test_main(code);
     let ruby_res = run_ruby(code, &mut globals);
@@ -416,7 +435,11 @@ mod test {
         run_test("@a=42; b = @a * 2; b");
         run_test("@a=42; c = b = @a * 2; c");
         run_test("@a = 10; @a += 15; @a");
-        run_test(
+        run_test_with_prelude(
+            r###"
+        x = C.new
+        x.ivar
+        "###,
             r###"
         class C
           def initialize
@@ -433,11 +456,13 @@ mod test {
             [@a, @b, @c, @d, @e, @f, @g, @h]
           end
         end
+        "###,
+        );
+        run_test_with_prelude(
+            r###"
         x = C.new
         x.ivar
         "###,
-        );
-        run_test(
             r###"
         class C < Array
           def initialize
@@ -454,8 +479,6 @@ mod test {
             [@a, @b, @c, @d, @e, @f, @g, @h]
           end
         end
-        x = C.new
-        x.ivar
         "###,
         );
     }
@@ -512,17 +535,17 @@ mod test {
     #[test]
     fn test_fn() {
         run_test("def f; end; f");
-        run_test2(
+        run_test_with_prelude(
+            "
+        a = []
+        a << f(4,7)
+        a << f(4,7) do end
+        a
+        ",
             "
         def f(a,b)
           a-b
         end
-        a = []
-        for i in 0..10
-          a << f(4,7)
-          a << f(4,7) do end
-        end
-        a
         ",
         );
     }
@@ -572,40 +595,6 @@ mod test {
                 end
             end;
             fact 130.0
-            "#,
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn bench_fibo() {
-        run_test2(
-            r#"
-            def fib(x)
-                if x<3 then
-                    1
-                else
-                    fib(x-1) + fib(x-2)
-                end
-            end;
-            fib 40
-            "#,
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn bench_factorial() {
-        run_test2(
-            r#"
-            def fact(x)
-                if x <= 1 then
-                    1
-                else
-                    x * fact(x-1)
-                end
-            end;
-            fact 4000
             "#,
         );
     }
@@ -1152,8 +1141,42 @@ mod test {
         for lhs in input {
             for rhs in input {
                 run_test(&format!("{} && {}", lhs, rhs));
+                run_test(&format!("{} || {}", lhs, rhs));
+                run_test(&format!("if {} && {} then 17 else 42 end", lhs, rhs));
+                run_test(&format!("if {} || {} then 17 else 42 end", lhs, rhs));
             }
         }
         run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");
+        run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
+    }
+
+    #[test]
+    fn test_block_call() {
+        run_test_with_prelude(
+            r#"
+        f {|a,b|
+          e=42
+          [a,b,e]
+        }
+        "#,
+            r#"
+        def f
+          yield 1,2,3,4
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f {|a,b,c,d|
+          e=42
+          [a,b,c,d,e]
+        }
+        "#,
+            r#"
+        def f
+          yield 1,2
+        end
+        "#,
+        );
     }
 }
