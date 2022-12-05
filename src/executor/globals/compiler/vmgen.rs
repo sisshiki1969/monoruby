@@ -687,6 +687,17 @@ impl Codegen {
         };
     }
 
+    /// Initialize frame
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|reg|arg|ofs||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// reg: a number of resisters
+    /// arg: a number of arguments
+    /// ofs: stack pointer offset
+    ///  /// ~~~
     fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let l1 = self.jit.label();
@@ -722,6 +733,17 @@ impl Codegen {
         label
     }
 
+    /// Concatenate string
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|ret|reg|len||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// ret: return register
+    /// reg: the start of argument registers
+    /// len: the number of argument registers
+    /// ~~~
     fn vm_concat(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
@@ -738,6 +760,17 @@ impl Codegen {
         label
     }
 
+    /// Load dynamic local variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|dst|src|out||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// dst: destination register
+    /// src: source register
+    /// out: source outer level
+    /// ~~~
     fn vm_load_dvar(&mut self) -> CodePtr {
         // r15: dst
         // rdi: src reg
@@ -763,6 +796,17 @@ impl Codegen {
         label
     }
 
+    /// Store dynamic local variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|dst|out|src||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// dst: destination register
+    /// out: destination outer level
+    /// src: source register
+    /// ~~~
     fn vm_store_dvar(&mut self) -> CodePtr {
         // r15: dst reg
         // rdi: dst outer
@@ -788,6 +832,30 @@ impl Codegen {
         label
     }
 
+    /// Call Method
+    ///
+    /// ~~~text
+    /// MethodCall
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|ret| name  || class |version|
+    /// +---+---+---+---++---+---+---+---+
+    /// MethodArgs
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|rcv|arg|len||   code ptr    |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// operands
+    /// ret:  return register
+    /// name: method name
+    /// rcv:  receiver register
+    /// arg:  the start of argument registers
+    /// len:  the number of argument registers
+    ///
+    /// inline method cache
+    /// class:    a class of the receiver
+    /// version:  class version
+    /// code ptr: code pointer of the function
+    /// ~~~
     fn vm_method_call(&mut self, has_block: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
@@ -931,6 +999,18 @@ impl Codegen {
         label
     }
 
+    /// Yield
+    ///
+    /// ~~~text
+    /// MethodCall
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|ret|arg|len||               |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// ret:  return register
+    /// arg:  the start of argument registers
+    /// len:  the number of argument registers
+    /// ~~~
     fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
@@ -968,28 +1048,6 @@ impl Codegen {
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        //
-        //       +-------------+
-        // +0x08 |     pc      |
-        //       +-------------+
-        //  0x00 |   ret reg   | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |   old rbp   |
-        //       +-------------+
-        // -0x18 |    outer    |
-        //       +-------------+
-        // -0x20 |    meta     |
-        //       +-------------+
-        // -0x28 |    block    |
-        //       +-------------+
-        // -0x30 |     %0      |
-        //       +-------------+
-        // -0x38 | %1(1st arg) | <- rdx
-        //       +-------------+
-        //       |             |
-        //
         monoasm! { self.jit,
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq r8, r10;
