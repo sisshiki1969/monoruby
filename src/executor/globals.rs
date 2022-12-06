@@ -143,7 +143,7 @@ impl Globals {
                 return self.load_file(&lib);
             }
             lib.set_extension("so");
-            if path.exists() {
+            if lib.exists() {
                 eprintln!("Warning: currently, can not require .so file. {:?}", lib);
             }
             //}

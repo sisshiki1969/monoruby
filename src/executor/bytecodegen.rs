@@ -918,8 +918,20 @@ impl IrContext {
                 info: block_info,
                 is_module,
             } => {
-                assert!(base.is_none());
-                assert!(!is_module);
+                if let Some(base) = base {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("base in class def. {:?}", base.kind),
+                        loc,
+                        info.sourceinfo.clone(),
+                    ));
+                };
+                if is_module {
+                    return Err(MonorubyErr::unsupported_feature(
+                        "module def.",
+                        loc,
+                        info.sourceinfo.clone(),
+                    ));
+                };
                 let ret = if use_value {
                     Some(info.push().into())
                 } else {

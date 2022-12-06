@@ -44,11 +44,13 @@ fn main() {
     if !args.exec.is_empty() {
         let path = std::path::Path::new("REPL");
         for code in args.exec {
-            let res = globals.compile_and_run(&code, path);
-            if let Ok(_val) = res {
-                #[cfg(debug_assertions)]
-                eprintln!("=> {:?}", _val)
-            };
+            match globals.compile_and_run(&code, path) {
+                Ok(_val) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("=> {:?}", _val)
+                }
+                Err(err) => err.show_error_message_and_loc(&globals),
+            }
         }
         return;
     }

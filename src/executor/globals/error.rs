@@ -306,6 +306,18 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn unsupported_feature(
+        msg: &str,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> MonorubyErr {
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Unimplemented(msg.to_string()),
+            loc,
+            sourceinfo,
+        )
+    }
+
     pub(crate) fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
