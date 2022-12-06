@@ -247,6 +247,7 @@ impl Codegen {
         self.dispatch[167] = self.vm_geri();
 
         self.dispatch[170] = self.vm_init();
+        self.dispatch[171] = self.vm_expand_array();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -728,6 +729,35 @@ impl Codegen {
             subq rax, 1;
             jne  l2;
         l3:
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// Expand array
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|src|dst|len||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// src: the source resister
+    /// dst: the start of destination reginsters
+    /// len: the number of destination registers
+    /// ~~~
+    fn vm_expand_array(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+            // rdx <- len
+            movq rdx, rsi;
+            // rsi <- dst
+            negq rdi;
+            lea rsi, [rbp + rdi * 8 - (OFFSET_SELF)];
+            // rdi <- *src
+            negq r15;
+            movq rdi, [rbp + r15 * 8 - (OFFSET_SELF)];
+            movq rax, (expand_array);
+            call rax;
         };
         self.fetch_and_dispatch();
         label

@@ -1179,4 +1179,32 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_block_nest() {
+        run_test_with_prelude(
+            r#"
+        f {|a,(b,c,d),e,f|
+            [a,b,c,d,e,f]
+        }
+        "#,
+            r#"
+        def f
+          yield 1,[2,3],4
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f {|a,(b)|
+            [a,b]
+        }
+        "#,
+            r#"
+        def f
+          yield 1,[2,3],4
+        end
+        "#,
+        );
+    }
 }

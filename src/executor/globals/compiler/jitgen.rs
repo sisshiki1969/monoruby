@@ -1265,6 +1265,22 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
+                TraceIr::ExpandArray(src, dst, len) => {
+                    self.write_back_slot(&mut ctx, src);
+                    for reg in dst.0..dst.0 + len {
+                        ctx.dealloc_xmm(SlotId(reg));
+                    }
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm!(self.jit,
+                        movq rdi, [rbp - (conv(src))];
+                        lea rsi, [rbp - (conv(dst))];
+                        movq rdx, (len);
+                        movq rax, (expand_array);
+                        call rax;
+                    );
+                    self.xmm_restore(&xmm_using);
+                }
                 TraceIr::MethodCall { ret, name, .. } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
                         if method_info.callee_codeptr.is_none() {

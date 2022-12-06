@@ -245,6 +245,12 @@ impl LoopAnalysis {
                     }
                     reg_info.def_as(dst, false);
                 }
+                TraceIr::ExpandArray(src, dst, len) => {
+                    for r in dst.0..dst.0 + len {
+                        reg_info.def_as(SlotId(r), false);
+                    }
+                    reg_info.use_as(src, false, NIL_CLASS);
+                }
                 TraceIr::Yield { ret, args, len } => {
                     for i in 0..len {
                         reg_info.use_non_float(args + i);

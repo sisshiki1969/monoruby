@@ -396,6 +396,9 @@ impl BcPc {
             TraceIr::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
+            TraceIr::ExpandArray(src, dst, len) => {
+                format!("{:?}; {} = expand({:?})", dst, len, src)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
@@ -576,6 +579,7 @@ pub(super) enum BcIr {
         func_id: FuncId,
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
+    ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     LoopStart,
     LoopEnd,
 }
@@ -882,6 +886,9 @@ impl std::fmt::Debug for Bc {
             TraceIr::ConcatStr(ret, args, len) => {
                 write!(f, "{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
+            TraceIr::ExpandArray(src, dst, len) => {
+                write!(f, "{:?}; {len} = expand({:?})", dst, src)
+            }
             TraceIr::LoopStart(count) => writeln!(
                 f,
                 "loop_start counter={} jit-addr={:016x}",
@@ -1041,6 +1048,7 @@ pub(super) enum TraceIr {
     },
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
+    ExpandArray(SlotId, SlotId, u16),
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -1247,6 +1255,7 @@ impl TraceIr {
                     arg_num: op2 as usize,
                     stack_offset: op3 as usize,
                 },
+                171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 180..=199 => Self::BinOpIr {
                     kind: BinOpK::from(opcode - 180),
                     ret: SlotId::new(op1),

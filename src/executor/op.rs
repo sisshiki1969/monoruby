@@ -399,6 +399,20 @@ pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: us
     Value::new_string(res)
 }
 
+pub extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
+    match src.is_array() {
+        Some(ary) => {
+            let len = std::cmp::min(ary.len(), len);
+            for i in 0..len {
+                unsafe { *dst.sub(i) = ary[i] }
+            }
+        }
+        None => {
+            unsafe { *dst = src };
+        }
+    };
+}
+
 pub extern "C" fn vm_get_constant(
     interp: &mut Executor,
     globals: &mut Globals,

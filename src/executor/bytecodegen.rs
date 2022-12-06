@@ -219,24 +219,13 @@ impl IrContext {
     pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.push(
-            BcIr::Init {
-                reg_num: 0,
-                arg_num: 0,
-                stack_offset: 0,
-            },
-            Loc::default(),
-        );
+        ir.gen_dummy_init();
+        for (src, dst, len) in &info.expand {
+            ir.gen_expand_array(*src, *dst, *len);
+        }
         ir.gen_expr(ctx, info, ast, true, true)?;
         let reg_num = info.total_reg_num();
-        ir.ir[0] = (
-            BcIr::Init {
-                reg_num,
-                arg_num: info.total_arg_num() - 1,
-                stack_offset: (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4,
-            },
-            Loc::default(),
-        );
+        ir.replace_init(reg_num, info.total_arg_num() - 1);
         assert_eq!(0, info.temp);
         Ok(ir)
     }
@@ -1113,7 +1102,9 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id =
+            ctx.functions
+                .add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef(name, func_id), loc);
         Ok(())
@@ -1129,7 +1120,9 @@ impl IrContext {
         ret: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
+        let func_id = ctx
+            .functions
+            .add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
         let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, superclass)?),
@@ -1178,6 +1171,39 @@ impl IrContext {
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
         self.push(BcIr::InlineCache, loc);
     }
+
+    fn gen_dummy_init(&mut self) {
+        self.push(
+            BcIr::Init {
+                reg_num: 0,
+                arg_num: 0,
+                stack_offset: 0,
+            },
+            Loc::default(),
+        );
+    }
+
+    fn gen_expand_array(&mut self, src: usize, dst: usize, len: usize) {
+        self.push(
+            BcIr::ExpandArray(
+                BcLocal(src as u16).into(),
+                BcLocal(dst as u16).into(),
+                len as u16,
+            ),
+            Loc::default(),
+        );
+    }
+
+    fn replace_init(&mut self, reg_num: usize, arg_num: usize) {
+        self.ir[0] = (
+            BcIr::Init {
+                reg_num,
+                arg_num,
+                stack_offset: (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4,
+            },
+            Loc::default(),
+        );
+    }
 }
 enum RecvKind {
     SelfValue,
@@ -1224,8 +1250,11 @@ impl IrContext {
             match block.kind {
                 NodeKind::Lambda(block) => {
                     let outer_locals = info.get_locals();
-                    let func_id =
-                        ctx.add_block((info.id, outer_locals), block, info.sourceinfo.clone())?;
+                    let func_id = ctx.functions.add_block(
+                        (info.id, outer_locals),
+                        block,
+                        info.sourceinfo.clone(),
+                    )?;
                     self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
                 }
                 _ => unimplemented!(),
@@ -1912,6 +1941,11 @@ impl IrContext {
                     let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
                     let op2 = info.get_index(&BcReg::from(*arg));
                     Bc::from(enc_www(155, op1.0, op2.0, *len as u16))
+                }
+                BcIr::ExpandArray(src, dst, len) => {
+                    let op1 = info.get_index(src);
+                    let op2 = info.get_index(dst);
+                    Bc::from(enc_www(171, op1.0, op2.0, *len))
                 }
             };
             ops.push(op);

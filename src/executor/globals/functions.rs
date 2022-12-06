@@ -1,3 +1,5 @@
+use ruruby_parse::FormalParam;
+
 use super::*;
 use std::pin::Pin;
 
@@ -15,7 +17,7 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, PartialEq)]
-struct Funcs(Vec<FuncInfo>);
+pub(crate) struct Funcs(Vec<FuncInfo>);
 
 impl std::ops::Index<FuncId> for Funcs {
     type Output = FuncInfo;
@@ -37,6 +39,7 @@ impl Funcs {
             FuncId(0),
             None,
             vec![],
+            vec![],
             Node::new_nil(Loc(0, 0)),
             SourceInfoRef::default(),
             false,
@@ -47,11 +50,49 @@ impl Funcs {
         FuncId(self.0.len() as u32)
     }
 
+    pub(crate) fn add_method(
+        &mut self,
+        name: Option<String>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let (args, expand) = handle_args(info.params, &sourceinfo)?;
+        Ok(self.add_iseq(None, name, args, expand, *info.body, sourceinfo, false))
+    }
+
+    pub(crate) fn add_block(
+        &mut self,
+        outer: (FuncId, Vec<HashMap<String, u16>>),
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let (args, expand) = handle_args(info.params, &sourceinfo)?;
+        Ok(self.add_iseq(
+            Some(outer),
+            None,
+            args,
+            expand,
+            *info.body,
+            sourceinfo,
+            false,
+        ))
+    }
+
+    pub(crate) fn add_classdef(
+        &mut self,
+        name: Option<String>,
+        body: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> FuncId {
+        self.add_iseq(None, name, vec![], vec![], body, sourceinfo, true)
+    }
+
     fn add_iseq(
         &mut self,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         name: Option<String>,
-        args: Vec<String>,
+        args: Vec<Option<String>>,
+        expand: Vec<(usize, usize, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
@@ -62,6 +103,7 @@ impl Funcs {
             func_id,
             outer,
             args,
+            expand,
             body,
             sourceinfo,
             is_classdef,
@@ -88,6 +130,40 @@ impl Funcs {
     }
 }
 
+fn handle_args(
+    params: Vec<FormalParam>,
+    sourceinfo: &SourceInfoRef,
+) -> Result<(Vec<Option<String>>, Vec<(usize, usize, usize)>)> {
+    let mut args = vec![];
+    let mut destruct_args = vec![];
+    let mut expand = vec![];
+    for param in params {
+        match param.kind {
+            ParamKind::Param(name) => args.push(Some(name)),
+            ParamKind::Destruct(names) => {
+                expand.push((args.len(), destruct_args.len(), names.len()));
+                args.push(None);
+                names.into_iter().for_each(|(name, _)| {
+                    destruct_args.push(Some(name));
+                });
+            }
+            _ => {
+                return Err(MonorubyErr::unsupported_parameter_kind(
+                    param.kind,
+                    param.loc,
+                    sourceinfo.clone(),
+                ))
+            }
+        }
+    }
+    let expand: Vec<_> = expand
+        .into_iter()
+        .map(|(src, dst, len)| (src, args.len() + dst, len))
+        .collect();
+    args.append(&mut destruct_args);
+    Ok((args, expand))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstSiteInfo {
     /// Name of constants.
@@ -106,7 +182,7 @@ pub struct ConstSiteId(pub u32);
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct FnStore {
-    functions: Funcs,
+    pub(crate) functions: Funcs,
     pub(crate) inline: HashMap<FuncId, InlineMethod>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
@@ -155,60 +231,6 @@ impl FnStore {
     fn len(&self) -> usize {
         self.functions.0.len()
     }
-
-    pub(crate) fn add_method(
-        &mut self,
-        name: Option<String>,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        let mut args = vec![];
-        for param in info.params {
-            match param.kind {
-                ParamKind::Param(name) => args.push(name),
-                _ => {
-                    return Err(MonorubyErr::unsupported_parameter_kind(
-                        param.kind, param.loc, sourceinfo,
-                    ))
-                }
-            }
-        }
-        Ok(self
-            .functions
-            .add_iseq(None, name, args, *info.body, sourceinfo, false))
-    }
-
-    pub(crate) fn add_block(
-        &mut self,
-        outer: (FuncId, Vec<HashMap<String, u16>>),
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        let mut args = vec![];
-        for param in info.params {
-            match param.kind {
-                ParamKind::Param(name) => args.push(name),
-                _ => {
-                    return Err(MonorubyErr::unsupported_parameter_kind(
-                        param.kind, param.loc, sourceinfo,
-                    ))
-                }
-            }
-        }
-        Ok(self
-            .functions
-            .add_iseq(Some(outer), None, args, *info.body, sourceinfo, false))
-    }
-
-    pub(crate) fn add_classdef(
-        &mut self,
-        name: Option<String>,
-        body: Node,
-        sourceinfo: SourceInfoRef,
-    ) -> FuncId {
-        self.functions
-            .add_iseq(None, name, vec![], body, sourceinfo, true)
-    }
 }
 
 impl FnStore {
@@ -220,6 +242,7 @@ impl FnStore {
         let main_fid = self.functions.add_iseq(
             None,
             Some("/main".to_string()),
+            vec![],
             vec![],
             ast,
             sourceinfo,
@@ -300,7 +323,8 @@ impl FuncInfo {
         name: Option<String>,
         func_id: FuncId,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
-        args: Vec<String>,
+        args: Vec<Option<String>>,
+        expand: Vec<(usize, usize, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
@@ -312,11 +336,21 @@ impl FuncInfo {
                 outer.1,
                 name.clone(),
                 args,
+                expand,
                 body,
                 sourceinfo,
             )
         } else {
-            ISeqInfo::new(func_id, None, vec![], name.clone(), args, body, sourceinfo)
+            ISeqInfo::new(
+                func_id,
+                None,
+                vec![],
+                name.clone(),
+                args,
+                expand,
+                body,
+                sourceinfo,
+            )
         };
         Self {
             name,
@@ -451,7 +485,9 @@ pub(crate) struct ISeqInfo {
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
-    args: Vec<String>,
+    args: Vec<Option<String>>,
+    /// expand array info. (src_reg, dst_reg, len)
+    pub(crate) expand: Vec<(usize, usize, usize)>,
     /// local variables.
     locals: HashMap<String, u16>,
     /// outer local variables.
@@ -481,7 +517,8 @@ impl ISeqInfo {
         outer: Option<FuncId>,
         outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
-        args: Vec<String>,
+        args: Vec<Option<String>>,
+        expand: Vec<(usize, usize, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -492,6 +529,7 @@ impl ISeqInfo {
             bytecode: None,
             sourcemap: vec![],
             args: args.clone(),
+            expand,
             locals: HashMap::default(),
             outer_locals,
             temp: 0,
@@ -615,7 +653,11 @@ impl ISeqInfo {
     }
 
     /// Add a variable identifier without checking duplicates.
-    fn add_local(&mut self, ident: String) -> BcLocal {
+    fn add_local(&mut self, ident: impl Into<Option<String>>) -> BcLocal {
+        let ident = match ident.into() {
+            Some(ident) => ident,
+            None => "/".to_string(),
+        };
         let local = self.locals.len() as u16;
         assert!(self.locals.insert(ident, local).is_none());
         BcLocal(local)
