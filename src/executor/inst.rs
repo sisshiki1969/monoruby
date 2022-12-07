@@ -122,12 +122,23 @@ impl BcPc {
             }
         }
         let s = match self.op1() {
-            TraceIr::Init {
+            TraceIr::InitMethod {
                 reg_num,
                 arg_num,
                 stack_offset,
             } => {
-                format!("init reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}")
+                format!(
+                    "init_method reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                )
+            }
+            TraceIr::InitBlock {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => {
+                format!(
+                    "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                )
             }
             TraceIr::Br(disp) => {
                 format!("br =>:{:05}", i as i32 + 1 + disp)
@@ -564,7 +575,12 @@ pub(super) enum BcIr {
         args: BcReg,
         len: usize,
     },
-    Init {
+    InitMethod {
+        reg_num: usize,
+        arg_num: usize,
+        stack_offset: usize,
+    },
+    InitBlock {
         reg_num: usize,
         arg_num: usize,
         stack_offset: usize,
@@ -715,14 +731,24 @@ impl std::fmt::Debug for Bc {
         }
         let pc = BcPc::from(self);
         match pc.op1() {
-            TraceIr::Init {
+            TraceIr::InitMethod {
                 reg_num,
                 arg_num,
                 stack_offset,
             } => {
                 write!(
                     f,
-                    "init reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                    "init_method reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                )
+            }
+            TraceIr::InitBlock {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => {
+                write!(
+                    f,
+                    "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
                 )
             }
             TraceIr::Br(disp) => {
@@ -1003,8 +1029,14 @@ pub(super) enum TraceIr {
     Ret(SlotId),
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
-    /// initialize_function
-    Init {
+    /// initialize_method
+    InitMethod {
+        reg_num: usize,
+        arg_num: usize,
+        stack_offset: usize,
+    },
+    /// initialize_block
+    InitBlock {
         reg_num: usize,
         arg_num: usize,
         stack_offset: usize,
@@ -1250,7 +1282,12 @@ impl TraceIr {
                     op3 as i16,
                     true,
                 ),
-                170 => Self::Init {
+                170 => Self::InitMethod {
+                    reg_num: op1 as usize,
+                    arg_num: op2 as usize,
+                    stack_offset: op3 as usize,
+                },
+                172 => Self::InitBlock {
                     reg_num: op1 as usize,
                     arg_num: op2 as usize,
                     stack_offset: op3 as usize,

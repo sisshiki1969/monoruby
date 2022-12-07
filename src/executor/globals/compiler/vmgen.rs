@@ -246,8 +246,9 @@ impl Codegen {
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
 
-        self.dispatch[170] = self.vm_init();
+        self.dispatch[170] = self.vm_init_method();
         self.dispatch[171] = self.vm_expand_array();
+        self.dispatch[172] = self.vm_init_block();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -688,7 +689,7 @@ impl Codegen {
         };
     }
 
-    /// Initialize frame
+    /// Initialize method frame
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
@@ -699,18 +700,19 @@ impl Codegen {
     /// arg: a number of arguments
     /// ofs: stack pointer offset
     ///  /// ~~~
-    fn vm_init(&mut self) -> CodePtr {
+    fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         let l3 = self.jit.label();
+        // in
         // r15: reg_num
         // rdi: arg_num
         // rsi: stack_offset
-        // rdx : number of args passed from caller
+        // rdx: number of args passed from caller
+        // out
+        // rdx: number of args
         monoasm! { self.jit,
-            //pushq rbp;
-            //movq rbp, rsp;
             shlq rsi, 4;
             subq rsp, rsi;
             movq rax, r15;  // rax = reg_num
@@ -731,6 +733,35 @@ impl Codegen {
         l3:
         };
         self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_init_block(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            cmpl rdx, 1;
+            jne  l1;
+            cmpl rdi, 2;
+            jlt  l1;
+            movq rax, [rbp - (OFFSET_ARG0)];
+            testq rax, 0b111;
+            jnz  l1;
+            cmpl [rax + 4], (ARRAY_CLASS.0);
+            jne  l1;
+            pushq rdi;
+            pushq rsi;
+            movq rdx, rdi;
+            movq rdi, rax;
+            lea  rsi, [rbp - (OFFSET_ARG0)];
+            movq rax, (expand_array);
+            call rax;
+            movq rdx, rax;
+            popq rsi;
+            popq rdi;
+        l1:
+        }
+        self.vm_init_method();
         label
     }
 

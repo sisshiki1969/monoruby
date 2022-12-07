@@ -330,27 +330,9 @@ impl FuncInfo {
         is_classdef: bool,
     ) -> Self {
         let info = if let Some(outer) = outer {
-            ISeqInfo::new(
-                func_id,
-                Some(outer.0),
-                outer.1,
-                name.clone(),
-                args,
-                expand,
-                body,
-                sourceinfo,
-            )
+            ISeqInfo::new_block(func_id, outer, name.clone(), args, expand, body, sourceinfo)
         } else {
-            ISeqInfo::new(
-                func_id,
-                None,
-                vec![],
-                name.clone(),
-                args,
-                expand,
-                body,
-                sourceinfo,
-            )
+            ISeqInfo::new_method(func_id, name.clone(), args, expand, body, sourceinfo)
         };
         Self {
             name,
@@ -499,6 +481,7 @@ pub(crate) struct ISeqInfo {
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
+    pub(crate) is_block: bool,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -521,6 +504,7 @@ impl ISeqInfo {
         expand: Vec<(usize, usize, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
+        is_block: bool,
     ) -> Self {
         let mut info = ISeqInfo {
             id,
@@ -536,11 +520,55 @@ impl ISeqInfo {
             temp_num: 0,
             ast: Some(body),
             sourceinfo,
+            is_block,
         };
         args.into_iter().for_each(|name| {
             info.add_local(name);
         });
         info
+    }
+
+    pub(crate) fn new_block(
+        id: FuncId,
+        outer: (FuncId, Vec<HashMap<String, u16>>),
+        name: Option<String>,
+        args: Vec<Option<String>>,
+        expand: Vec<(usize, usize, usize)>,
+        body: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        Self::new(
+            id,
+            Some(outer.0),
+            outer.1,
+            name,
+            args,
+            expand,
+            body,
+            sourceinfo,
+            true,
+        )
+    }
+
+    pub(crate) fn new_method(
+        id: FuncId,
+        name: Option<String>,
+        args: Vec<Option<String>>,
+        expand: Vec<(usize, usize, usize)>,
+        body: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        Self::new(
+            id,
+            None,
+            vec![],
+            name,
+            args,
+            expand,
+            body,
+            sourceinfo,
+            false,
+        )
     }
 
     /// set bytecode.

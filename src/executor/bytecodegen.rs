@@ -245,13 +245,13 @@ impl IrContext {
     pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<IrContext> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_dummy_init();
+        ir.gen_dummy_init(info.is_block);
         for (src, dst, len) in &info.expand {
             ir.gen_expand_array(*src, *dst, *len);
         }
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
         let reg_num = info.total_reg_num();
-        ir.replace_init(reg_num, info.total_arg_num() - 1);
+        ir.replace_init(reg_num, info.total_arg_num() - 1, info.is_block);
         assert_eq!(0, info.temp);
         Ok(ir)
     }
@@ -1212,12 +1212,20 @@ impl IrContext {
         self.push(BcIr::InlineCache, loc);
     }
 
-    fn gen_dummy_init(&mut self) {
+    fn gen_dummy_init(&mut self, is_block: bool) {
         self.push(
-            BcIr::Init {
-                reg_num: 0,
-                arg_num: 0,
-                stack_offset: 0,
+            if is_block {
+                BcIr::InitBlock {
+                    reg_num: 0,
+                    arg_num: 0,
+                    stack_offset: 0,
+                }
+            } else {
+                BcIr::InitMethod {
+                    reg_num: 0,
+                    arg_num: 0,
+                    stack_offset: 0,
+                }
             },
             Loc::default(),
         );
@@ -1234,12 +1242,21 @@ impl IrContext {
         );
     }
 
-    fn replace_init(&mut self, reg_num: usize, arg_num: usize) {
+    fn replace_init(&mut self, reg_num: usize, arg_num: usize, is_block: bool) {
+        let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
         self.ir[0] = (
-            BcIr::Init {
-                reg_num,
-                arg_num,
-                stack_offset: (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4,
+            if is_block {
+                BcIr::InitBlock {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                }
+            } else {
+                BcIr::InitMethod {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                }
             },
             Loc::default(),
         );
@@ -1911,12 +1928,22 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_ww(149, op1.0, op2.0))
                 }
-                BcIr::Init {
+                BcIr::InitMethod {
                     reg_num,
                     arg_num,
                     stack_offset,
                 } => Bc::from(enc_www(
                     170,
+                    *reg_num as u16,
+                    *arg_num as u16,
+                    *stack_offset as u16,
+                )),
+                BcIr::InitBlock {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                } => Bc::from(enc_www(
+                    172,
                     *reg_num as u16,
                     *arg_num as u16,
                     *stack_offset as u16,
