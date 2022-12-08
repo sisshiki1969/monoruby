@@ -17,12 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Set up Ruby
-        uses: ruby/setup-ruby@359bebbc29cbe6c87da6bc9ea3bc930432750108
+        uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.1"
+          ruby-version: "3.2.0dev"
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly-2022-06-30
+          toolchain: nightly-2022-11-03
       - run: |
           cargo install grcov
           rustup component add llvm-tools-preview
