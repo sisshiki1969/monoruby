@@ -1429,6 +1429,16 @@ impl Codegen {
                         self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, xmm_using);
                     }
                 }
+                TraceIr::CheckLocal(local, disp) => {
+                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
+                    let branch_dest = self.jit.label();
+                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    monoasm!(self.jit,
+                        movq rax, [rbp - (conv(local))];
+                        testq rax, rax;
+                        jnz  branch_dest;
+                    );
+                }
             }
 
             let next_idx = cc.bb_pos + ofs + 1;

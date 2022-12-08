@@ -16,6 +16,22 @@ impl From<FuncId> for u32 {
     }
 }
 
+#[derive(Clone, Default, PartialEq)]
+pub struct ArgumentNames(pub Vec<Option<String>>);
+
+#[derive(Clone, Default, PartialEq)]
+pub struct ExpandInfo {
+    pub src: usize,
+    pub dst: usize,
+    pub len: usize,
+}
+
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct OptionalInfo {
+    pub(crate) local: BcLocal,
+    pub(crate) initializer: Node,
+}
+
 #[derive(Clone, PartialEq)]
 pub(crate) struct Funcs(Vec<FuncInfo>);
 
@@ -38,6 +54,7 @@ impl Funcs {
             None,
             FuncId(0),
             None,
+            ArgumentNames(vec![]),
             vec![],
             vec![],
             Node::new_nil(Loc(0, 0)),
@@ -56,8 +73,10 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand) = handle_args(info.params, &sourceinfo)?;
-        Ok(self.add_iseq(None, name, args, expand, *info.body, sourceinfo, false))
+        let (args, expand, optional) = handle_args(info.params, &sourceinfo)?;
+        Ok(self.add_iseq(
+            None, name, args, expand, optional, *info.body, sourceinfo, false,
+        ))
     }
 
     pub(crate) fn add_block(
@@ -66,12 +85,13 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand) = handle_args(info.params, &sourceinfo)?;
+        let (args, expand, optional) = handle_args(info.params, &sourceinfo)?;
         Ok(self.add_iseq(
             Some(outer),
             None,
             args,
             expand,
+            optional,
             *info.body,
             sourceinfo,
             false,
@@ -84,15 +104,25 @@ impl Funcs {
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
-        self.add_iseq(None, name, vec![], vec![], body, sourceinfo, true)
+        self.add_iseq(
+            None,
+            name,
+            ArgumentNames(vec![]),
+            vec![],
+            vec![],
+            body,
+            sourceinfo,
+            true,
+        )
     }
 
     fn add_iseq(
         &mut self,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         name: Option<String>,
-        args: Vec<Option<String>>,
-        expand: Vec<(usize, usize, usize)>,
+        args: ArgumentNames,
+        expand: Vec<ExpandInfo>,
+        optional: Vec<OptionalInfo>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
@@ -104,6 +134,7 @@ impl Funcs {
             outer,
             args,
             expand,
+            optional,
             body,
             sourceinfo,
             is_classdef,
@@ -133,13 +164,19 @@ impl Funcs {
 fn handle_args(
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
-) -> Result<(Vec<Option<String>>, Vec<(usize, usize, usize)>)> {
+) -> Result<(ArgumentNames, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
     let mut args = vec![];
     let mut destruct_args = vec![];
     let mut expand = vec![];
+    let mut optional = vec![];
     for param in params {
         match param.kind {
             ParamKind::Param(name) => args.push(Some(name)),
+            ParamKind::Optional(name, box initializer) => {
+                let local = BcLocal(args.len() as u16);
+                args.push(Some(name));
+                optional.push(OptionalInfo { local, initializer });
+            }
             ParamKind::Destruct(names) => {
                 expand.push((args.len(), destruct_args.len(), names.len()));
                 args.push(None);
@@ -158,10 +195,14 @@ fn handle_args(
     }
     let expand: Vec<_> = expand
         .into_iter()
-        .map(|(src, dst, len)| (src, args.len() + dst, len))
+        .map(|(src, dst, len)| ExpandInfo {
+            src,
+            dst: args.len() + dst,
+            len,
+        })
         .collect();
     args.append(&mut destruct_args);
-    Ok((args, expand))
+    Ok((ArgumentNames(args), expand, optional))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +283,7 @@ impl FnStore {
         let main_fid = self.functions.add_iseq(
             None,
             Some("/main".to_string()),
+            ArgumentNames(vec![]),
             vec![],
             vec![],
             ast,
@@ -261,8 +303,8 @@ impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        let mut ir = IrContext::compile_func(&mut info, self)?;
-        ir.ir_to_bytecode(&mut info, self);
+        IrContext::compile_func(&mut info, self)?;
+        //ir.ir_to_bytecode(&mut info, self);
 
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
@@ -323,20 +365,38 @@ impl FuncInfo {
         name: Option<String>,
         func_id: FuncId,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
-        args: Vec<Option<String>>,
-        expand: Vec<(usize, usize, usize)>,
+        args: ArgumentNames,
+        expand: Vec<ExpandInfo>,
+        optional: Vec<OptionalInfo>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
     ) -> Self {
         let info = if let Some(outer) = outer {
-            ISeqInfo::new_block(func_id, outer, name.clone(), args, expand, body, sourceinfo)
+            ISeqInfo::new_block(
+                func_id,
+                outer,
+                name.clone(),
+                args,
+                expand,
+                optional,
+                body,
+                sourceinfo,
+            )
         } else {
-            ISeqInfo::new_method(func_id, name.clone(), args, expand, body, sourceinfo)
+            ISeqInfo::new_method(
+                func_id,
+                name.clone(),
+                args,
+                expand,
+                optional,
+                body,
+                sourceinfo,
+            )
         };
         Self {
             name,
-            arity: info.args.len() as i32,
+            arity: info.args.0.len() as i32,
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -427,7 +487,7 @@ impl FuncInfo {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.iter().collect::<Vec<_>>(),
+            info.args.0,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -467,9 +527,11 @@ pub(crate) struct ISeqInfo {
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
-    args: Vec<Option<String>>,
+    args: ArgumentNames,
     /// expand array info. (src_reg, dst_reg, len)
-    pub(crate) expand: Vec<(usize, usize, usize)>,
+    pub(crate) expand: Vec<ExpandInfo>,
+    /// optional parameters initializer
+    pub(crate) optional: Vec<OptionalInfo>,
     /// local variables.
     locals: HashMap<String, u16>,
     /// outer local variables.
@@ -489,7 +551,7 @@ impl std::fmt::Debug for ISeqInfo {
         write!(
             f,
             "RubyFuncInfo {{ id: {}, name: {:?}. args: {:?} }}",
-            self.id.0, self.name, self.args
+            self.id.0, self.name, self.args.0
         )
     }
 }
@@ -500,8 +562,9 @@ impl ISeqInfo {
         outer: Option<FuncId>,
         outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
-        args: Vec<Option<String>>,
-        expand: Vec<(usize, usize, usize)>,
+        args: ArgumentNames,
+        expand: Vec<ExpandInfo>,
+        optional: Vec<OptionalInfo>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_block: bool,
@@ -514,6 +577,7 @@ impl ISeqInfo {
             sourcemap: vec![],
             args: args.clone(),
             expand,
+            optional,
             locals: HashMap::default(),
             outer_locals,
             temp: 0,
@@ -522,7 +586,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block,
         };
-        args.into_iter().for_each(|name| {
+        args.0.into_iter().for_each(|name| {
             info.add_local(name);
         });
         info
@@ -532,8 +596,9 @@ impl ISeqInfo {
         id: FuncId,
         outer: (FuncId, Vec<HashMap<String, u16>>),
         name: Option<String>,
-        args: Vec<Option<String>>,
-        expand: Vec<(usize, usize, usize)>,
+        args: ArgumentNames,
+        expand: Vec<ExpandInfo>,
+        optional: Vec<OptionalInfo>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -544,6 +609,7 @@ impl ISeqInfo {
             name,
             args,
             expand,
+            optional,
             body,
             sourceinfo,
             true,
@@ -553,8 +619,9 @@ impl ISeqInfo {
     pub(crate) fn new_method(
         id: FuncId,
         name: Option<String>,
-        args: Vec<Option<String>>,
-        expand: Vec<(usize, usize, usize)>,
+        args: ArgumentNames,
+        expand: Vec<ExpandInfo>,
+        optional: Vec<OptionalInfo>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -565,6 +632,7 @@ impl ISeqInfo {
             name,
             args,
             expand,
+            optional,
             body,
             sourceinfo,
             false,
@@ -593,7 +661,7 @@ impl ISeqInfo {
 
     /// get a number of arguments(includes *self*).
     pub(crate) fn total_arg_num(&self) -> usize {
-        1 + self.args.len()
+        1 + self.args.0.len()
     }
 
     /// get name.

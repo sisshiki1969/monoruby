@@ -140,6 +140,9 @@ impl BcPc {
                     "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
                 )
             }
+            TraceIr::CheckLocal(local, disp) => {
+                format!("check_local({:?}) =>:{:05}", local, i as i32 + 1 + disp)
+            }
             TraceIr::Br(disp) => {
                 format!("br =>:{:05}", i as i32 + 1 + disp)
             }
@@ -565,6 +568,7 @@ pub(super) enum BcIr {
     Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
     Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
     Mov(BcReg, BcReg),                       // dst, offset
+    CheckLocal(BcReg, usize),
     Br(usize),
     CondBr(BcReg, usize, bool, BrKind),
     Ret(BcReg),
@@ -750,6 +754,9 @@ impl std::fmt::Debug for Bc {
                     f,
                     "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
                 )
+            }
+            TraceIr::CheckLocal(local, disp) => {
+                write!(f, "check_local({:?}) => {}", local, disp_str(disp))
             }
             TraceIr::Br(disp) => {
                 write!(f, "br => {}", disp_str(disp))
@@ -960,6 +967,8 @@ pub(super) enum TraceIr {
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
     CondBr(SlotId, i32, bool, BrKind),
+    /// check local var(%reg, dest)  : branch when reg was None.
+    CheckLocal(SlotId, i32),
     /// integer(%reg, i32)
     Integer(SlotId, i32),
     /// Symbol(%reg, IdentId)
@@ -1206,7 +1215,7 @@ impl TraceIr {
                         _version,
                     }
                 }
-
+                20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

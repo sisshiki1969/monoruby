@@ -725,9 +725,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.5.1"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f88c5561171189e69df9d98bcf18fd5f9558300f7ea7b801eb8a0fd748bd8745"
+checksum = "ec947b7a4ce12e3b87e353abae7ce124d025b6c7d6c5aea5cc0bcf92e9510ded"
 
 [[package]]
 name = "is-terminal"
@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "ruruby-parse"
 version = "0.0.1"
-source = "git+https://github.com/sisshiki1969/ruruby-parse.git#a3dfe231906299d7fe795df7fa476b7615e60833"
+source = "git+https://github.com/sisshiki1969/ruruby-parse.git#7655375fb7538582e18fbe26da121707fad80cd8"
 dependencies = [
  "clap 3.2.23",
  "console",

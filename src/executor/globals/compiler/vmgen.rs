@@ -204,6 +204,7 @@ impl Codegen {
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
         self.dispatch[19] = self.vm_method_call(true);
+        self.dispatch[20] = self.vm_check_local(branch);
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -702,6 +703,7 @@ impl Codegen {
     ///  /// ~~~
     fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let l0 = self.jit.label();
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         let l3 = self.jit.label();
@@ -713,17 +715,28 @@ impl Codegen {
         // out
         // rdx: number of args
         monoasm! { self.jit,
+            // setup stack pointer
             shlq rsi, 4;
             subq rsp, rsi;
-            movq rax, r15;  // rax = reg_num
             cmpl rdx, rdi;
-            jlt  l1;
+            jge  l1;
+            movl rax, rdi;
+            subl rax, rdx;
+            // fill zero to residual locals.
             movl rdx, rdi;
+            negq rdx;
+            lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
+        l0:
+            movq [rdx + rax * 8], (NIL_VALUE);
+            subq rax, 1;
+            jne  l0;
         l1:
-            subq rax, rdx;
-            jle  l3;
-            subq rax, 1;    // rax = reg_num - 1 - args_len
-            jeq  l3;
+            // rax = reg_num - 1 - arg_num
+            movq rax, r15;
+            subq rax, 1;
+            subq rax, rdi;
+            jz   l3;
+            // fill nil to temporary registers.
             negq r15;
             lea  r15, [rbp + r15 * 8 - (OFFSET_SELF)];
         l2:
@@ -997,6 +1010,7 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
         }
+        // set arguments
         monoasm! { self.jit,
             movq r8, rdi;
             testq r8, r8;
@@ -1664,6 +1678,18 @@ impl Codegen {
             movq rax, (pop_class_context);
             call rax;
         );
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq r15, [r15];
+            testq r15, r15;
+            jne  branch;
+        };
         self.fetch_and_dispatch();
         label
     }
