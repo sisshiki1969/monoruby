@@ -303,6 +303,7 @@ impl Globals {
 
     pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
+            RV::None => "Undef".to_string(),
             RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Integer(n) => format!("{}", n),
@@ -332,6 +333,7 @@ impl Globals {
 
     pub(crate) fn val_inspect(&self, val: Value) -> String {
         match val.unpack() {
+            RV::None => "Undef".to_string(),
             RV::Nil => "nil".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Integer(n) => format!("{}", n),
@@ -348,7 +350,7 @@ impl Globals {
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_inspect(val),
-                _ => unreachable!(),
+                _ => unreachable!("{:016x}", val.get()),
             },
         }
     }
