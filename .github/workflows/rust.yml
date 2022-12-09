@@ -19,7 +19,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "3.2.0dev"
+          ruby-version: "3.2.0-rc1"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           toolchain: nightly-2022-11-03
