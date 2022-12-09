@@ -18,13 +18,18 @@ caller から渡される実引数の数。splat operator やブロック呼び�
 
 ## Callee
 
+### prologue での処理 (interpreter: INIT_METHOD/ INIT_BLOCK)
+
 - SPLAT オブジェクトがある場合には展開
   - passed_args を調整する
-- [BLOCK] 実引数が１個かつ Array で仮引数が２個以上の場合、Array を展開
+- [BLOCK] 実引数 passed_args == 1 かつ Array で、arg_num >= 2 の場合、Array を展開
   - passed_args を調整する
-- 余った仮引数（arg_num - passed_args）には０を埋める（子引数は不要）
+- [METHOD] passed_args < required の場合はエラーを返す
+- [BLOCK] 余った必須仮引数（required - passed_args）には nil を埋める。
+- 余ったオプション引数（arg_num - max(required, passed_args)）には０を埋める。
+- 一時変数スロットを nil で初期化。
+
+### bytecode での処理 (bytecode.rs/compile_func())
+
 - 分割代入がある場合は分割されるスロットを再帰的に展開（余った子引数は nil で埋める）
-- ０のスロットがあるかどうかチェック(required >= passed_args)
-  - [BLOCK] ０のスロットを nil に書き換える
-  - [METHOD] ０のスロットがあったらエラーを返す
 - 省略可能引数がある場合は実引数が引き渡されていなければ初期化

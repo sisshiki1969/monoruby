@@ -753,6 +753,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let l1 = self.jit.label();
         monoasm! { self.jit,
+            // if passed_arg == 1 && arg0 isArray && arg_num >= 2 then expand arg0.
             cmpl rdx, 1;
             jne  l1;
             cmpl rdi, 2;
