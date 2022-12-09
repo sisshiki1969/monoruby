@@ -43,6 +43,7 @@ impl Codegen {
 
     fn init_method(&mut self) {
         let l1 = self.jit.label();
+        let l2 = self.jit.label();
         let l3 = self.jit.label();
         // in
         // r15: reg_num (except *self*)
@@ -52,9 +53,19 @@ impl Codegen {
         // rax, rdx, r15
         monoasm! { self.jit,
             subl r15, 1;
-        // if passed_args >= arg_num then goto l1
-            cmpl rdx, rdi;
+            // if passed_args >= arg_num then goto l1
+            cmpw rdx, rdi;
             jge  l1;
+            cmpw rdx, [r13 - 8];
+            jge  l2;
+            movzxw rcx, [r13 - 8];
+            movl rax, rcx;
+            subl rax, rdx;
+        }
+        self.fill(1 /* rcx */, NIL_VALUE);
+        monoasm! { self.jit,
+            movzxw rdx, [r13 - 8];
+        l2:
         // rax = arg_num - passed_args
             movl rax, rdi;
             subl rax, rdx;
@@ -97,7 +108,7 @@ impl Codegen {
     /// out
     /// rdx: number of args
     /// destroy
-    /// rax, rdi
+    /// rax
     fn expand_arg0(&mut self) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
