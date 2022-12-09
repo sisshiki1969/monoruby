@@ -144,7 +144,6 @@ impl LoopAnalysis {
             match self.pc.op1() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
-                TraceIr::CheckLocal(..) => {}
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }
@@ -329,8 +328,16 @@ impl LoopAnalysis {
                     }
                     return None;
                 }
-                TraceIr::CondBr(cond_, disp, _opt, _brkind) => {
+                TraceIr::CondBr(cond_, disp, _, _) => {
                     reg_info.use_as(cond_, false, TRUE_CLASS);
+                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
+                    if disp >= 0 {
+                        self.add_branch(idx, reg_info.clone(), dest_idx);
+                    } else if self.loop_level == 1 {
+                        self.add_backedge(&reg_info);
+                    }
+                }
+                TraceIr::CheckLocal(_, disp) => {
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info.clone(), dest_idx);

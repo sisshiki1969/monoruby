@@ -17,7 +17,11 @@ impl From<FuncId> for u32 {
 }
 
 #[derive(Clone, Default, PartialEq)]
-pub struct ArgumentNames(pub Vec<Option<String>>);
+pub struct ArgumentNames {
+    // req + optional
+    pub arg_num: usize,
+    pub names: Vec<Option<String>>,
+}
 
 #[derive(Clone, Default, PartialEq)]
 pub struct ExpandInfo {
@@ -54,7 +58,7 @@ impl Funcs {
             None,
             FuncId(0),
             None,
-            ArgumentNames(vec![]),
+            ArgumentNames::default(),
             vec![],
             vec![],
             Node::new_nil(Loc(0, 0)),
@@ -107,7 +111,7 @@ impl Funcs {
         self.add_iseq(
             None,
             name,
-            ArgumentNames(vec![]),
+            ArgumentNames::default(),
             vec![],
             vec![],
             body,
@@ -193,6 +197,7 @@ fn handle_args(
             }
         }
     }
+    let arg_num = args.len();
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
@@ -202,7 +207,14 @@ fn handle_args(
         })
         .collect();
     args.append(&mut destruct_args);
-    Ok((ArgumentNames(args), expand, optional))
+    Ok((
+        ArgumentNames {
+            names: args,
+            arg_num,
+        },
+        expand,
+        optional,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,7 +295,7 @@ impl FnStore {
         let main_fid = self.functions.add_iseq(
             None,
             Some("/main".to_string()),
-            ArgumentNames(vec![]),
+            ArgumentNames::default(),
             vec![],
             vec![],
             ast,
@@ -396,7 +408,7 @@ impl FuncInfo {
         };
         Self {
             name,
-            arity: info.args.0.len() as i32,
+            arity: info.args.arg_num as i32,
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -481,13 +493,13 @@ impl FuncInfo {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} args:{:?} bc:{:?} meta:{:?}",
+            "{:?} name:{} arg_num:{:?} bc:{:?} meta:{:?}",
             info.id,
             match &self.name {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.0,
+            info.args.arg_num,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -550,8 +562,8 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id: {}, name: {:?}. args: {:?} }}",
-            self.id.0, self.name, self.args.0
+            "RubyFuncInfo {{ id: {}, name: {:?}. arg_num: {:?} }}",
+            self.id.0, self.name, self.args.arg_num
         )
     }
 }
@@ -586,7 +598,7 @@ impl ISeqInfo {
             sourceinfo,
             is_block,
         };
-        args.0.into_iter().for_each(|name| {
+        args.names.into_iter().for_each(|name| {
             info.add_local(name);
         });
         info
@@ -661,7 +673,7 @@ impl ISeqInfo {
 
     /// get a number of arguments(includes *self*).
     pub(crate) fn total_arg_num(&self) -> usize {
-        1 + self.args.0.len()
+        1 + self.args.arg_num
     }
 
     /// get name.
@@ -795,7 +807,9 @@ impl ISeqInfo {
                 TraceIr::MethodArgs(..) => {
                     skip = true;
                 }
-                TraceIr::Br(disp) | TraceIr::CondBr(_, disp, _, _) => {
+                TraceIr::Br(disp)
+                | TraceIr::CondBr(_, disp, _, _)
+                | TraceIr::CheckLocal(_, disp) => {
                     info[((idx + 1) as i32 + disp) as usize].push(idx);
                 }
                 _ => {}

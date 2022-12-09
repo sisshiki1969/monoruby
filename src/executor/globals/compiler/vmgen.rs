@@ -727,7 +727,7 @@ impl Codegen {
             negq rdx;
             lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
         l0:
-            movq [rdx + rax * 8], (NIL_VALUE);
+            movq [rdx + rax * 8], 0;
             subq rax, 1;
             jne  l0;
         l1:

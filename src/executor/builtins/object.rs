@@ -114,7 +114,7 @@ extern "C" fn print(
 
 extern "C" fn assert(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     _: Value,
     arg: Arg,
     _len: usize,
@@ -122,7 +122,11 @@ extern "C" fn assert(
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
-    eprintln!("assert {:?} {:?}", expected, actual);
+    eprintln!(
+        "expected:{} actual:{}",
+        expected.inspect(globals),
+        actual.inspect(globals)
+    );
     assert!(Value::eq(expected, actual));
     Some(Value::nil())
 }

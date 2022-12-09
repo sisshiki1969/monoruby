@@ -1635,7 +1635,7 @@ impl Codegen {
         monoasm!(self.jit,
             subq rsp, (stack_offset * 16);
         );
-        // fill nil to residual arguments.
+        // fill 0 to residual arguments.
         monoasm!(self.jit,
             // rdx: len
             movl rax, rdx;
@@ -1644,7 +1644,7 @@ impl Codegen {
             negq rdx;
             lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
         l2:
-            movq [rdx], (NIL_VALUE);
+            movq [rdx], 0;
             subq rdx, 8;
             addl rax, 1;
             jne  l2;

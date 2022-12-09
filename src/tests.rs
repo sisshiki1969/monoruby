@@ -1150,8 +1150,8 @@ mod test {
         run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
     }
 
-    /*#[test]
-    fn test_block_call() {
+    #[test]
+    fn test_block_call1() {
         run_test_with_prelude(
             r#"
         f {|a,b|
@@ -1165,6 +1165,10 @@ mod test {
         end
         "#,
         );
+    }
+
+    /*#[test]
+    fn test_block_call2() {
         run_test_with_prelude(
             r#"
         f {|a,b,c,d|
@@ -1178,10 +1182,10 @@ mod test {
         end
         "#,
         );
-    }
+    }*/
 
-    #[test]
-    fn test_block_nest() {
+    /*#[test]
+    fn test_block_nest1() {
         run_test_with_prelude(
             r#"
         f {|a,(b,c,d),e,f|
@@ -1194,6 +1198,10 @@ mod test {
         end
         "#,
         );
+    }*/
+
+    #[test]
+    fn test_block_nest2() {
         run_test_with_prelude(
             r#"
         f {|a,(b)|
@@ -1209,7 +1217,7 @@ mod test {
     }
 
     #[test]
-    fn test_block_array_expand() {
+    fn test_block_array_expand1() {
         run_test_with_prelude(
             r#"
         f { |a,(b,c),d|
@@ -1222,6 +1230,9 @@ mod test {
         end
         "#,
         );
+    }
+    #[test]
+    fn test_block_array_expand2() {
         run_test_with_prelude(
             r#"
         f { |a,b|
@@ -1234,5 +1245,21 @@ mod test {
         end
         "#,
         );
-    }*/
+    }
+
+    #[test]
+    fn test_block_optional() {
+        run_test_with_prelude(
+            r#"
+        f { |a,b,c=42|
+          [a,b,c]
+        }
+        "#,
+            r#"
+        def f
+          yield [1,2]
+        end
+        "#,
+        );
+    }
 }
