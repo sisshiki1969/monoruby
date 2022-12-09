@@ -901,7 +901,8 @@ impl Codegen {
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.op1() {
-                TraceIr::Init { .. } => {}
+                TraceIr::InitMethod { .. } => {}
+                TraceIr::InitBlock { .. } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;
                 }
@@ -1428,6 +1429,16 @@ impl Codegen {
                         self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, xmm_using);
                     }
                 }
+                TraceIr::CheckLocal(local, disp) => {
+                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
+                    let branch_dest = self.jit.label();
+                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    monoasm!(self.jit,
+                        movq rax, [rbp - (conv(local))];
+                        testq rax, rax;
+                        jnz  branch_dest;
+                    );
+                }
             }
 
             let next_idx = cc.bb_pos + ofs + 1;
@@ -1582,52 +1593,80 @@ impl Codegen {
             // save len in rdx.
             movq rdx, rdi;
         );
-        if let TraceIr::Init {
-            reg_num,
-            arg_num,
-            stack_offset,
-        } = pc.op1()
-        {
-            let l1 = self.jit.label();
-            let l2 = self.jit.label();
+        match pc.op1() {
+            TraceIr::InitMethod {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => self.init_func(reg_num, arg_num, stack_offset),
+            TraceIr::InitBlock {
+                reg_num,
+                arg_num,
+                stack_offset,
+            } => {
+                if arg_num >= 2 {
+                    let l1 = self.jit.label();
+                    monoasm! { self.jit,
+                        cmpl rdx, 1;
+                        jne  l1;
+                        movq rdi, [rbp - (OFFSET_ARG0)];
+                        testq rdi, 0b111;
+                        jnz  l1;
+                        cmpl [rdi + 4], (ARRAY_CLASS.0);
+                        jne  l1;
+                        movq rdx, (arg_num);
+                        lea  rsi, [rbp - (OFFSET_ARG0)];
+                        movq rax, (expand_array);
+                        call rax;
+                        movq rdx, rax;
+                    l1:
+                    }
+                }
+                self.init_func(reg_num, arg_num, stack_offset);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn init_func(&mut self, reg_num: usize, arg_num: usize, stack_offset: usize) {
+        // rdx: number of args passed from caller
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
+        monoasm!(self.jit,
+            subq rsp, (stack_offset * 16);
+        );
+        // fill nil to residual arguments.
+        monoasm!(self.jit,
+            // rdx: len
+            movl rax, rdx;
+            subl rax, (arg_num);
+            jge  l1;
+            negq rdx;
+            lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
+        l2:
+            movq [rdx], (NIL_VALUE);
+            subq rdx, 8;
+            addl rax, 1;
+            jne  l2;
+        l1:
+        );
+        // fill nil to temporary registers.
+        let clear_len = reg_num - arg_num - 1;
+        if clear_len > 2 {
             monoasm!(self.jit,
-                subq rsp, (stack_offset * 16);
+                movq rax, (NIL_VALUE);
             );
-            // fill nil to residual arguments.
-            monoasm!(self.jit,
-                // rdx: len
-                movl rax, rdx;
-                subl rax, (arg_num);
-                jge  l1;
-                negq rdx;
-                lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
-            l2:
-                movq [rdx], (NIL_VALUE);
-                subq rdx, 8;
-                addl rax, 1;
-                jne  l2;
-            l1:
-            );
-            // fill nil to temporary registers.
-            let clear_len = reg_num - arg_num - 1;
-            if clear_len > 2 {
+            for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq rax, (NIL_VALUE);
+                    movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
                 );
-                for i in 0..clear_len {
-                    monoasm!(self.jit,
-                        movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
-                    );
-                }
-            } else {
-                for i in 0..clear_len {
-                    monoasm!(self.jit,
-                        movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
-                    );
-                }
             }
         } else {
-            unreachable!()
+            for i in 0..clear_len {
+                monoasm!(self.jit,
+                    movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
+                );
+            }
         }
     }
 

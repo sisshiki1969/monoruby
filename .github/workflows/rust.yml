@@ -33,7 +33,9 @@ jobs:
       - name: Run tests
         run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" cargo run -- test.rb
       - name: Run tests
-        run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" cargo run < test.rb
+        run: LLVM_PROFILE_FILE="monoruby-stdin-%p-%m.profraw" cargo run < test.rb
+      - name: Run tests
+        run: LLVM_PROFILE_FILE="monoruby-e-%p-%m.profraw" cargo run -- -e ""
 
       - name: Run grcov
         run: grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing -o ./lcov.info

@@ -204,6 +204,7 @@ impl Codegen {
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
         self.dispatch[19] = self.vm_method_call(true);
+        self.dispatch[20] = self.vm_check_local(branch);
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -246,8 +247,9 @@ impl Codegen {
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
 
-        self.dispatch[170] = self.vm_init();
+        self.dispatch[170] = self.vm_init_method();
         self.dispatch[171] = self.vm_expand_array();
+        self.dispatch[172] = self.vm_init_block();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -688,7 +690,7 @@ impl Codegen {
         };
     }
 
-    /// Initialize frame
+    /// Initialize method frame
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
@@ -699,29 +701,42 @@ impl Codegen {
     /// arg: a number of arguments
     /// ofs: stack pointer offset
     ///  /// ~~~
-    fn vm_init(&mut self) -> CodePtr {
+    fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let l0 = self.jit.label();
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         let l3 = self.jit.label();
+        // in
         // r15: reg_num
         // rdi: arg_num
         // rsi: stack_offset
-        // rdx : number of args passed from caller
+        // rdx: number of args passed from caller
+        // out
+        // rdx: number of args
         monoasm! { self.jit,
-            //pushq rbp;
-            //movq rbp, rsp;
+            // setup stack pointer
             shlq rsi, 4;
             subq rsp, rsi;
-            movq rax, r15;  // rax = reg_num
             cmpl rdx, rdi;
-            jlt  l1;
+            jge  l1;
+            movl rax, rdi;
+            subl rax, rdx;
+            // fill zero to residual locals.
             movl rdx, rdi;
+            negq rdx;
+            lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
+        l0:
+            movq [rdx + rax * 8], (NIL_VALUE);
+            subq rax, 1;
+            jne  l0;
         l1:
-            subq rax, rdx;
-            jle  l3;
-            subq rax, 1;    // rax = reg_num - 1 - args_len
-            jeq  l3;
+            // rax = reg_num - 1 - arg_num
+            movq rax, r15;
+            subq rax, 1;
+            subq rax, rdi;
+            jz   l3;
+            // fill nil to temporary registers.
             negq r15;
             lea  r15, [rbp + r15 * 8 - (OFFSET_SELF)];
         l2:
@@ -731,6 +746,35 @@ impl Codegen {
         l3:
         };
         self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_init_block(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            cmpl rdx, 1;
+            jne  l1;
+            cmpl rdi, 2;
+            jlt  l1;
+            movq rax, [rbp - (OFFSET_ARG0)];
+            testq rax, 0b111;
+            jnz  l1;
+            cmpl [rax + 4], (ARRAY_CLASS.0);
+            jne  l1;
+            pushq rdi;
+            pushq rsi;
+            movq rdx, rdi;
+            movq rdi, rax;
+            lea  rsi, [rbp - (OFFSET_ARG0)];
+            movq rax, (expand_array);
+            call rax;
+            movq rdx, rax;
+            popq rsi;
+            popq rdi;
+        l1:
+        }
+        self.vm_init_method();
         label
     }
 
@@ -966,6 +1010,7 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
         }
+        // set arguments
         monoasm! { self.jit,
             movq r8, rdi;
             testq r8, r8;
@@ -1633,6 +1678,18 @@ impl Codegen {
             movq rax, (pop_class_context);
             call rax;
         );
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq r15, [r15];
+            testq r15, r15;
+            jne  branch;
+        };
         self.fetch_and_dispatch();
         label
     }

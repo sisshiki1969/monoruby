@@ -80,6 +80,42 @@ enum LoopKind {
     While,
 }
 
+fn is_smi(node: &Node) -> Option<i16> {
+    if let NodeKind::Integer(i) = &node.kind {
+        if *i == *i as i16 as i64 {
+            return Some(*i as i16);
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LvalueKind {
+    Const(IdentId),
+    InstanceVar(IdentId),
+    DynamicVar { outer: usize, dst: BcReg },
+    Index { base: BcReg, index: BcReg },
+    Send { recv: BcReg, method: IdentId },
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UseMode {
+    Ret,
+    Use,
+    NotUse,
+}
+
+impl UseMode {
+    fn use_val(&self) -> bool {
+        *self != Self::NotUse
+    }
+
+    fn is_ret(&self) -> bool {
+        *self == UseMode::Ret
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct IrContext {
     /// bytecode IR.
@@ -88,6 +124,30 @@ pub(crate) struct IrContext {
     labels: Vec<Option<InstId>>,
     /// loop information.
     loops: Vec<(LoopKind, usize, Option<BcReg>)>, // (kind, label for exit, return register)
+}
+
+impl IrContext {
+    pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<()> {
+        let mut ir = IrContext::new();
+        let ast = std::mem::take(&mut info.ast).unwrap();
+        ir.gen_dummy_init(info.is_block);
+        for ExpandInfo { src, dst, len } in &info.expand {
+            ir.gen_expand_array(*src, *dst, *len);
+        }
+        for OptionalInfo { local, initializer } in std::mem::take(&mut info.optional) {
+            let local = local.into();
+            let next = ir.new_label();
+            ir.gen_check_local(local, next);
+            ir.gen_store_expr(ctx, info, local, initializer)?;
+            ir.apply_label(next);
+        }
+        ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
+        let reg_num = info.total_reg_num();
+        ir.replace_init(reg_num, info.total_arg_num() - 1, info.is_block);
+        assert_eq!(0, info.temp);
+        ir.ir_to_bytecode(info, ctx);
+        Ok(())
+    }
 }
 
 impl IrContext {
@@ -132,6 +192,10 @@ impl IrContext {
             BcIr::CondBr(cond, else_pos, optimizable, BrKind::BrIfNot),
             Loc::default(),
         );
+    }
+
+    fn gen_check_local(&mut self, local: BcReg, else_pos: usize) {
+        self.push(BcIr::CheckLocal(local, else_pos), Loc::default());
     }
 
     fn gen_opt_condbr(
@@ -202,58 +266,6 @@ impl IrContext {
         self.gen_opt_condbr(ctx, info, jmp_if_true, rhs, else_pos)?;
         self.apply_label(cont_pos);
         Ok(())
-    }
-}
-
-pub(crate) fn is_smi(node: &Node) -> Option<i16> {
-    if let NodeKind::Integer(i) = &node.kind {
-        if *i == *i as i16 as i64 {
-            return Some(*i as i16);
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum LvalueKind {
-    Const(IdentId),
-    InstanceVar(IdentId),
-    DynamicVar { outer: usize, dst: BcReg },
-    Index { base: BcReg, index: BcReg },
-    Send { recv: BcReg, method: IdentId },
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum UseMode {
-    Ret,
-    Use,
-    NotUse,
-}
-
-impl UseMode {
-    fn use_val(&self) -> bool {
-        *self != Self::NotUse
-    }
-
-    fn is_ret(&self) -> bool {
-        *self == UseMode::Ret
-    }
-}
-
-impl IrContext {
-    pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<IrContext> {
-        let mut ir = IrContext::new();
-        let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_dummy_init();
-        for (src, dst, len) in &info.expand {
-            ir.gen_expand_array(*src, *dst, *len);
-        }
-        ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
-        let reg_num = info.total_reg_num();
-        ir.replace_init(reg_num, info.total_arg_num() - 1);
-        assert_eq!(0, info.temp);
-        Ok(ir)
     }
 
     fn gen_load_const(
@@ -1212,12 +1224,20 @@ impl IrContext {
         self.push(BcIr::InlineCache, loc);
     }
 
-    fn gen_dummy_init(&mut self) {
+    fn gen_dummy_init(&mut self, is_block: bool) {
         self.push(
-            BcIr::Init {
-                reg_num: 0,
-                arg_num: 0,
-                stack_offset: 0,
+            if is_block {
+                BcIr::InitBlock {
+                    reg_num: 0,
+                    arg_num: 0,
+                    stack_offset: 0,
+                }
+            } else {
+                BcIr::InitMethod {
+                    reg_num: 0,
+                    arg_num: 0,
+                    stack_offset: 0,
+                }
             },
             Loc::default(),
         );
@@ -1234,12 +1254,21 @@ impl IrContext {
         );
     }
 
-    fn replace_init(&mut self, reg_num: usize, arg_num: usize) {
+    fn replace_init(&mut self, reg_num: usize, arg_num: usize, is_block: bool) {
+        let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
         self.ir[0] = (
-            BcIr::Init {
-                reg_num,
-                arg_num,
-                stack_offset: (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4,
+            if is_block {
+                BcIr::InitBlock {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                }
+            } else {
+                BcIr::InitMethod {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                }
             },
             Loc::default(),
         );
@@ -1754,17 +1783,51 @@ fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
 }
 
 impl IrContext {
-    pub(crate) fn ir_to_bytecode(&mut self, info: &mut ISeqInfo, store: &mut FnStore) {
+    fn ir_to_bytecode(&mut self, info: &mut ISeqInfo, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
-                BcIr::LoopStart => Bc::from(enc_l(14, 0)),
-                BcIr::LoopEnd => Bc::from(enc_l(15, 0)),
+                BcIr::MethodCall(ret, name) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(1, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
+                }
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let op1 = dst - idx as i32 - 1;
                     Bc::from(enc_l(3, op1 as u32))
+                }
+                BcIr::Integer(reg, num) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(6, op1.0, *num as u32))
+                }
+                BcIr::Literal(reg, val) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from_with_value(enc_wl(7, op1.0, 0), *val)
+                }
+                BcIr::Nil(reg) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_w(8, op1.0))
+                }
+                BcIr::Symbol(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(9, op1.0, name.get()))
+                }
+                BcIr::LoadConst(reg, toplevel, prefix, name) => {
+                    let op1 = info.get_index(reg);
+                    let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
+                    Bc::from(enc_wl(10, op1.0, op2.0))
+                }
+                BcIr::StoreConst(reg, name) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_wl(11, op1.0, name.get()))
                 }
                 BcIr::CondBr(reg, dst, optimizable, kind) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
@@ -1778,42 +1841,37 @@ impl IrContext {
                     );
                     Bc::from(op)
                 }
-                BcIr::Integer(reg, num) => {
+                BcIr::LoopStart => Bc::from(enc_l(14, 0)),
+                BcIr::LoopEnd => Bc::from(enc_l(15, 0)),
+                BcIr::LoadIvar(reg, name) => {
                     let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(6, op1.0, *num as u32))
+                    Bc::from(enc_wl(16, op1.0, name.get()))
                 }
-                BcIr::Symbol(reg, name) => {
+                BcIr::StoreIvar(reg, name) => {
                     let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(9, op1.0, name.get()))
+                    Bc::from(enc_wl(17, op1.0, name.get()))
                 }
-                BcIr::Nil(reg) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_w(8, op1.0))
+                BcIr::MethodCallBlock(ret, name) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(19, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
                 }
-                BcIr::Literal(reg, val) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from_with_value(enc_wl(7, op1.0, 0), *val)
+                BcIr::CheckLocal(local, dst) => {
+                    let op1 = info.get_index(local);
+                    let dst = self.labels[*dst].unwrap().0 as i32;
+                    let op2 = dst - idx as i32 - 1;
+                    Bc::from(enc_wl(20, op1.0, op2 as u32))
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
                     Bc::from(enc_www(131, op1.0, op2.0, *len))
-                }
-                BcIr::Range {
-                    ret,
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(start);
-                    let op3 = info.get_index(end);
-                    Bc::from(enc_www(
-                        153 + if *exclude_end { 1 } else { 0 },
-                        op1.0,
-                        op2.0,
-                        op3.0,
-                    ))
                 }
                 BcIr::Index(ret, base, idx) => {
                     let op1 = info.get_index(ret);
@@ -1839,22 +1897,21 @@ impl IrContext {
                     let op3 = info.get_index(src);
                     Bc::from(enc_www(151, op1.0, op2, op3.0))
                 }
-                BcIr::LoadConst(reg, toplevel, prefix, name) => {
-                    let op1 = info.get_index(reg);
-                    let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
-                    Bc::from(enc_wl(10, op1.0, op2.0))
-                }
-                BcIr::StoreConst(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(11, op1.0, name.get()))
-                }
-                BcIr::LoadIvar(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(16, op1.0, name.get()))
-                }
-                BcIr::StoreIvar(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(17, op1.0, name.get()))
+                BcIr::Range {
+                    ret,
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(start);
+                    let op3 = info.get_index(end);
+                    Bc::from(enc_www(
+                        153 + if *exclude_end { 1 } else { 0 },
+                        op1.0,
+                        op2.0,
+                        op3.0,
+                    ))
                 }
                 BcIr::Neg(dst, src) => {
                     let op1 = info.get_index(dst);
@@ -1911,7 +1968,7 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_ww(149, op1.0, op2.0))
                 }
-                BcIr::Init {
+                BcIr::InitMethod {
                     reg_num,
                     arg_num,
                     stack_offset,
@@ -1921,28 +1978,16 @@ impl IrContext {
                     *arg_num as u16,
                     *stack_offset as u16,
                 )),
-                BcIr::MethodCall(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(1, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
-                BcIr::MethodCallBlock(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(19, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
+                BcIr::InitBlock {
+                    reg_num,
+                    arg_num,
+                    stack_offset,
+                } => Bc::from(enc_www(
+                    172,
+                    *reg_num as u16,
+                    *arg_num as u16,
+                    *stack_offset as u16,
+                )),
                 BcIr::Yield { ret, args, len } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
