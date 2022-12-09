@@ -2,6 +2,8 @@ use super::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
+mod method;
+
 macro_rules! cmp_ops {
   ($op:ident) => {
       paste! {
@@ -688,95 +690,6 @@ impl Codegen {
         monoasm! { self.jit,
             jmp exit;
         };
-    }
-
-    /// Initialize method frame
-    ///
-    /// ~~~text
-    /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|arg|ofs||       |       |
-    /// +---+---+---+---++---+---+---+---+
-    ///
-    /// reg: a number of resisters
-    /// arg: a number of arguments
-    /// ofs: stack pointer offset
-    ///  /// ~~~
-    fn vm_init_method(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let l0 = self.jit.label();
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
-        let l3 = self.jit.label();
-        // in
-        // r15: reg_num
-        // rdi: arg_num
-        // rsi: stack_offset
-        // rdx: number of args passed from caller
-        // out
-        // rdx: number of args
-        monoasm! { self.jit,
-            // setup stack pointer
-            shlq rsi, 4;
-            subq rsp, rsi;
-            cmpl rdx, rdi;
-            jge  l1;
-            movl rax, rdi;
-            subl rax, rdx;
-            // fill zero to residual locals.
-            movl rdx, rdi;
-            negq rdx;
-            lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
-        l0:
-            movq [rdx + rax * 8], 0;
-            subq rax, 1;
-            jne  l0;
-        l1:
-            // rax = reg_num - 1 - arg_num
-            movq rax, r15;
-            subq rax, 1;
-            subq rax, rdi;
-            jz   l3;
-            // fill nil to temporary registers.
-            negq r15;
-            lea  r15, [rbp + r15 * 8 - (OFFSET_SELF)];
-        l2:
-            movq [r15 + rax * 8], (NIL_VALUE);
-            subq rax, 1;
-            jne  l2;
-        l3:
-        };
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_init_block(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let l1 = self.jit.label();
-        monoasm! { self.jit,
-            // if passed_arg == 1 && arg0 isArray && arg_num >= 2 then expand arg0.
-            cmpl rdx, 1;
-            jne  l1;
-            cmpl rdi, 2;
-            jlt  l1;
-            movq rax, [rbp - (OFFSET_ARG0)];
-            testq rax, 0b111;
-            jnz  l1;
-            cmpl [rax + 4], (ARRAY_CLASS.0);
-            jne  l1;
-            pushq rdi;
-            pushq rsi;
-            movq rdx, rdi;
-            movq rdi, rax;
-            lea  rsi, [rbp - (OFFSET_ARG0)];
-            movq rax, (expand_array);
-            call rax;
-            movq rdx, rax;
-            popq rsi;
-            popq rdi;
-        l1:
-        }
-        self.vm_init_method();
-        label
     }
 
     /// Expand array

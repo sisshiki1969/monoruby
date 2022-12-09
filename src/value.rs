@@ -248,6 +248,8 @@ impl Value {
             RV::Integer(i)
         } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
+        } else if self.get() == 0 {
+            RV::None
         } else if let Some(rv) = self.try_rvalue() {
             match rv.kind() {
                 ObjKind::BIGNUM => RV::BigInt(rv.as_bignum()),
@@ -544,6 +546,7 @@ impl Value {
 
 #[derive(Clone, PartialEq)]
 pub enum RV<'a> {
+    None,
     Nil,
     Bool(bool),
     Integer(i64),
@@ -557,6 +560,7 @@ pub enum RV<'a> {
 impl<'a> std::fmt::Debug for RV<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RV::None => write!(f, "Undef"),
             RV::Nil => write!(f, "nil"),
             RV::Bool(b) => write!(f, "{:?}", b),
             RV::Integer(n) => write!(f, "{}", n),

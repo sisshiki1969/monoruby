@@ -582,11 +582,13 @@ pub(super) enum BcIr {
     InitMethod {
         reg_num: usize,
         arg_num: usize,
+        req_num: usize,
         stack_offset: usize,
     },
     InitBlock {
         reg_num: usize,
         arg_num: usize,
+        req_num: usize,
         stack_offset: usize,
     },
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
@@ -616,6 +618,13 @@ impl Bc {
         Self {
             op1,
             op2: Bc2::from(0),
+        }
+    }
+
+    pub(crate) fn from_with_num(op1: u64, num: u16) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(num as _),
         }
     }
 

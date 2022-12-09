@@ -143,7 +143,12 @@ impl IrContext {
         }
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
         let reg_num = info.total_reg_num();
-        ir.replace_init(reg_num, info.total_arg_num() - 1, info.is_block);
+        ir.replace_init(
+            reg_num,
+            info.total_arg_num() - 1,
+            info.req_num(),
+            info.is_block,
+        );
         assert_eq!(0, info.temp);
         ir.ir_to_bytecode(info, ctx);
         Ok(())
@@ -1230,12 +1235,14 @@ impl IrContext {
                 BcIr::InitBlock {
                     reg_num: 0,
                     arg_num: 0,
+                    req_num: 0,
                     stack_offset: 0,
                 }
             } else {
                 BcIr::InitMethod {
                     reg_num: 0,
                     arg_num: 0,
+                    req_num: 0,
                     stack_offset: 0,
                 }
             },
@@ -1254,19 +1261,21 @@ impl IrContext {
         );
     }
 
-    fn replace_init(&mut self, reg_num: usize, arg_num: usize, is_block: bool) {
+    fn replace_init(&mut self, reg_num: usize, arg_num: usize, req_num: usize, is_block: bool) {
         let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
         self.ir[0] = (
             if is_block {
                 BcIr::InitBlock {
                     reg_num,
                     arg_num,
+                    req_num,
                     stack_offset,
                 }
             } else {
                 BcIr::InitMethod {
                     reg_num,
                     arg_num,
+                    req_num,
                     stack_offset,
                 }
             },
@@ -1971,23 +1980,21 @@ impl IrContext {
                 BcIr::InitMethod {
                     reg_num,
                     arg_num,
+                    req_num,
                     stack_offset,
-                } => Bc::from(enc_www(
-                    170,
-                    *reg_num as u16,
-                    *arg_num as u16,
-                    *stack_offset as u16,
-                )),
+                } => Bc::from_with_num(
+                    enc_www(170, *reg_num as u16, *arg_num as u16, *stack_offset as u16),
+                    *req_num as u16,
+                ),
                 BcIr::InitBlock {
                     reg_num,
                     arg_num,
+                    req_num,
                     stack_offset,
-                } => Bc::from(enc_www(
-                    172,
-                    *reg_num as u16,
-                    *arg_num as u16,
-                    *stack_offset as u16,
-                )),
+                } => Bc::from_with_num(
+                    enc_www(172, *reg_num as u16, *arg_num as u16, *stack_offset as u16),
+                    *req_num as u16,
+                ),
                 BcIr::Yield { ret, args, len } => {
                     let op1 = match ret {
                         None => SlotId::new(0),

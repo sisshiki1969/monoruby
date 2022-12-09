@@ -20,6 +20,7 @@ impl From<FuncId> for u32 {
 pub struct ArgumentNames {
     // req + optional
     pub arg_num: usize,
+    pub req_num: usize,
     pub names: Vec<Option<String>>,
 }
 
@@ -173,9 +174,13 @@ fn handle_args(
     let mut destruct_args = vec![];
     let mut expand = vec![];
     let mut optional = vec![];
+    let mut req_num = 0;
     for param in params {
         match param.kind {
-            ParamKind::Param(name) => args.push(Some(name)),
+            ParamKind::Param(name) => {
+                args.push(Some(name));
+                req_num += 1;
+            }
             ParamKind::Optional(name, box initializer) => {
                 let local = BcLocal(args.len() as u16);
                 args.push(Some(name));
@@ -184,6 +189,7 @@ fn handle_args(
             ParamKind::Destruct(names) => {
                 expand.push((args.len(), destruct_args.len(), names.len()));
                 args.push(None);
+                req_num += 1;
                 names.into_iter().for_each(|(name, _)| {
                     destruct_args.push(Some(name));
                 });
@@ -211,6 +217,7 @@ fn handle_args(
         ArgumentNames {
             names: args,
             arg_num,
+            req_num,
         },
         expand,
         optional,
@@ -669,6 +676,11 @@ impl ISeqInfo {
     /// get a number of local vars.
     pub(crate) fn local_num(&self) -> usize {
         self.locals.len()
+    }
+
+    /// get a number of required arguments.
+    pub(crate) fn req_num(&self) -> usize {
+        self.args.req_num
     }
 
     /// get a number of arguments(includes *self*).
