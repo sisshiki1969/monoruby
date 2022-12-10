@@ -1180,10 +1180,10 @@ mod test {
         "#,
         );
     }
-    /*
+
     #[test]
     fn test_block_call2() {
-        run_test_with_prelude(
+        run_test2_with_prelude(
             r#"
         f {|a,b,c,d|
           e=42
@@ -1200,7 +1200,7 @@ mod test {
 
     #[test]
     fn test_block_nest1() {
-        run_test_with_prelude(
+        run_test2_with_prelude(
             r#"
         f {|a,(b,c,d),e,f|
             [a,b,c,d,e,f]
@@ -1212,7 +1212,7 @@ mod test {
         end
         "#,
         );
-    }*/
+    }
 
     #[test]
     fn test_block_nest2() {
