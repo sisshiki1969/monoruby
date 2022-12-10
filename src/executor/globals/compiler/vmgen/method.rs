@@ -41,16 +41,6 @@ impl Codegen {
         };
     }
 
-    extern "C" fn err_wrong_number_of_arguments(
-        globals: &mut Globals,
-        given: usize,
-        expected: usize,
-    ) {
-        globals.err_argument(&format!(
-            "wrong number of arguments (given {given}, expected {expected})"
-        ));
-    }
-
     fn vm_init_func(&mut self, is_block: bool) {
         let l1 = self.jit.label();
         let l2 = self.jit.label();
@@ -89,7 +79,7 @@ impl Codegen {
                 movq rdi, r12;
                 movl rsi, (0);
                 movl rdx, (0);
-                movq rax, (Self::err_wrong_number_of_arguments);
+                movq rax, (err_wrong_number_of_arguments);
                 call rax;
                 xorq rax, rax;
                 jmp  exit;

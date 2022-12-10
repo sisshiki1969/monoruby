@@ -216,6 +216,12 @@ extern "C" fn error_divide_by_zero(globals: &mut Globals) {
     globals.err_divide_by_zero();
 }
 
+extern "C" fn err_wrong_number_of_arguments(globals: &mut Globals, given: usize, expected: usize) {
+    globals.err_argument(&format!(
+        "wrong number of arguments (given {given}, expected {expected})"
+    ));
+}
+
 extern "C" fn get_error_location(
     _interp: &mut Executor,
     globals: &mut Globals,

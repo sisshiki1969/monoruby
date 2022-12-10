@@ -42,7 +42,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
-pub fn run_test2_with_prelude(code: &str, prelude: &str) {
+/*pub fn run_test2_with_prelude(code: &str, prelude: &str) {
     let wrapped = format!(
         r##"
       {prelude}
@@ -54,7 +54,7 @@ pub fn run_test2_with_prelude(code: &str, prelude: &str) {
     let ruby_res = run_ruby(&(prelude.to_string() + code), &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
-}
+}*/
 
 pub fn run_test2(code: &str) {
     let (interp_val, mut globals) = run_test_main(code);
@@ -1183,7 +1183,7 @@ mod test {
 
     #[test]
     fn test_block_call2() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
         f {|a,b,c,d|
           e=42
@@ -1200,7 +1200,7 @@ mod test {
 
     #[test]
     fn test_block_nest1() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
         f {|a,(b,c,d),e,f|
             [a,b,c,d,e,f]
@@ -1216,7 +1216,7 @@ mod test {
 
     #[test]
     fn test_block_nest2() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
                 f {|a,(b)|
                     [a,b]
@@ -1232,7 +1232,7 @@ mod test {
 
     #[test]
     fn test_block_array_expand1() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
             f { |a,(b,c),d|
                 [a,b,c,d]
@@ -1248,7 +1248,7 @@ mod test {
 
     #[test]
     fn test_block_array_expand2() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
             f { |a,b|
               [a,b]

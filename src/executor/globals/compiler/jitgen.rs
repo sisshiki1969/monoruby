@@ -1600,10 +1600,8 @@ impl Codegen {
                 req_num,
                 stack_offset,
             } => {
-                monoasm!(self.jit,
-                    subq rsp, (stack_offset * 16);
-                );
-                self.init_func(reg_num, arg_num, req_num, stack_offset);
+                self.setup_stack(stack_offset);
+                self.init_func(reg_num, arg_num, req_num, false);
             }
             TraceIr::InitBlock {
                 reg_num,
@@ -1611,19 +1609,23 @@ impl Codegen {
                 req_num,
                 stack_offset,
             } => {
-                monoasm!(self.jit,
-                    subq rsp, (stack_offset * 16);
-                );
+                self.setup_stack(stack_offset);
                 if arg_num >= 2 {
                     self.jit_expand_arg0(arg_num);
                 }
-                self.init_func(reg_num, arg_num, req_num, stack_offset);
+                self.init_func(reg_num, arg_num, req_num, true);
             }
             _ => unreachable!(),
         }
     }
 
-    fn init_func(&mut self, reg_num: usize, arg_num: usize, req_num: usize, stack_offset: usize) {
+    fn setup_stack(&mut self, stack_offset: usize) {
+        monoasm!(self.jit,
+            subq rsp, (stack_offset * 16);
+        );
+    }
+
+    fn init_func(&mut self, reg_num: usize, arg_num: usize, req_num: usize, is_block: bool) {
         // rdx: number of args passed from caller
         let l1 = self.jit.label();
         let l2 = self.jit.label();
@@ -1639,12 +1641,28 @@ impl Codegen {
                     // if passed_args >= req_num then goto l2
                     cmpl rdx, (req_num);
                     jge  l2;
-                    movl rax, (req_num);
-                    subl rax, rdx;
                 }
-                self.jit_fill(req_num, NIL_VALUE);
-                monoasm! { self.jit,
-                    movl rdx, (req_num);
+                if is_block {
+                    monoasm! { self.jit,
+                        movl rax, (req_num);
+                        subl rax, rdx;
+                    }
+                    self.jit_fill(req_num, NIL_VALUE);
+                    monoasm! { self.jit,
+                        movl rdx, (req_num);
+                    }
+                } else {
+                    // if passed_args < req_num then raise error.
+                    let exit = self.vm_return;
+                    monoasm! { self.jit,
+                        movq rdi, r12;
+                        movl rsi, (0);
+                        movl rdx, (0);
+                        movq rax, (err_wrong_number_of_arguments);
+                        call rax;
+                        xorq rax, rax;
+                        jmp  exit;
+                    }
                 }
             }
             monoasm! { self.jit,
