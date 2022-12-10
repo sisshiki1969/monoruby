@@ -45,6 +45,7 @@ impl Codegen {
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         let l3 = self.jit.label();
+        let err = self.wrong_argument;
         // in
         // r15: reg_num (except *self*)
         // rdi: arg_num
@@ -53,17 +54,28 @@ impl Codegen {
         // destroy
         // rax, rdx, r15
         monoasm! { self.jit,
-            subl r15, 1;
-            // if passed_args >= arg_num then goto l1
-            cmpw rdx, rdi;
-            jge  l1;
-            // if passed_args >= req_num then goto l2
-            cmpw rdx, [r13 - 8];
-            jge  l2;
+          subl r15, 1;
+          // if passed_args >= arg_num then goto l1
+          cmpw rdx, rdi;
+        }
+        if is_block {
+            monoasm! { self.jit,
+              jge  l1;
+            }
+        } else {
+            monoasm! { self.jit,
+              jeq  l1;
+              jgt  err;
+            }
+        }
+        monoasm! { self.jit,
+          // if passed_args >= req_num then goto l2
+          cmpw rdx, [r13 - 8];
         }
         if is_block {
             // fill zero to residual required arguments.
             monoasm! { self.jit,
+                jge  l2;
                 movzxw rcx, [r13 - 8];
                 movl rax, rcx;
                 subl rax, rdx;
@@ -74,15 +86,12 @@ impl Codegen {
             }
         } else {
             // if passed_args < req_num then raise error.
-            let exit = self.vm_return;
+            // in
+            // [r13 - 14]: arg_num
+            // [R13 -  8]: req_num
+            // rdx: number of args passed from caller
             monoasm! { self.jit,
-                movq rdi, r12;
-                movl rsi, rdx;  // given
-                movzxw rdx, [r13 - 8];  // required
-                movq rax, (err_wrong_number_of_arguments);
-                call rax;
-                xorq rax, rax;
-                jmp  exit;
+                jlt  err;
             }
         }
         monoasm! { self.jit,

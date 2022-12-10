@@ -24,7 +24,7 @@ extern "C" fn range_new(
     _: Option<Value>,
 ) -> Option<Value> {
     if len < 2 || len > 3 {
-        globals.err_wrong_number_of_arguments_range(len, 2..3);
+        globals.err_wrong_number_of_arguments_range(len, 2..=3);
         return None;
     }
     globals.generate_range(arg[0], arg[1], false)

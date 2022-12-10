@@ -24,6 +24,16 @@ pub struct ArgumentNames {
     pub names: Vec<Option<String>>,
 }
 
+impl ArgumentNames {
+    fn arity(&self) -> i32 {
+        if self.arg_num == self.req_num {
+            self.arg_num as i32
+        } else {
+            -1
+        }
+    }
+}
+
 #[derive(Clone, Default, PartialEq)]
 pub struct ExpandInfo {
     pub src: usize,
@@ -415,7 +425,7 @@ impl FuncInfo {
         };
         Self {
             name,
-            arity: info.args.arg_num as i32,
+            arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),

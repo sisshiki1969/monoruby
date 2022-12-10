@@ -1277,4 +1277,76 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_method_optional() {
+        run_test_with_prelude(
+            r#"
+        f(1,2)
+        "#,
+            r#"
+        def f(x,y,z=42,w=12)
+            [x,y,z,w]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f(1,2,3)
+        "#,
+            r#"
+        def f(x,y,z=42)
+            [x,y,z]
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_method_error() {
+        run_test_error(
+            r#"
+        def f(x,y,z=42,w=12)
+            [x,y,z,w]
+        end
+        f(1)
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f(x,y,z=42,w=12)
+            [x,y,z,w]
+        end
+        f(1,2,3,4,5)
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f(x,y,z=42,w=12)
+            [x,y,z,w]
+        end
+        10.times {|x|
+            if x == 9
+                f(1)
+            else
+                f(1,2)
+            end
+        }
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f(x,y,z=42,w=12)
+            [x,y,z,w]
+        end
+        10.times {|x|
+            if x == 9
+                f(1,2,3,4,5)
+            else
+                f(1,2)
+            end
+        }
+        "#,
+        );
+    }
 }

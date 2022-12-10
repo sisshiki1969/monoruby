@@ -104,12 +104,16 @@ impl Globals {
     pub(crate) fn err_wrong_number_of_arguments_range(
         &mut self,
         given: usize,
-        range: std::ops::Range<usize>,
+        range: std::ops::RangeInclusive<usize>,
     ) {
-        self.err_argument(&format!(
-            "wrong number of arguments (given {given}, expeted {:?})",
-            range
-        ));
+        if range.start() == range.end() {
+            self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
+        } else {
+            self.err_argument(&format!(
+                "wrong number of arguments (given {given}, expeted {:?})",
+                range
+            ));
+        }
     }
 
     ///
@@ -341,10 +345,9 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, obj))
     }
 
-    pub(crate) fn wrong_arguments(expected: usize, actual: usize) -> MonorubyErr {
+    pub(crate) fn wrong_arguments(expected: usize, given: usize) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Arguments(format!(
-            "number of arguments mismatch. expected:{} actual:{}",
-            expected, actual
+            "wrong number of arguments (given {given}, expected {expected})"
         )))
     }
 

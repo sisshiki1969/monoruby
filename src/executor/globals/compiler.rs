@@ -40,6 +40,7 @@ pub struct Codegen {
     pub f64_to_val: DestLabel,
     pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
+    pub wrong_argument: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub method_invoker: Invoker,
     pub method_invoker2: Invoker2,
@@ -212,14 +213,17 @@ extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
     eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
 }*/
 
-extern "C" fn error_divide_by_zero(globals: &mut Globals) {
+extern "C" fn err_divide_by_zero(globals: &mut Globals) {
     globals.err_divide_by_zero();
 }
 
-extern "C" fn err_wrong_number_of_arguments(globals: &mut Globals, given: usize, expected: usize) {
-    globals.err_argument(&format!(
-        "wrong number of arguments (given {given}, expected {expected})"
-    ));
+extern "C" fn err_wrong_number_of_arguments_range(
+    globals: &mut Globals,
+    given: usize,
+    min: usize,
+    max: usize,
+) {
+    globals.err_wrong_number_of_arguments_range(given, min..=max)
 }
 
 extern "C" fn get_error_location(
@@ -251,6 +255,7 @@ impl Codegen {
         let jit_return = jit.label();
         let vm_return = jit.label();
         let div_by_zero = jit.label();
+        let wrong_argument = jit.label();
         let heap_to_f64 = jit.label();
         //jit.select_page(1);
         monoasm!(&mut jit,
@@ -285,11 +290,19 @@ impl Codegen {
             ret;
         div_by_zero:
             movq rdi, r12;
-            movq rax, (error_divide_by_zero);
+            movq rax, (err_divide_by_zero);
             call rax;
             xorq rax, rax;
             leave;
             ret;
+        wrong_argument:
+            movq rdi, r12;
+            movl rsi, rdx;  // given
+            movzxw rdx, [r13 - 8];  // min
+            movzxw rcx, [r13 - 14];  // max
+            movq rax, (err_wrong_number_of_arguments_range);
+            call rax;
+            jmp  vm_return;
         heap_to_f64:
             // we must save rdi for log_optimize.
             subq rsp, 128;
@@ -356,6 +369,7 @@ impl Codegen {
             f64_to_val: entry_panic,
             heap_to_f64,
             div_by_zero,
+            wrong_argument,
             dispatch,
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },

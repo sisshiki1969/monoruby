@@ -1601,7 +1601,7 @@ impl Codegen {
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, arg_num, req_num, false);
+                self.init_func(reg_num, arg_num, req_num, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
@@ -1613,7 +1613,7 @@ impl Codegen {
                 if arg_num >= 2 {
                     self.jit_expand_arg0(arg_num);
                 }
-                self.init_func(reg_num, arg_num, req_num, true);
+                self.init_func(reg_num, arg_num, req_num, pc, true);
             }
             _ => unreachable!(),
         }
@@ -1625,7 +1625,24 @@ impl Codegen {
         );
     }
 
-    fn init_func(&mut self, reg_num: usize, arg_num: usize, req_num: usize, is_block: bool) {
+    fn init_func(
+        &mut self,
+        reg_num: usize,
+        arg_num: usize,
+        req_num: usize,
+        pc: BcPc,
+        is_block: bool,
+    ) {
+        let err_label = self.jit.label();
+        self.jit.select_page(1);
+        let err = self.wrong_argument;
+        monoasm! { self.jit,
+        err_label:
+            movq r13, ((pc+1).get_u64());
+            jmp  err;
+        }
+        self.jit.select_page(0);
+
         // rdx: number of args passed from caller
         let l1 = self.jit.label();
         let l2 = self.jit.label();
@@ -1634,13 +1651,24 @@ impl Codegen {
             monoasm! { self.jit,
                 // if passed_args >= arg_num then goto l1
                 cmpl rdx, (arg_num);
-                jge  l1;
+            }
+            if is_block {
+                monoasm! { self.jit,
+                    jge  l1;
+                }
+            } else {
+                monoasm! { self.jit,
+                    jgt  err_label;
+                    jeq  l1;
+                }
             }
             if req_num > 0 {
-                monoasm! { self.jit,
-                    // if passed_args >= req_num then goto l2
-                    cmpl rdx, (req_num);
-                    jge  l2;
+                if arg_num != req_num {
+                    monoasm! { self.jit,
+                        // if passed_args >= req_num then goto l2
+                        cmpl rdx, (req_num);
+                        jge  l2;
+                    }
                 }
                 if is_block {
                     monoasm! { self.jit,
@@ -1653,15 +1681,8 @@ impl Codegen {
                     }
                 } else {
                     // in method, raise error if passed_args < req_num.
-                    let exit = self.vm_return;
                     monoasm! { self.jit,
-                        movq rdi, r12;
-                        movl rsi, rdx;  // given
-                        movl rdx, (req_num);  // required
-                        movq rax, (err_wrong_number_of_arguments);
-                        call rax;
-                        xorq rax, rax;
-                        jmp  exit;
+                        jmp  err_label;
                     }
                 }
             }
