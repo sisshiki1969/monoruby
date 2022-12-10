@@ -1149,7 +1149,7 @@ mod test {
         run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");
         run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
     }
-
+    /*
     #[test]
     fn test_block_call1() {
         run_test_with_prelude(
@@ -1262,5 +1262,5 @@ mod test {
         end
         "#,
         );
-    }
+    }*/
 }

@@ -98,7 +98,7 @@ impl Codegen {
         monoasm! { self.jit,
         l2:
         // fill zero to residual locals.
-        // rax = arg_num - passed_args
+        // rax = arg_num - max(passed_args, req_num)
             movl rax, rdi;
             subl rax, rdx;
             movl rdx, rdi;
