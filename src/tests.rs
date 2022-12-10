@@ -1200,35 +1200,35 @@ mod test {
         );
     }*/
     /*
-    #[test]
-    fn test_block_nest2() {
-        run_test_with_prelude(
-            r#"
-        f {|a,(b)|
-            [a,b]
-        }
-        "#,
-            r#"
-        def f
-          yield 1,[2,3],4
-        end
-        "#,
-        );
-    }
-
+            #[test]
+            fn test_block_nest2() {
+                run_test_with_prelude(
+                    r#"
+                f {|a,(b)|
+                    [a,b]
+                }
+                "#,
+                    r#"
+                def f
+                  yield 1,[2,3],4
+                end
+                "#,
+                );
+            }
+    */
     #[test]
     fn test_block_array_expand1() {
         run_test_with_prelude(
             r#"
-        f { |a,(b,c),d|
-          [a,b,c,d]
-        }
-        "#,
+            f { |a,(b,c),d|
+              [a,b,c,d]
+            }
+            "#,
             r#"
-        def f
-          yield [1,[2,3],4]
-        end
-        "#,
+            def f
+              yield [1,[2,3],4]
+            end
+            "#,
         );
     }
 
@@ -1247,7 +1247,7 @@ mod test {
         "#,
         );
     }
-
+    /*
     #[test]
     fn test_block_optional() {
         run_test_with_prelude(
