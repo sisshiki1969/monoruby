@@ -42,6 +42,20 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
+pub fn run_test2_with_prelude(code: &str, prelude: &str) {
+    let wrapped = format!(
+        r##"
+      {prelude}
+      {code}
+  "##
+    );
+    eprintln!("{}", wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let ruby_res = run_ruby(&(prelude.to_string() + code), &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
 pub fn run_test2(code: &str) {
     let (interp_val, mut globals) = run_test_main(code);
     let ruby_res = run_ruby(code, &mut globals);
@@ -1252,7 +1266,7 @@ mod test {
 
     #[test]
     fn test_block_optional() {
-        run_test_with_prelude(
+        run_test2_with_prelude(
             r#"
         f { |a,b,c=42|
           [a,b,c]
