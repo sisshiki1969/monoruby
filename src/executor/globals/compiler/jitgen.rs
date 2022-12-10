@@ -1652,12 +1652,12 @@ impl Codegen {
                         movl rdx, (req_num);
                     }
                 } else {
-                    // if passed_args < req_num then raise error.
+                    // in method, raise error if passed_args < req_num.
                     let exit = self.vm_return;
                     monoasm! { self.jit,
                         movq rdi, r12;
-                        movl rsi, (0);
-                        movl rdx, (0);
+                        movl rsi, rdx;  // given
+                        movl rdx, (req_num);  // required
                         movq rax, (err_wrong_number_of_arguments);
                         call rax;
                         xorq rax, rax;

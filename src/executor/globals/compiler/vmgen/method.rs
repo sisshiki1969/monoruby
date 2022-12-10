@@ -77,8 +77,8 @@ impl Codegen {
             let exit = self.vm_return;
             monoasm! { self.jit,
                 movq rdi, r12;
-                movl rsi, (0);
-                movl rdx, (0);
+                movl rsi, rdx;  // given
+                movzxw rdx, [r13 - 8];  // required
                 movq rax, (err_wrong_number_of_arguments);
                 call rax;
                 xorq rax, rax;
