@@ -125,19 +125,21 @@ impl BcPc {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
             } => {
                 format!(
-                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{} stack_offset:{stack_offset}",self.u16(0)
+                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}",
                 )
             }
             TraceIr::InitBlock {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
             } => {
                 format!(
-                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{} stack_offset:{stack_offset}",self.u16(0)
+                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}",
                 )
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -751,21 +753,23 @@ impl std::fmt::Debug for Bc {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
             } => {
                 write!(
                     f,
-                    "init_method reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}"
                 )
             }
             TraceIr::InitBlock {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
             } => {
                 write!(
                     f,
-                    "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}"
                 )
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -1055,12 +1059,14 @@ pub(super) enum TraceIr {
     InitMethod {
         reg_num: usize,
         arg_num: usize,
+        req_num: usize,
         stack_offset: usize,
     },
     /// initialize_block
     InitBlock {
         reg_num: usize,
         arg_num: usize,
+        req_num: usize,
         stack_offset: usize,
     },
     //                0       4       8       12      16
@@ -1307,11 +1313,13 @@ impl TraceIr {
                 170 => Self::InitMethod {
                     reg_num: op1 as usize,
                     arg_num: op2 as usize,
+                    req_num: pc.u16(0) as usize,
                     stack_offset: op3 as usize,
                 },
                 172 => Self::InitBlock {
                     reg_num: op1 as usize,
                     arg_num: op2 as usize,
+                    req_num: pc.u16(0) as usize,
                     stack_offset: op3 as usize,
                 },
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),

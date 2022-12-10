@@ -1150,7 +1150,6 @@ mod test {
         run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
     }
 
-    #[ignore]
     #[test]
     fn test_block_call1() {
         run_test_with_prelude(
@@ -1168,13 +1167,11 @@ mod test {
         );
     }
 
-    /*#[ignore]
     #[test]
     fn test_block_call2() {
         run_test_with_prelude(
             r#"
         f {|a,b,c,d|
-          __dump
           e=42
           [a,b,c,d,e]
         }
@@ -1185,9 +1182,8 @@ mod test {
         end
         "#,
         );
-    }*/
+    }
 
-    /*#[ignore]
     #[test]
     fn test_block_nest1() {
         run_test_with_prelude(
@@ -1202,9 +1198,8 @@ mod test {
         end
         "#,
         );
-    }*/
+    }
 
-    #[ignore]
     #[test]
     fn test_block_nest2() {
         run_test_with_prelude(
@@ -1221,7 +1216,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_block_array_expand1() {
         run_test_with_prelude(
@@ -1238,7 +1232,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_block_array_expand2() {
         run_test_with_prelude(
@@ -1255,7 +1248,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_block_optional() {
         run_test_with_prelude(

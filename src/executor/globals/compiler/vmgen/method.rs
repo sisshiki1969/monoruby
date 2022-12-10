@@ -15,7 +15,7 @@ impl Codegen {
     pub(super) fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        self.init_method();
+        self.vm_init_func(false);
         self.fetch_and_dispatch();
         label
     }
@@ -24,7 +24,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.stack_setup();
         self.expand_arg0();
-        self.init_method();
+        self.vm_init_func(true);
         self.fetch_and_dispatch();
         label
     }
@@ -41,13 +41,24 @@ impl Codegen {
         };
     }
 
-    fn init_method(&mut self) {
+    extern "C" fn err_wrong_number_of_arguments(
+        globals: &mut Globals,
+        given: usize,
+        expected: usize,
+    ) {
+        globals.err_argument(&format!(
+            "wrong number of arguments (given {given}, expected {expected})"
+        ));
+    }
+
+    fn vm_init_func(&mut self, is_block: bool) {
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         let l3 = self.jit.label();
         // in
         // r15: reg_num (except *self*)
         // rdi: arg_num
+        // [R13 - 8]: req_num
         // rdx: number of args passed from caller
         // destroy
         // rax, rdx, r15
@@ -56,20 +67,40 @@ impl Codegen {
             // if passed_args >= arg_num then goto l1
             cmpw rdx, rdi;
             jge  l1;
+            // if passed_args >= req_num then goto l2
             cmpw rdx, [r13 - 8];
             jge  l2;
-            movzxw rcx, [r13 - 8];
-            movl rax, rcx;
-            subl rax, rdx;
         }
-        self.fill(1 /* rcx */, NIL_VALUE);
+        if is_block {
+            // fill zero to residual required arguments.
+            monoasm! { self.jit,
+                movzxw rcx, [r13 - 8];
+                movl rax, rcx;
+                subl rax, rdx;
+            }
+            self.fill(1 /* rcx */, NIL_VALUE);
+            monoasm! { self.jit,
+                movzxw rdx, [r13 - 8];
+            }
+        } else {
+            // if passed_args < req_num then raise error.
+            let exit = self.vm_return;
+            monoasm! { self.jit,
+                movq rdi, r12;
+                movl rsi, (0);
+                movl rdx, (0);
+                movq rax, (Self::err_wrong_number_of_arguments);
+                call rax;
+                xorq rax, rax;
+                jmp  exit;
+            }
+        }
         monoasm! { self.jit,
-            movzxw rdx, [r13 - 8];
         l2:
+        // fill zero to residual locals.
         // rax = arg_num - passed_args
             movl rax, rdi;
             subl rax, rdx;
-        // fill zero to residual locals.
             movl rdx, rdi;
         }
         self.fill(2 /* rdx */, 0);

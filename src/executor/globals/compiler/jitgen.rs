@@ -1597,59 +1597,54 @@ impl Codegen {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
-            } => self.init_func(reg_num, arg_num, stack_offset),
+            } => self.init_func(reg_num, arg_num, req_num, stack_offset),
             TraceIr::InitBlock {
                 reg_num,
                 arg_num,
+                req_num,
                 stack_offset,
             } => {
                 if arg_num >= 2 {
-                    let l1 = self.jit.label();
-                    monoasm! { self.jit,
-                        cmpl rdx, 1;
-                        jne  l1;
-                        movq rdi, [rbp - (OFFSET_ARG0)];
-                        testq rdi, 0b111;
-                        jnz  l1;
-                        cmpl [rdi + 4], (ARRAY_CLASS.0);
-                        jne  l1;
-                        movq rdx, (arg_num);
-                        lea  rsi, [rbp - (OFFSET_ARG0)];
-                        movq rax, (expand_array);
-                        call rax;
-                        movq rdx, rax;
-                    l1:
-                    }
+                    self.jit_expand_arg0(arg_num);
                 }
-                self.init_func(reg_num, arg_num, stack_offset);
+                self.init_func(reg_num, arg_num, req_num, stack_offset);
             }
             _ => unreachable!(),
         }
     }
 
-    fn init_func(&mut self, reg_num: usize, arg_num: usize, stack_offset: usize) {
+    fn init_func(&mut self, reg_num: usize, arg_num: usize, req_num: usize, stack_offset: usize) {
         // rdx: number of args passed from caller
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         monoasm!(self.jit,
             subq rsp, (stack_offset * 16);
         );
-        // fill 0 to residual arguments.
-        monoasm!(self.jit,
-            // rdx: len
-            movl rax, rdx;
-            subl rax, (arg_num);
+        monoasm! { self.jit,
+            // if passed_args >= arg_num then goto l1
+            cmpl rdx, (arg_num);
             jge  l1;
-            negq rdx;
-            lea  rdx, [rbp + rdx * 8 - (OFFSET_ARG0)];
+            // if passed_args >= req_num then goto l2
+            cmpl rdx, (req_num);
+            jge  l2;
+            movl rax, (req_num);
+            subl rax, rdx;
+        }
+        self.jit_fill(req_num, NIL_VALUE);
+        monoasm! { self.jit,
+            movl rdx, (req_num);
         l2:
-            movq [rdx], 0;
-            subq rdx, 8;
-            addl rax, 1;
-            jne  l2;
+        // rax = arg_num - passed_args
+            movl rax, (arg_num);
+            subl rax, rdx;
+        // fill zero to residual locals.
+        }
+        self.jit_fill(arg_num, 0);
+        monoasm! { self.jit,
         l1:
-        );
+        };
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num - 1;
         if clear_len > 2 {
@@ -1668,6 +1663,41 @@ impl Codegen {
                 );
             }
         }
+    }
+
+    fn jit_expand_arg0(&mut self, arg_num: usize) {
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            cmpl rdx, 1;
+            jne  l1;
+            movq rdi, [rbp - (OFFSET_ARG0)];
+            testq rdi, 0b111;
+            jnz  l1;
+            cmpl [rdi + 4], (ARRAY_CLASS.0);
+            jne  l1;
+            movq rdx, (arg_num);
+            lea  rsi, [rbp - (OFFSET_ARG0)];
+            movq rax, (expand_array);
+            call rax;
+            movq rdx, rax;
+        l1:
+        };
+    }
+
+    /// fill *val* to the slots [*end* - rax + 1 .. *end*]
+    fn jit_fill(&mut self, ends: usize, val: u64) {
+        let l0 = self.jit.label();
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            testq rax, rax;
+            jz   l1;
+            lea  rdi, [rbp - (OFFSET_ARG0 as i32 + ends as i32 * 8)];
+        l0:
+            movq [rdi + rax * 8], (val);
+            subq rax, 1;
+            jne  l0;
+        l1:
+        };
     }
 
     fn epilogue(&mut self) {
