@@ -1213,25 +1213,26 @@ mod test {
         "#,
         );
     }*/
-    /*
-            #[test]
-            fn test_block_nest2() {
-                run_test_with_prelude(
-                    r#"
+
+    #[test]
+    fn test_block_nest2() {
+        run_test2_with_prelude(
+            r#"
                 f {|a,(b)|
                     [a,b]
                 }
                 "#,
-                    r#"
+            r#"
                 def f
                   yield 1,[2,3],4
                 end
                 "#,
-                );
-            }
-            #[test]
-            fn test_block_array_expand1() {
-        run_test_with_prelude(
+        );
+    }
+
+    #[test]
+    fn test_block_array_expand1() {
+        run_test2_with_prelude(
             r#"
             f { |a,(b,c),d|
                 [a,b,c,d]
@@ -1244,25 +1245,22 @@ mod test {
             "#,
         );
     }
-    */
 
-    /*
-        #[test]
-        fn test_block_array_expand2() {
-            run_test_with_prelude(
-                r#"
+    #[test]
+    fn test_block_array_expand2() {
+        run_test2_with_prelude(
+            r#"
             f { |a,b|
               [a,b]
             }
             "#,
-                r#"
+            r#"
             def f
               yield [1,[2,3],4]
             end
             "#,
-            );
-        }
-    }*/
+        );
+    }
 
     #[test]
     fn test_block_optional() {
