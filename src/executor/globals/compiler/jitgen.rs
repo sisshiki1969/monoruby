@@ -1599,13 +1599,21 @@ impl Codegen {
                 arg_num,
                 req_num,
                 stack_offset,
-            } => self.init_func(reg_num, arg_num, req_num, stack_offset),
+            } => {
+                monoasm!(self.jit,
+                    subq rsp, (stack_offset * 16);
+                );
+                self.init_func(reg_num, arg_num, req_num, stack_offset);
+            }
             TraceIr::InitBlock {
                 reg_num,
                 arg_num,
                 req_num,
                 stack_offset,
             } => {
+                monoasm!(self.jit,
+                    subq rsp, (stack_offset * 16);
+                );
                 if arg_num >= 2 {
                     self.jit_expand_arg0(arg_num);
                 }
@@ -1619,29 +1627,35 @@ impl Codegen {
         // rdx: number of args passed from caller
         let l1 = self.jit.label();
         let l2 = self.jit.label();
-        monoasm!(self.jit,
-            subq rsp, (stack_offset * 16);
-        );
-        monoasm! { self.jit,
-            // if passed_args >= arg_num then goto l1
-            cmpl rdx, (arg_num);
-            jge  l1;
-            // if passed_args >= req_num then goto l2
-            cmpl rdx, (req_num);
-            jge  l2;
-            movl rax, (req_num);
-            subl rax, rdx;
+
+        if arg_num > 0 {
+            monoasm! { self.jit,
+                // if passed_args >= arg_num then goto l1
+                cmpl rdx, (arg_num);
+                jge  l1;
+            }
+            if req_num > 0 {
+                monoasm! { self.jit,
+                    // if passed_args >= req_num then goto l2
+                    cmpl rdx, (req_num);
+                    jge  l2;
+                    movl rax, (req_num);
+                    subl rax, rdx;
+                }
+                self.jit_fill(req_num, NIL_VALUE);
+                monoasm! { self.jit,
+                    movl rdx, (req_num);
+                }
+            }
+            monoasm! { self.jit,
+            l2:
+            // rax = arg_num - max(passed_args, req_num)
+                movl rax, (arg_num);
+                subl rax, rdx;
+            // fill zero to residual locals.
+            }
+            self.jit_fill(arg_num, 0);
         }
-        self.jit_fill(req_num, NIL_VALUE);
-        monoasm! { self.jit,
-            movl rdx, (req_num);
-        l2:
-        // rax = arg_num - max(passed_args, req_num)
-            movl rax, (arg_num);
-            subl rax, rdx;
-        // fill zero to residual locals.
-        }
-        self.jit_fill(arg_num, 0);
         monoasm! { self.jit,
         l1:
         };

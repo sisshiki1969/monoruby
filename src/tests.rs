@@ -1264,7 +1264,7 @@ mod test {
 
     #[test]
     fn test_block_optional() {
-        run_test2_with_prelude(
+        run_test_with_prelude(
             r#"
         f { |a,b,c=42|
           [a,b,c]
