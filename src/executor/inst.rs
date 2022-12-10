@@ -128,7 +128,7 @@ impl BcPc {
                 stack_offset,
             } => {
                 format!(
-                    "init_method reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{} stack_offset:{stack_offset}",self.u16(0)
                 )
             }
             TraceIr::InitBlock {
@@ -137,7 +137,7 @@ impl BcPc {
                 stack_offset,
             } => {
                 format!(
-                    "init_block reg_num:{reg_num} arg_num:{arg_num} stack_offset:{stack_offset}"
+                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{} stack_offset:{stack_offset}",self.u16(0)
                 )
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -667,6 +667,10 @@ impl Bc {
     pub(crate) fn class_version(&self) -> (ClassId, u32) {
         let op = self.op2.0;
         (ClassId::new(op as u32), (op >> 32) as u32)
+    }
+
+    pub(crate) fn u16(&self, id: usize) -> u16 {
+        (self.op2.0 >> (id * 16)) as u16
     }
 
     fn codeptr(&self) -> Option<CodePtr> {

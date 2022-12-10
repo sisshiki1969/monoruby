@@ -5,7 +5,7 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|arg|ofs||       |       |
+    /// | op|reg|arg|ofs||req|   |       |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// reg: a number of resisters
@@ -90,13 +90,17 @@ impl Codegen {
     /// fill *val* to the slots from *ptr* to *ptr* + rax - 1
     fn fill(&mut self, ptr: u64, val: u64) {
         let l0 = self.jit.label();
+        let l1 = self.jit.label();
         monoasm! { self.jit,
+            testq rax, rax;
+            jz   l1;
             negq R(ptr);
             lea  R(ptr), [rbp + R(ptr) * 8 - (OFFSET_ARG0)];
         l0:
             movq [R(ptr) + rax * 8], (val);
             subq rax, 1;
             jne  l0;
+        l1:
         };
     }
 
