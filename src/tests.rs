@@ -1198,7 +1198,7 @@ mod test {
         end
         "#,
         );
-    }
+    }*/
 
     #[test]
     fn test_block_nest2() {
@@ -1262,5 +1262,5 @@ mod test {
         end
         "#,
         );
-    }*/
+    }
 }
