@@ -449,22 +449,19 @@ impl Codegen {
     fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
-            movq rax, [r13]; // rax <- :0:1:2:3
+            movq r8, (self.dispatch.as_ptr());
             addq r13, 16;
-            movsxl rdi, rax;  // rdi <- :2:3
-            shrq rax, 32;
-            movzxw r15, rax;  // r15 <- :1
-            shrq rax, 16;
-            movzxw rax, rax;   // rax <- :0
+            movzxw rax, [r13 - 10]; // rax <- :0
+            movzxw r15, [r13 - 12];  // r15 <- :1
             // dispatch
             testq rax, 0x80;
             jeq l1;
-            movsxw rsi, rdi;    // rsi <- :3
-            shrq rdi, 16;
-            movzxw rdi, rdi;    // rdi <- :2
+            movsxw rsi, [r13 - 16];    // rsi <- :3
+            movzxw rdi, [r13 - 14];    // rdi <- :2
+            movq rax, [r8 + rax * 8];
+            jmp rax;
         l1:
-            movq r8, (self.dispatch.as_ptr());
-            movzxb rax, rax;
+            movsxl rdi, [r13 - 16];  // rdi <- :2:3
             movq rax, [r8 + rax * 8];
             jmp rax;
         };

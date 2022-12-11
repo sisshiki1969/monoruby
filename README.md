@@ -26,6 +26,7 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - method definition
   - required parameter
   - optional parameter
+  - rest parameter
 - class definition
 
 ## Benchmark
