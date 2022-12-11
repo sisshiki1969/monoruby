@@ -869,7 +869,7 @@ mod test {
         );
     }
 
-    /*#[test]
+    #[test]
     fn test_for1() {
         run_test(
             r#"
@@ -879,7 +879,7 @@ mod test {
             b # => 0..300
             "#,
         );
-    }*/
+    }
 
     #[test]
     fn test_for2() {

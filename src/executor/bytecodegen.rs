@@ -3,6 +3,9 @@ use num::BigInt;
 use paste::paste;
 use ruruby_parse::{ArgList, BinOp, BlockInfo, CmpKind, Loc, Node, NodeKind, UnOp};
 
+mod binary;
+mod encode;
+
 ///
 /// ID of register.
 ///
@@ -176,6 +179,26 @@ impl IrContext {
         self.labels[label] = Some(pos);
     }
 
+    fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcReg>) {
+        let ret = match local {
+            Some(ret) => ret,
+            None => info.pop().into(),
+        };
+        assert_eq!(0, info.temp);
+        self.push(BcIr::Ret(ret), Loc::default());
+    }
+
+    fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
+        if dst != src {
+            self.push(BcIr::Mov(dst, src), Loc::default());
+        }
+    }
+
+    fn gen_temp_mov(&mut self, info: &mut ISeqInfo, rhs: BcReg) {
+        let lhs = info.push();
+        self.gen_mov(lhs.into(), rhs);
+    }
+
     fn gen_br(&mut self, cond_pos: usize) {
         self.push(BcIr::Br(cond_pos), Loc::default());
     }
@@ -196,6 +219,91 @@ impl IrContext {
 
     fn gen_check_local(&mut self, local: BcReg, else_pos: usize) {
         self.push(BcIr::CheckLocal(local, else_pos), Loc::default());
+    }
+
+    fn gen_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>) {
+        let reg = match dst {
+            Some(dst) => dst,
+            None => info.push().into(),
+        };
+        self.push(BcIr::Nil(reg), Loc::default());
+    }
+
+    fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
+        let reg = BcReg::get_reg(info, dst);
+        self.push(BcIr::Literal(reg, v), Loc::default());
+    }
+
+    fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
+        if let Ok(i) = i32::try_from(i) {
+            let reg = match dst {
+                Some(local) => local,
+                None => info.push().into(),
+            };
+            self.push(BcIr::Integer(reg, i), Loc::default());
+        } else {
+            self.gen_literal(info, dst, Value::new_integer(i));
+        }
+    }
+
+    fn gen_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
+        self.gen_literal(info, dst, Value::new_bigint(bigint));
+    }
+
+    fn gen_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
+        self.gen_literal(info, dst, Value::new_float(f));
+    }
+
+    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: IdentId) {
+        let reg = BcReg::get_reg(info, dst);
+        self.push(BcIr::Symbol(reg, sym), Loc::default());
+    }
+
+    fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
+        self.gen_literal(info, dst, Value::new_string(s));
+    }
+
+    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
+        self.push(BcIr::Array(ret, src, len as u16), loc);
+    }
+
+    fn gen_array(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        ret: Option<BcReg>,
+        nodes: Vec<Node>,
+        loc: Loc,
+    ) -> Result<()> {
+        let len = nodes.len();
+        let src = self.gen_args(ctx, info, nodes)?.into();
+        info.popn(len);
+        let ret = BcReg::get_reg(info, ret);
+        self.emit_array(ret, src, len, loc);
+        Ok(())
+    }
+    fn gen_range(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        ret: Option<BcReg>,
+        start: Node,
+        end: Node,
+        exclude_end: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        let ret = BcReg::get_reg(info, ret);
+        let (start, end) = self.gen_binary_temp_expr(ctx, info, start, end)?;
+        self.push(
+            BcIr::Range {
+                ret,
+                start,
+                end,
+                exclude_end,
+            },
+            loc,
+        );
+        Ok(())
     }
 
     fn gen_opt_condbr(
@@ -289,79 +397,6 @@ impl IrContext {
     fn gen_load_ivar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
         let reg = BcReg::get_reg(info, dst);
         self.push(BcIr::LoadIvar(reg, name), loc);
-    }
-
-    fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
-        let reg = BcReg::get_reg(info, dst);
-        self.push(BcIr::Literal(reg, v), Loc::default());
-    }
-
-    fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
-        if let Ok(i) = i32::try_from(i) {
-            let reg = match dst {
-                Some(local) => local,
-                None => info.push().into(),
-            };
-            self.push(BcIr::Integer(reg, i), Loc::default());
-        } else {
-            self.gen_literal(info, dst, Value::new_integer(i));
-        }
-    }
-
-    fn gen_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
-        self.gen_literal(info, dst, Value::new_float(f));
-    }
-
-    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: IdentId) {
-        let reg = BcReg::get_reg(info, dst);
-        self.push(BcIr::Symbol(reg, sym), Loc::default());
-    }
-
-    fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
-        self.gen_literal(info, dst, Value::new_string(s));
-    }
-
-    fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
-        self.push(BcIr::Array(ret, src, len as u16), loc);
-    }
-
-    fn gen_array(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
-        ret: Option<BcReg>,
-        nodes: Vec<Node>,
-        loc: Loc,
-    ) -> Result<()> {
-        let len = nodes.len();
-        let src = self.gen_args(ctx, info, nodes)?.into();
-        info.popn(len);
-        let ret = BcReg::get_reg(info, ret);
-        self.emit_array(ret, src, len, loc);
-        Ok(())
-    }
-    fn gen_range(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
-        ret: Option<BcReg>,
-        start: Node,
-        end: Node,
-        exclude_end: bool,
-        loc: Loc,
-    ) -> Result<()> {
-        let ret = BcReg::get_reg(info, ret);
-        let (start, end) = self.gen_binary_temp_expr(ctx, info, start, end)?;
-        self.push(
-            BcIr::Range {
-                ret,
-                start,
-                end,
-                exclude_end,
-            },
-            loc,
-        );
-        Ok(())
     }
 
     fn gen_index(
@@ -458,18 +493,6 @@ impl IrContext {
         }
     }
 
-    fn gen_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
-        self.gen_literal(info, dst, Value::new_bigint(bigint));
-    }
-
-    fn gen_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>) {
-        let reg = match dst {
-            Some(dst) => dst,
-            None => info.push().into(),
-        };
-        self.push(BcIr::Nil(reg), Loc::default());
-    }
-
     fn gen_neg(&mut self, info: &mut ISeqInfo, local: Option<BcReg>, loc: Loc) {
         match local {
             Some(local) => {
@@ -481,26 +504,6 @@ impl IrContext {
                 self.push(BcIr::Neg(dst, src), loc);
             }
         };
-    }
-
-    fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcReg>) {
-        let ret = match local {
-            Some(ret) => ret,
-            None => info.pop().into(),
-        };
-        assert_eq!(0, info.temp);
-        self.push(BcIr::Ret(ret), Loc::default());
-    }
-
-    fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
-        if dst != src {
-            self.push(BcIr::Mov(dst, src), Loc::default());
-        }
-    }
-
-    fn gen_temp_mov(&mut self, info: &mut ISeqInfo, rhs: BcReg) {
-        let lhs = info.push();
-        self.gen_mov(lhs.into(), rhs);
     }
 
     fn handle_mode(&mut self, info: &mut ISeqInfo, use_mode: UseMode, local: BcLocal) {
@@ -598,40 +601,6 @@ impl IrContext {
                 let rhs = self.gen_temp_expr(ctx, info, rhs)?;
                 Ok((lhs, rhs))
             }
-        }
-    }
-
-    /// Generate bytecode Ir for binary operations.
-    fn gen_binop(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
-        op: BinOp,
-        lhs: Node,
-        rhs: Node,
-        dst: Option<BcReg>,
-        loc: Loc,
-    ) -> Result<BcReg> {
-        match op {
-            BinOp::Add => self.gen_add(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Sub => self.gen_sub(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Mul => self.gen_mul(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Div => self.gen_div(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Rem => self.gen_rem(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Exp => self.gen_exp(ctx, info, dst, lhs, rhs, loc),
-            BinOp::BitOr => self.gen_bitor(ctx, info, dst, lhs, rhs, loc),
-            BinOp::BitAnd => self.gen_bitand(ctx, info, dst, lhs, rhs, loc),
-            BinOp::BitXor => self.gen_bitxor(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Shr => self.gen_shr(ctx, info, dst, lhs, rhs, loc),
-            BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
-            BinOp::LAnd => self.gen_land(ctx, info, dst, lhs, rhs),
-            BinOp::LOr => self.gen_lor(ctx, info, dst, lhs, rhs),
-            BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
-            _ => Err(MonorubyErr::unsupported_operator(
-                op,
-                loc,
-                info.sourceinfo.clone(),
-            )),
         }
     }
 
@@ -1400,46 +1369,6 @@ impl IrContext {
         Ok((dst, lhs))
     }
 
-    fn gen_land(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
-        dst: Option<BcReg>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<BcReg> {
-        let exit_pos = self.new_label();
-        let dst = match dst {
-            None => info.push().into(),
-            Some(reg) => reg,
-        };
-        self.gen_store_expr(ctx, info, dst, lhs)?;
-        self.gen_condnotbr(dst, exit_pos, false);
-        self.gen_store_expr(ctx, info, dst, rhs)?;
-        self.apply_label(exit_pos);
-        Ok(dst)
-    }
-
-    fn gen_lor(
-        &mut self,
-        ctx: &mut FnStore,
-        info: &mut ISeqInfo,
-        dst: Option<BcReg>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<BcReg> {
-        let exit_pos = self.new_label();
-        let dst = match dst {
-            None => info.push().into(),
-            Some(reg) => reg,
-        };
-        self.gen_store_expr(ctx, info, dst, lhs)?;
-        self.gen_condbr(dst, exit_pos, false);
-        self.gen_store_expr(ctx, info, dst, rhs)?;
-        self.apply_label(exit_pos);
-        Ok(dst)
-    }
-
     fn gen_cmp(
         &mut self,
         ctx: &mut FnStore,
@@ -1546,11 +1475,32 @@ impl IrContext {
             ..
         } = iter.kind
         {
+            // +------+
+            // | iter | (when use_value)
+            // +------+
+            // | end  |
+            // +------+
+            // | dst  |
+            // +------+
             let loop_entry = self.new_label();
             let loop_exit = self.new_label();
             self.gen_store_expr(ctx, info, counter.into(), start)?;
-            let end = self.push_expr(ctx, info, end)?;
-
+            let end = if use_value {
+                let iter = info.push();
+                let end = self.push_expr(ctx, info, end)?;
+                self.push(
+                    BcIr::Range {
+                        ret: iter.into(),
+                        start: counter.into(),
+                        end,
+                        exclude_end,
+                    },
+                    loc,
+                );
+                end
+            } else {
+                self.push_expr(ctx, info, end)?
+            };
             self.apply_label(loop_entry);
             self.push(BcIr::LoopStart, loc);
             let dst = info.push().into();
@@ -1569,7 +1519,7 @@ impl IrContext {
                 loc,
             );
             self.gen_condbr(dst, loop_exit, true);
-            info.pop();
+            info.pop(); // pop *dst*
 
             self.gen_expr(ctx, info, *body.body, UseMode::NotUse)?;
 
@@ -1580,14 +1530,11 @@ impl IrContext {
             self.gen_br(loop_entry);
 
             self.apply_label(loop_exit);
-            info.pop();
+            info.pop(); // pop *end*
         } else {
             unimplemented!()
         }
-        if use_value {
-            // TODO: we must return iter object.
-            self.gen_nil(info, None);
-        }
+
         self.loops.pop().unwrap();
         self.apply_label(break_pos);
         self.push(BcIr::LoopEnd, loc);
@@ -1632,6 +1579,7 @@ impl IrContext {
         Ok(())
     }
 
+    // in postfix while, we must evaluate the body expr once at least.
     fn gen_while_begin_postfix(
         &mut self,
         ctx: &mut FnStore,
@@ -1665,365 +1613,5 @@ impl IrContext {
         self.push(BcIr::LoopEnd, loc);
 
         Ok(())
-    }
-}
-
-macro_rules! gen_ops {
-    (($op:ident, $inst:ident)) => {
-        paste! {
-            fn [<gen_ $op>](
-                &mut self,
-                ctx: &mut FnStore,
-                info: &mut ISeqInfo,
-                dst: Option<BcReg>,
-                lhs: Node,
-                rhs: Node,
-                loc: Loc,
-            ) -> Result<BcReg> {
-                let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-                self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
-                Ok(dst)
-            }
-        }
-    };
-    (($op1:ident, $inst1:ident), $(($op2:ident, $inst2:ident)),+) => {
-        gen_ops!(($op1, $inst1));
-        gen_ops!($(($op2, $inst2)),+);
-    };
-}
-
-macro_rules! gen_ri_ops {
-    (($op:ident, $inst:ident)) => {
-        paste! {
-            fn [<gen_ $op>](
-                &mut self,
-                ctx: &mut FnStore,
-                info: &mut ISeqInfo,
-                dst: Option<BcReg>,
-                lhs: Node,
-                rhs: Node,
-                loc: Loc,
-            ) -> Result<BcReg> {
-                if let Some(i) = is_smi(&rhs) {
-                    let (dst, lhs) = self.gen_singular(ctx, info, dst, lhs)?;
-                    self.push(BcIr::BinOpRi(BinOpK::$inst, dst, lhs, i), loc);
-                    Ok(dst)
-                } else if let Some(i) = is_smi(&lhs) {
-                    let (dst, rhs) = self.gen_singular(ctx, info, dst, rhs)?;
-                    self.push(BcIr::BinOpIr(BinOpK::$inst, dst, i, rhs), loc);
-                    Ok(dst)
-                } else {
-                    let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-                    self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
-                    Ok(dst)
-                }
-            }
-        }
-    };
-    (($op1:ident, $inst1:ident), $(($op2:ident, $inst2:ident)),+) => {
-        gen_ri_ops!(($op1, $inst1));
-        gen_ri_ops!($(($op2, $inst2)),+);
-    };
-}
-
-impl IrContext {
-    gen_ri_ops!((add, Add), (sub, Sub), (mul, Mul), (div, Div), (exp, Exp));
-    gen_ops!(
-        (rem, Rem),
-        (bitor, BitOr),
-        (bitand, BitAnd),
-        (bitxor, BitXor),
-        (shr, Shr),
-        (shl, Shl)
-    );
-}
-
-fn enc_w(opcode: u16, op1: u16) -> u64 {
-    enc_www(opcode, op1, 0, 0)
-}
-
-fn enc_wl(opcode: u16, op1: u16, op2: u32) -> u64 {
-    ((opcode as u64) << 48) + ((op1 as u64) << 32) + (op2 as u64)
-}
-
-fn enc_l(opcode: u16, op1: u32) -> u64 {
-    enc_wl(opcode, 0, op1)
-}
-
-fn enc_ww(opcode: u16, op1: u16, op2: u16) -> u64 {
-    enc_www(opcode, op1, op2, 0)
-}
-
-fn enc_www(opcode: u16, op1: u16, op2: u16, op3: u16) -> u64 {
-    ((opcode as u64) << 48) + ((op1 as u64) << 32) + ((op2 as u64) << 16) + (op3 as u64)
-}
-
-fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {
-    enc_www(opcode, op1, op2 as u16, op3)
-}
-
-fn enc_wwsw(opcode: u16, op1: u16, op2: u16, op3: i16) -> u64 {
-    enc_www(opcode, op1, op2, op3 as u16)
-}
-
-impl IrContext {
-    fn ir_to_bytecode(&mut self, info: &mut ISeqInfo, store: &mut FnStore) {
-        let mut ops = vec![];
-        let mut locs = vec![];
-        for (idx, (inst, loc)) in self.ir.iter().enumerate() {
-            let op = match inst {
-                BcIr::MethodCall(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(1, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
-                BcIr::Br(dst) => {
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let op1 = dst - idx as i32 - 1;
-                    Bc::from(enc_l(3, op1 as u32))
-                }
-                BcIr::Integer(reg, num) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(6, op1.0, *num as u32))
-                }
-                BcIr::Literal(reg, val) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from_with_value(enc_wl(7, op1.0, 0), *val)
-                }
-                BcIr::Nil(reg) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_w(8, op1.0))
-                }
-                BcIr::Symbol(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(9, op1.0, name.get()))
-                }
-                BcIr::LoadConst(reg, toplevel, prefix, name) => {
-                    let op1 = info.get_index(reg);
-                    let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
-                    Bc::from(enc_wl(10, op1.0, op2.0))
-                }
-                BcIr::StoreConst(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(11, op1.0, name.get()))
-                }
-                BcIr::CondBr(reg, dst, optimizable, kind) => {
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let op1 = info.get_index(reg);
-                    let op2 = dst - idx as i32 - 1;
-                    let kind = *kind as u16;
-                    let op = enc_wl(
-                        if *optimizable { 12 + kind } else { 4 + kind },
-                        op1.0,
-                        op2 as u32,
-                    );
-                    Bc::from(op)
-                }
-                BcIr::LoopStart => Bc::from(enc_l(14, 0)),
-                BcIr::LoopEnd => Bc::from(enc_l(15, 0)),
-                BcIr::LoadIvar(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(16, op1.0, name.get()))
-                }
-                BcIr::StoreIvar(reg, name) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_wl(17, op1.0, name.get()))
-                }
-                BcIr::MethodCallBlock(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(19, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
-                BcIr::CheckLocal(local, dst) => {
-                    let op1 = info.get_index(local);
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let op2 = dst - idx as i32 - 1;
-                    Bc::from(enc_wl(20, op1.0, op2 as u32))
-                }
-                BcIr::Array(ret, src, len) => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(src);
-                    Bc::from(enc_www(131, op1.0, op2.0, *len))
-                }
-                BcIr::Index(ret, base, idx) => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(base);
-                    let op3 = info.get_index(idx);
-                    Bc::from_with_class2(enc_www(132, op1.0, op2.0, op3.0))
-                }
-                BcIr::StoreIndex(src, base, idx) => {
-                    let op1 = info.get_index(src);
-                    let op2 = info.get_index(base);
-                    let op3 = info.get_index(idx);
-                    Bc::from(enc_www(133, op1.0, op2.0, op3.0))
-                }
-                BcIr::LoadDynVar { ret, src, outer } => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(src);
-                    let op3 = *outer as u16;
-                    Bc::from(enc_www(150, op1.0, op2.0, op3))
-                }
-                BcIr::StoreDynVar { dst, outer, src } => {
-                    let op1 = info.get_index(dst);
-                    let op2 = *outer as u16;
-                    let op3 = info.get_index(src);
-                    Bc::from(enc_www(151, op1.0, op2, op3.0))
-                }
-                BcIr::Range {
-                    ret,
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(start);
-                    let op3 = info.get_index(end);
-                    Bc::from(enc_www(
-                        153 + if *exclude_end { 1 } else { 0 },
-                        op1.0,
-                        op2.0,
-                        op3.0,
-                    ))
-                }
-                BcIr::Neg(dst, src) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(src);
-                    Bc::from_with_class_and_version(
-                        enc_ww(129, op1.0, op2.0),
-                        ClassId::default(),
-                        -1i32 as u32,
-                    )
-                }
-                BcIr::BinOpIr(kind, dst, lhs, rhs) => {
-                    let op1 = info.get_index(dst);
-                    let op3 = info.get_index(rhs);
-                    Bc::from_with_class2(enc_wsww(180 + *kind as u16, op1.0, *lhs, op3.0))
-                }
-                BcIr::BinOp(kind, dst, lhs, rhs) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    let op3 = info.get_index(rhs);
-                    Bc::from_with_class2(enc_www(200 + *kind as u16, op1.0, op2.0, op3.0))
-                }
-                BcIr::BinOpRi(kind, dst, lhs, rhs) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    Bc::from_with_class2(enc_wwsw(220 + *kind as u16, op1.0, op2.0, *rhs))
-                }
-                BcIr::Cmp(kind, dst, lhs, rhs, optimizable) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    let op3 = info.get_index(rhs);
-                    let op = if *optimizable {
-                        enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
-                    } else {
-                        enc_www(134 + *kind as u16, op1.0, op2.0, op3.0)
-                    };
-                    Bc::from_with_class2(op)
-                }
-                BcIr::Cmpri(kind, dst, lhs, rhs, optimizable) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(lhs);
-                    let op = if *optimizable {
-                        enc_wwsw(162 + *kind as u16, op1.0, op2.0, *rhs)
-                    } else {
-                        enc_wwsw(142 + *kind as u16, op1.0, op2.0, *rhs)
-                    };
-                    Bc::from_with_class2(op)
-                }
-                BcIr::Ret(reg) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_w(148, op1.0))
-                }
-                BcIr::Mov(dst, src) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(src);
-                    Bc::from(enc_ww(149, op1.0, op2.0))
-                }
-                BcIr::InitMethod(info) => {
-                    let FnInitInfo {
-                        reg_num,
-                        pos_num,
-                        req_num,
-                        stack_offset,
-                    } = info;
-                    Bc::from_with_num(
-                        enc_www(170, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
-                        *req_num as u16,
-                    )
-                }
-                BcIr::InitBlock(info) => {
-                    let FnInitInfo {
-                        reg_num,
-                        pos_num,
-                        req_num,
-                        stack_offset,
-                    } = info;
-                    Bc::from_with_num(
-                        enc_www(172, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
-                        *req_num as u16,
-                    )
-                }
-                BcIr::Yield { ret, args, len } => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    let op2 = info.get_index(args);
-                    Bc::from(enc_www(152, op1.0, op2.0, *len as u16))
-                }
-                BcIr::MethodArgs(recv, args, len) => {
-                    let op1 = info.get_index(recv);
-                    let op2 = info.get_index(args);
-                    Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
-                }
-                BcIr::InlineCache => Bc::from(0),
-                BcIr::MethodDef(name, func_id) => {
-                    Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
-                }
-                BcIr::ClassDef {
-                    ret,
-                    superclass,
-                    name,
-                    func_id,
-                } => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    let op2 = match superclass {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), *name, *func_id)
-                }
-                BcIr::ConcatStr(ret, arg, len) => {
-                    let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
-                    let op2 = info.get_index(&BcReg::from(*arg));
-                    Bc::from(enc_www(155, op1.0, op2.0, *len as u16))
-                }
-                BcIr::ExpandArray(src, dst, len) => {
-                    let op1 = info.get_index(src);
-                    let op2 = info.get_index(dst);
-                    Bc::from(enc_www(171, op1.0, op2.0, *len))
-                }
-            };
-            ops.push(op);
-            locs.push(*loc);
-        }
-        info.set_bytecode(ops);
-        info.sourcemap = locs;
     }
 }
