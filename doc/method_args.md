@@ -27,6 +27,7 @@ caller から渡される実引数の数。splat operator やブロック呼び�
 - [METHOD] passed_args < required, pos_num < passed_args の場合はエラーを返す
 - [BLOCK] 余った必須仮引数（required - passed_args）には nil を埋める。
 - 余ったオプション引数（pos_num - max(required, passed_args)）には０を埋める。
+- rest 引数があれば生成
 - 一時変数スロットを nil で初期化。
 
 ### bytecode での処理 (bytecode.rs/compile_func())
@@ -35,6 +36,7 @@ caller から渡される実引数の数。splat operator やブロック呼び�
 - 省略可能引数がある場合は実引数が引き渡されていなければ初期化
 
 ```text
+               <------arg_num------>
                <-----pos_num----->
                <-req_num->
                +---------+-------+-+--------

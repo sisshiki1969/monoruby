@@ -122,9 +122,9 @@ fn run_test_main(code: &str) -> (Value, Globals) {
         .unwrap();
     let jit_str = res.inspect(&globals);
     #[cfg(not(debug_assertions))]
-    eprintln!("jit:  {jit_str} elapsed:{:?}", now.elapsed());
+    eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
-    eprintln!("jit:  {jit_str}");
+    eprintln!("monoruby:  {jit_str}");
 
     (res, globals)
 }
@@ -1270,6 +1270,64 @@ mod test {
             r#"
         def f(x,y,z=42)
             [x,y,z]
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_method_rest() {
+        run_test_with_prelude(
+            r#"
+        f(1,2)
+        "#,
+            r#"
+        def f(x,y,a=42,b=55,*z)
+            [x,y,a,b,z]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f(1,2,3,4,5,6,7)
+        "#,
+            r#"
+        def f(x,y,a=42,b=55,*z)
+            [x,y,a,b,z]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f(1,2,3,4,5,6,7)
+        "#,
+            r#"
+        def f(x,y,*z)
+            [x,y,z]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f { |a,b,x=42,y=12,*c|
+          [a,b,c,x,y]
+        }
+        "#,
+            r#"
+        def f
+          yield [1,2,3]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f { |a,b,x=42,y=12,*c|
+          [a,b,c,x,y]
+        }
+        "#,
+            r#"
+        def f
+          yield [1,2,3,4,5,6]
         end
         "#,
         );

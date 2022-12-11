@@ -424,6 +424,33 @@ pub extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize
     }
 }
 
+pub extern "C" fn make_rest_array(src: *mut Value, len: usize) {
+    let mut ary = vec![];
+    for i in 0..len {
+        unsafe { ary.push(*src.sub(i)) }
+    }
+    unsafe { *src = Value::new_array_from_vec(ary) };
+}
+
+pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
+    let ary = src.as_array();
+    let len = ary.len();
+    if min_len <= len {
+        for i in 0..len {
+            unsafe { *dst.sub(i) = ary[i] }
+        }
+        len
+    } else {
+        for i in 0..len {
+            unsafe { *dst.sub(i) = ary[i] }
+        }
+        for i in len..min_len {
+            unsafe { *dst.sub(i) = Value::nil() }
+        }
+        min_len
+    }
+}
+
 pub extern "C" fn vm_get_constant(
     interp: &mut Executor,
     globals: &mut Globals,

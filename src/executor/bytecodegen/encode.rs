@@ -189,6 +189,7 @@ impl IrContext {
                 BcIr::InitMethod(info) => {
                     let FnInitInfo {
                         reg_num,
+                        arg_num,
                         pos_num,
                         req_num,
                         stack_offset,
@@ -196,11 +197,13 @@ impl IrContext {
                     Bc::from_with_num(
                         enc_www(170, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
                         *req_num as u16,
+                        *arg_num as u16,
                     )
                 }
                 BcIr::InitBlock(info) => {
                     let FnInitInfo {
                         reg_num,
+                        arg_num,
                         pos_num,
                         req_num,
                         stack_offset,
@@ -208,6 +211,7 @@ impl IrContext {
                     Bc::from_with_num(
                         enc_www(172, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
                         *req_num as u16,
+                        *arg_num as u16,
                     )
                 }
                 BcIr::Yield { ret, args, len } => {

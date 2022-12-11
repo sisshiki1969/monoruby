@@ -18,6 +18,8 @@ impl From<FuncId> for u32 {
 
 #[derive(Clone, Default, PartialEq)]
 pub struct ArgumentNames {
+    // req + opt + rest
+    pub arg_num: usize,
     // req + optional
     pub pos_num: usize,
     pub req_num: usize,
@@ -26,7 +28,7 @@ pub struct ArgumentNames {
 
 impl ArgumentNames {
     fn arity(&self) -> i32 {
-        if self.pos_num == self.req_num {
+        if self.pos_num == self.req_num && self.pos_num == self.arg_num {
             self.pos_num as i32
         } else {
             -1
@@ -185,6 +187,7 @@ fn handle_args(
     let mut expand = vec![];
     let mut optional = vec![];
     let mut req_num = 0;
+    let mut rest = 0;
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
@@ -195,6 +198,11 @@ fn handle_args(
                 let local = BcLocal(args.len() as u16);
                 args.push(Some(name));
                 optional.push(OptionalInfo { local, initializer });
+            }
+            ParamKind::Rest(name) => {
+                args.push(Some(name));
+                assert_eq!(0, rest);
+                rest = 1;
             }
             ParamKind::Destruct(names) => {
                 expand.push((args.len(), destruct_args.len(), names.len()));
@@ -213,7 +221,7 @@ fn handle_args(
             }
         }
     }
-    let pos_num = args.len();
+    let pos_num = args.len() - rest;
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
@@ -226,6 +234,7 @@ fn handle_args(
     Ok((
         ArgumentNames {
             names: args,
+            arg_num: pos_num + rest,
             pos_num,
             req_num,
         },
@@ -686,6 +695,11 @@ impl ISeqInfo {
     /// get a number of local vars.
     pub(crate) fn local_num(&self) -> usize {
         self.locals.len()
+    }
+
+    /// get a number of required arguments.
+    pub(crate) fn arg_num(&self) -> usize {
+        self.args.arg_num
     }
 
     /// get a number of required arguments.

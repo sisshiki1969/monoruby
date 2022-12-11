@@ -46,11 +46,15 @@ impl Value {
                 (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
                 (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
                 (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
-                (ObjKind::ARRAY, ObjKind::ARRAY) => lhs
-                    .as_array()
-                    .iter()
-                    .zip(rhs.as_array().iter())
-                    .all(|(lhs, rhs)| Value::eq(*lhs, *rhs)),
+                (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                    let lhs = lhs.as_array();
+                    let rhs = rhs.as_array();
+                    lhs.len() == rhs.len()
+                        && lhs
+                            .iter()
+                            .zip(rhs.iter())
+                            .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
+                }
                 (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
                 _ => false,
             },

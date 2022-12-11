@@ -145,8 +145,7 @@ impl IrContext {
             ir.apply_label(next);
         }
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
-        let reg_num = info.total_reg_num();
-        ir.replace_init(reg_num, info.pos_num(), info.req_num(), info.is_block);
+        ir.replace_init(info);
         assert_eq!(0, info.temp);
         ir.ir_to_bytecode(info, ctx);
         Ok(())
@@ -1215,13 +1214,13 @@ impl IrContext {
         );
     }
 
-    fn replace_init(&mut self, reg_num: usize, pos_num: usize, req_num: usize, is_block: bool) {
-        let info = FnInitInfo::new(reg_num, pos_num, req_num);
+    fn replace_init(&mut self, info: &ISeqInfo) {
+        let fninfo = FnInitInfo::new(info);
         self.ir[0] = (
-            if is_block {
-                BcIr::InitBlock(info)
+            if info.is_block {
+                BcIr::InitBlock(fninfo)
             } else {
-                BcIr::InitMethod(info)
+                BcIr::InitMethod(fninfo)
             },
             Loc::default(),
         );

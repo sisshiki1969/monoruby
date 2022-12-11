@@ -1596,24 +1596,26 @@ impl Codegen {
         match pc.op1() {
             TraceIr::InitMethod {
                 reg_num,
+                arg_num,
                 pos_num,
                 req_num,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, pos_num, req_num, pc, false);
+                self.init_func(reg_num, arg_num, pos_num, req_num, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
+                arg_num,
                 pos_num,
                 req_num,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
                 if pos_num >= 2 {
-                    self.jit_expand_arg0(pos_num);
+                    self.jit_expand_arg0(req_num);
                 }
-                self.init_func(reg_num, pos_num, req_num, pc, true);
+                self.init_func(reg_num, arg_num, pos_num, req_num, pc, true);
             }
             _ => unreachable!(),
         }
@@ -1628,6 +1630,7 @@ impl Codegen {
     fn init_func(
         &mut self,
         reg_num: usize,
+        arg_num: usize,
         pos_num: usize,
         req_num: usize,
         pc: BcPc,
@@ -1646,21 +1649,34 @@ impl Codegen {
         // rdx: number of args passed from caller
         let l1 = self.jit.label();
         let l2 = self.jit.label();
+        let l3 = self.jit.label();
+        let l5 = self.jit.label();
 
         if pos_num > 0 {
             monoasm! { self.jit,
                 // if passed_args >= pos_num then goto l1
                 cmpl rdx, (pos_num);
+                jeq  l1;
+                jlt  l5;
             }
-            if is_block {
-                monoasm! { self.jit,
-                    jge  l1;
+            if pos_num == arg_num {
+                if is_block {
+                    monoasm! { self.jit, jmp  l3; }
+                } else {
+                    monoasm! { self.jit, jmp  err_label; }
                 }
             } else {
                 monoasm! { self.jit,
-                    jgt  err_label;
-                    jeq  l1;
-                }
+                    lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
+                    movl rsi, rdx;
+                    subl rsi, (pos_num);
+                    movq rax, (make_rest_array);
+                    call rax;
+                    jmp  l3;
+                };
+            }
+            monoasm! { self.jit,
+            l5:
             }
             if req_num > 0 {
                 if pos_num != req_num {
@@ -1694,31 +1710,44 @@ impl Codegen {
             // fill zero to residual locals.
             }
             self.jit_fill(pos_num, 0);
+        } else {
+            // TODO: we must check arity even if pos_num == 0.
         }
         monoasm! { self.jit,
         l1:
         };
+        if arg_num != pos_num {
+            monoasm! { self.jit,
+                lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
+                xorq rsi, rsi;
+                movq rax, (make_rest_array);
+                call rax;
+            };
+        }
+        monoasm! { self.jit,
+        l3:
+        }
         // fill nil to temporary registers.
-        let clear_len = reg_num - pos_num - 1;
+        let clear_len = reg_num - arg_num - 1;
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((pos_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
+                    movq [rbp - ((arg_num + i) as i32 * 8 + OFFSET_ARG0)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((pos_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
+                    movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
                 );
             }
         }
     }
 
-    fn jit_expand_arg0(&mut self, pos_num: usize) {
+    fn jit_expand_arg0(&mut self, req_num: usize) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
             cmpl rdx, 1;
@@ -1728,9 +1757,9 @@ impl Codegen {
             jnz  l1;
             cmpl [rdi + 4], (ARRAY_CLASS.0);
             jne  l1;
-            movq rdx, (pos_num);
+            movq rdx, (req_num);
             lea  rsi, [rbp - (OFFSET_ARG0)];
-            movq rax, (expand_array);
+            movq rax, (block_expand_array);
             call rax;
             movq rdx, rax;
         l1:

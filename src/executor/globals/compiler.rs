@@ -40,6 +40,15 @@ pub struct Codegen {
     pub f64_to_val: DestLabel,
     pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
+    ///
+    /// Raise wrong number of arguments error.
+    ///
+    /// in
+    ///
+    /// rdx: actual number of arguments
+    ///
+    /// r13: pc (InitBlock/InitMethod)
+    ///
     pub wrong_argument: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub method_invoker: Invoker,

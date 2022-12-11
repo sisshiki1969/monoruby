@@ -22,8 +22,10 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - block and dynamic local variables
 - if-then-elsif-end statement
 - for-in statement
-- while statement
+- while/until statement and postfix while/until modifier
 - method definition
+  - required parameter
+  - optional parameter
 - class definition
 
 ## Benchmark
@@ -38,18 +40,19 @@ This project still remains in early-alpha stage. Currently, only the functionali
 |qsort*          |      125.036k|              315.657k|              119.578k|   384.874k|
 |app_fib         |         3.637|                14.396|                 4.569|     17.185|
 |tarai*          |         2.809|                12.851|                 3.915|     14.762|
-|so_mandelbrot   |         0.623|                 0.976|                 0.824|     13.832|
-|so_nbody        |         0.920|                 1.538|                 0.878|      5.132|
+|so_mandelbrot   |         0.629|                 0.985|                 0.810|     15.359|
+|so_nbody        |         0.917|                 1.541|                 0.876|      5.636|
+|app_aobench     |         0.028|                 0.045|                 0.035|      0.104|
 
 |                     |3.2.0-preview3| 3.2.0-preview3 --yjit|     monoruby|
 |:--------------------|-------------:|---------------------:|------------:|
-|vm_ivar              |      170.332M|              170.449M|     732.590M|
-|vm_ivar_get          |        12.067|                26.865|       74.040|
-|vm_ivar_set          |      109.025M|              115.217M|     707.712M|
-|vm_ivar_generic_get  |       15.167M|               16.079M|     118.955M|
-|vm_ivar_generic_set  |       12.556M|               16.322M|      79.166M|
-|vm_attr_ivar         |       58.778M|               58.759M|     269.301M|
-|vm_attr_ivar_set     |       52.270M|               52.345M|     307.156M|
+|vm_ivar              |      172.132M|              195.274M|       2.399G|
+|vm_ivar_get          |        12.226|                26.882|       68.584|
+|vm_ivar_set          |      121.974M|              123.096M|       1.519G|
+|vm_ivar_generic_get  |       15.793M|               15.693M|     125.449M|
+|vm_ivar_generic_set  |       12.508M|               16.265M|      92.820M|
+|vm_attr_ivar         |       58.379M|               58.935M|     332.861M|
+|vm_attr_ivar_set     |       52.319M|               52.612M|     309.355M|
 
 ## How to run
 
@@ -59,13 +62,13 @@ Please be aware that **only nightly version of Rust works** for monoruby.
 To run ruby program file on monoruby,
 
 ```sh
-% cargo run app_fib.rb
+% cargo run test.rb
 ```
 
 or
 
 ```sh
-% cargo run --release -- app_fib.rb
+% cargo run --release -- test.rb
 ```
 
 one liner
@@ -74,8 +77,8 @@ one liner
 % cargo run -- -e "puts 100"
 ```
 
-You can launch REPL, omitting file name.
+You can launch REPL.
 
 ```sh
-% cargo run
+% ./irm.sh
 ```
