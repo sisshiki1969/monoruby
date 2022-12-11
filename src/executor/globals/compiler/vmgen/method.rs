@@ -55,26 +55,28 @@ impl Codegen {
         // rax, rdx, r15
         monoasm! { self.jit,
           subl r15, 1;
-          // if passed_args >= arg_num then goto l1
           cmpw rdx, rdi;
         }
         if is_block {
+            // if passed_args >= arg_num then goto l1
             monoasm! { self.jit,
               jge  l1;
             }
         } else {
+            // if passed_args == arg_num then goto l1
+            // if passed_args > arg_num then goto err
             monoasm! { self.jit,
               jeq  l1;
               jgt  err;
             }
         }
         monoasm! { self.jit,
-          // if passed_args >= req_num then goto l2
           cmpw rdx, [r13 - 8];
         }
         if is_block {
             // fill zero to residual required arguments.
             monoasm! { self.jit,
+            // if passed_args >= req_num then goto l2
                 jge  l2;
                 movzxw rcx, [r13 - 8];
                 movl rax, rcx;
@@ -86,10 +88,6 @@ impl Codegen {
             }
         } else {
             // if passed_args < req_num then raise error.
-            // in
-            // [r13 - 14]: arg_num
-            // [R13 -  8]: req_num
-            // rdx: number of args passed from caller
             monoasm! { self.jit,
                 jlt  err;
             }

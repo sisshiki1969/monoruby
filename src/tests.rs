@@ -1295,6 +1295,13 @@ mod test {
         );
         run_test_error(
             r#"
+        def f
+        end
+        f(1,2,3,4,5)
+        "#,
+        );
+        run_test_error(
+            r#"
         def f(x,y,z=42,w=12)
             [x,y,z,w]
         end
@@ -1317,6 +1324,19 @@ mod test {
                 f(1,2,3,4,5)
             else
                 f(1,2)
+            end
+        }
+        "#,
+        );
+        run_test_error(
+            r#"
+        def f
+        end
+        10.times {|x|
+            if x == 9
+                f(1)
+            else
+                f
             end
         }
         "#,
