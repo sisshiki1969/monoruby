@@ -48,7 +48,7 @@ impl Codegen {
         let err = self.wrong_argument;
         // in
         // r15: reg_num (except *self*)
-        // rdi: arg_num
+        // rdi: pos_num
         // [R13 - 8]: req_num
         // rdx: number of args passed from caller
         // destroy
@@ -58,13 +58,13 @@ impl Codegen {
           cmpw rdx, rdi;
         }
         if is_block {
-            // if passed_args >= arg_num then goto l1
+            // if passed_args >= pos_num then goto l1
             monoasm! { self.jit,
               jge  l1;
             }
         } else {
-            // if passed_args == arg_num then goto l1
-            // if passed_args > arg_num then goto err
+            // if passed_args == pos_num then goto l1
+            // if passed_args > pos_num then goto err
             monoasm! { self.jit,
               jeq  l1;
               jgt  err;
@@ -95,7 +95,7 @@ impl Codegen {
         monoasm! { self.jit,
         l2:
         // fill zero to residual locals.
-        // rax = arg_num - max(passed_args, req_num)
+        // rax = pos_num - max(passed_args, req_num)
             movl rax, rdi;
             subl rax, rdx;
             movl rdx, rdi;
@@ -104,7 +104,7 @@ impl Codegen {
         monoasm! { self.jit,
         l1:
         // fill nil to temporary registers.
-        // rax = reg_num - 1 - arg_num
+        // rax = reg_num - 1 - pos_num
             movq rax, r15;
             subq rax, rdi;
             jz   l3;
@@ -132,10 +132,10 @@ impl Codegen {
         };
     }
 
-    /// Expand arg0 if the number of args is 1 and arg0 is Array and arg_num > 1.
+    /// Expand arg0 if the number of args is 1 and arg0 is Array and pos_num > 1.
     ///
     /// in
-    /// rdi: arg_num
+    /// rdi: pos_num
     /// rdx: number of args passed from caller
     /// out
     /// rdx: number of args
@@ -144,7 +144,7 @@ impl Codegen {
     fn expand_arg0(&mut self) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
-            // if passed_arg == 1 && arg0 isArray && arg_num >= 2 then expand arg0.
+            // if passed_arg == 1 && arg0 isArray && pos_num >= 2 then expand arg0.
             cmpl rdx, 1;
             jne  l1;
             cmpl rdi, 2;

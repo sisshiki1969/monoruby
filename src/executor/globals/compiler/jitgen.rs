@@ -1596,24 +1596,24 @@ impl Codegen {
         match pc.op1() {
             TraceIr::InitMethod {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, arg_num, req_num, pc, false);
+                self.init_func(reg_num, pos_num, req_num, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                if arg_num >= 2 {
-                    self.jit_expand_arg0(arg_num);
+                if pos_num >= 2 {
+                    self.jit_expand_arg0(pos_num);
                 }
-                self.init_func(reg_num, arg_num, req_num, pc, true);
+                self.init_func(reg_num, pos_num, req_num, pc, true);
             }
             _ => unreachable!(),
         }
@@ -1628,7 +1628,7 @@ impl Codegen {
     fn init_func(
         &mut self,
         reg_num: usize,
-        arg_num: usize,
+        pos_num: usize,
         req_num: usize,
         pc: BcPc,
         is_block: bool,
@@ -1647,10 +1647,10 @@ impl Codegen {
         let l1 = self.jit.label();
         let l2 = self.jit.label();
 
-        if arg_num > 0 {
+        if pos_num > 0 {
             monoasm! { self.jit,
-                // if passed_args >= arg_num then goto l1
-                cmpl rdx, (arg_num);
+                // if passed_args >= pos_num then goto l1
+                cmpl rdx, (pos_num);
             }
             if is_block {
                 monoasm! { self.jit,
@@ -1663,7 +1663,7 @@ impl Codegen {
                 }
             }
             if req_num > 0 {
-                if arg_num != req_num {
+                if pos_num != req_num {
                     monoasm! { self.jit,
                         // if passed_args >= req_num then goto l2
                         cmpl rdx, (req_num);
@@ -1688,37 +1688,37 @@ impl Codegen {
             }
             monoasm! { self.jit,
             l2:
-            // rax = arg_num - max(passed_args, req_num)
-                movl rax, (arg_num);
+            // rax = pos_num - max(passed_args, req_num)
+                movl rax, (pos_num);
                 subl rax, rdx;
             // fill zero to residual locals.
             }
-            self.jit_fill(arg_num, 0);
+            self.jit_fill(pos_num, 0);
         }
         monoasm! { self.jit,
         l1:
         };
         // fill nil to temporary registers.
-        let clear_len = reg_num - arg_num - 1;
+        let clear_len = reg_num - pos_num - 1;
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
+                    movq [rbp - ((pos_num + i) as i32 * 8 + (OFFSET_ARG0))], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((arg_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
+                    movq [rbp - ((pos_num + i) as i32 * 8 + (OFFSET_ARG0))], (NIL_VALUE);
                 );
             }
         }
     }
 
-    fn jit_expand_arg0(&mut self, arg_num: usize) {
+    fn jit_expand_arg0(&mut self, pos_num: usize) {
         let l1 = self.jit.label();
         monoasm! { self.jit,
             cmpl rdx, 1;
@@ -1728,7 +1728,7 @@ impl Codegen {
             jnz  l1;
             cmpl [rdi + 4], (ARRAY_CLASS.0);
             jne  l1;
-            movq rdx, (arg_num);
+            movq rdx, (pos_num);
             lea  rsi, [rbp - (OFFSET_ARG0)];
             movq rax, (expand_array);
             call rax;

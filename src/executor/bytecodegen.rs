@@ -143,12 +143,7 @@ impl IrContext {
         }
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
         let reg_num = info.total_reg_num();
-        ir.replace_init(
-            reg_num,
-            info.total_arg_num() - 1,
-            info.req_num(),
-            info.is_block,
-        );
+        ir.replace_init(reg_num, info.pos_num(), info.req_num(), info.is_block);
         assert_eq!(0, info.temp);
         ir.ir_to_bytecode(info, ctx);
         Ok(())
@@ -1232,19 +1227,9 @@ impl IrContext {
     fn gen_dummy_init(&mut self, is_block: bool) {
         self.push(
             if is_block {
-                BcIr::InitBlock {
-                    reg_num: 0,
-                    arg_num: 0,
-                    req_num: 0,
-                    stack_offset: 0,
-                }
+                BcIr::InitBlock(FnInitInfo::default())
             } else {
-                BcIr::InitMethod {
-                    reg_num: 0,
-                    arg_num: 0,
-                    req_num: 0,
-                    stack_offset: 0,
-                }
+                BcIr::InitMethod(FnInitInfo::default())
             },
             Loc::default(),
         );
@@ -1261,23 +1246,13 @@ impl IrContext {
         );
     }
 
-    fn replace_init(&mut self, reg_num: usize, arg_num: usize, req_num: usize, is_block: bool) {
-        let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
+    fn replace_init(&mut self, reg_num: usize, pos_num: usize, req_num: usize, is_block: bool) {
+        let info = FnInitInfo::new(reg_num, pos_num, req_num);
         self.ir[0] = (
             if is_block {
-                BcIr::InitBlock {
-                    reg_num,
-                    arg_num,
-                    req_num,
-                    stack_offset,
-                }
+                BcIr::InitBlock(info)
             } else {
-                BcIr::InitMethod {
-                    reg_num,
-                    arg_num,
-                    req_num,
-                    stack_offset,
-                }
+                BcIr::InitMethod(info)
             },
             Loc::default(),
         );
@@ -1977,24 +1952,30 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_ww(149, op1.0, op2.0))
                 }
-                BcIr::InitMethod {
-                    reg_num,
-                    arg_num,
-                    req_num,
-                    stack_offset,
-                } => Bc::from_with_num(
-                    enc_www(170, *reg_num as u16, *arg_num as u16, *stack_offset as u16),
-                    *req_num as u16,
-                ),
-                BcIr::InitBlock {
-                    reg_num,
-                    arg_num,
-                    req_num,
-                    stack_offset,
-                } => Bc::from_with_num(
-                    enc_www(172, *reg_num as u16, *arg_num as u16, *stack_offset as u16),
-                    *req_num as u16,
-                ),
+                BcIr::InitMethod(info) => {
+                    let FnInitInfo {
+                        reg_num,
+                        pos_num,
+                        req_num,
+                        stack_offset,
+                    } = info;
+                    Bc::from_with_num(
+                        enc_www(170, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
+                        *req_num as u16,
+                    )
+                }
+                BcIr::InitBlock(info) => {
+                    let FnInitInfo {
+                        reg_num,
+                        pos_num,
+                        req_num,
+                        stack_offset,
+                    } = info;
+                    Bc::from_with_num(
+                        enc_www(172, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
+                        *req_num as u16,
+                    )
+                }
                 BcIr::Yield { ret, args, len } => {
                     let op1 = match ret {
                         None => SlotId::new(0),

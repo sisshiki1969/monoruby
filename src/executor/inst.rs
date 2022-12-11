@@ -124,22 +124,22 @@ impl BcPc {
         let s = match self.op1() {
             TraceIr::InitMethod {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 format!(
-                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}",
+                    "init_method reg_num:{reg_num} pos_num:{pos_num} req_num:{req_num} stack_offset:{stack_offset}",
                 )
             }
             TraceIr::InitBlock {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 format!(
-                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}",
+                    "init_block reg_num:{reg_num} pos_num:{pos_num} req_num:{req_num} stack_offset:{stack_offset}",
                 )
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -581,18 +581,8 @@ pub(super) enum BcIr {
         args: BcReg,
         len: usize,
     },
-    InitMethod {
-        reg_num: usize,
-        arg_num: usize,
-        req_num: usize,
-        stack_offset: usize,
-    },
-    InitBlock {
-        reg_num: usize,
-        arg_num: usize,
-        req_num: usize,
-        stack_offset: usize,
-    },
+    InitMethod(FnInitInfo),
+    InitBlock(FnInitInfo),
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     InlineCache,
     MethodDef(IdentId, FuncId),
@@ -606,6 +596,26 @@ pub(super) enum BcIr {
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     LoopStart,
     LoopEnd,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(super) struct FnInitInfo {
+    pub(super) reg_num: usize,
+    pub(super) pos_num: usize,
+    pub(super) req_num: usize,
+    pub(super) stack_offset: usize,
+}
+
+impl FnInitInfo {
+    pub(super) fn new(reg_num: usize, pos_num: usize, req_num: usize) -> Self {
+        let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
+        FnInitInfo {
+            reg_num,
+            pos_num,
+            req_num,
+            stack_offset,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -752,24 +762,24 @@ impl std::fmt::Debug for Bc {
         match pc.op1() {
             TraceIr::InitMethod {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 write!(
                     f,
-                    "init_method reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}"
+                    "init_method reg_num:{reg_num} pos_num:{pos_num} req_num:{req_num} stack_offset:{stack_offset}"
                 )
             }
             TraceIr::InitBlock {
                 reg_num,
-                arg_num,
+                pos_num,
                 req_num,
                 stack_offset,
             } => {
                 write!(
                     f,
-                    "init_block reg_num:{reg_num} arg_num:{arg_num} req_num:{req_num} stack_offset:{stack_offset}"
+                    "init_block reg_num:{reg_num} pos_num:{pos_num} req_num:{req_num} stack_offset:{stack_offset}"
                 )
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -1058,14 +1068,14 @@ pub(super) enum TraceIr {
     /// initialize_method
     InitMethod {
         reg_num: usize,
-        arg_num: usize,
+        pos_num: usize,
         req_num: usize,
         stack_offset: usize,
     },
     /// initialize_block
     InitBlock {
         reg_num: usize,
-        arg_num: usize,
+        pos_num: usize,
         req_num: usize,
         stack_offset: usize,
     },
@@ -1312,13 +1322,13 @@ impl TraceIr {
                 ),
                 170 => Self::InitMethod {
                     reg_num: op1 as usize,
-                    arg_num: op2 as usize,
+                    pos_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     stack_offset: op3 as usize,
                 },
                 172 => Self::InitBlock {
                     reg_num: op1 as usize,
-                    arg_num: op2 as usize,
+                    pos_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     stack_offset: op3 as usize,
                 },

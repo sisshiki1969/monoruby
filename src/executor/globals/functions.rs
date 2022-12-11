@@ -19,15 +19,15 @@ impl From<FuncId> for u32 {
 #[derive(Clone, Default, PartialEq)]
 pub struct ArgumentNames {
     // req + optional
-    pub arg_num: usize,
+    pub pos_num: usize,
     pub req_num: usize,
     pub names: Vec<Option<String>>,
 }
 
 impl ArgumentNames {
     fn arity(&self) -> i32 {
-        if self.arg_num == self.req_num {
-            self.arg_num as i32
+        if self.pos_num == self.req_num {
+            self.pos_num as i32
         } else {
             -1
         }
@@ -213,7 +213,7 @@ fn handle_args(
             }
         }
     }
-    let arg_num = args.len();
+    let pos_num = args.len();
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
@@ -226,7 +226,7 @@ fn handle_args(
     Ok((
         ArgumentNames {
             names: args,
-            arg_num,
+            pos_num,
             req_num,
         },
         expand,
@@ -510,13 +510,13 @@ impl FuncInfo {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} arg_num:{:?} bc:{:?} meta:{:?}",
+            "{:?} name:{} pos_num:{:?} bc:{:?} meta:{:?}",
             info.id,
             match &self.name {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.arg_num,
+            info.args.pos_num,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -579,8 +579,8 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id: {}, name: {:?}. arg_num: {:?} }}",
-            self.id.0, self.name, self.args.arg_num
+            "RubyFuncInfo {{ id: {}, name: {:?}. pos_num: {:?} }}",
+            self.id.0, self.name, self.args.pos_num
         )
     }
 }
@@ -693,9 +693,9 @@ impl ISeqInfo {
         self.args.req_num
     }
 
-    /// get a number of arguments(includes *self*).
-    pub(crate) fn total_arg_num(&self) -> usize {
-        1 + self.args.arg_num
+    /// get a number of positional arguments.
+    pub(crate) fn pos_num(&self) -> usize {
+        self.args.pos_num
     }
 
     /// get name.
