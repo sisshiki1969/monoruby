@@ -23,6 +23,41 @@ pub fn run_test(code: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
+pub fn run_tests(code: &[&str]) {
+    let code = format!("[{}]", code.join(", "));
+    let wrapped = format!(
+        r##"
+      res = ({0})
+      for __i in 0..7 do
+          res2 = ({0})
+          __assert(res, res2)
+      end
+      res
+  "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let ruby_res = run_ruby(&code, &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
+pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
+    for lhs in lhs {
+        for rhs in rhs {
+            for op in op {
+                run_tests(&[
+                    &format!("{lhs} {op} {rhs}"),
+                    &format!("{lhs} {op} (-{rhs})"),
+                    &format!("-{lhs} {op} {rhs}"),
+                    &format!("-{lhs} {op} (-{rhs})"),
+                ]);
+            }
+        }
+    }
+}
+
 pub fn run_test_with_prelude(code: &str, prelude: &str) {
     let wrapped = format!(
         r##"
@@ -276,53 +311,21 @@ mod test {
             "234234645",
             "2352354645657876868978696835652452546462456245646",
         ];
-        for lhs in lhs_integer.iter() {
-            for rhs in rhs_integer.iter() {
-                for op in ["%"] {
-                    run_test(&format!("{} {} {}", lhs, op, rhs));
-                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
-                }
-            }
-        }
         for lhs in lhs_integer {
             for rhs in rhs_integer {
-                for op in ["&", "|", "^"] {
-                    run_test(&format!("{} {} {}", lhs, op, rhs));
-                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
-                    run_test(&format!("-{} {} {}", lhs, op, rhs));
-                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
+                for op in ["%"] {
+                    run_tests(&[
+                        &format!("{lhs} {op} {rhs}"),
+                        &format!("-{lhs} {op} (-{rhs})"),
+                    ]);
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_numbers2() {
-        let lhs_integer = [
-            "0",
-            "5375",
-            "690426",
-            "24829482958347598570210950349530597028472983429873",
-            "234.2345",
-        ];
-        let rhs_integer = [
-            "17",
-            "3454",
-            "25084",
-            "234234645",
-            "2352354645657876868978696835652452546462456245646",
-            "169.5333",
-        ];
-        for lhs in lhs_integer.iter() {
-            for rhs in rhs_integer.iter() {
-                for op in ["+", "-", "*", "/"] {
-                    run_test(&format!("{} {} {}", lhs, op, rhs));
-                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
-                    run_test(&format!("-{} {} {}", lhs, op, rhs));
-                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
-                }
-            }
-        }
+        run_binop_tests(
+            &lhs_integer,
+            &["+", "-", "*", "/", "&", "|", "^"],
+            &rhs_integer,
+        );
     }
 
     #[test]
@@ -342,45 +345,11 @@ mod test {
             "2352354645657876868978696835652452546462456245646",
             "169.5333",
         ];
-        for lhs in lhs_integer.iter() {
-            for rhs in rhs_integer.iter() {
-                for op in ["==", "!=", "<"] {
-                    run_test(&format!("{} {} {}", lhs, op, rhs));
-                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
-                    run_test(&format!("-{} {} {}", lhs, op, rhs));
-                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_numbers4() {
-        let lhs_integer = [
-            "0",
-            "5375",
-            "690426",
-            "24829482958347598570210950349530597028472983429873",
-            "234.2345",
-        ];
-        let rhs_integer = [
-            "17",
-            "3454",
-            "25084",
-            "234234645",
-            "2352354645657876868978696835652452546462456245646",
-            "169.5333",
-        ];
-        for lhs in lhs_integer.iter() {
-            for rhs in rhs_integer.iter() {
-                for op in ["<=", ">", ">="] {
-                    run_test(&format!("{} {} {}", lhs, op, rhs));
-                    run_test(&format!("{} {} (-{})", lhs, op, rhs));
-                    run_test(&format!("-{} {} {}", lhs, op, rhs));
-                    run_test(&format!("-{} {} (-{})", lhs, op, rhs));
-                }
-            }
-        }
+        run_binop_tests(
+            &lhs_integer,
+            &["==", "!=", "<", "<=", ">", ">="],
+            &rhs_integer,
+        );
     }
 
     #[test]
@@ -1154,10 +1123,14 @@ mod test {
         let input = ["true", "false", "nil", "100", ":ab", "Object"];
         for lhs in input {
             for rhs in input {
-                run_test(&format!("{} && {}", lhs, rhs));
-                run_test(&format!("{} || {}", lhs, rhs));
-                run_test(&format!("if {} && {} then 17 else 42 end", lhs, rhs));
-                run_test(&format!("if {} || {} then 17 else 42 end", lhs, rhs));
+                run_test(&format!(
+                    r##"[
+                        {lhs} && {rhs},
+                        {lhs} || {rhs},
+                        if {lhs} && {rhs} then 17 else 42 end,
+                        if {lhs} || {rhs} then 17 else 42 end
+                        ]"##
+                ));
             }
         }
         run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");

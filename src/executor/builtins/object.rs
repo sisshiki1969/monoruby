@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
@@ -106,10 +107,41 @@ extern "C" fn print(
     len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    for offset in 0..len {
-        globals.write_stdout(&arg[offset].to_bytes(globals));
+    for i in 0..len {
+        globals.write_stdout(&arg[i].to_bytes(globals));
     }
     Some(Value::nil())
+}
+
+/// ### Kernel#p
+/// - p(*arg) -> object | Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
+extern "C" fn p(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<Value>,
+) -> Option<Value> {
+    let mut buf = String::new();
+    for i in 0..len {
+        buf += &arg[i].inspect(globals);
+        buf += "\n";
+    }
+    globals.write_stdout(buf.as_bytes());
+    Some(match len {
+        0 => Value::nil(),
+        1 => arg[0],
+        _ => {
+            let mut ary = vec![];
+            for i in 0..len {
+                ary.push(arg[i]);
+            }
+            Value::new_array_from_vec(ary)
+        }
+    })
 }
 
 extern "C" fn assert(
@@ -358,37 +390,41 @@ mod test {
 
     #[test]
     fn test_builtin() {
-        run_test(":sym.class.to_s");
-        run_test("5.class.to_s");
-        run_test("5.7.class.to_s");
-        run_test("'windows'.class.to_s");
-        run_test("puts 100");
-        run_test("print '100'");
-        run_test("nil.respond_to?(:foo)");
-        run_test("nil.inspect");
-        run_test("Time.singleton_class.to_s");
-        run_test(r#"File.write("/tmp/foo", "woo")"#);
+        run_test2(":sym.class.to_s");
+        run_test2("5.class.to_s");
+        run_test2("5.7.class.to_s");
+        run_test2("'windows'.class.to_s");
+        run_test2("puts 100");
+        run_test2("print '100'");
+        run_test2("p");
+        run_test2("p 1");
+        run_test2("p 1,2");
+        run_test2("p 1,2,3");
+        run_test2("nil.respond_to?(:foo)");
+        run_test2("nil.inspect");
+        run_test2("Time.singleton_class.to_s");
+        run_test2(r#"File.write("/tmp/foo", "woo")"#);
     }
 
     #[test]
     fn test_object() {
-        run_test(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
-        run_test(r#"a=Object.new; a.instance_variable_get(:@i)"#);
-        run_test(
+        run_test2(r#"a=Object.new; a.instance_variable_set("@i", 42)"#);
+        run_test2(r#"a=Object.new; a.instance_variable_get(:@i)"#);
+        run_test2(
             r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@i)"#,
         );
-        run_test(
+        run_test2(
             r#"a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)"#,
         );
     }
 
     #[test]
     fn kernel_integer() {
-        run_test(r#"Integer(-2435)"#);
-        run_test(r#"Integer("2435")"#);
+        run_test2(r#"Integer(-2435)"#);
+        run_test2(r#"Integer("2435")"#);
         run_test_error(r#"Integer("2435.78")"#);
         run_test_error(r#"Integer([4])"#);
-        run_test(r#"Integer(-2435766756886769978978435)"#);
-        run_test(r#"Integer(2435.4556787)"#);
+        run_test2(r#"Integer(-2435766756886769978978435)"#);
+        run_test2(r#"Integer(2435.4556787)"#);
     }
 }

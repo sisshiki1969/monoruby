@@ -122,32 +122,36 @@ mod test {
 
     #[test]
     fn test_array_new() {
-        run_test(
+        run_test_with_prelude(
             r##"
-        class A < Array
-        end
         a = A.new
         a << 4
         a[2] = 5
         a
+        "##,
+            r##"
+        class A < Array
+        end
         "##,
         );
     }
 
     #[test]
     fn test_array_size() {
-        run_test(r##"[].size"##);
-        run_test(r##"[].length"##);
-        run_test(r##"[1,2,3].size"##);
-        run_test(
+        run_test2(r##"[].size"##);
+        run_test2(r##"[].length"##);
+        run_test2(r##"[1,2,3].size"##);
+        run_test_with_prelude(
             r##"
-        class A < Array
-        end
         a = A.new
         a << 100
         a << 42
         a << 2
         a.size
+        "##,
+            r##"
+        class A < Array
+        end
         "##,
         );
     }
