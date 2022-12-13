@@ -502,13 +502,13 @@ pub extern "C" fn define_method(
 }
 
 pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals) {
-    let mut cfp = interp.cfp as *const usize;
+    let mut cfp = interp.cfp;
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
         eprint!("  [{}]: cfp:{:?} ", i, cfp);
-        let ret_addr = unsafe { *cfp.add(2) as *const usize };
+        let ret_addr = cfp.return_addr();
         eprintln!("ret adr: {:?} ", ret_addr);
-        let prev_cfp = unsafe { *cfp as *const usize };
+        let prev_cfp = cfp.next();
         _dump_frame_info(interp, globals, cfp);
         if prev_cfp.is_null() {
             break;
@@ -518,8 +518,8 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals)
     eprintln!("-----end stacktrace");
 }
 
-fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, cfp: *const usize) {
-    let bp = unsafe { cfp.add(OFFSET_CFP as usize / 8) };
+fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, cfp: CFP) {
+    let bp = cfp.bp();
     let meta = Meta::new(unsafe { *bp.sub(OFFSET_META as usize / 8) as u64 });
     let outer = unsafe { *bp.sub(OFFSET_OUTER as usize / 8) };
     let func_id = meta.func_id();

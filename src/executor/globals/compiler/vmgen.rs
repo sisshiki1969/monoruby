@@ -355,6 +355,9 @@ impl Codegen {
     }
 
     fn gen_invoker_prologue(&mut self, invoke_block: bool) {
+        // rdi: &mut Interp
+        // rsi: &mut Globals
+        // rdx: *const FuncData
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -364,10 +367,17 @@ impl Codegen {
             movq rbx, rdi;
             movq r12, rsi;
             // set meta/func_id
-            movq rax, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + OFFSET_META)], rax;
+            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq [rsp - (16 + OFFSET_META)], rdi;
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
         };
+        if invoke_block {
+            // TODO: this is not correct!!
+            monoasm! { self.jit,
+                movq rax, [rbx];
+                movq rax, [rax];
+            };
+        }
         self.push_frame(invoke_block);
         monoasm! { self.jit,
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
@@ -1016,20 +1026,22 @@ impl Codegen {
             pushq rsi;
             movq rdi, r12;
             movq rsi, [rbp - (OFFSET_BLOCK)];
-            movq rax, (vm_get_block_data);
+            movq rdx, rbx;
+            movq rax, (get_block_data);
             call rax;
+            // rax <- outer_cfp, rdx <- &FuncData
             popq r10;  // r10 <- len
             popq rcx;  // rcx <- %args
             // r9 <- CodePtr
-            movq r9, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + OFFSET_META)], rdi;
             // set pc
-            movq r13, [rax + (FUNCDATA_OFFSET_PC)];
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
             // set self
-            movq rax, [rbp - (OFFSET_SELF)];
-            movq [rsp - (16 + OFFSET_SELF)], rax;
+            movq rdi, [rbp - (OFFSET_SELF)];
+            movq [rsp - (16 + OFFSET_SELF)], rdi;
         };
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
@@ -1544,7 +1556,7 @@ impl Codegen {
             movl rsi, [r13 - 4];  // rdx <- func_id
             //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
-            movq rax, (vm_get_func_data);
+            movq rax, (get_func_data);
             call rax; // rax <- &FuncData
             //
             //       +-------------+

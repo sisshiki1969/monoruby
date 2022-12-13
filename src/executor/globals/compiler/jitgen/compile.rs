@@ -161,7 +161,7 @@ impl Codegen {
             movl rsi, (func_id.0);  // rdx <- func_id
             //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
-            movq rax, (vm_get_func_data);
+            movq rax, (get_func_data);
             call rax; // rax <- &FuncData
             //
             //       +-------------+

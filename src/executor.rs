@@ -27,13 +27,41 @@ pub(self) const OFFSET_BLOCK: i64 = 32;
 pub(self) const OFFSET_SELF: i64 = 40;
 pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
 
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct CFP(*const CFP);
+
+impl std::default::Default for CFP {
+    fn default() -> Self {
+        Self(std::ptr::null())
+    }
+}
+
+impl CFP {
+    fn next(&self) -> Self {
+        unsafe { *self.0 }
+    }
+
+    fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    fn return_addr(&self) -> *const usize {
+        unsafe { (*self.0.add(2)).0 as _ }
+    }
+
+    fn bp(&self) -> *const usize {
+        unsafe { self.0.add(OFFSET_CFP as usize / 8) as _ }
+    }
+}
+
 ///
 /// Bytecode interpreter.
 ///
 #[derive(Default)]
 #[repr(C)]
 pub struct Executor {
-    pub cfp: usize,
+    pub cfp: CFP,
     lexical_class: Vec<ClassId>,
 }
 
@@ -157,15 +185,12 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        block: Value,
+        block_handler: Value,
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        let func_id = match block.unpack() {
-            RV::Integer(id) => FuncId(((id as u64) >> 16) as u32),
-            _ => unimplemented!(),
-        };
-        let data = globals.compile_on_demand(func_id) as *const _;
+        let block_data = globals.get_block_data(block_handler, self);
+        let data = block_data.func_data as _;
         (globals.codegen.block_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
 

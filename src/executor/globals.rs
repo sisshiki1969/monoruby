@@ -245,6 +245,28 @@ impl Globals {
         }
         &self.func[func_id].data
     }
+
+    pub(crate) fn get_block_data(&mut self, block_handler: Value, interp: &Executor) -> BlockData {
+        if let Some(bh) = block_handler.try_fixnum() {
+            let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
+            let mut cfp = interp.cfp;
+            for _ in 0..bh as i16 as u16 {
+                cfp = cfp.next();
+            }
+            let func_data = self.compile_on_demand(func_id);
+            return BlockData {
+                outer_cfp: cfp,
+                func_data,
+            };
+        }
+        unreachable!()
+    }
+}
+
+#[repr(C)]
+pub(crate) struct BlockData<'a> {
+    pub(crate) outer_cfp: CFP,
+    pub(crate) func_data: &'a FuncData,
 }
 
 impl Globals {

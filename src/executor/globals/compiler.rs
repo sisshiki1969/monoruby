@@ -9,7 +9,7 @@ mod vmgen;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
 
-type Invoker = extern "C" fn(
+type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     *const FuncData,
@@ -18,7 +18,7 @@ type Invoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
-type Invoker2 =
+type MethodInvoker2 =
     extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
 ///
@@ -51,9 +51,9 @@ pub struct Codegen {
     ///
     pub wrong_argument: DestLabel,
     pub dispatch: Vec<CodePtr>,
-    pub method_invoker: Invoker,
-    pub method_invoker2: Invoker2,
-    pub block_invoker: Invoker,
+    pub method_invoker: MethodInvoker,
+    pub method_invoker2: MethodInvoker2,
+    pub block_invoker: MethodInvoker,
 }
 
 //
@@ -76,17 +76,16 @@ extern "C" fn find_method(
     Some(data)
 }
 
-extern "C" fn vm_get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {
+extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {
     globals.compile_on_demand(func_id)
 }
 
-extern "C" fn vm_get_block_data(globals: &mut Globals, block_handler: Value) -> &FuncData {
-    if let Some(bh) = block_handler.try_fixnum() {
-        if let Ok(func_id) = u32::try_from((bh as u64) >> 16) {
-            return globals.compile_on_demand(FuncId(func_id));
-        }
-    }
-    unreachable!()
+extern "C" fn get_block_data<'a>(
+    globals: &'a mut Globals,
+    block_handler: Value,
+    interp: &Executor,
+) -> BlockData<'a> {
+    globals.get_block_data(block_handler, interp)
 }
 
 extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
@@ -395,18 +394,14 @@ impl Codegen {
 
     /// Push control frame and set outer.
     ///
-    /// in: rcx<-self
+    /// in:
+    /// (method) rcx<-self
+    /// (block)  rax<-outer_cfp
     /// destroy: rax, rdi
     fn push_frame(&mut self, invoke_block: bool) {
-        monoasm!(self.jit,
-            movq rax, [rbx];
-            lea  rdi, [rsp - (16 + OFFSET_CFP)];
-            movq [rdi], rax;
-            movq [rbx], rdi;
-        );
         if invoke_block {
             monoasm! { self.jit,
-                movq rax, [rax];
+                // set outer
                 lea  rdi, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
                 movq [rsp - (16 + OFFSET_OUTER)], rdi;
                 // set self
@@ -420,6 +415,12 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_SELF)], rcx;
             };
         }
+        monoasm!(self.jit,
+            movq rax, [rbx];
+            lea  rdi, [rsp - (16 + OFFSET_CFP)];
+            movq [rdi], rax;
+            movq [rbx], rdi;
+        );
     }
 
     /// Pop control frame

@@ -593,12 +593,12 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
-            // rdx <- &FuncData
             movq rdi, r12;
             movq rsi, [rbp - (OFFSET_BLOCK)];
-            movq rax, (vm_get_block_data);
+            movq rdx, rbx;
+            movq rax, (get_block_data);
             call rax;
-            movq rdx, rax;
+            // rax <- outer_cfp, rdx <- &FuncData
         }
         self.push_frame(true);
         monoasm! { self.jit,
