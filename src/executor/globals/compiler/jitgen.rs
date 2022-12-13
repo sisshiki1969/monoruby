@@ -1647,21 +1647,21 @@ impl Codegen {
         self.jit.select_page(0);
 
         // rdx: number of args passed from caller
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
-        let l3 = self.jit.label();
-        let l5 = self.jit.label();
+        let fill_req = self.jit.label();
+        let fill_opt = self.jit.label();
+        let set_rest_empty = self.jit.label();
+        let fill_temp = self.jit.label();
 
         if pos_num > 0 {
             monoasm! { self.jit,
                 // if passed_args >= pos_num then goto l1
                 cmpl rdx, (pos_num);
-                jeq  l1;
-                jlt  l5;
+                jeq  set_rest_empty;
+                jlt  fill_req;
             }
             if pos_num == arg_num {
                 if is_block {
-                    monoasm! { self.jit, jmp  l3; }
+                    monoasm! { self.jit, jmp  fill_temp; }
                 } else {
                     monoasm! { self.jit, jmp  err_label; }
                 }
@@ -1672,18 +1672,18 @@ impl Codegen {
                     subl rsi, (pos_num);
                     movq rax, (make_rest_array);
                     call rax;
-                    jmp  l3;
+                    jmp  fill_temp;
                 };
             }
             monoasm! { self.jit,
-            l5:
+            fill_req:
             }
             if req_num > 0 {
                 if pos_num != req_num {
                     monoasm! { self.jit,
                         // if passed_args >= req_num then goto l2
                         cmpl rdx, (req_num);
-                        jge  l2;
+                        jge  fill_opt;
                     }
                 }
                 if is_block {
@@ -1703,7 +1703,7 @@ impl Codegen {
                 }
             }
             monoasm! { self.jit,
-            l2:
+            fill_opt:
             // rax = pos_num - max(passed_args, req_num)
                 movl rax, (pos_num);
                 subl rax, rdx;
@@ -1714,7 +1714,7 @@ impl Codegen {
             // TODO: we must check arity even if pos_num == 0.
         }
         monoasm! { self.jit,
-        l1:
+        set_rest_empty:
         };
         if arg_num != pos_num {
             monoasm! { self.jit,
@@ -1725,7 +1725,7 @@ impl Codegen {
             };
         }
         monoasm! { self.jit,
-        l3:
+        fill_temp:
         }
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num - 1;

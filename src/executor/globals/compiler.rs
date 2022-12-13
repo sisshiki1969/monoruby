@@ -80,9 +80,9 @@ extern "C" fn vm_get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncD
     globals.compile_on_demand(func_id)
 }
 
-extern "C" fn vm_get_block_data(globals: &mut Globals, block: Value) -> &FuncData {
-    if let Some(func_id) = block.try_fixnum() {
-        if let Ok(func_id) = u32::try_from(func_id) {
+extern "C" fn vm_get_block_data(globals: &mut Globals, block_handler: Value) -> &FuncData {
+    if let Some(bh) = block_handler.try_fixnum() {
+        if let Ok(func_id) = u32::try_from((bh as u64) >> 16) {
             return globals.compile_on_demand(FuncId(func_id));
         }
     }

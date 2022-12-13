@@ -162,7 +162,7 @@ impl Executor {
         args: &[Value],
     ) -> Option<Value> {
         let func_id = match block.unpack() {
-            RV::Integer(id) => FuncId(id as u32),
+            RV::Integer(id) => FuncId(((id as u64) >> 16) as u32),
             _ => unimplemented!(),
         };
         let data = globals.compile_on_demand(func_id) as *const _;

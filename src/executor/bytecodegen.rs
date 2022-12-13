@@ -1276,7 +1276,8 @@ impl IrContext {
                         block,
                         info.sourceinfo.clone(),
                     )?;
-                    self.gen_literal(info, None, Value::new_integer(func_id.0 as i64));
+                    let block_handler = (func_id.0 as i64) << 16;
+                    self.gen_literal(info, None, Value::new_integer(block_handler));
                 }
                 _ => unimplemented!(),
             }

@@ -4,12 +4,15 @@ impl Codegen {
     /// Initialize method frame
     ///
     /// ~~~text
+    /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|pos|ofs||req|arg|       |
+    /// | op|reg|pos|ofs||   |   |arg|req|
     /// +---+---+---+---++---+---+---+---+
     ///
     /// reg: a number of resisters
-    /// pos: a number of positional arguments
+    /// arg: a number of arguments (req + opt + rest)
+    /// pos: a number of positional arguments (req + opt)
+    /// req: a number of required arguments
     /// ofs: stack pointer offset
     ///  /// ~~~
     pub(super) fn vm_init_method(&mut self) -> CodePtr {
@@ -42,11 +45,11 @@ impl Codegen {
     }
 
     fn vm_init_func(&mut self, is_block: bool) {
-        let l1 = self.jit.label();
-        let l2 = self.jit.label();
-        let l3 = self.jit.label();
-        let l4 = self.jit.label();
-        let l5 = self.jit.label();
+        let fill_req = self.jit.label();
+        let fill_opt = self.jit.label();
+        let set_rest_empty = self.jit.label();
+        let fill_temp = self.jit.label();
+        let exit = self.jit.label();
         let err = self.wrong_argument;
         // in
         // r15: reg_num (except *self*)
@@ -62,13 +65,13 @@ impl Codegen {
         // if passed_args < pos_num then goto l5
         // if passed_args == pos_num then goto l1
           cmpw rdx, rdi;
-          jeq  l1;
-          jlt  l5;
+          jeq  set_rest_empty;
+          jlt  fill_req;
           movzxw rax, [r13 - 6];
           cmpw rax, [r13 - 14];
         }
         if is_block {
-            monoasm! { self.jit, jeq  l4; }
+            monoasm! { self.jit, jeq  fill_temp; }
         } else {
             // if passed_args > pos_num && no rest parameter then goto err
             monoasm! { self.jit, jeq  err; }
@@ -81,17 +84,17 @@ impl Codegen {
           lea  rdi, [rbp + rdi * 8 - (OFFSET_ARG0)];
           movq rax, (make_rest_array);
           call rax;
-          jmp  l4;
+          jmp  fill_temp;
         }
         monoasm! { self.jit,
-        l5:
+        fill_req:
           cmpw rdx, [r13 - 8];
         }
         if is_block {
-            // fill zero to residual required arguments.
+            // fill nil to residual required arguments.
             monoasm! { self.jit,
             // if passed_args >= req_num then goto l2
-                jge  l2;
+                jge  fill_opt;
                 movzxw rcx, [r13 - 8];
                 movl rax, rcx;
                 subl rax, rdx;
@@ -107,7 +110,7 @@ impl Codegen {
             }
         }
         monoasm! { self.jit,
-        l2:
+        fill_opt:
         // fill zero to residual locals.
         // rax = pos_num - max(passed_args, req_num)
             movl rax, rdi;
@@ -116,26 +119,26 @@ impl Codegen {
         }
         self.fill(2 /* rdx */, 0);
         monoasm! { self.jit,
-        l1:
+        set_rest_empty:
         // set rest parameter to empty Array.
             movzxw rax, [r13 - 6];
             cmpw rax, [r13 - 14];
-            jeq  l4;
+            jeq  fill_temp;
             negq rdi;
             lea  rdi, [rbp + rdi * 8 - (OFFSET_ARG0)];
             xorq rsi, rsi;
             movq rax, (make_rest_array);
             call rax;
-        l4:
+        fill_temp:
         // fill nil to temporary registers.
         // rax = reg_num - 1 - arg_num
             movl rax, r15;
             subw rax, [r13 - 6];
-            jz   l3;
+            jz   exit;
         }
         self.fill(15 /* r15 */, NIL_VALUE);
         monoasm! { self.jit,
-        l3:
+        exit:
         };
     }
 
