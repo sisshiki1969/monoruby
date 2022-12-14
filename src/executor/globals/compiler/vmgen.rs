@@ -1039,9 +1039,6 @@ impl Codegen {
             movq [rsp -(16 + OFFSET_META)], rdi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
-            // set self
-            movq rdi, [rbp - (OFFSET_SELF)];
-            movq [rsp - (16 + OFFSET_SELF)], rdi;
         };
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
