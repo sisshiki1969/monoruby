@@ -1279,6 +1279,12 @@ impl IrContext {
                     let block_handler = ((func_id.0 as i64) << 16) + 1;
                     self.gen_literal(info, None, Value::new_integer(block_handler));
                 }
+                NodeKind::LocalVar(proc_local) => {
+                    let proc_local = info.refer_local(&proc_local);
+                    let proc_temp = info.push().into();
+                    self.gen_mov(proc_temp, proc_local.into());
+                    self.push(BcIr::BinOpRi(BinOpK::Add, proc_temp, proc_temp, 1), loc);
+                }
                 _ => unimplemented!(),
             }
         }
