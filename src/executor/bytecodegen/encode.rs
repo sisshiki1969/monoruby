@@ -192,12 +192,14 @@ impl IrContext {
                         arg_num,
                         pos_num,
                         req_num,
+                        block_pos,
                         stack_offset,
                     } = info;
                     Bc::from_with_num(
                         enc_www(170, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
                         *req_num as u16,
                         *arg_num as u16,
+                        *block_pos as u16,
                     )
                 }
                 BcIr::InitBlock(info) => {
@@ -206,12 +208,14 @@ impl IrContext {
                         arg_num,
                         pos_num,
                         req_num,
+                        block_pos,
                         stack_offset,
                     } = info;
                     Bc::from_with_num(
                         enc_www(172, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
                         *req_num as u16,
                         *arg_num as u16,
+                        *block_pos as u16,
                     )
                 }
                 BcIr::Yield { ret, args, len } => {

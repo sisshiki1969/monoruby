@@ -189,9 +189,15 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        let block_data = globals.get_block_data(block_handler, self);
-        let data = block_data.func_data as _;
-        (globals.codegen.block_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
+        let data = globals.get_block_data(block_handler, self);
+        (globals.codegen.block_invoker)(
+            self,
+            globals,
+            &data as _,
+            receiver,
+            args.as_ptr(),
+            args.len(),
+        )
     }
 
     ///

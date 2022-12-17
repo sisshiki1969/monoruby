@@ -57,6 +57,7 @@ impl Codegen {
         // [R13 - 14]: pos_num
         // [R13 - 8]: req_num
         // [R13 - 6]: arg_num
+        // [R13 - 4]: block_pos
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
@@ -137,8 +138,16 @@ impl Codegen {
             jz   exit;
         }
         self.fill(15 /* r15 */, NIL_VALUE);
+        let exit2 = self.jit.label();
         monoasm! { self.jit,
         exit:
+            cmpw [r13 - 4], 0;
+            jeq  exit2;
+            movzxw rax, [r13 - 4];
+            negq rax;
+            movq rdi, [rbp - (OFFSET_BLOCK)];
+            movq [rbp + rax * 8 - (OFFSET_SELF)], rdi;
+        exit2:
         };
     }
 

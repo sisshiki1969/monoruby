@@ -1599,23 +1599,25 @@ impl Codegen {
                 arg_num,
                 pos_num,
                 req_num,
+                block_pos,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, arg_num, pos_num, req_num, pc, false);
+                self.init_func(reg_num, arg_num, pos_num, req_num, block_pos, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
                 arg_num,
                 pos_num,
                 req_num,
+                block_pos,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
                 if pos_num >= 2 {
                     self.jit_expand_arg0(req_num);
                 }
-                self.init_func(reg_num, arg_num, pos_num, req_num, pc, true);
+                self.init_func(reg_num, arg_num, pos_num, req_num, block_pos, pc, true);
             }
             _ => unreachable!(),
         }
@@ -1633,6 +1635,7 @@ impl Codegen {
         arg_num: usize,
         pos_num: usize,
         req_num: usize,
+        block_pos: usize,
         pc: BcPc,
         is_block: bool,
     ) {

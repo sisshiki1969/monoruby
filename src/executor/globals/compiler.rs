@@ -18,6 +18,15 @@ type MethodInvoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
+type BlockInvoker = extern "C" fn(
+    &mut Executor,
+    &mut Globals,
+    *const BlockData,
+    Value,
+    *const Value,
+    usize,
+) -> Option<Value>;
+
 type MethodInvoker2 =
     extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
@@ -51,9 +60,9 @@ pub struct Codegen {
     ///
     pub wrong_argument: DestLabel,
     pub dispatch: Vec<CodePtr>,
-    pub method_invoker: MethodInvoker,
-    pub method_invoker2: MethodInvoker2,
-    pub block_invoker: MethodInvoker,
+    pub(crate) method_invoker: MethodInvoker,
+    pub(crate) method_invoker2: MethodInvoker2,
+    pub(crate) block_invoker: BlockInvoker,
 }
 
 //
@@ -80,11 +89,11 @@ extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData
     globals.compile_on_demand(func_id)
 }
 
-extern "C" fn get_block_data<'a>(
-    globals: &'a mut Globals,
+extern "C" fn get_block_data(
+    globals: &mut Globals,
     block_handler: Value,
     interp: &Executor,
-) -> BlockData<'a> {
+) -> BlockData {
     globals.get_block_data(block_handler, interp)
 }
 

@@ -23,6 +23,7 @@ pub struct ArgumentNames {
     // req + optional
     pub pos_num: usize,
     pub req_num: usize,
+    pub block_param: Option<String>,
     pub names: Vec<Option<String>>,
 }
 
@@ -188,6 +189,7 @@ fn handle_args(
     let mut optional = vec![];
     let mut req_num = 0;
     let mut rest = 0;
+    let mut block_param = None;
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
@@ -211,6 +213,9 @@ fn handle_args(
                 names.into_iter().for_each(|(name, _)| {
                     destruct_args.push(Some(name));
                 });
+            }
+            ParamKind::Block(name) => {
+                block_param = Some(name);
             }
             _ => {
                 return Err(MonorubyErr::unsupported_parameter_kind(
@@ -237,6 +242,7 @@ fn handle_args(
             arg_num: pos_num + rest,
             pos_num,
             req_num,
+            block_param,
         },
         expand,
         optional,
@@ -627,6 +633,9 @@ impl ISeqInfo {
         args.names.into_iter().for_each(|name| {
             info.add_local(name);
         });
+        if let Some(name) = args.block_param {
+            info.add_local(name);
+        }
         info
     }
 
@@ -710,6 +719,15 @@ impl ISeqInfo {
     /// get a number of positional arguments.
     pub(crate) fn pos_num(&self) -> usize {
         self.args.pos_num
+    }
+
+    /// get a position of a block argument.
+    pub(crate) fn block_pos(&self) -> usize {
+        if self.args.block_param.is_some() {
+            self.args.arg_num + 1
+        } else {
+            0
+        }
     }
 
     /// get name.

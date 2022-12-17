@@ -253,7 +253,7 @@ impl Globals {
             for _ in 0..bh as i16 as u16 {
                 cfp = cfp.next();
             }
-            let func_data = self.compile_on_demand(func_id);
+            let func_data = self.compile_on_demand(func_id) as _;
             return BlockData {
                 outer_cfp: cfp,
                 func_data,
@@ -264,9 +264,9 @@ impl Globals {
 }
 
 #[repr(C)]
-pub(crate) struct BlockData<'a> {
+pub(crate) struct BlockData {
     pub(crate) outer_cfp: CFP,
-    pub(crate) func_data: &'a FuncData,
+    pub(crate) func_data: *const FuncData,
 }
 
 impl Globals {

@@ -304,7 +304,7 @@ impl Codegen {
         let block_invoker: extern "C" fn(
             &mut Executor,
             &mut Globals,
-            *const FuncData,
+            *const BlockData,
             Value,
             *const Value,
             usize,
@@ -357,7 +357,14 @@ impl Codegen {
     fn gen_invoker_prologue(&mut self, invoke_block: bool) {
         // rdi: &mut Interp
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: (method)*const FuncData
+        // rdx: (block) *const BlockData
+        if invoke_block {
+            monoasm! { self.jit,
+                movq rax, [rdx];        // rax <- outer_cfp`
+                movq rdx, [rdx + 8];    // rdx <- &FuncData
+            };
+        }
         monoasm! { self.jit,
             pushq rbx;
             pushq r12;
@@ -366,44 +373,15 @@ impl Codegen {
             pushq r15;
             movq rbx, rdi;
             movq r12, rsi;
-            // set meta/func_id
+            // set block
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            // set meta
             movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + OFFSET_META)], rdi;
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            // set pc
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
         };
-        if invoke_block {
-            // TODO: this is not correct!!
-            monoasm! { self.jit,
-                movq rax, [rbx];
-                movq rax, [rax];
-            };
-        }
         self.push_frame(invoke_block);
-        monoasm! { self.jit,
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            //
-            //       +-------------+
-            // +0x08 |             |
-            //       +-------------+
-            //  0x00 |             | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    outer    |
-            //       +-------------+
-            // -0x20 |    meta     | func_id
-            //       +-------------+
-            // -0x28 |    Block    |
-            //       +-------------+
-            // -0x30 |     %0      | receiver
-            //       +-------------+
-            // -0x38 | %1(1st arg) |
-            //       +-------------+
-            //       |             |
-            //
-        };
     }
 
     fn gen_invoker_epilogue(&mut self) {
@@ -1039,12 +1017,13 @@ impl Codegen {
             movq [rsp -(16 + OFFSET_META)], rdi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            // set block
+            movq [rsp - (16 + OFFSET_BLOCK)], 0;
         };
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
 
         monoasm! { self.jit,
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
             movq r8, r10;
             testq r8, r8;
             jeq  loop_exit;
