@@ -1017,6 +1017,17 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, src);
                     self.jit_store_constant(&ctx, id, src);
                 }
+                TraceIr::BlockArgProxy(dst) => {
+                    ctx.dealloc_xmm(dst);
+                    let panic = self.entry_panic;
+                    monoasm! { self.jit,
+                        movq rax, [rbp - (OFFSET_BLOCK)];
+                        testq rax, 0b1;
+                        jeq panic;
+                        addq rax, 0b10;
+                        movq [rbp - (conv(dst))], rax;
+                    };
+                }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);
                     self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
@@ -1635,7 +1646,7 @@ impl Codegen {
         arg_num: usize,
         pos_num: usize,
         req_num: usize,
-        block_pos: usize,
+        _block_pos: usize,
         pc: BcPc,
         is_block: bool,
     ) {

@@ -730,6 +730,11 @@ impl ISeqInfo {
         }
     }
 
+    /// get a block argument name.
+    pub(crate) fn block_param_name(&self) -> Option<&String> {
+        self.args.block_param.as_ref()
+    }
+
     /// get name.
     #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
     pub(crate) fn name(&self) -> String {

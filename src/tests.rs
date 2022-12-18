@@ -1400,4 +1400,29 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_block_param() {
+        run_test_with_prelude(
+            r#"
+        f do |a,b|
+            a + b + h
+        end
+        "#,
+            r#"
+        def g
+            yield 1,2
+        end
+
+        def h
+            yield 1,3,5
+        end
+          
+        def f(&p)
+            [g(&p), h(&p)]
+        end
+        h = 39
+        "#,
+        );
+    }
 }

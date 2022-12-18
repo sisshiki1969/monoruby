@@ -3,7 +3,9 @@ def g
 end
 
 def f(&p)
-  g(&p)
+  k = 1.1
+  puts g(&k)
+  puts g(&p)
 end
-
-puts f {|a,b| a+b}
+h = 39
+f {|a,b| a+b+h}

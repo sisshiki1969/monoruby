@@ -218,6 +218,9 @@ impl BcPc {
             TraceIr::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
+            TraceIr::BlockArgProxy(dst) => {
+                format!("{:?} = block_arg", dst)
+            }
             TraceIr::LoadDynVar(ret, src) => {
                 format!("{:?} = {:?}", ret, src)
             }
@@ -549,6 +552,7 @@ pub(super) enum BcIr {
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
     StoreConst(BcReg, IdentId),
+    BlockArgProxy(BcReg),
     LoadDynVar {
         /// return register of the current frame.
         ret: BcReg,
@@ -846,6 +850,9 @@ impl std::fmt::Debug for Bc {
             TraceIr::StoreConst(reg, id) => {
                 write!(f, "const[{:?}] = {:?}", id, reg)
             }
+            TraceIr::BlockArgProxy(dst) => {
+                write!(f, "{:?} = block_arg", dst)
+            }
             TraceIr::LoadDynVar(ret, src) => {
                 write!(f, "{:?} = {:?}", ret, src)
             }
@@ -1031,6 +1038,7 @@ pub(super) enum TraceIr {
     StoreConst(SlotId, IdentId),
     LoadDynVar(SlotId, DynVar),
     StoreDynVar(DynVar, SlotId),
+    BlockArgProxy(SlotId),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     /// nil(%reg)
@@ -1262,6 +1270,7 @@ impl TraceIr {
                     }
                 }
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
+                21 => Self::BlockArgProxy(SlotId::new(op1)),
                 _ => unreachable!("{:016x}", op),
             }
         } else {
