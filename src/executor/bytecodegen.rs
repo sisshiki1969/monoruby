@@ -900,11 +900,20 @@ impl IrContext {
             NodeKind::Begin {
                 box body,
                 rescue,
-                else_: None,
-                ensure: None,
+                else_,
+                ensure,
             } => {
                 assert!(rescue.is_empty());
-                self.gen_expr(ctx, info, body, use_mode)?;
+
+                if let Some(box else_) = else_ {
+                    self.gen_expr(ctx, info, body, UseMode::NotUse)?;
+                    self.gen_expr(ctx, info, else_, use_mode)?;
+                } else {
+                    self.gen_expr(ctx, info, body, use_mode)?;
+                }
+                if let Some(box ensure) = ensure {
+                    self.gen_expr(ctx, info, ensure, UseMode::NotUse)?;
+                }
                 return Ok(());
             }
             NodeKind::MethodDef(name, block) => {
