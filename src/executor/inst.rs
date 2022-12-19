@@ -245,6 +245,12 @@ impl BcPc {
                     reg
                 )
             }
+            TraceIr::LoadGvar { ret, name } => {
+                format!("{:?} = ${}", ret, IdentId::get_name(name),)
+            }
+            TraceIr::StoreGvar { val, name } => {
+                format!("${} = {:?}", IdentId::get_name(name), val)
+            }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::Neg(dst, src) => {
                 let op1 = format!("{:?} = neg {:?}", dst, src);
@@ -552,6 +558,14 @@ pub(super) enum BcIr {
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
     LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
     StoreConst(BcReg, IdentId),
+    LoadGvar {
+        ret: BcReg,
+        name: IdentId,
+    },
+    StoreGvar {
+        val: BcReg,
+        name: IdentId,
+    },
     BlockArgProxy(BcReg),
     LoadDynVar {
         /// return register of the current frame.
@@ -865,6 +879,12 @@ impl std::fmt::Debug for Bc {
             TraceIr::StoreIvar(reg, id, ..) => {
                 write!(f, "@[{:?}] = {:?}", id, reg)
             }
+            TraceIr::LoadGvar { ret, name } => {
+                write!(f, "{:?} = ${}", ret, IdentId::get_name(name),)
+            }
+            TraceIr::StoreGvar { val, name } => {
+                write!(f, "${} = {:?}", IdentId::get_name(name), val)
+            }
             TraceIr::Nil(reg) => write!(f, "{:?} = nil", reg),
             TraceIr::Neg(dst, src) => write!(f, "{:?} = neg {:?}", dst, src),
             TraceIr::BinOp {
@@ -1041,6 +1061,14 @@ pub(super) enum TraceIr {
     BlockArgProxy(SlotId),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
+    LoadGvar {
+        ret: SlotId,
+        name: IdentId,
+    },
+    StoreGvar {
+        val: SlotId,
+        name: IdentId,
+    },
     /// nil(%reg)
     Nil(SlotId),
     /// negate(%ret, %src)
@@ -1271,6 +1299,14 @@ impl TraceIr {
                 }
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1)),
+                25 => Self::LoadGvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
+                26 => Self::StoreGvar {
+                    val: SlotId::new(op1),
+                    name: IdentId::from(op2),
+                },
                 _ => unreachable!("{:016x}", op),
             }
         } else {

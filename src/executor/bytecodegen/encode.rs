@@ -90,6 +90,14 @@ impl IrContext {
                     let op1 = info.get_index(dst);
                     Bc::from(enc_wl(21, op1.0, 0))
                 }
+                BcIr::LoadGvar { ret, name } => {
+                    let op1 = info.get_index(ret);
+                    Bc::from(enc_wl(25, op1.0, name.get()))
+                }
+                BcIr::StoreGvar { val, name } => {
+                    let op1 = info.get_index(val);
+                    Bc::from(enc_wl(26, op1.0, name.get()))
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);

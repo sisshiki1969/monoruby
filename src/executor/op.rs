@@ -491,6 +491,19 @@ pub extern "C" fn set_constant(
     interp.set_constant(globals, name, val)
 }
 
+///
+/// Get Global variable.
+///
+/// rax: Value
+///
+pub extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
+    globals.get_gvar(name)
+}
+
+pub extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
+    globals.set_gvar(name, val);
+}
+
 pub extern "C" fn define_method(
     interp: &mut Executor,
     globals: &mut Globals,

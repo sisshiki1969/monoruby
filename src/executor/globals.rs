@@ -30,11 +30,15 @@ pub enum InlineMethod {
 /// Global state.
 ///
 pub struct Globals {
+    /// code generator.
     pub codegen: Codegen,
     /// function info.
     pub(crate) func: FnStore,
     /// class table.
     class: ClassStore,
+    /// globals variables.
+    global_vars: HashMap<IdentId, Value>,
+    /// error information.
     error: Option<MonorubyErr>,
     /// warning level.
     pub warning: u8,
@@ -45,6 +49,7 @@ pub struct Globals {
     /// library directries.
     pub lib_directories: Vec<String>,
     #[cfg(feature = "log-jit")]
+    /// stats for deoptimization
     pub deopt_stats: HashMap<(FuncId, usize), usize>,
 }
 
@@ -55,6 +60,7 @@ impl Globals {
             codegen: Codegen::new(no_jit, main_object),
             func: FnStore::new(),
             class: ClassStore::new(),
+            global_vars: HashMap::default(),
             error: None,
             warning,
             no_jit,
@@ -86,6 +92,17 @@ impl Globals {
 
     pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
         self.stdout.write_all(bytes).unwrap();
+    }
+
+    pub(crate) fn set_gvar(&mut self, name: IdentId, val: Value) {
+        self.global_vars.insert(name, val);
+    }
+
+    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Value {
+        match self.global_vars.get(&name) {
+            Some(val) => *val,
+            None => Value::nil(),
+        }
     }
 
     pub(crate) fn class_version_inc(&mut self) {

@@ -1036,6 +1036,32 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, src);
                     self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
+                TraceIr::LoadGvar { ret, name } => {
+                    ctx.dealloc_xmm(ret);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm! { self.jit,
+                        movq rdi, r12;
+                        movl rsi, (name.get());
+                        movq rax, (get_global_var);
+                        call rax;
+                        movq [rbp - (conv(ret))], rax;
+                    };
+                    self.xmm_restore(&xmm_using);
+                }
+                TraceIr::StoreGvar { val, name } => {
+                    self.write_back_slot(&mut ctx, val);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm! { self.jit,
+                        movq rdi, r12;
+                        movl rsi, (name.get());
+                        movq rdx, [rbp - (conv(val))];
+                        movq rax, (set_global_var);
+                        call rax;
+                    };
+                    self.xmm_restore(&xmm_using);
+                }
                 TraceIr::LoadDynVar(ret, src) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,

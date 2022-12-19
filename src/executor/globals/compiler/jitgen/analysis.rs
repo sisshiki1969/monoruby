@@ -203,6 +203,12 @@ impl LoopAnalysis {
                 TraceIr::StoreIvar(src, ..) => {
                     reg_info.use_non_float(src);
                 }
+                TraceIr::LoadGvar { ret, .. } => {
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::StoreGvar { val, .. } => {
+                    reg_info.use_non_float(val);
+                }
                 TraceIr::Neg(dst, src) => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(src, is_float, pc.classid1());

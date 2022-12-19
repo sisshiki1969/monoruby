@@ -208,6 +208,8 @@ impl Codegen {
         self.dispatch[19] = self.vm_method_call(true);
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
+        self.dispatch[25] = self.vm_load_gvar();
+        self.dispatch[26] = self.vm_store_gvar();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -1329,6 +1331,45 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|dst|identId||               |
+    // +---+---+---+---++---+---+---+---+
+    //
+    fn vm_load_gvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movl rsi, rdi; // name: IdentId
+            movq rdi, r12; // &mut Globals
+            movq rax, (get_global_var);
+            call rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|val|identId||               |
+    // +---+---+---+---++---+---+---+---+
+    //
+    fn vm_store_gvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movl rsi, rdi;  // name: IdentId
+            movq rdi, r12;  // &mut Globals
+            movq rdx, [r15];  // base: Value
+            movq rax, (set_global_var);
+            call rax;
+        };
+        //self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }

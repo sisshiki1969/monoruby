@@ -96,6 +96,7 @@ fn is_smi(node: &Node) -> Option<i16> {
 enum LvalueKind {
     Const(IdentId),
     InstanceVar(IdentId),
+    GlobalVar(IdentId),
     DynamicVar { outer: usize, dst: BcReg },
     Index { base: BcReg, index: BcReg },
     Send { recv: BcReg, method: IdentId },
@@ -398,6 +399,11 @@ impl IrContext {
         self.push(BcIr::LoadIvar(reg, name), loc);
     }
 
+    fn gen_load_gvar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let ret = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadGvar { ret, name }, loc);
+    }
+
     fn gen_index(
         &mut self,
         ctx: &mut FnStore,
@@ -439,6 +445,10 @@ impl IrContext {
                 let name = IdentId::get_ident_id(name);
                 LvalueKind::InstanceVar(name)
             }
+            NodeKind::GlobalVar(name) => {
+                let name = IdentId::get_ident_id(name);
+                LvalueKind::GlobalVar(name)
+            }
             NodeKind::DynamicLocalVar(outer, ident) => {
                 let outer = *outer;
                 let dst = BcLocal(info.refer_dynamic_local(outer, ident)).into();
@@ -478,6 +488,9 @@ impl IrContext {
             }
             LvalueKind::InstanceVar(name) => {
                 self.push(BcIr::StoreIvar(src, name), loc);
+            }
+            LvalueKind::GlobalVar(name) => {
+                self.push(BcIr::StoreGvar { val: src, name }, loc);
             }
             LvalueKind::DynamicVar { outer, dst } => {
                 self.push(BcIr::StoreDynVar { dst, outer, src }, loc);
@@ -743,6 +756,10 @@ impl IrContext {
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
                 self.gen_load_ivar(info, None, name, loc);
+            }
+            NodeKind::GlobalVar(name) => {
+                let name = IdentId::get_ident_id_from_string(name);
+                self.gen_load_gvar(info, None, name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,

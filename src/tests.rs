@@ -1425,4 +1425,18 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_global_var() {
+        run_test(
+            r#"
+        a = []
+        a << $std
+        $std = 42
+        a << $std
+        $std = nil
+        a
+        "#,
+        )
+    }
 }
