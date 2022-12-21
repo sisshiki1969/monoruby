@@ -423,7 +423,7 @@ impl IrContext {
     }
 
     ///
-    /// Evaluaate *lhs* as a lvalue.
+    /// Evaluate *lhs* as a lvalue.
     ///
     fn eval_lvalue(
         &mut self,
@@ -1446,7 +1446,7 @@ impl IrContext {
             lhs_kind.push(self.eval_lvalue(ctx, info, lhs)?);
         }
 
-        // Next, we evaluate rvalues and save them in temporory registers which start from temp_reg.
+        // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
         let rhs_reg = info.next_reg();
         let mut temp_reg = rhs_reg;
         for rhs in mrhs {
