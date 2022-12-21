@@ -122,7 +122,7 @@ impl Value {
     }
 
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
-        globals.val_tobytes(self)
+        globals.val_to_bytes(self)
     }
 
     pub fn inspect(self, globals: &Globals) -> String {

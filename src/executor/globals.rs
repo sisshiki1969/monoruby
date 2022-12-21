@@ -131,7 +131,7 @@ impl Globals {
             None => {
                 let err = self.take_error().unwrap();
                 err.show_error_message_and_all_loc(self);
-                panic!("error occured in startup.");
+                panic!("error occurred in startup.");
             }
         };
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -363,7 +363,7 @@ impl Globals {
         }
     }
 
-    pub(crate) fn val_tobytes(&self, val: Value) -> Vec<u8> {
+    pub(crate) fn val_to_bytes(&self, val: Value) -> Vec<u8> {
         if let RV::String(s) = val.unpack() {
             return s.to_vec();
         }
