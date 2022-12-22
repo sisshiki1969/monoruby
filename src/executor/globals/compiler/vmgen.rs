@@ -212,6 +212,7 @@ impl Codegen {
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
+        self.dispatch[27] = self.vm_splat();
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -705,6 +706,28 @@ impl Codegen {
             negq r15;
             movq rdi, [rbp + r15 * 8 - (OFFSET_SELF)];
             movq rax, (expand_array);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// Make splat
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|src|       ||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// src: the source resister
+    /// ~~~
+    fn vm_splat(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+            // rdi <- *mut Value
+            negq rdi;
+            lea rdi, [rbp + rdi * 8 - (OFFSET_SELF)];
+            movq rax, (make_splat);
             call rax;
         };
         self.fetch_and_dispatch();

@@ -39,6 +39,7 @@ impl std::fmt::Debug for RValue {
                     7 => format!("TIME({:?})", self.kind.time),
                     8 => format!("ARRAY({:?})", self.kind.array),
                     9 => format!("RANGE({:?})", self.kind.range),
+                    10 => format!("SPLAT({:?})", self.kind.array),
                     _ => unreachable!(),
                 }
             },
@@ -280,6 +281,14 @@ impl RValue {
         }
     }
 
+    pub(crate) fn new_splat(ary: ArrayInner) -> Self {
+        RValue {
+            flags: RVFlag::new(ARRAY_CLASS, ObjKind::SPLAT),
+            kind: ObjKind::array(ary),
+            var_table: None,
+        }
+    }
+
     pub(crate) fn new_time(time: TimeInfo) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS, ObjKind::TIME),
@@ -419,7 +428,7 @@ pub union ObjKind {
 impl ObjKind {
     pub const INVALID: u8 = 0;
     pub const CLASS: u8 = 1;
-    //pub const MODULE: u8 = 2;
+    pub const MODULE: u8 = 2;
     pub const OBJECT: u8 = 3;
     pub const BIGNUM: u8 = 4;
     pub const FLOAT: u8 = 5;
@@ -427,6 +436,7 @@ impl ObjKind {
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
+    pub const SPLAT: u8 = 10;
 }
 
 #[derive(Clone)]

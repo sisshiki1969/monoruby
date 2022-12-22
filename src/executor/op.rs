@@ -424,6 +424,10 @@ pub extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize
     }
 }
 
+pub extern "C" fn make_splat(src: *mut Value) {
+    unsafe { *src = Value::new_splat(*src) };
+}
+
 pub extern "C" fn make_rest_array(src: *mut Value, len: usize) {
     let mut ary = vec![];
     for i in 0..len {

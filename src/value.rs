@@ -235,6 +235,13 @@ impl Value {
         RValue::new_array_with_class(v, class_id).pack()
     }
 
+    pub(crate) fn new_splat(val: Value) -> Self {
+        match val.is_array() {
+            Some(ary) => RValue::new_splat(ary.clone()).pack(),
+            None => val,
+        }
+    }
+
     pub(crate) fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }

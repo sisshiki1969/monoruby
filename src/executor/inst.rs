@@ -428,6 +428,9 @@ impl BcPc {
             TraceIr::ExpandArray(src, dst, len) => {
                 format!("{:?}; {} = expand({:?})", dst, len, src)
             }
+            TraceIr::Splat(src) => {
+                format!("splat({:?})", src)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
@@ -616,6 +619,7 @@ pub(super) enum BcIr {
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
+    Splat(BcReg),
     LoopStart,
     LoopEnd,
 }
@@ -989,6 +993,9 @@ impl std::fmt::Debug for Bc {
             TraceIr::ExpandArray(src, dst, len) => {
                 write!(f, "{:?}; {len} = expand({:?})", dst, src)
             }
+            TraceIr::Splat(src) => {
+                write!(f, "splat({:?})", src)
+            }
             TraceIr::LoopStart(count) => writeln!(
                 f,
                 "loop_start counter={} jit-addr={:016x}",
@@ -1172,6 +1179,7 @@ pub(super) enum TraceIr {
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
+    Splat(SlotId),
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -1307,6 +1315,7 @@ impl TraceIr {
                     val: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
+                27 => Self::Splat(SlotId::new(op1)),
                 _ => unreachable!("{:016x}", op),
             }
         } else {

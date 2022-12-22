@@ -98,6 +98,10 @@ impl IrContext {
                     let op1 = info.get_index(val);
                     Bc::from(enc_wl(26, op1.0, name.get()))
                 }
+                BcIr::Splat(src) => {
+                    let op1 = info.get_index(src);
+                    Bc::from(enc_wl(27, op1.0, 0))
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
