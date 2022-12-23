@@ -1717,8 +1717,10 @@ impl Codegen {
                     lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
                     movl rsi, rdx;
                     subl rsi, (pos_num);
+                    subq rsp, 1024;
                     movq rax, (make_rest_array);
                     call rax;
+                    addq rsp, 1024;
                     jmp  fill_temp;
                 };
             } else {
@@ -1782,8 +1784,10 @@ impl Codegen {
                 monoasm! { self.jit,
                     lea  rdi, [rbp - (OFFSET_ARG0)];
                     movl rsi, rdx;
+                    subq rsp, 1024;
                     movq rax, (make_rest_array);
                     call rax;
+                    addq rsp, 1024;
                     //jmp  fill_temp;
                 };
             } else {

@@ -280,9 +280,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (op::_dump_stacktrace);
-            subq rax, 8;
             call rax;
-            addq rax, 8;
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (panic);

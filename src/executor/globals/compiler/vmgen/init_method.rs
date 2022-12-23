@@ -6,10 +6,11 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|pos|ofs||   |   |arg|req|
+    /// | op|reg|pos|ofs||   |blk|arg|req|
     /// +---+---+---+---++---+---+---+---+
     ///
     /// reg: a number of resisters
+    /// blk: position of block parameter
     /// arg: a number of arguments (req + opt + rest)
     /// pos: a number of positional arguments (req + opt)
     /// req: a number of required arguments
@@ -51,18 +52,20 @@ impl Codegen {
         let fill_temp = self.jit.label();
         let exit = self.jit.label();
         let err = self.wrong_argument;
+        monoasm! { self.jit,
+            subl r15, 1;
         // in
         // r15: reg_num (except *self*)
         // rdi: pos_num
         // [R13 - 14]: pos_num
+        // [R13 - 12]: reg_num
         // [R13 - 8]: req_num
         // [R13 - 6]: arg_num
         // [R13 - 4]: block_pos
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
-        monoasm! { self.jit,
-          subl r15, 1;
+        //
         // if passed_args < pos_num then goto l5
         // if passed_args == pos_num then goto l1
           cmpw rdx, rdi;
@@ -83,8 +86,11 @@ impl Codegen {
           subl rsi, rdi;
           negq rdi;
           lea  rdi, [rbp + rdi * 8 - (OFFSET_ARG0)];
+          // TODO: this work aroud may cause error if the number of arguments exceeds 128.
+          subq rsp, 1024;
           movq rax, (make_rest_array);
           call rax;
+          addq rsp, 1024;
           jmp  fill_temp;
         }
         monoasm! { self.jit,

@@ -1,4 +1,4 @@
-def f(a,b,c,d,*x)
+def f(a,*x)
   puts "#{x}"
 end
 
