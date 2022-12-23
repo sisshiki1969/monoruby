@@ -53,7 +53,8 @@ impl std::fmt::Debug for ClassId {
             8 => write!(f, "STRING"),
             9 => write!(f, "SYMBOL"),
             10 => write!(f, "TIME"),
-            11 => write!(f, "RANGE"),
+            11 => write!(f, "ARRAY"),
+            12 => write!(f, "RANGE"),
             n => write!(f, "ClassId({})", n),
         }
     }

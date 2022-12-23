@@ -1687,25 +1687,20 @@ impl Codegen {
         self.jit.select_page(0);
 
         // rdx: number of args passed from caller
-        let fill_req = self.jit.label();
-        let fill_opt = self.jit.label();
-        let set_rest_empty = self.jit.label();
-        let fill_temp = self.jit.label();
+        let has_rest_param = pos_num != arg_num;
 
         if pos_num > 0 {
+            let set_rest_empty = self.jit.label();
+            let fill_req = self.jit.label();
+            let fill_opt = self.jit.label();
+            let fill_temp = self.jit.label();
             monoasm! { self.jit,
                 // if passed_args >= pos_num then goto l1
                 cmpl rdx, (pos_num);
                 jeq  set_rest_empty;
                 jlt  fill_req;
             }
-            if pos_num == arg_num {
-                if is_block {
-                    monoasm! { self.jit, jmp  fill_temp; }
-                } else {
-                    monoasm! { self.jit, jmp  err_label; }
-                }
-            } else {
+            if has_rest_param {
                 monoasm! { self.jit,
                     lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
                     movl rsi, rdx;
@@ -1714,6 +1709,12 @@ impl Codegen {
                     call rax;
                     jmp  fill_temp;
                 };
+            } else {
+                if is_block {
+                    monoasm! { self.jit, jmp  fill_temp; }
+                } else {
+                    monoasm! { self.jit, jmp  err_label; }
+                }
             }
             monoasm! { self.jit,
             fill_req:
@@ -1750,23 +1751,39 @@ impl Codegen {
             // fill zero to residual locals.
             }
             self.jit_fill(pos_num, 0);
-        } else {
-            // TODO: we must check arity even if pos_num == 0.
-        }
-        monoasm! { self.jit,
-        set_rest_empty:
-        };
-        if arg_num != pos_num {
             monoasm! { self.jit,
-                lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
-                xorq rsi, rsi;
-                movq rax, (make_rest_array);
-                call rax;
+            set_rest_empty:
             };
+            if has_rest_param {
+                monoasm! { self.jit,
+                    lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
+                    xorq rsi, rsi;
+                    movq rax, (make_rest_array);
+                    call rax;
+                };
+            }
+            monoasm! { self.jit,
+            fill_temp:
+            }
+        } else {
+            if has_rest_param {
+                monoasm! { self.jit,
+                    lea  rdi, [rbp - (OFFSET_ARG0)];
+                    movl rsi, rdx;
+                    movq rax, (make_rest_array);
+                    call rax;
+                    //jmp  fill_temp;
+                };
+            } else {
+                if !is_block {
+                    monoasm! { self.jit,
+                        cmpl rdx, (0);
+                        jne  err_label;
+                    }
+                }
+            }
         }
-        monoasm! { self.jit,
-        fill_temp:
-        }
+
         // fill nil to temporary registers.
         let clear_len = reg_num - arg_num - 1;
         if clear_len > 2 {

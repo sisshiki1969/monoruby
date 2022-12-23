@@ -1331,6 +1331,16 @@ mod test {
         end
         "#,
         );
+        run_test_with_prelude(
+            r#"
+        f(0,1,2)
+        "#,
+            r#"
+        def f(*x)
+          x
+        end
+        "#,
+        );
     }
 
     #[test]
