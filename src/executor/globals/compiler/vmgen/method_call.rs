@@ -103,10 +103,6 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
         }
-        // set arguments
-        monoasm! { self.jit,
-          movq r8, rdi;
-        }
         self.set_arguments();
         monoasm! { self.jit,
             // argument registers:
@@ -193,13 +189,13 @@ impl Codegen {
             movq rax, (get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
-            popq r10;  // r10 <- len
+            popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args
             // r9 <- CodePtr
             movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
-            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp -(16 + OFFSET_META)], rdi;
+            movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq [rsp -(16 + OFFSET_META)], rsi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
             // set block
@@ -208,9 +204,6 @@ impl Codegen {
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        monoasm! { self.jit,
-          movq r8, r10;
-        }
         self.set_arguments();
         monoasm! { self.jit,
             // argument registers:
@@ -221,7 +214,6 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rdi, r10;
             call r9;
         };
         self.pop_frame();
@@ -240,21 +232,59 @@ impl Codegen {
     ///
     /// ### in
     ///
-    /// - r8: arg len
+    /// - rdi: arg len
     /// - rcx: the first argument address
     ///
+    /// ### out
+    ///
+    /// - rdi: arg len
+    ///
+    /// ### destroy
+    ///
+    /// - rax
+    /// - rsi
+    /// - r15
     fn set_arguments(&mut self) {
         let loop_ = self.jit.label();
+        let no_splat = self.jit.label();
+        let next = self.jit.label();
         let loop_exit = self.jit.label();
-        // set arguments
         monoasm! { self.jit,
-            testq r8, r8;
+            testq rdi, rdi;
             jeq  loop_exit;
-            negq r8;
+            movl r15, rdi;
+            lea  rsi, [rsp - (16 + OFFSET_ARG0)];
         loop_:
-            movq rax, [rcx + r8 * 8 + 8];
-            movq [rsp + r8 * 8 - (16 + OFFSET_SELF)], rax;
-            addq r8, 1;
+            movq rax, [rcx];
+            testq rax, 0b111;
+            jne  no_splat;
+            cmpw [rax + 2], (ObjKind::SPLAT);
+            jne  no_splat;
+            // TODO: this possibly cause problem.
+            subq rsp, 1024;
+            pushq rdi;
+            pushq rsi;
+            pushq rcx;
+            pushq r8;
+            movq rdi, rax;
+            movq rax, (expand_splat);
+            call rax;
+            popq r8;
+            popq rcx;
+            popq rsi;
+            popq rdi;
+            addq rsp, 1024;
+            lea  rdi, [rdi + rax * 1 - 1];
+            shlq rax, 3;
+            subq rsi, rax;
+            jmp next;
+
+        no_splat:
+            movq [rsi], rax;
+            subq rsi, 8;
+        next:
+            subq rcx, 8;
+            subl r15, 1;
             jne  loop_;
         loop_exit:
         };

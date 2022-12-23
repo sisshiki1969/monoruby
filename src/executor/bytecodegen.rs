@@ -1194,7 +1194,12 @@ impl IrContext {
     ) -> Result<BcTemp> {
         let arg = info.next_reg();
         for arg in args {
-            self.push_expr(ctx, info, arg)?;
+            if let NodeKind::Splat(box expr) = arg.kind {
+                let src = self.push_expr(ctx, info, expr)?;
+                self.push(BcIr::Splat(src), arg.loc);
+            } else {
+                self.push_expr(ctx, info, arg)?;
+            }
         }
         Ok(arg)
     }

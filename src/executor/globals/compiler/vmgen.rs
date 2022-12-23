@@ -725,8 +725,8 @@ impl Codegen {
         let label = self.jit.get_current_address();
         monoasm! { self.jit,
             // rdi <- *mut Value
-            negq rdi;
-            lea rdi, [rbp + rdi * 8 - (OFFSET_SELF)];
+            negq r15;
+            lea rdi, [rbp + r15 * 8 - (OFFSET_SELF)];
             movq rax, (make_splat);
             call rax;
         };

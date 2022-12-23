@@ -418,6 +418,11 @@ impl Value {
         }
     }
 
+    pub(crate) fn as_splat(&self) -> &ArrayInner {
+        assert_eq!(ObjKind::SPLAT, self.rvalue().kind());
+        self.rvalue().as_array()
+    }
+
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {

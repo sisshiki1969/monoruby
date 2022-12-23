@@ -401,19 +401,25 @@ impl Codegen {
 
     /// Push control frame and set outer.
     ///
-    /// in:
+    /// ### in
+    ///
     /// (method) rcx<-self
+    ///
     /// (block)  rax<-outer_cfp
-    /// destroy: rax, rdi
+    ///
+    /// ### destroy
+    ///
+    /// - rax
+    /// - rsi
     fn push_frame(&mut self, invoke_block: bool) {
         if invoke_block {
             monoasm! { self.jit,
                 // set outer
-                lea  rdi, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
-                movq [rsp - (16 + OFFSET_OUTER)], rdi;
+                lea  rsi, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
+                movq [rsp - (16 + OFFSET_OUTER)], rsi;
                 // set self
-                movq  rdi, [rax - ((OFFSET_SELF - OFFSET_CFP) as i32)];
-                movq [rsp - (16 + OFFSET_SELF)], rdi;
+                movq  rsi, [rax - ((OFFSET_SELF - OFFSET_CFP) as i32)];
+                movq [rsp - (16 + OFFSET_SELF)], rsi;
             };
         } else {
             monoasm! { self.jit,
@@ -424,9 +430,9 @@ impl Codegen {
         }
         monoasm!(self.jit,
             movq rax, [rbx];
-            lea  rdi, [rsp - (16 + OFFSET_CFP)];
-            movq [rdi], rax;
-            movq [rbx], rdi;
+            lea  rsi, [rsp - (16 + OFFSET_CFP)];
+            movq [rsi], rax;
+            movq [rbx], rsi;
         );
     }
 

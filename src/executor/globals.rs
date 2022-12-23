@@ -386,10 +386,10 @@ impl Globals {
             RV::Object(rvalue) => match rvalue.kind() {
                 ObjKind::CLASS => rvalue.as_class().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
+                ObjKind::ARRAY | ObjKind::SPLAT => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_inspect(val),
-                _ => unreachable!("{:016x}", val.get()),
+                kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
     }
