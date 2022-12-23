@@ -1,11 +1,7 @@
-def g
-  yield 1,2
+def f(a,b,c,d,*x)
+  puts "#{x}"
 end
 
-def f(&p)
-  k = 1.1
-  puts g(&k)
-  puts g(&p)
+for i in 0..10
+  f 1,2,3,4,5,6,7,8,9
 end
-h = 39
-f {|a,b| a+b+h}
