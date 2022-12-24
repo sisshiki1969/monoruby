@@ -1721,82 +1721,104 @@ impl Codegen {
         let has_rest_param = pos_num != arg_num;
 
         if pos_num > 0 {
-            let set_rest_empty = self.jit.label();
-            let fill_req = self.jit.label();
-            let fill_opt = self.jit.label();
-            let fill_temp = self.jit.label();
-            monoasm! { self.jit,
-                // if passed_args >= pos_num then goto l1
-                cmpl rdx, (pos_num);
-                jeq  set_rest_empty;
-                jlt  fill_req;
-            }
-            if has_rest_param {
+            if pos_num == req_num && !has_rest_param {
                 monoasm! { self.jit,
-                    lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
-                    movl rsi, rdx;
-                    subl rsi, (pos_num);
-                    subq rsp, 1024;
-                    movq rax, (make_rest_array);
-                    call rax;
-                    addq rsp, 1024;
-                    jmp  fill_temp;
-                };
-            } else {
-                if is_block {
-                    monoasm! { self.jit, jmp  fill_temp; }
-                } else {
-                    monoasm! { self.jit, jmp  err_label; }
-                }
-            }
-            monoasm! { self.jit,
-            fill_req:
-            }
-            if req_num > 0 {
-                if pos_num != req_num {
-                    monoasm! { self.jit,
-                        // if passed_args >= req_num then goto l2
-                        cmpl rdx, (req_num);
-                        jge  fill_opt;
-                    }
+                    cmpl rdx, (pos_num);
                 }
                 if is_block {
+                    let fill_temp = self.jit.label();
                     monoasm! { self.jit,
+                        jge  fill_temp;
                         movl rax, (req_num);
                         subl rax, rdx;
                     }
                     self.jit_fill(req_num, NIL_VALUE);
                     monoasm! { self.jit,
-                        movl rdx, (req_num);
+                    fill_temp:
                     }
                 } else {
-                    // in method, raise error if passed_args < req_num.
                     monoasm! { self.jit,
-                        jmp  err_label;
+                        jne  err_label;
                     }
                 }
-            }
-            monoasm! { self.jit,
-            fill_opt:
-            // rax = pos_num - max(passed_args, req_num)
-                movl rax, (pos_num);
-                subl rax, rdx;
-            // fill zero to residual locals.
-            }
-            self.jit_fill(pos_num, 0);
-            monoasm! { self.jit,
-            set_rest_empty:
-            };
-            if has_rest_param {
+            } else {
+                let set_rest_empty = self.jit.label();
+                let fill_req = self.jit.label();
+                let fill_opt = self.jit.label();
+                let fill_temp = self.jit.label();
                 monoasm! { self.jit,
-                    lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
-                    xorq rsi, rsi;
-                    movq rax, (make_rest_array);
-                    call rax;
+                    // if passed_args >= pos_num then goto l1
+                    cmpl rdx, (pos_num);
+                    jeq  set_rest_empty;
+                    jlt  fill_req;
+                }
+                if has_rest_param {
+                    monoasm! { self.jit,
+                        lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
+                        movl rsi, rdx;
+                        subl rsi, (pos_num);
+                        subq rsp, 1024;
+                        movq rax, (make_rest_array);
+                        call rax;
+                        addq rsp, 1024;
+                        jmp  fill_temp;
+                    };
+                } else {
+                    if is_block {
+                        monoasm! { self.jit, jmp  fill_temp; }
+                    } else {
+                        monoasm! { self.jit, jmp  err_label; }
+                    }
+                }
+                monoasm! { self.jit,
+                fill_req:
+                }
+                if req_num > 0 {
+                    if pos_num != req_num {
+                        monoasm! { self.jit,
+                            // if passed_args >= req_num then goto l2
+                            cmpl rdx, (req_num);
+                            jge  fill_opt;
+                        }
+                    }
+                    if is_block {
+                        monoasm! { self.jit,
+                            movl rax, (req_num);
+                            subl rax, rdx;
+                        }
+                        self.jit_fill(req_num, NIL_VALUE);
+                        monoasm! { self.jit,
+                            movl rdx, (req_num);
+                        }
+                    } else {
+                        // in method, raise error if passed_args < req_num.
+                        monoasm! { self.jit,
+                            jmp  err_label;
+                        }
+                    }
+                }
+                monoasm! { self.jit,
+                fill_opt:
+                // rax = pos_num - max(passed_args, req_num)
+                    movl rax, (pos_num);
+                    subl rax, rdx;
+                // fill zero to residual locals.
+                }
+                self.jit_fill(pos_num, 0);
+                monoasm! { self.jit,
+                set_rest_empty:
                 };
-            }
-            monoasm! { self.jit,
-            fill_temp:
+                if has_rest_param {
+                    monoasm! { self.jit,
+                        lea  rdi, [rbp - (pos_num as i32 * 8 + OFFSET_ARG0)];
+                        xorq rsi, rsi;
+                        movq rax, (make_rest_array);
+                        call rax;
+                    };
+                }
+                monoasm! { self.jit,
+                fill_temp:
+                }
             }
         } else {
             if has_rest_param {
