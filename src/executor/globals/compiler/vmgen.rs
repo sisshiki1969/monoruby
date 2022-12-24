@@ -189,7 +189,6 @@ impl Codegen {
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
-        self.dispatch[1] = self.vm_method_call(false);
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
         self.dispatch[4] = self.vm_condbr(branch);
@@ -207,12 +206,15 @@ impl Codegen {
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
-        self.dispatch[19] = self.vm_method_call(true);
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[27] = self.vm_splat();
+        self.dispatch[30] = self.vm_method_call(false, true);
+        self.dispatch[31] = self.vm_method_call(false, false);
+        self.dispatch[32] = self.vm_method_call(true, true);
+        self.dispatch[33] = self.vm_method_call(true, false);
 
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();

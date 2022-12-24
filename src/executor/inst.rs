@@ -339,7 +339,11 @@ impl BcPc {
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
-                ret, name, class, ..
+                ret,
+                name,
+                class,
+                has_splat,
+                ..
             } => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
@@ -356,12 +360,13 @@ impl BcPc {
                     format!("{} = {:?}.call {}()", ret.ret_str(), recv, name,)
                 } else {
                     format!(
-                        "{} = {:?}.call {}({:?}; {})",
+                        "{} = {:?}.call {}({:?}; {}){}",
                         ret.ret_str(),
                         recv,
                         name,
                         args,
                         len,
+                        if has_splat { "*" } else { "" }
                     )
                 };
                 format!("{:36} [{}]", op1, class.get_name(globals))
@@ -374,7 +379,11 @@ impl BcPc {
                 }
             }
             TraceIr::MethodCallBlock {
-                ret, name, class, ..
+                ret,
+                name,
+                class,
+                has_splat,
+                ..
             } => {
                 let args_pc = *self + 1;
                 let (recv, args, len) = match args_pc.op1() {
@@ -391,13 +400,14 @@ impl BcPc {
                     format!("{} = {:?}.call {}(&{:?})", ret.ret_str(), recv, name, args)
                 } else {
                     format!(
-                        "{} = {:?}.call {}({:?}; {} &{:?})",
+                        "{} = {:?}.call {}({:?}; {} &{:?}){}",
                         ret.ret_str(),
                         recv,
                         name,
                         args + 1,
                         len,
                         args,
+                        if has_splat { "*" } else { "" }
                     )
                 };
                 format!("{:36} [{}]", op1, class.get_name(globals))
@@ -599,8 +609,8 @@ pub(super) enum BcIr {
     Br(usize),
     CondBr(BcReg, usize, bool, BrKind),
     Ret(BcReg),
-    MethodCall(Option<BcReg>, IdentId),      // (ret, id)
-    MethodCallBlock(Option<BcReg>, IdentId), // (ret, id)
+    MethodCall(Option<BcReg>, IdentId, bool), // (ret, id, has_splat)
+    MethodCallBlock(Option<BcReg>, IdentId, bool), // (ret, id, has_splat)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,
@@ -959,15 +969,33 @@ impl std::fmt::Debug for Bc {
             TraceIr::Ret(reg) => write!(f, "ret {:?}", reg),
             TraceIr::Mov(dst, src) => write!(f, "{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
-                ret, name, class, ..
+                ret,
+                name,
+                class,
+                has_splat,
+                ..
             } => {
-                let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
+                let op1 = format!(
+                    "{} = call {:?}{}",
+                    ret.ret_str(),
+                    name,
+                    if has_splat { "*" } else { "" }
+                );
                 write!(f, "{:28} {:?}", op1, class)
             }
             TraceIr::MethodCallBlock {
-                ret, name, class, ..
+                ret,
+                name,
+                class,
+                has_splat,
+                ..
             } => {
-                let op1 = format!("{} = call {:?}", ret.ret_str(), name,);
+                let op1 = format!(
+                    "{} = call {:?}{}",
+                    ret.ret_str(),
+                    name,
+                    if has_splat { "*" } else { "" }
+                );
                 write!(f, "{:28} {:?}", op1, class)
             }
             TraceIr::Yield { ret, args, len } => {
@@ -1152,12 +1180,14 @@ pub(super) enum TraceIr {
         ret: SlotId,
         name: IdentId,
         class: ClassId,
+        has_splat: bool,
         _version: u32,
     },
     MethodCallBlock {
         ret: SlotId,
         name: IdentId,
         class: ClassId,
+        has_splat: bool,
         _version: u32,
     },
     Yield {
@@ -1242,15 +1272,6 @@ impl TraceIr {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                1 => {
-                    let (class, _version) = pc.class_version();
-                    Self::MethodCall {
-                        ret: SlotId::new(op1),
-                        name: IdentId::from(op2),
-                        class,
-                        _version,
-                    }
-                }
                 2 => Self::MethodDef(
                     IdentId::from((pc.op2.0) as u32),
                     FuncId((pc.op2.0 >> 32) as u32),
@@ -1296,15 +1317,6 @@ impl TraceIr {
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },
-                19 => {
-                    let (class, _version) = pc.class_version();
-                    Self::MethodCallBlock {
-                        ret: SlotId::new(op1),
-                        name: IdentId::from(op2),
-                        class,
-                        _version,
-                    }
-                }
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1)),
                 25 => Self::LoadGvar {
@@ -1316,6 +1328,26 @@ impl TraceIr {
                     name: IdentId::from(op2),
                 },
                 27 => Self::Splat(SlotId::new(op1)),
+                30..=31 => {
+                    let (class, _version) = pc.class_version();
+                    Self::MethodCall {
+                        ret: SlotId::new(op1),
+                        name: IdentId::from(op2),
+                        class,
+                        has_splat: if opcode == 30 { true } else { false },
+                        _version,
+                    }
+                }
+                32..=33 => {
+                    let (class, _version) = pc.class_version();
+                    Self::MethodCallBlock {
+                        ret: SlotId::new(op1),
+                        name: IdentId::from(op2),
+                        class,
+                        has_splat: if opcode == 32 { true } else { false },
+                        _version,
+                    }
+                }
                 _ => unreachable!("{:016x}", op),
             }
         } else {

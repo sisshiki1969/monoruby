@@ -25,7 +25,7 @@ impl Codegen {
     /// version:  class version
     /// code ptr: code pointer of the function
     /// ~~~
-    pub(super) fn vm_method_call(&mut self, has_block: bool) -> CodePtr {
+    pub(super) fn vm_method_call(&mut self, has_block: bool, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let slowpath = self.jit.label();
@@ -103,7 +103,7 @@ impl Codegen {
                 movq [rsp - (16 + OFFSET_BLOCK)], 0;
             };
         }
-        self.set_arguments();
+        self.set_arguments(has_splat);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -204,7 +204,7 @@ impl Codegen {
         self.push_frame(true);
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        self.set_arguments();
+        self.set_arguments(true);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -244,7 +244,7 @@ impl Codegen {
     /// - rax
     /// - rsi
     /// - r15
-    fn set_arguments(&mut self) {
+    fn set_arguments(&mut self, has_splat: bool) {
         let loop_ = self.jit.label();
         let no_splat = self.jit.label();
         let next = self.jit.label();
@@ -254,32 +254,37 @@ impl Codegen {
             jeq  loop_exit;
             movl r15, rdi;
             lea  rsi, [rsp - (16 + OFFSET_ARG0)];
-        loop_:
+            loop_:
             movq rax, [rcx];
-            testq rax, 0b111;
-            jne  no_splat;
-            cmpw [rax + 2], (ObjKind::SPLAT);
-            jne  no_splat;
-            // TODO: this possibly cause problem.
-            subq rsp, 1024;
-            pushq rdi;
-            pushq rsi;
-            pushq rcx;
-            pushq r8;
-            movq rdi, rax;
-            movq rax, (expand_splat);
-            call rax;
-            popq r8;
-            popq rcx;
-            popq rsi;
-            popq rdi;
-            addq rsp, 1024;
-            lea  rdi, [rdi + rax * 1 - 1];
-            shlq rax, 3;
-            subq rsi, rax;
-            jmp next;
-
-        no_splat:
+        }
+        if has_splat {
+            monoasm! { self.jit,
+                testq rax, 0b111;
+                jne  no_splat;
+                cmpw [rax + 2], (ObjKind::SPLAT);
+                jne  no_splat;
+                // TODO: this possibly cause problem.
+                subq rsp, 1024;
+                pushq rdi;
+                pushq rsi;
+                pushq rcx;
+                pushq r8;
+                movq rdi, rax;
+                movq rax, (expand_splat);
+                call rax;
+                popq r8;
+                popq rcx;
+                popq rsi;
+                popq rdi;
+                addq rsp, 1024;
+                lea  rdi, [rdi + rax * 1 - 1];
+                shlq rax, 3;
+                subq rsi, rax;
+                jmp next;
+            no_splat:
+            }
+        }
+        monoasm! { self.jit,
             movq [rsi], rax;
             subq rsi, 8;
         next:

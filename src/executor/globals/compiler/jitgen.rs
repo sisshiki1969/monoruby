@@ -1331,17 +1331,35 @@ impl Codegen {
                     );
                     self.xmm_restore(&xmm_using);
                 }
-                TraceIr::MethodCall { ret, name, .. } => {
+                TraceIr::MethodCall {
+                    ret,
+                    name,
+                    has_splat,
+                    ..
+                } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
                         if method_info.callee_codeptr.is_none() {
                             self.recompile_and_deopt(&ctx, position, pc);
                         }
-                        self.gen_method_call(fnstore, &mut ctx, method_info, ret, name, pc);
+                        self.gen_method_call(
+                            fnstore,
+                            &mut ctx,
+                            method_info,
+                            ret,
+                            name,
+                            pc,
+                            has_splat,
+                        );
                     } else {
                         unreachable!()
                     }
                 }
-                TraceIr::MethodCallBlock { ret, name, .. } => {
+                TraceIr::MethodCallBlock {
+                    ret,
+                    name,
+                    has_splat,
+                    ..
+                } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
                         if method_info.callee_codeptr.is_none() {
                             self.recompile_and_deopt(&ctx, position, pc);
@@ -1353,6 +1371,7 @@ impl Codegen {
                             ret,
                             name,
                             pc,
+                            has_splat,
                         );
                     } else {
                         unreachable!()

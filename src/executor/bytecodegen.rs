@@ -1212,12 +1212,13 @@ impl IrContext {
         arg: BcReg,
         len: usize,
         block: bool,
+        has_splat: bool,
         loc: Loc,
     ) {
         if block {
-            self.push(BcIr::MethodCallBlock(ret, method), loc)
+            self.push(BcIr::MethodCallBlock(ret, method, has_splat), loc)
         } else {
-            self.push(BcIr::MethodCall(ret, method), loc)
+            self.push(BcIr::MethodCall(ret, method, has_splat), loc)
         };
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
         self.push(BcIr::InlineCache, loc);
@@ -1293,6 +1294,7 @@ impl IrContext {
         assert!(arglist.kw_args.is_empty());
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
+        let has_splat = arglist.splat;
         let mut has_block = false;
         let old_temp = info.temp;
         let arg = info.next_reg();
@@ -1327,7 +1329,16 @@ impl IrContext {
             RecvKind::Local(reg) => reg,
             RecvKind::Temp => info.pop().into(),
         };
-        self.gen_call(recv, method, ret, arg.into(), len, has_block, loc);
+        self.gen_call(
+            recv,
+            method,
+            ret,
+            arg.into(),
+            len,
+            has_block,
+            has_splat,
+            loc,
+        );
         if is_ret {
             self.gen_ret(info, None);
         }
@@ -1370,7 +1381,7 @@ impl IrContext {
     }
 
     fn gen_method_assign(&mut self, method: IdentId, receiver: BcReg, val: BcReg, loc: Loc) {
-        self.gen_call(receiver, method, None, val, 1, false, loc);
+        self.gen_call(receiver, method, None, val, 1, false, false, loc);
     }
 
     fn gen_binary(

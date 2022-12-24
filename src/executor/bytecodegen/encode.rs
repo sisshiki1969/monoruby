@@ -6,17 +6,6 @@ impl IrContext {
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
-                BcIr::MethodCall(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(1, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
                 BcIr::Br(dst) => {
                     let dst = self.labels[*dst].unwrap().0 as i32;
                     let op1 = dst - idx as i32 - 1;
@@ -69,17 +58,7 @@ impl IrContext {
                     let op1 = info.get_index(reg);
                     Bc::from(enc_wl(17, op1.0, name.get()))
                 }
-                BcIr::MethodCallBlock(ret, name) => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => info.get_index(ret),
-                    };
-                    Bc::from_with_class_and_version(
-                        enc_wl(19, op1.0, name.get()),
-                        ClassId::new(0),
-                        -1i32 as u32,
-                    )
-                }
+
                 BcIr::CheckLocal(local, dst) => {
                     let op1 = info.get_index(local);
                     let dst = self.labels[*dst].unwrap().0 as i32;
@@ -101,6 +80,28 @@ impl IrContext {
                 BcIr::Splat(src) => {
                     let op1 = info.get_index(src);
                     Bc::from(enc_wl(27, op1.0, 0))
+                }
+                BcIr::MethodCall(ret, name, has_splat) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(if *has_splat { 30 } else { 31 }, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
+                }
+                BcIr::MethodCallBlock(ret, name, has_splat) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(if *has_splat { 32 } else { 33 }, op1.0, name.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);

@@ -17,6 +17,7 @@ impl Codegen {
         ret: SlotId,
         name: IdentId,
         pc: BcPc,
+        has_splat: bool,
     ) {
         let MethodInfo {
             recv,
@@ -34,7 +35,16 @@ impl Codegen {
             }
         }
         self.write_back_range(ctx, args, len);
-        self.gen_call(fnstore, ctx, method_info, name, None, ret, pc + 1);
+        self.gen_call(
+            fnstore,
+            ctx,
+            method_info,
+            name,
+            None,
+            ret,
+            pc + 1,
+            has_splat,
+        );
     }
 
     fn gen_inlinable(
@@ -114,6 +124,7 @@ impl Codegen {
         ret: SlotId,
         name: IdentId,
         pc: BcPc,
+        has_splat: bool,
     ) {
         let MethodInfo { args, len, .. } = method_info;
         ctx.dealloc_xmm(ret);
@@ -123,7 +134,16 @@ impl Codegen {
         self.gen_write_back(wb);
         ctx.dealloc_locals();
         method_info.args = args + 1;
-        self.gen_call(fnstore, ctx, method_info, name, Some(args), ret, pc + 1);
+        self.gen_call(
+            fnstore,
+            ctx,
+            method_info,
+            name,
+            Some(args),
+            ret,
+            pc + 1,
+            has_splat,
+        );
     }
 
     fn gen_call(
@@ -135,6 +155,7 @@ impl Codegen {
         block: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
+        has_splat: bool,
     ) {
         let MethodInfo {
             callee_codeptr,
@@ -144,12 +165,12 @@ impl Codegen {
         if let Some(codeptr) = callee_codeptr {
             let cached = InlineCached::new(pc, codeptr);
             if recv.is_zero() && ctx.self_class != cached.class_id {
-                self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
+                self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
             } else {
-                self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc);
+                self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc, has_splat);
             }
         } else {
-            self.gen_call_not_cached(ctx, method_info, name, block, ret, pc);
+            self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
         }
     }
 
@@ -165,6 +186,7 @@ impl Codegen {
         ret: SlotId,
         cached: InlineCached,
         pc: BcPc,
+        has_splat: bool,
     ) {
         let deopt = self.gen_side_deopt(pc - 1, ctx);
         monoasm!(self.jit,
@@ -199,7 +221,7 @@ impl Codegen {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, method_info, ret, block, cached, pc);
+                self.method_call_cached(ctx, method_info, ret, block, cached, pc, has_splat);
             }
         };
     }
@@ -215,6 +237,7 @@ impl Codegen {
         block: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
+        has_splat: bool,
     ) {
         let MethodInfo { recv, len, .. } = method_info;
         // set arguments to a callee stack.
@@ -280,7 +303,7 @@ impl Codegen {
         );
 
         self.push_frame(false);
-        self.set_self_and_args(method_info, block);
+        self.set_self_and_args(method_info, block, has_splat);
 
         monoasm!(self.jit,
             // set meta.
@@ -552,6 +575,7 @@ impl Codegen {
         block: Option<SlotId>,
         cached: InlineCached,
         pc: BcPc,
+        has_splat: bool,
     ) {
         // argument registers:
         //   rdi: args len
@@ -560,7 +584,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
 
         self.push_frame(false);
-        self.set_self_and_args(method_info, block);
+        self.set_self_and_args(method_info, block, has_splat);
 
         monoasm!(self.jit,
             // set meta.
@@ -614,7 +638,7 @@ impl Codegen {
             movq rdi, (len);
         };
         // set arguments
-        self.vm_set_arguments(args, len);
+        self.vm_set_arguments(args, len, true);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -649,7 +673,12 @@ impl Codegen {
     /// in     : rdi <- the number of arguments
     /// out    : rdi <- the number of arguments
     /// destroy: caller save registers
-    fn set_self_and_args(&mut self, method_info: MethodInfo, block: Option<SlotId>) {
+    fn set_self_and_args(
+        &mut self,
+        method_info: MethodInfo,
+        block: Option<SlotId>,
+        has_splat: bool,
+    ) {
         let MethodInfo {
             recv, args, len, ..
         } = method_info;
@@ -659,7 +688,7 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_SELF)], rax;
             movq rdi, (len);
         );
-        self.vm_set_arguments(args, len);
+        self.vm_set_arguments(args, len, has_splat);
         // set block
         match block {
             Some(block) => {
@@ -686,7 +715,7 @@ impl Codegen {
     /// ### destroy
     ///
     /// - caller save registers
-    fn vm_set_arguments(&mut self, args: SlotId, len: u16) {
+    fn vm_set_arguments(&mut self, args: SlotId, len: u16, has_splat: bool) {
         // set arguments
         if len != 0 {
             let splat = self.splat;
@@ -694,22 +723,28 @@ impl Codegen {
                 lea r8, [rsp - (16 + OFFSET_ARG0)];
             );
             for i in 0..len {
-                let no_splat = self.jit.label();
                 let next = self.jit.label();
                 let reg = args + i;
-                monoasm!(self.jit,
+                monoasm! {self.jit,
                     movq rax, [rbp - (conv(reg))];
-                    testq rax, 0b111;
-                    jne  no_splat;
-                    cmpw [rax + 2], (ObjKind::SPLAT);
-                    jne  no_splat;
-                    call splat;
-                    jmp next;
-                no_splat:
+                }
+                if has_splat {
+                    let no_splat = self.jit.label();
+                    monoasm! {self.jit,
+                        testq rax, 0b111;
+                        jne  no_splat;
+                        cmpw [rax + 2], (ObjKind::SPLAT);
+                        jne  no_splat;
+                        call splat;
+                        jmp next;
+                    no_splat:
+                    }
+                }
+                monoasm! {self.jit,
                     movq [r8], rax;
                     subq r8, 8;
                 next:
-                    );
+                }
             }
         }
     }

@@ -425,6 +425,7 @@ pub union ObjKind {
     pub range: ManuallyDrop<Range>,
 }
 
+#[allow(dead_code)]
 impl ObjKind {
     pub const INVALID: u8 = 0;
     pub const CLASS: u8 = 1;
