@@ -611,9 +611,10 @@ impl Codegen {
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
             // set block
             movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            movq rdi, (len);
         };
         // set arguments
-        self.set_args(args, len);
+        self.vm_set_arguments(args, len);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -623,7 +624,6 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rdi, (len);
             call rsi;
         };
         self.pop_frame();
@@ -646,8 +646,9 @@ impl Codegen {
 
     /// Set *self*, len, block, and arguments.
     ///
-    /// out    : rdi <- len
-    /// destroy: rax
+    /// in     : rdi <- the number of arguments
+    /// out    : rdi <- the number of arguments
+    /// destroy: caller save registers
     fn set_self_and_args(&mut self, method_info: MethodInfo, block: Option<SlotId>) {
         let MethodInfo {
             recv, args, len, ..
@@ -658,7 +659,7 @@ impl Codegen {
             movq [rsp - (16 + OFFSET_SELF)], rax;
             movq rdi, (len);
         );
-        self.set_args(args, len);
+        self.vm_set_arguments(args, len);
         // set block
         match block {
             Some(block) => {
@@ -677,15 +678,39 @@ impl Codegen {
 
     /// Set arguments.
     ///
-    /// destroy: rax
-    fn set_args(&mut self, args: SlotId, len: u16) {
+    /// ### save
+    ///
+    /// - rdi: the number of arguments
+    /// - rsi
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    fn vm_set_arguments(&mut self, args: SlotId, len: u16) {
         // set arguments
-        for i in 0..len {
-            let reg = args + i;
+        if len != 0 {
+            let splat = self.splat;
             monoasm!(self.jit,
-                movq rax, [rbp - (conv(reg))];
-                movq [rsp - (16 + OFFSET_ARG0 as i32 + i as i32 * 8)], rax;
+                lea r8, [rsp - (16 + OFFSET_ARG0)];
             );
+            for i in 0..len {
+                let no_splat = self.jit.label();
+                let next = self.jit.label();
+                let reg = args + i;
+                monoasm!(self.jit,
+                    movq rax, [rbp - (conv(reg))];
+                    testq rax, 0b111;
+                    jne  no_splat;
+                    cmpw [rax + 2], (ObjKind::SPLAT);
+                    jne  no_splat;
+                    call splat;
+                    jmp next;
+                no_splat:
+                    movq [r8], rax;
+                    subq r8, 8;
+                next:
+                    );
+            }
         }
     }
 }

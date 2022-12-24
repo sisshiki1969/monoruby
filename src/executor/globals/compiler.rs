@@ -50,14 +50,23 @@ pub struct Codegen {
     pub heap_to_f64: DestLabel,
     pub div_by_zero: DestLabel,
     ///
-    /// Raise wrong number of arguments error.
+    /// expand splat argument.
     ///
-    /// in
+    /// ### in
+    /// - r8:  destination address
+    /// - rdi: the number of arguments
+    /// ### out
+    /// - r8:  destination address
+    /// - rdi: the number of arguments
+    /// ### destroy
+    ///   callee save registers except *rsi*.
+    pub splat: DestLabel,
     ///
-    /// rdx: actual number of arguments
+    /// Raise "wrong number of arguments" error.
     ///
-    /// r13: pc (InitBlock/InitMethod)
-    ///
+    /// ### in
+    /// - rdx: actual number of arguments
+    /// - r13: pc (InitBlock/InitMethod)
     pub wrong_argument: DestLabel,
     pub dispatch: Vec<CodePtr>,
     pub(crate) method_invoker: MethodInvoker,
@@ -274,6 +283,7 @@ impl Codegen {
         let div_by_zero = jit.label();
         let wrong_argument = jit.label();
         let heap_to_f64 = jit.label();
+        let splat = jit.label();
         //jit.select_page(1);
         monoasm!(&mut jit,
         entry_panic:
@@ -355,6 +365,21 @@ impl Codegen {
             movq rdi, [rsp + 112];
             addq rsp, 128;
             ret;
+        splat:
+            subq rsp, 1024;
+            pushq rdi;
+            pushq rsi;
+            movq rdi, rax;
+            movq rsi, r8;
+            movq rax, (expand_splat);
+            call rax;
+            popq rsi;
+            popq rdi;
+            addq rsp, 1024;
+            lea  rdi, [rdi + rax * 1 - 1];
+            shlq rax, 3;
+            subq r8, rax;
+            ret;
         );
 
         // dispatch table.
@@ -383,6 +408,7 @@ impl Codegen {
             vm_return,
             f64_to_val: entry_panic,
             heap_to_f64,
+            splat,
             div_by_zero,
             wrong_argument,
             dispatch,

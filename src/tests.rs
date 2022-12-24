@@ -1344,6 +1344,40 @@ mod test {
     }
 
     #[test]
+    fn test_splat() {
+        run_test_with_prelude(
+            r#"
+        f(*[0,1,2,3,4,5,6,7,8])
+        "#,
+            r#"
+        def f(*x)
+          x
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f(*[0,1,2,3])
+        "#,
+            r#"
+        def f(a,b,c=12,d=23)
+          a+b+c+d
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f([1,2,3,4,5]) {|a,b,c,d,e| a+b+c+d+e}
+        "#,
+            r#"
+        def f(x)
+          yield *x
+        end
+        "#,
+        );
+    }
+
+    #[test]
     fn test_method_error() {
         run_test_error(
             r#"
