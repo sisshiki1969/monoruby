@@ -278,6 +278,11 @@ impl IrContext {
                     let op2 = info.get_index(dst);
                     Bc::from(enc_www(171, op1.0, op2.0, *len))
                 }
+                BcIr::AliasMethod { new, old } => {
+                    let op1 = info.get_index(new);
+                    let op2 = info.get_index(old);
+                    Bc::from(enc_www(173, 0, op1.0, op2.0))
+                }
             };
             ops.push(op);
             locs.push(*loc);

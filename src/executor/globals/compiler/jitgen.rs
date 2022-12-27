@@ -1331,6 +1331,21 @@ impl Codegen {
                     );
                     self.xmm_restore(&xmm_using);
                 }
+                TraceIr::AliasMethod { new, old } => {
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm!(self.jit,
+                        movq rdx, [rbp - (conv(new))];
+                        movq rcx, [rbp - (conv(old))];
+                        movq rdi, r12;
+                        movq rsi, [rbp - (OFFSET_SELF)];
+                        movq r8, [rbp - (OFFSET_META)];
+                        movq rax, (alias_method);
+                        call rax;
+                    );
+                    self.xmm_restore(&xmm_using);
+                    self.handle_error(pc);
+                }
                 TraceIr::MethodCall {
                     ret,
                     name,

@@ -402,8 +402,26 @@ impl Globals {
         Some(Value::new_range(start, end, exclude_end))
     }
 
+    ///
+    /// Find method *name* for object *obj*.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
     pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
-        let mut class_id = obj.class_id();
+        let class_id = obj.class_id();
+        self.find_method_for_class(class_id, name)
+    }
+
+    ///
+    /// Find method *name* of class with *class_id*.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
+    pub(crate) fn find_method_for_class(
+        &mut self,
+        mut class_id: ClassId,
+        name: IdentId,
+    ) -> Option<FuncId> {
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -416,6 +434,11 @@ impl Globals {
         None
     }
 
+    ///
+    /// Find method *name* for object *obj*. If not found, return MethodNotFound error.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
     pub(crate) fn find_method_checked(
         &mut self,
         obj: Value,
@@ -531,6 +554,46 @@ impl Globals {
         self.add_method(class_id, method_name, func_id);
         self.class_version_inc();
         method_name
+    }
+
+    ///
+    /// Give alias *new_name* to the method *old_name* for object *obj*.
+    ///
+    pub(crate) fn alias_method(
+        &mut self,
+        obj: Value,
+        new_name: IdentId,
+        old_name: IdentId,
+    ) -> Option<()> {
+        let func = match self.find_method(obj, old_name) {
+            Some(func) => func,
+            None => {
+                self.err_method_not_found(old_name, obj);
+                return None;
+            }
+        };
+        self.add_method(obj.class_id(), new_name, func);
+        Some(())
+    }
+
+    ///
+    /// Give alias *new_name* to the instance method *old_name* of class *class_id*.
+    ///
+    pub(crate) fn alias_method_for_class(
+        &mut self,
+        class_id: ClassId,
+        new_name: IdentId,
+        old_name: IdentId,
+    ) -> Option<()> {
+        let func = match self.find_method_for_class(class_id, old_name) {
+            Some(func) => func,
+            None => {
+                self.err_method_not_found(old_name, class_id.get_obj(self));
+                return None;
+            }
+        };
+        self.add_method(class_id, new_name, func);
+        Some(())
     }
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {

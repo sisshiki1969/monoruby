@@ -441,6 +441,9 @@ impl BcPc {
             TraceIr::Splat(src) => {
                 format!("splat({:?})", src)
             }
+            TraceIr::AliasMethod { new, old } => {
+                format!("alias_method({:?}<-{:?})", new, old)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
@@ -630,6 +633,10 @@ pub(super) enum BcIr {
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     Splat(BcReg),
+    AliasMethod {
+        new: BcReg,
+        old: BcReg,
+    },
     LoopStart,
     LoopEnd,
 }
@@ -1024,6 +1031,9 @@ impl std::fmt::Debug for Bc {
             TraceIr::Splat(src) => {
                 write!(f, "splat({:?})", src)
             }
+            TraceIr::AliasMethod { new, old } => {
+                write!(f, "alias_method({:?}<-{:?})", new, old)
+            }
             TraceIr::LoopStart(count) => writeln!(
                 f,
                 "loop_start counter={} jit-addr={:016x}",
@@ -1210,6 +1220,10 @@ pub(super) enum TraceIr {
     ConcatStr(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
     Splat(SlotId),
+    AliasMethod {
+        new: SlotId,
+        old: SlotId,
+    },
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -1440,6 +1454,10 @@ impl TraceIr {
                     stack_offset: op3 as usize,
                 },
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
+                173 => Self::AliasMethod {
+                    new: SlotId::new(op2),
+                    old: SlotId::new(op3),
+                },
                 180..=199 => Self::BinOpIr {
                     kind: BinOpK::from(opcode - 180),
                     ret: SlotId::new(op1),

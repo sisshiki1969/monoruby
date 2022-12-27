@@ -987,6 +987,31 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::AliasMethod(box new, box old) => {
+                match (new.kind, old.kind) {
+                    (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
+                        let new = IdentId::get_ident_id_from_string(new);
+                        let old = IdentId::get_ident_id_from_string(old);
+                        self.gen_symbol(info, None, new);
+                        self.gen_symbol(info, None, old);
+                        let old = info.pop().into();
+                        let new = info.pop().into();
+                        self.push(BcIr::AliasMethod { new, old }, loc);
+                    }
+                    _ => unimplemented!(),
+                };
+                match use_mode {
+                    UseMode::Ret => {
+                        self.gen_nil(info, None);
+                        self.gen_ret(info, None);
+                    }
+                    UseMode::NotUse => {}
+                    UseMode::Use => {
+                        self.gen_nil(info, None);
+                    }
+                }
+                return Ok(());
+            }
             _ => return Err(MonorubyErr::unsupported_node(expr, info.sourceinfo.clone())),
         }
         match use_mode {
@@ -1316,7 +1341,12 @@ impl IrContext {
                     let proc_temp = info.push().into();
                     self.push(BcIr::BlockArgProxy(proc_temp), loc);
                 }
-                _ => unimplemented!(),
+                _ => {
+                    return Err(MonorubyErr::unsupported_lhs(
+                        &block,
+                        info.sourceinfo.clone(),
+                    ))
+                }
             }
         }
         let args = arglist.args;

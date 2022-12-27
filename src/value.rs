@@ -393,12 +393,12 @@ impl Value {
         unsafe { &mut *(self.get() as *mut RValue) }
     }
 
-    /*pub(crate) fn is_symbol(&self) -> Option<IdentId> {
+    pub(crate) fn as_symbol(&self) -> IdentId {
         match self.unpack() {
-            RV::Symbol(sym) => Some(sym),
-            _ => None,
+            RV::Symbol(sym) => sym,
+            _ => unreachable!(),
         }
-    }*/
+    }
 
     pub(crate) fn as_array(&self) -> &ArrayInner {
         assert_eq!(ObjKind::ARRAY, self.rvalue().kind());

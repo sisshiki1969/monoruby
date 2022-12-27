@@ -428,6 +428,23 @@ pub extern "C" fn make_splat(src: *mut Value) {
     unsafe { *src = Value::new_splat(*src) };
 }
 
+pub extern "C" fn alias_method(
+    globals: &mut Globals,
+    self_val: Value,
+    new: Value,
+    old: Value,
+    meta: Meta,
+) -> Option<Value> {
+    let new = new.as_symbol();
+    let old = old.as_symbol();
+    match meta.mode() {
+        0 => globals.alias_method(self_val, new, old)?,
+        1 => globals.alias_method_for_class(self_val.as_class(), new, old)?,
+        _ => unreachable!(),
+    };
+    Some(Value::nil())
+}
+
 pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
     let ary = src.as_splat();
     let len = ary.len();

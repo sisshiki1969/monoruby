@@ -260,6 +260,7 @@ impl Codegen {
         self.dispatch[170] = self.vm_init_method();
         self.dispatch[171] = self.vm_expand_array();
         self.dispatch[172] = self.vm_init_block();
+        self.dispatch[173] = self.vm_alias_method();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -710,6 +711,36 @@ impl Codegen {
             movq rax, (expand_array);
             call rax;
         };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// Alias method
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|   |new|old||       |       |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// new: a register for a new symbol
+    /// old: a register for a old symbol
+    /// ~~~
+    fn vm_alias_method(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { self.jit,
+            movl rdx, rdi;
+            negq rdx;
+            movq rdx, [rbp + rdx * 8 - (OFFSET_SELF)];
+            movl rcx, rsi;
+            negq rcx;
+            movq rcx, [rbp + rcx * 8 - (OFFSET_SELF)];
+            movq rdi, r12;
+            movq rsi, [rbp - (OFFSET_SELF)];
+            movq r8, [rbp - (OFFSET_META)];
+            movq rax, (alias_method);
+            call rax;
+        };
+        self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }

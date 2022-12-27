@@ -1483,4 +1483,39 @@ mod test {
         "#,
         )
     }
+
+    #[test]
+    fn test_alias() {
+        run_test(
+            r#"
+        def f
+          "f"
+        end
+        alias g f
+        g
+        "#,
+        )
+    }
+
+    #[test]
+    fn test_alias_class() {
+        run_test(
+            r#"
+        class S
+          def f
+            "f"
+          end
+          def g
+            "g"
+          end
+        end
+        class C < S
+          alias g f
+        end
+        c = C.new
+        s = S.new
+        [c.f, c.g, s.f, s.g]
+        "#,
+        )
+    }
 }
