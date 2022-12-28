@@ -309,7 +309,7 @@ impl Codegen {
             // set meta.
             movq rax, qword 0;
         patch_meta:
-            movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + BP_META)], rax;
 
             movq r13, qword 0;
         patch_pc:
@@ -524,10 +524,10 @@ impl Codegen {
             movq rbp, rsp;
             //movq [rbp - (OFFSET_OUTER)], 0;
             movq rax, (Meta::native(func_id, len as _).get());
-            movq [rbp - (OFFSET_META)], rax;
-            movq [rbp - (OFFSET_BLOCK)], r9;
-            movq [rbp - (OFFSET_SELF)], rdx;
-            subq rsp, ((OFFSET_SELF + 15) & !0xf);
+            movq [rbp - (BP_META)], rax;
+            movq [rbp - (BP_BLOCK)], r9;
+            movq [rbp - (BP_SELF)], rdx;
+            subq rsp, ((BP_SELF + 15) & !0xf);
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (abs_address);
@@ -589,7 +589,7 @@ impl Codegen {
         monoasm!(self.jit,
             // set meta.
             movq rax, qword (cached.meta.get());
-            movq [rsp - (16 + OFFSET_META)], rax;
+            movq [rsp - (16 + BP_META)], rax;
 
             movq r13, qword (cached.pc.get_u64());
         );
@@ -618,7 +618,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
             movq rdi, r12;
-            movq rsi, [rbp - (OFFSET_BLOCK)];
+            movq rsi, [rbp - (BP_BLOCK)];
             movq rdx, rbx;
             movq rax, (get_block_data);
             call rax;
@@ -630,11 +630,11 @@ impl Codegen {
             movq rsi, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
             movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp -(16 + OFFSET_META)], rdi;
+            movq [rsp -(16 + BP_META)], rdi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
             // set block
-            movq [rsp - (16 + OFFSET_BLOCK)], 0;
+            movq [rsp - (16 + BP_BLOCK)], 0;
             movq rdi, (len);
         };
         // set arguments
@@ -685,7 +685,7 @@ impl Codegen {
         // set self, len
         monoasm!(self.jit,
             movq rax, [rbp - (conv(recv))];
-            movq [rsp - (16 + OFFSET_SELF)], rax;
+            movq [rsp - (16 + BP_SELF)], rax;
             movq rdi, (len);
         );
         self.vm_set_arguments(args, len, has_splat);
@@ -694,12 +694,12 @@ impl Codegen {
             Some(block) => {
                 monoasm!(self.jit,
                     movq rax, [rbp - (conv(block))];
-                    movq [rsp - (16 + OFFSET_BLOCK)], rax;
+                    movq [rsp - (16 + BP_BLOCK)], rax;
                 );
             }
             None => {
                 monoasm!(self.jit,
-                    movq [rsp - (16 + OFFSET_BLOCK)], 0;
+                    movq [rsp - (16 + BP_BLOCK)], 0;
                 );
             }
         }
@@ -720,7 +720,7 @@ impl Codegen {
         if len != 0 {
             let splat = self.splat;
             monoasm!(self.jit,
-                lea r8, [rsp - (16 + OFFSET_ARG0)];
+                lea r8, [rsp - (16 + BP_ARG0)];
             );
             for i in 0..len {
                 let next = self.jit.label();

@@ -654,7 +654,7 @@ pub(super) struct FnInitInfo {
 impl FnInitInfo {
     pub(super) fn new(info: &ISeqInfo) -> Self {
         let reg_num = info.total_reg_num();
-        let stack_offset = (reg_num * 8 + OFFSET_SELF as usize + 15) >> 4;
+        let stack_offset = (reg_num * 8 + BP_SELF as usize + 15) >> 4;
         FnInitInfo {
             reg_num,
             arg_num: info.arg_num(),

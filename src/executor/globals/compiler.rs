@@ -303,7 +303,7 @@ impl Codegen {
             movq r15, rax;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - (OFFSET_META)];
+            movq rdx, [rbp - (BP_META)];
             movq rcx, r13;
             subq rcx, 8;
             movq rax, (get_error_location);
@@ -441,22 +441,27 @@ impl Codegen {
         if invoke_block {
             monoasm! { self.jit,
                 // set outer
-                lea  rsi, [rax - ((OFFSET_OUTER - OFFSET_CFP) as i32)];
-                movq [rsp - (16 + OFFSET_OUTER)], rsi;
+                lea  rsi, [rax - ((BP_OUTER - BP_PREV_CFP) as i32)];
+                movq [rsp - (16 + BP_OUTER)], rsi;
                 // set self
-                movq  rsi, [rax - ((OFFSET_SELF - OFFSET_CFP) as i32)];
-                movq [rsp - (16 + OFFSET_SELF)], rsi;
+                movq  rsi, [rax - ((BP_SELF - BP_PREV_CFP) as i32)];
+                movq [rsp - (16 + BP_SELF)], rsi;
             };
         } else {
             monoasm! { self.jit,
-                movq [rsp - (16 + OFFSET_OUTER)], 0;
+
+                movq [rsp - (16 + BP_OUTER)], 0;
                 // set self
-                movq [rsp - (16 + OFFSET_SELF)], rcx;
+                movq [rsp - (16 + BP_SELF)], rcx;
             };
         }
         monoasm!(self.jit,
+            // set lfp
+            lea  r14, [rsp - 16];
+            movq [rsp - (16 + BP_LFP)], r14;
+            // push cfp
             movq rax, [rbx];
-            lea  rsi, [rsp - (16 + OFFSET_CFP)];
+            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
             movq [rsi], rax;
             movq [rbx], rsi;
         );
@@ -467,8 +472,9 @@ impl Codegen {
     /// destroy: rdi
     fn pop_frame(&mut self) {
         monoasm!(self.jit,
-            lea  rdi, [rbp - (OFFSET_CFP)];
+            lea  rdi, [rbp - (BP_PREV_CFP)];
             movq [rbx], rdi;
+            movq r14, [rbp - (BP_LFP)];
         );
     }
 
@@ -477,7 +483,7 @@ impl Codegen {
     ///
     fn calc_offset(&mut self) {
         monoasm!(self.jit,
-            addq rax, (OFFSET_ARG0 / 8 + 1);
+            addq rax, (BP_ARG0 / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
         );
@@ -544,8 +550,8 @@ impl Codegen {
         entry:
             subl [rip + counter], 1;
             jne vm_entry;
-            movl rsi, [rsp - (8 + OFFSET_FUNCID)];
-            movq rdx, [rsp - (8 + OFFSET_SELF)];
+            movl rsi, [rsp - (8 + BP_META_FUNCID)];
+            movq rdx, [rsp - (8 + BP_SELF)];
             subq rsp, 1024;
             pushq rdi;
             movq rdi, r12;
@@ -621,11 +627,11 @@ impl Codegen {
         self.calc_offset();
         monoasm!(self.jit,
             subq rsp, rax;
-            lea  rcx, [rbp - (OFFSET_ARG0)];     // rcx <- *const arg[0]
-            movq  r9, [rbp - (OFFSET_BLOCK)];     // r9 <- block
-            movq  rdx, [rbp - (OFFSET_SELF)];    // rdx <- self
+            lea  rcx, [rbp - (BP_ARG0)];     // rcx <- *const arg[0]
+            movq  r9, [rbp - (BP_BLOCK)];     // r9 <- block
+            movq  rdx, [rbp - (BP_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [rbp - (OFFSET_REGNUM)], rdi;
+            movw [rbp - (BP_META_REGNUM)], rdi;
 
             movq rdi, rbx;
             movq rsi, r12;
@@ -659,7 +665,7 @@ impl Codegen {
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
-            movq rdi, [rsp - (8 + OFFSET_SELF)];  // self: Value
+            movq rdi, [rsp - (8 + BP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
@@ -696,9 +702,9 @@ impl Codegen {
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, r12; //&mut Globals
-            movq rsi, [rsp - (8 + OFFSET_SELF)];  // self: Value
+            movq rsi, [rsp - (8 + BP_SELF)];  // self: Value
             movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rsp - (8 + OFFSET_ARG0)];  //val: Value
+            movq rcx, [rsp - (8 + BP_ARG0)];  //val: Value
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
             movq rax, (set_instance_var_with_cache);

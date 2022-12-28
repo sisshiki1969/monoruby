@@ -85,7 +85,7 @@ impl Codegen {
           movl rsi, rdx;
           subl rsi, rdi;
           negq rdi;
-          lea  rdi, [rbp + rdi * 8 - (OFFSET_ARG0)];
+          lea  rdi, [rbp + rdi * 8 - (BP_ARG0)];
           // TODO: this work aroud may cause error if the number of arguments exceeds 128.
           subq rsp, 1024;
           movq rax, (make_rest_array);
@@ -132,7 +132,7 @@ impl Codegen {
             cmpw rax, [r13 - 14];
             jeq  fill_temp;
             negq rdi;
-            lea  rdi, [rbp + rdi * 8 - (OFFSET_ARG0)];
+            lea  rdi, [rbp + rdi * 8 - (BP_ARG0)];
             xorq rsi, rsi;
             movq rax, (make_rest_array);
             call rax;
@@ -151,8 +151,8 @@ impl Codegen {
             jeq  exit2;
             movzxw rax, [r13 - 4];
             negq rax;
-            movq rdi, [rbp - (OFFSET_BLOCK)];
-            movq [rbp + rax * 8 - (OFFSET_SELF)], rdi;
+            movq rdi, [rbp - (BP_BLOCK)];
+            movq [rbp + rax * 8 - (BP_SELF)], rdi;
         exit2:
         };
     }
@@ -165,7 +165,7 @@ impl Codegen {
             testq rax, rax;
             jz   l1;
             negq R(ptr);
-            lea  R(ptr), [rbp + R(ptr) * 8 - (OFFSET_ARG0)];
+            lea  R(ptr), [rbp + R(ptr) * 8 - (BP_ARG0)];
         l0:
             movq [R(ptr) + rax * 8], (val);
             subq rax, 1;
@@ -191,7 +191,7 @@ impl Codegen {
             jne  l1;
             cmpl rdi, 2;
             jlt  l1;
-            movq rax, [rbp - (OFFSET_ARG0)];
+            movq rax, [rbp - (BP_ARG0)];
             testq rax, 0b111;
             jnz  l1;
             cmpl [rax + 4], (ARRAY_CLASS.0);
@@ -200,7 +200,7 @@ impl Codegen {
             pushq rsi;
             movzxw rdx, [r13 - 8];
             movq rdi, rax;
-            lea  rsi, [rbp - (OFFSET_ARG0)];
+            lea  rsi, [rbp - (BP_ARG0)];
             movq rax, (block_expand_array);
             call rax;
             movq rdx, rax;

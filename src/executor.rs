@@ -15,17 +15,18 @@ type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn =
     extern "C" fn(&mut Executor, &mut Globals, Value, Arg, usize, Option<Value>) -> Option<Value>;
 
-pub(self) const OFFSET_CFP: i64 = 8;
-pub(self) const OFFSET_OUTER: i64 = 16;
+pub(self) const BP_PREV_CFP: i64 = 8;
+pub(self) const BP_LFP: i64 = 16;
+pub(self) const BP_OUTER: i64 = 24;
 /// Meta 8bytes
-pub(self) const OFFSET_META: i64 = 24;
+pub(self) const BP_META: i64 = 32;
 /// Meta::Regnum 2bytes
-pub(self) const OFFSET_REGNUM: i64 = OFFSET_META - 4;
+pub(self) const BP_META_REGNUM: i64 = BP_META - 4;
 /// Meta::FuncId 4bytes
-pub(self) const OFFSET_FUNCID: i64 = OFFSET_META;
-pub(self) const OFFSET_BLOCK: i64 = 32;
-pub(self) const OFFSET_SELF: i64 = 40;
-pub(self) const OFFSET_ARG0: i64 = OFFSET_SELF + 8;
+pub(self) const BP_META_FUNCID: i64 = BP_META;
+pub(self) const BP_BLOCK: i64 = 40;
+pub(self) const BP_SELF: i64 = 48;
+pub(self) const BP_ARG0: i64 = BP_SELF + 8;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
@@ -51,7 +52,7 @@ impl CFP {
     }
 
     fn bp(&self) -> *const usize {
-        unsafe { self.0.add(OFFSET_CFP as usize / 8) as _ }
+        unsafe { self.0.add(BP_PREV_CFP as usize / 8) as _ }
     }
 }
 

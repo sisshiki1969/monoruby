@@ -59,7 +59,7 @@ impl Codegen {
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rsi, rdi; // name: IdentId
-            movq rdi, [rbp - (OFFSET_SELF)];  // base: Value
+            movq rdi, [rbp - (BP_SELF)];  // base: Value
             movq rdx, r12; // &mut Globals
             lea rcx, [r13 - 8]; // &mut ClassId
             lea r8, [r13 - 4]; // &mut IvarId
@@ -82,7 +82,7 @@ impl Codegen {
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
             movq rdi, r12; //&mut Globals
-            movq rsi, [rbp - (OFFSET_SELF)];  // base: Value
+            movq rsi, [rbp - (BP_SELF)];  // base: Value
             movq rcx, [r15];     // val: Value
             lea r8, [r13 - 8]; // &mut ClassId
             lea r9, [r13 - 4]; // &mut IvarId
@@ -156,16 +156,16 @@ impl Codegen {
         let loop_exit = self.jit.label();
         let exit = self.jit.label();
         monoasm! { self.jit,
-            movq rax, [rbp - (OFFSET_OUTER)];
+            movq rax, [rbp - (BP_OUTER)];
         loop_:
             subq rsi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (OFFSET_OUTER)];
+            lea  rax, [rax + (BP_OUTER)];
             negq rdi;
-            movq rax, [rax + rdi * 8 - (OFFSET_SELF)];
+            movq rax, [rax + rdi * 8 - (BP_SELF)];
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
@@ -191,18 +191,18 @@ impl Codegen {
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         monoasm! { self.jit,
-            movq rax, [rbp - (OFFSET_OUTER)];
+            movq rax, [rbp - (BP_OUTER)];
         loop_:
             subq rdi, 1;
             jz   loop_exit;
             movq rax, [rax];
             jmp  loop_;
         loop_exit:
-            lea  rax, [rax + (OFFSET_OUTER)];
+            lea  rax, [rax + (BP_OUTER)];
             negq rsi;
             negq r15;
-            movq rdi, [rbp + rsi * 8 - (OFFSET_SELF)];
-            movq [rax + r15 * 8 - (OFFSET_SELF)], rdi;
+            movq rdi, [rbp + rsi * 8 - (BP_SELF)];
+            movq [rax + r15 * 8 - (BP_SELF)], rdi;
         };
         self.fetch_and_dispatch();
         label
