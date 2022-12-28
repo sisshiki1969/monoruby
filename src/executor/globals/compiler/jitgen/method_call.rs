@@ -670,9 +670,14 @@ impl Codegen {
 
     /// Set *self*, len, block, and arguments.
     ///
-    /// in     : rdi <- the number of arguments
-    /// out    : rdi <- the number of arguments
-    /// destroy: caller save registers
+    /// ### in
+    /// - rdi <- the number of arguments
+    ///
+    /// ### out
+    /// - rdi <- the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
     fn set_self_and_args(
         &mut self,
         method_info: MethodInfo,

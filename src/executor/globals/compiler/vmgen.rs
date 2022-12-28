@@ -1220,15 +1220,21 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq r8, rax;
+            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + BP_META)], rdi;
             movq [rsp - (16 + BP_BLOCK)], 0;
-            movq [rsp - (16 + BP_OUTER)], 0;
-            movq [rsp - (16 + BP_SELF)], r15;
-            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
-            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rcx, r15;
+        };
+        self.push_frame(false);
+        monoasm! { self.jit,
+            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
+            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
+        };
+        self.pop_frame();
+        monoasm! { self.jit,
             popq r15;
             popq r13;
             testq rax, rax;
