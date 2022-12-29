@@ -7,7 +7,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
           movq rdx, (id.get());  // name: IdentId
-          movq rcx, [rbp - (conv(src))];  // val: Value
+          movq rcx, [r14 - (conv(src))];  // val: Value
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals
           addq [rip + const_version], 1;

@@ -60,9 +60,7 @@ impl Codegen {
         let deopt = self.gen_side_deopt(pc, ctx);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(*recv))];
-        );
+        self.load_rdi(*recv);
         if !recv.is_zero() {
             self.guard_class(class, deopt);
         }
@@ -189,9 +187,7 @@ impl Codegen {
         has_splat: bool,
     ) {
         let deopt = self.gen_side_deopt(pc - 1, ctx);
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(method_info.recv))];
-        );
+        self.load_rdi(method_info.recv);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !method_info.recv.is_zero() {
@@ -283,8 +279,8 @@ impl Codegen {
                 movl r15, (ctx.self_class.0);
             );
         } else {
+            self.load_rdi(recv);
             monoasm!(self.jit,
-                movq rdi, [rbp - (conv(recv))];
                 movq rax, (Value::get_class);
                 call rax;
                 movl r15, rax;  // r15: receiver class_id
@@ -304,6 +300,7 @@ impl Codegen {
 
         self.push_frame(false);
         self.set_self_and_args(method_info, block, has_splat);
+        self.set_lfp();
 
         monoasm!(self.jit,
             // set meta.
@@ -335,7 +332,7 @@ impl Codegen {
         slow_path:
             movq rsi, (u32::from(name)); // IdentId
             movq rdx, (len as usize); // args_len: usize
-            movq rcx, [rbp - (conv(recv))]; // receiver: Value
+            movq rcx, [r14 - (conv(recv))]; // receiver: Value
             call entry_find_method;
             // absolute address was returned to rax.
             testq rax, rax;
@@ -445,14 +442,14 @@ impl Codegen {
             jne  no_inline;
             cmpl rsi, (OBJECT_INLINE_IVAR);
             jge no_inline;
-            movq rax, [rbp - (conv(args))];  //val: Value
+            movq rax, [r14 - (conv(args))];  //val: Value
             movq [rdi + rsi * 8 + 16], rax;
             jmp exit;
         no_inline:
         );
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rdx, [rbp - (conv(args))];  //val: Value
+            movq rdx, [r14 - (conv(args))];  //val: Value
             movq rax, (RValue::set_ivar);
             call rax;
         );
@@ -469,7 +466,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rsi, rdi;  // recv: Value
             movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rbp - (conv(args))];  //val: Value
+            movq rcx, [r14 - (conv(args))];  //val: Value
             movq rdi, r12; //&mut Globals
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
@@ -522,7 +519,6 @@ impl Codegen {
         caller:
             pushq rbp;
             movq rbp, rsp;
-            //movq [rbp - (OFFSET_OUTER)], 0;
             movq rax, (Meta::native(func_id, len as _).get());
             movq [rbp - (BP_META)], rax;
             movq [rbp - (BP_BLOCK)], r9;
@@ -540,7 +536,7 @@ impl Codegen {
         match block {
             Some(block) => {
                 monoasm!(self.jit,
-                    movq r9, [rbp - (conv(block))]; // block
+                    movq r9, [r14 - (conv(block))]; // block
                 );
             }
             None => {
@@ -555,8 +551,11 @@ impl Codegen {
         );
         self.push_frame(false);
         monoasm!(self.jit,
-            lea  rcx, [rbp - (conv(args))];  // args: *const Value
+            lea  rcx, [r14 - (conv(args))];  // args: *const Value
             movq r8, (len);
+        );
+        self.set_lfp();
+        monoasm!(self.jit,
             call caller;
         );
         self.pop_frame();
@@ -585,7 +584,6 @@ impl Codegen {
 
         self.push_frame(false);
         self.set_self_and_args(method_info, block, has_splat);
-
         monoasm!(self.jit,
             // set meta.
             movq rax, qword (cached.meta.get());
@@ -593,6 +591,7 @@ impl Codegen {
 
             movq r13, qword (cached.pc.get_u64());
         );
+        self.set_lfp();
         let src_point = self.jit.get_current_address();
         monoasm!(self.jit,
             // patch point
@@ -639,6 +638,7 @@ impl Codegen {
         };
         // set arguments
         self.vm_set_arguments(args, len, true);
+        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -688,8 +688,8 @@ impl Codegen {
             recv, args, len, ..
         } = method_info;
         // set self, len
+        self.load_rax(recv);
         monoasm!(self.jit,
-            movq rax, [rbp - (conv(recv))];
             movq [rsp - (16 + BP_SELF)], rax;
             movq rdi, (len);
         );
@@ -697,8 +697,8 @@ impl Codegen {
         // set block
         match block {
             Some(block) => {
+                self.load_rax(block);
                 monoasm!(self.jit,
-                    movq rax, [rbp - (conv(block))];
                     movq [rsp - (16 + BP_BLOCK)], rax;
                 );
             }
@@ -730,9 +730,7 @@ impl Codegen {
             for i in 0..len {
                 let next = self.jit.label();
                 let reg = args + i;
-                monoasm! {self.jit,
-                    movq rax, [rbp - (conv(reg))];
-                }
+                self.load_rax(reg);
                 if has_splat {
                     let no_splat = self.jit.label();
                     monoasm! {self.jit,

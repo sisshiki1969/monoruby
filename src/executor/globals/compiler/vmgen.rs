@@ -86,9 +86,10 @@ impl Codegen {
             lea  rax, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rax;
             // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            // set lfp
-            lea  r14, [rsp - (16)];
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+        }
+        self.set_lfp();
+        monoasm! {self.jit,
             //
             //       +-------------+
             //  0x00 |             | <- rsp
@@ -394,6 +395,7 @@ impl Codegen {
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
         };
         self.push_frame(invoke_block);
+        self.set_lfp();
     }
 
     fn gen_invoker_epilogue(&mut self) {
@@ -485,7 +487,7 @@ impl Codegen {
     fn vm_get_addr_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            lea rdi, [rbp + rdi * 8 - (BP_SELF)];
+            lea rdi, [r14 + rdi * 8 - (BP_SELF)];
         };
     }
 
@@ -499,7 +501,7 @@ impl Codegen {
     fn vm_get_addr_rcx(&mut self) {
         monoasm! { self.jit,
             negq rcx;
-            lea rcx, [rbp + rcx * 8 - (BP_SELF)];
+            lea rcx, [r14 + rcx * 8 - (BP_SELF)];
         };
     }
 
@@ -513,7 +515,7 @@ impl Codegen {
     fn vm_get_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            movq rdi, [rbp + rdi * 8 - (BP_SELF)];
+            movq rdi, [r14 + rdi * 8 - (BP_SELF)];
         };
     }
 
@@ -527,7 +529,7 @@ impl Codegen {
     fn vm_get_rsi(&mut self) {
         monoasm! { self.jit,
             negq rsi;
-            movq rsi, [rbp + rsi * 8 - (BP_SELF)];
+            movq rsi, [r14 + rsi * 8 - (BP_SELF)];
         };
     }
 
@@ -541,7 +543,7 @@ impl Codegen {
     fn vm_get_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            movq r15, [rbp + r15 * 8 - (BP_SELF)];
+            movq r15, [r14 + r15 * 8 - (BP_SELF)];
         };
     }
 
@@ -571,7 +573,7 @@ impl Codegen {
     fn vm_get_addr_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            lea r15, [rbp + r15 * 8 - (BP_SELF)];
+            lea r15, [r14 + r15 * 8 - (BP_SELF)];
         };
     }
 
@@ -707,10 +709,10 @@ impl Codegen {
             movq rdx, rsi;
             // rsi <- dst
             negq rdi;
-            lea rsi, [rbp + rdi * 8 - (BP_SELF)];
+            lea rsi, [r14 + rdi * 8 - (BP_SELF)];
             // rdi <- *src
             negq r15;
-            movq rdi, [rbp + r15 * 8 - (BP_SELF)];
+            movq rdi, [r14 + r15 * 8 - (BP_SELF)];
             movq rax, (expand_array);
             call rax;
         };
@@ -733,12 +735,12 @@ impl Codegen {
         monoasm! { self.jit,
             movl rdx, rdi;
             negq rdx;
-            movq rdx, [rbp + rdx * 8 - (BP_SELF)];
+            movq rdx, [r14 + rdx * 8 - (BP_SELF)];
             movl rcx, rsi;
             negq rcx;
-            movq rcx, [rbp + rcx * 8 - (BP_SELF)];
+            movq rcx, [r14 + rcx * 8 - (BP_SELF)];
             movq rdi, r12;
-            movq rsi, [rbp - (BP_SELF)];
+            movq rsi, [r14 - (BP_SELF)];
             movq r8, [rbp - (BP_META)];
             movq rax, (alias_method);
             call rax;
@@ -762,7 +764,7 @@ impl Codegen {
         monoasm! { self.jit,
             // rdi <- *mut Value
             negq r15;
-            lea rdi, [rbp + r15 * 8 - (BP_SELF)];
+            lea rdi, [r14 + r15 * 8 - (BP_SELF)];
             movq rax, (make_splat);
             call rax;
         };
@@ -1227,6 +1229,7 @@ impl Codegen {
             movq rcx, r15;
         };
         self.push_frame(false);
+        self.set_lfp();
         monoasm! { self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];

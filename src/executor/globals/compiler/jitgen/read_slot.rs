@@ -31,9 +31,7 @@ impl Codegen {
                 let freg = ctx.alloc_xmm();
                 ctx.link_r_xmm(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
-                monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(reg))];
-                );
+                self.load_rdi(reg);
                 self.gen_val_to_f64_assume_float(freg.enc(), side_exit);
                 freg
             }
@@ -63,9 +61,7 @@ impl Codegen {
                 let freg = ctx.alloc_xmm();
                 ctx.link_r_xmm(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
-                monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(reg))];
-                );
+                self.load_rdi(reg);
                 self.gen_val_to_f64_assume_integer(freg.enc(), side_exit);
                 freg
             }

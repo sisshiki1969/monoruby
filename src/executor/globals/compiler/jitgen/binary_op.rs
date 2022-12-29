@@ -538,8 +538,8 @@ impl Codegen {
     }
 
     pub(super) fn gen_cmpri_prep(&mut self, lhs: SlotId, rhs: i16, generic: DestLabel) {
+        self.load_rdi(lhs);
         monoasm!(self.jit,
-            movq rdi, [rbp - (conv(lhs))];
             movq rsi, (Value::new_integer(rhs as i64).get());
         );
         self.guard_rdi_fixnum(generic);
@@ -617,24 +617,17 @@ impl Codegen {
 
 impl Codegen {
     fn load_guard_rdi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(reg))];
-        );
+        self.load_rdi(reg);
         self.guard_rdi_fixnum(deopt);
     }
 
     fn load_guard_rsi_fixnum(&mut self, reg: SlotId, deopt: DestLabel) {
-        monoasm!(self.jit,
-            movq rsi, [rbp - (conv(reg))];
-        );
+        self.load_rsi(reg);
         self.guard_rsi_fixnum(deopt);
     }
 
     fn load_guard_binary_fixnum(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(lhs))];
-            movq rsi, [rbp - (conv(rhs))];
-        );
+        self.load_binary_args(lhs, rhs);
         self.guard_rdi_fixnum(deopt);
         self.guard_rsi_fixnum(deopt);
     }
@@ -788,16 +781,16 @@ impl Codegen {
         match *mode {
             BinOpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
             BinOpMode::RI(lhs, rhs) => {
+                self.load_rdi(lhs);
                 monoasm!(self.jit,
-                    movq rdi, [rbp - (conv(lhs))];
                     movq rsi, (Value::int32(rhs as i32).get());
                 );
             }
             BinOpMode::IR(lhs, rhs) => {
                 monoasm!(self.jit,
                     movq rdi, (Value::int32(lhs as i32).get());
-                    movq rsi, [rbp - (conv(rhs))];
                 );
+                self.load_rsi(rhs);
             }
         }
     }

@@ -1,4 +1,5 @@
 use monoasm_macro::monoasm;
+use paste::paste;
 
 use super::*;
 
@@ -639,34 +640,34 @@ impl Codegen {
     }
 }
 
+macro_rules! load_store {
+    ($reg: ident) => {
+        paste! {
+            ///
+            /// store $reg to *reg*
+            ///
+            fn [<store_ $reg>](&mut self, reg: SlotId) {
+                monoasm!(self.jit,
+                    movq [r14 - (conv(reg))], $reg;
+                );
+            }
+
+            ///
+            /// load *reg* to $reg
+            ///
+            fn [<load_ $reg>](&mut self, reg: SlotId) {
+                monoasm!(self.jit,
+                    movq $reg, [r14 - (conv(reg))];
+                );
+            }
+        }
+    };
+}
+
 impl Codegen {
-    ///
-    /// store rax to *ret*.
-    ///
-    fn store_rax(&mut self, ret: SlotId) {
-        monoasm!(self.jit,
-            movq [rbp - (conv(ret))], rax;
-        );
-    }
-
-    ///
-    /// store rdi to *ret*.
-    ///
-    fn store_rdi(&mut self, ret: SlotId) {
-        monoasm!(self.jit,
-            movq [rbp - (conv(ret))], rdi;
-        );
-    }
-
-    ///
-    /// store rsi to *ret*.
-    ///
-    fn store_rsi(&mut self, ret: SlotId) {
-        monoasm!(self.jit,
-            // store the result to return reg.
-            movq [rbp - (conv(ret))], rsi;
-        );
-    }
+    load_store!(rax);
+    load_store!(rdi);
+    load_store!(rsi);
 
     ///
     /// move xmm(*src*) to xmm(*dst*).
@@ -768,8 +769,8 @@ impl Codegen {
         let heap_to_f64 = self.heap_to_f64;
         let heap = self.jit.label();
         let exit = self.jit.label();
+        self.load_rdi(reg);
         monoasm!(&mut self.jit,
-            movq rdi, [rbp - (conv(reg))];
             testq rdi, 0b01;
             jnz side_exit;
             testq rdi, 0b10;
@@ -844,10 +845,8 @@ impl Codegen {
                 ctx.link_rw_xmm(dst, freg);
             }
             LinkMode::None => {
-                monoasm!(self.jit,
-                  movq rax, [rbp - (conv(src))];
-                  movq [rbp - (conv(dst))], rax;
-                );
+                self.load_rax(src);
+                self.store_rax(dst);
             }
         }
     }
@@ -920,7 +919,7 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     let i = Value::int32(i).get();
                     monoasm!(self.jit,
-                      movq [rbp - (conv(ret))], (i);
+                      movq [r14 - (conv(ret))], (i);
                     );
                 }
                 TraceIr::Symbol(ret, id) => {
@@ -940,8 +939,8 @@ impl Codegen {
                         monoasm!(self.jit,
                             movq xmm(freg.enc()), [rip + imm];
                             movq rax, (Value::new_float(f).get());
-                            movq [rbp - (conv(dst))], rax;
                         );
+                        self.store_rax(dst);
                     } else {
                         if val.is_packed_value() {
                             monoasm!(self.jit,
@@ -964,7 +963,7 @@ impl Codegen {
                     self.write_back_range(&mut ctx, src, len);
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
-                        lea  rdi, [rbp - (conv(src))];
+                        lea  rdi, [r14 - (conv(src))];
                         movq rsi, (len);
                         movq rax, (gen_array);
                         call rax;
@@ -979,9 +978,9 @@ impl Codegen {
                 } => {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
+                    self.load_rdi(start);
+                    self.load_rsi(end);
                     monoasm! { self.jit,
-                        movq rdi, [rbp - (conv(start))]; // base: Value
-                        movq rsi, [rbp - (conv(end))]; // idx: Value
                         movq rdx, r12; // &mut Globals
                         movl rcx, (if exclude_end {1} else {0});
                         movq rax, (gen_range);
@@ -1025,8 +1024,8 @@ impl Codegen {
                         testq rax, 0b1;
                         jeq panic;
                         addq rax, 0b10;
-                        movq [rbp - (conv(dst))], rax;
                     };
+                    self.store_rax(dst);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);
@@ -1045,8 +1044,8 @@ impl Codegen {
                         movl rsi, (name.get());
                         movq rax, (get_global_var);
                         call rax;
-                        movq [rbp - (conv(ret))], rax;
                     };
+                    self.store_rax(ret);
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::StoreGvar { val, name } => {
@@ -1056,7 +1055,7 @@ impl Codegen {
                     monoasm! { self.jit,
                         movq rdi, r12;
                         movl rsi, (name.get());
-                        movq rdx, [rbp - (conv(val))];
+                        movq rdx, [r14 - (conv(val))];
                         movq rax, (set_global_var);
                         call rax;
                     };
@@ -1091,15 +1090,15 @@ impl Codegen {
                         );
                     }
                     let offset = conv(dst.reg) - BP_OUTER;
+                    self.load_rdi(src);
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(src))];
                         movq [rax - (offset)], rdi;
                     );
                 }
                 TraceIr::Nil(ret) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
-                        movq [rbp - (conv(ret))], (NIL_VALUE);
+                        movq [r14 - (conv(ret))], (NIL_VALUE);
                     );
                 }
                 TraceIr::Neg(dst, src) => {
@@ -1119,9 +1118,7 @@ impl Codegen {
                         ctx.dealloc_xmm(dst);
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
-                        monoasm!(self.jit,
-                            movq rdi, [rbp - (conv(src))];
-                        );
+                        self.load_rdi(src);
                         self.call_unop(neg_value as _);
                         self.xmm_restore(&xmm_using);
                         self.handle_error(pc);
@@ -1188,8 +1185,8 @@ impl Codegen {
                         }
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
+                        self.load_rdi(lhs);
                         monoasm!(self.jit,
-                            movq rdi, [rbp - (conv(lhs))];
                             movq rsi, (Value::int32(rhs as i32).get());
                         );
                         self.gen_generic_binop(&ctx, pc, kind, ret);
@@ -1218,8 +1215,8 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         monoasm!(self.jit,
                             movq rdi, (Value::int32(lhs as i32).get());
-                            movq rsi, [rbp - (conv(rhs))];
                         );
+                        self.load_rsi(rhs);
                         self.gen_generic_binop(&ctx, pc, kind, ret);
                     }
                 }
@@ -1293,7 +1290,7 @@ impl Codegen {
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
                         movq rdi, r12;
-                        lea rsi, [rbp - (conv(arg))];
+                        lea rsi, [r14 - (conv(arg))];
                         movq rdx, (len);
                         movq rax, (concatenate_string);
                         call rax;
@@ -1310,9 +1307,9 @@ impl Codegen {
                     }
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
+                    self.load_rdi(src);
                     monoasm!(self.jit,
-                        movq rdi, [rbp - (conv(src))];
-                        lea rsi, [rbp - (conv(dst))];
+                        lea rsi, [r14 - (conv(dst))];
                         movq rdx, (len);
                         movq rax, (expand_array);
                         call rax;
@@ -1325,7 +1322,7 @@ impl Codegen {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
-                        lea  rdi, [rbp - (conv(src))];
+                        lea  rdi, [r14 - (conv(src))];
                         movq rax, (make_splat);
                         call rax;
                     );
@@ -1335,8 +1332,8 @@ impl Codegen {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
-                        movq rdx, [rbp - (conv(new))];
-                        movq rcx, [rbp - (conv(old))];
+                        movq rdx, [r14 - (conv(new))];
+                        movq rcx, [r14 - (conv(old))];
                         movq rdi, r12;
                         movq rsi, [rbp - (BP_SELF)];
                         movq r8, [rbp - (BP_META)];
@@ -1425,9 +1422,7 @@ impl Codegen {
                 }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
-                    monoasm!(self.jit,
-                        movq rax, [rbp - (conv(lhs))];
-                    );
+                    self.load_rax(lhs);
                     self.epilogue();
                     return false;
                 }
@@ -1445,8 +1440,8 @@ impl Codegen {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    self.load_rax(cond_);
                     monoasm!(self.jit,
-                        movq rax, [rbp - (conv(cond_))];
                         orq rax, 0x10;
                         cmpq rax, (FALSE_VALUE);
                     );
@@ -1516,8 +1511,8 @@ impl Codegen {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    self.load_rax(local);
                     monoasm!(self.jit,
-                        movq rax, [rbp - (conv(local))];
                         testq rax, rax;
                         jnz  branch_dest;
                     );
@@ -1769,7 +1764,7 @@ impl Codegen {
                 }
                 if has_rest_param {
                     monoasm! { self.jit,
-                        lea  rdi, [rbp - (pos_num as i32 * 8 + BP_ARG0)];
+                        lea  rdi, [r14 - (pos_num as i32 * 8 + BP_ARG0)];
                         movl rsi, rdx;
                         subl rsi, (pos_num);
                         subq rsp, 1024;
@@ -1825,7 +1820,7 @@ impl Codegen {
                 };
                 if has_rest_param {
                     monoasm! { self.jit,
-                        lea  rdi, [rbp - (pos_num as i32 * 8 + BP_ARG0)];
+                        lea  rdi, [r14 - (pos_num as i32 * 8 + BP_ARG0)];
                         xorq rsi, rsi;
                         movq rax, (make_rest_array);
                         call rax;
@@ -1838,7 +1833,7 @@ impl Codegen {
         } else {
             if has_rest_param {
                 monoasm! { self.jit,
-                    lea  rdi, [rbp - (BP_ARG0)];
+                    lea  rdi, [r14 - (BP_ARG0)];
                     movl rsi, rdx;
                     subq rsp, 1024;
                     movq rax, (make_rest_array);
@@ -1864,13 +1859,13 @@ impl Codegen {
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((arg_num + i) as i32 * 8 + BP_ARG0)], rax;
+                    movq [r14 - ((arg_num + i) as i32 * 8 + BP_ARG0)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [rbp - ((arg_num + i) as i32 * 8 + (BP_ARG0))], (NIL_VALUE);
+                    movq [r14 - ((arg_num + i) as i32 * 8 + (BP_ARG0))], (NIL_VALUE);
                 );
             }
         }
@@ -1881,13 +1876,13 @@ impl Codegen {
         monoasm! { self.jit,
             cmpl rdx, 1;
             jne  l1;
-            movq rdi, [rbp - (BP_ARG0)];
+            movq rdi, [r14 - (BP_ARG0)];
             testq rdi, 0b111;
             jnz  l1;
             cmpl [rdi + 4], (ARRAY_CLASS.0);
             jne  l1;
             movq rdx, (req_num);
-            lea  rsi, [rbp - (BP_ARG0)];
+            lea  rsi, [r14 - (BP_ARG0)];
             movq rax, (block_expand_array);
             call rax;
             movq rdx, rax;
@@ -1902,7 +1897,7 @@ impl Codegen {
         monoasm! { self.jit,
             testq rax, rax;
             jz   l1;
-            lea  rdi, [rbp - (BP_ARG0 as i32 + ends as i32 * 8)];
+            lea  rdi, [r14 - (BP_ARG0 as i32 + ends as i32 * 8)];
         l0:
             movq [rdi + rax * 8], (val);
             subq rax, 1;
@@ -1919,10 +1914,8 @@ impl Codegen {
     }
 
     fn load_binary_args(&mut self, lhs: SlotId, rhs: SlotId) {
-        monoasm!(self.jit,
-            movq rdi, [rbp - (conv(lhs))];
-            movq rsi, [rbp - (conv(rhs))];
-        );
+        self.load_rdi(lhs);
+        self.load_rsi(rhs);
     }
 
     fn xmm_save(&mut self, xmm_using: &[Xmm]) {

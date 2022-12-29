@@ -1,6 +1,5 @@
 use monoasm::*;
 use monoasm_macro::monoasm;
-use paste::paste;
 
 use super::*;
 
@@ -456,9 +455,6 @@ impl Codegen {
             };
         }
         monoasm!(self.jit,
-            // set lfp
-            lea  r14, [rsp - 16];
-            movq [rsp - (16 + BP_LFP)], r14;
             // push cfp
             movq rax, [rbx];
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
@@ -475,6 +471,14 @@ impl Codegen {
             lea  rdi, [rbp - (BP_PREV_CFP)];
             movq [rbx], rdi;
             movq r14, [rbp - (BP_LFP)];
+        );
+    }
+
+    fn set_lfp(&mut self) {
+        monoasm!(self.jit,
+            // set lfp
+            lea  r14, [rsp - 16];
+            movq [rsp - (16 + BP_LFP)], r14;
         );
     }
 

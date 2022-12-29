@@ -104,6 +104,7 @@ impl Codegen {
             };
         }
         self.set_arguments(has_splat);
+        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -205,6 +206,7 @@ impl Codegen {
         self.vm_get_addr_rcx(); // rcx <- *args
 
         self.set_arguments(true);
+        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len

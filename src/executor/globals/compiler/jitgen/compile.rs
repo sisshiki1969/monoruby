@@ -59,8 +59,8 @@ impl Codegen {
             if ctx.self_kind == Some(ObjKind::OBJECT)
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {
+                self.load_rax(src);
                 monoasm!(self.jit,
-                    movq rax, [rbp - (conv(src))];   // val: Value
                     movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
             } else {
@@ -71,7 +71,7 @@ impl Codegen {
             monoasm!(self.jit,
                 movq rsi, rdi;  // base: Value
                 movq rdx, (id.get());  // id: IdentId
-                movq rcx, [rbp - (conv(src))];   // val: Value
+                movq rcx, [r14 - (conv(src))];   // val: Value
                 movq rdi, r12; //&mut Globals
                 movq rax, (set_instance_var);
                 call rax;
@@ -93,8 +93,8 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
-            movq rdx, [rbp - (conv(base))]; // base: Value
-            movq rcx, [rbp - (conv(idx))]; // idx: Value
+            movq rdx, [r14 - (conv(base))]; // base: Value
+            movq rcx, [r14 - (conv(idx))]; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             movq r8, (pc.get_u64() + 8);
@@ -117,9 +117,9 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm! { self.jit,
-            movq rdx, [rbp - (conv(base))]; // base: Value
-            movq rcx, [rbp - (conv(idx))]; // idx: Value
-            movq r8, [rbp - (conv(src))];  // src: Value
+            movq rdx, [r14 - (conv(base))]; // base: Value
+            movq rcx, [r14 - (conv(idx))]; // idx: Value
+            movq r8, [r14 - (conv(src))];  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             movq rax, (set_index);
@@ -146,7 +146,7 @@ impl Codegen {
             }
         } else {
             monoasm! { self.jit,
-                movq rcx, [rbp - (conv(superclass))];  // rcx <- superclass: Option<Value>
+                movq rcx, [r14 - (conv(superclass))];  // rcx <- superclass: Option<Value>
             }
         }
         monoasm! { self.jit,
@@ -183,22 +183,27 @@ impl Codegen {
             //       +-------------+
             //       |             |
             //
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + BP_OUTER)], 0;
+            movq r8, rax;
+            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + BP_META)], rdi;
             movq [rsp - (16 + BP_BLOCK)], 0;
-            movq [rsp - (16 + BP_SELF)], r15;
-            movq r13 , [rax + (FUNCDATA_OFFSET_PC)];
-            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rcx, r15;
+        }
+        self.push_frame(false);
+        self.set_lfp();
+        monoasm! {self.jit,
+            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
+            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
+        }
+        self.pop_frame();
+        monoasm! {self.jit,
             testq rax, rax;
             jeq jit_return;
         };
         if !ret.is_zero() {
-            monoasm!(self.jit,
-                movq [rbp - (conv(ret))], rax;
-            );
+            self.store_rax(ret);
         }
         // pop class context.
         monoasm!(self.jit,
@@ -226,7 +231,7 @@ impl Codegen {
         self.xmm_save(xmm_using);
         monoasm!(self.jit,
             movl rsi, (cached_ivarid.get());
-            movq rdx, [rbp - (conv(src))];   // val: Value
+            movq rdx, [r14 - (conv(src))];   // val: Value
             movq rax, (RValue::set_ivar);
             call rax;
         );

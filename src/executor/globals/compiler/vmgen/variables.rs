@@ -201,7 +201,7 @@ impl Codegen {
             lea  rax, [rax + (BP_OUTER)];
             negq rsi;
             negq r15;
-            movq rdi, [rbp + rsi * 8 - (BP_SELF)];
+            movq rdi, [r14 + rsi * 8 - (BP_SELF)];
             movq [rax + r15 * 8 - (BP_SELF)], rdi;
         };
         self.fetch_and_dispatch();
