@@ -236,25 +236,6 @@ impl Codegen {
         has_splat: bool,
     ) {
         let MethodInfo { recv, len, .. } = method_info;
-        // set arguments to a callee stack.
-        //
-        //       +-------------+
-        //  0x00 |             | <- rsp
-        //       +-------------+
-        // -0x08 | return addr |
-        //       +-------------+
-        // -0x10 |   old rbp   |
-        //       +-------------+
-        // -0x18 |    meta     |
-        //       +-------------+
-        // -0x20 |    block    |
-        //       +-------------+
-        // -0x28 |     %0      |
-        //       +-------------+
-        // -0x30 | %1(1st arg) |
-        //       +-------------+
-        //       |             |
-        //
         // argument registers:
         //   rdi: args len
         //
@@ -264,8 +245,6 @@ impl Codegen {
         let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
-        let cached_class_version = self.jit.const_i32(-1);
-        let cached_recv_class = self.jit.const_i32(0);
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
         let entry_panic = self.entry_panic;
@@ -287,13 +266,14 @@ impl Codegen {
             );
         }
         monoasm!(self.jit,
-            cmpl r15, [rip + cached_recv_class];
+            movq r13, (pc.get_u64());
+            cmpl r15, [r13 - 8];
             jne slow_path;
         );
         // version guard
         monoasm!(self.jit,
             movl rax, [rip + global_class_version];
-            cmpl [rip + cached_class_version], rax;
+            cmpl [r13 - 4], rax;
             jne slow_path;
         method_resolved:
         );
@@ -343,13 +323,16 @@ impl Codegen {
             subq rdi, 8;
             movq rcx, [rax + (FUNCDATA_OFFSET_META)];
             movq [rdi], rcx;
+            movq [r13 + 16], rcx;
 
             lea rdi, [rip + patch_pc];
             subq rdi, 8;
             movq rcx, [rax + (FUNCDATA_OFFSET_PC)];
             movq [rdi], rcx;
+            movq [r13 + 24], rcx;
 
             movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq [r13 + 8], rax;
             lea rdi, [rip + patch_adr];
             // calculate a displacement to the function address.
             subq rax, rdi;
@@ -357,8 +340,8 @@ impl Codegen {
             movl [rdi - 4], rax;
 
             movl rax, [rip + global_class_version];
-            movl [rip + cached_class_version], rax;
-            movl [rip + cached_recv_class], r15;
+            movl [r13 - 4], rax;
+            movl [r13 - 8], r15;
             jmp method_resolved;
         );
         let entry_return = self.vm_return;

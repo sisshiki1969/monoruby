@@ -120,6 +120,7 @@ struct BBContext {
     self_class: ClassId,
     self_kind: Option<u8>,
     local_num: usize,
+    recompile_flag: bool,
 }
 
 impl BBContext {
@@ -131,6 +132,7 @@ impl BBContext {
             self_class: self_value.class_id(),
             self_kind: self_value.kind(),
             local_num,
+            recompile_flag: false,
         }
     }
 
@@ -465,16 +467,16 @@ extern "C" fn log_deoptimize(
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else if let TraceIr::ClassDef { .. } = pc.op1() {
-        eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+        eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
         match globals.deopt_stats.get_mut(&(func_id, index)) {
             Some(c) => *c = *c + 1,
             None => {
-                globals.deopt_stats.insert((func_id, index), 0);
+                globals.deopt_stats.insert((func_id, index), 1);
             }
         };
-        eprint!("<-- deoptimization occurs in {} {:?}.", name, func_id);
+        eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
     }
 }
@@ -1112,7 +1114,7 @@ impl Codegen {
                         );
                     } else {
                         if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.write_back_slot(&mut ctx, src);
                         ctx.dealloc_xmm(dst);
@@ -1156,7 +1158,7 @@ impl Codegen {
                     ..
                 } => {
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&ctx, position, pc);
+                        self.recompile_and_deopt(&mut ctx, position, pc);
                     }
                     self.write_back_slot(&mut ctx, lhs);
                     self.write_back_slot(&mut ctx, rhs);
@@ -1181,7 +1183,7 @@ impl Codegen {
                         self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
                     } else {
                         if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
@@ -1209,7 +1211,7 @@ impl Codegen {
                         self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
                     } else {
                         if pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
@@ -1240,7 +1242,7 @@ impl Codegen {
                         self.gen_integer_cmp_kind(kind, ret);
                     } else {
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         let generic = self.jit.label();
                         self.write_back_slot(&mut ctx, lhs);
@@ -1270,7 +1272,7 @@ impl Codegen {
                         self.gen_integer_cmp_kind(kind, ret);
                     } else {
                         if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         let generic = self.jit.label();
                         self.write_back_slot(&mut ctx, lhs);
@@ -1351,7 +1353,7 @@ impl Codegen {
                 } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
                         if method_info.callee_codeptr.is_none() {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.gen_method_call(
                             fnstore,
@@ -1374,7 +1376,7 @@ impl Codegen {
                 } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
                         if method_info.callee_codeptr.is_none() {
-                            self.recompile_and_deopt(&ctx, position, pc);
+                            self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.gen_method_call_with_block(
                             fnstore,
@@ -1476,7 +1478,7 @@ impl Codegen {
                         cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                         self.gen_cmp_float_opt(kind, branch_dest, brkind);
                     //} else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                    //    self.recompile_and_deopt(&ctx, position, pc);
+                    //    self.recompile_and_deopt(&mut ctx, position, pc);
                     //    let branch_dest = self.jit.label();
                     //    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     } else {
@@ -1532,7 +1534,12 @@ impl Codegen {
         true
     }
 
-    fn recompile_and_deopt(&mut self, ctx: &BBContext, position: Option<BcPc>, pc: BcPc) {
+    fn recompile_and_deopt(&mut self, ctx: &mut BBContext, position: Option<BcPc>, pc: BcPc) {
+        if ctx.recompile_flag {
+            return;
+        } else {
+            ctx.recompile_flag = true;
+        }
         let recompile = self.jit.label();
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, &ctx);

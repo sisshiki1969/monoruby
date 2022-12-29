@@ -458,10 +458,6 @@ impl Codegen {
     }
 
     /// Set outer.
-    ///
-    /// ### in
-    /// - rcx: *self*
-    ///
     fn set_method_outer(&mut self) {
         monoasm! { self.jit,
             movq [rsp - (16 + BP_OUTER)], 0;
