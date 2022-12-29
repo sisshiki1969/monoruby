@@ -394,13 +394,23 @@ impl Codegen {
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
         };
-        self.push_frame(invoke_block);
-        self.set_lfp();
+        if invoke_block {
+            self.set_block_self_outer()
+        } else {
+            monoasm! { self.jit,
+                movq [rsp - (16 + BP_SELF)], rcx;
+            }
+            self.set_method_outer()
+        }
     }
 
     fn gen_invoker_epilogue(&mut self) {
         monoasm! { self.jit,
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+        }
+        self.push_frame();
+        self.set_lfp();
+        monoasm! { self.jit,
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rdi;
@@ -1226,17 +1236,15 @@ impl Codegen {
             movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + BP_META)], rdi;
             movq [rsp - (16 + BP_BLOCK)], 0;
-            movq rcx, r15;
+            movq [rsp - (16 + BP_SELF)], r15;
         };
-        self.push_frame(false);
-        self.set_lfp();
+        self.set_method_outer();
         monoasm! { self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
-            call rax;
         };
-        self.pop_frame();
+        self.call_rax();
         monoasm! { self.jit,
             popq r15;
             popq r13;

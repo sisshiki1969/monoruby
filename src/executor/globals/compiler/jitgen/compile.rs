@@ -187,17 +187,15 @@ impl Codegen {
             movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + BP_META)], rdi;
             movq [rsp - (16 + BP_BLOCK)], 0;
-            movq rcx, r15;
+            movq [rsp - (16 + BP_SELF)], r15;
         }
-        self.push_frame(false);
-        self.set_lfp();
+        self.set_method_outer();
         monoasm! {self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
-            call rax;
         }
-        self.pop_frame();
+        self.call_rax();
         monoasm! {self.jit,
             testq rax, rax;
             jeq jit_return;

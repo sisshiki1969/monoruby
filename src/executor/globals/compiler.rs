@@ -426,60 +426,107 @@ impl Codegen {
 
     /// Push control frame and set outer.
     ///
-    /// ### in
-    ///
-    /// (method) rcx<-self
-    ///
-    /// (block)  rax<-outer_cfp
-    ///
     /// ### destroy
-    ///
-    /// - rax
     /// - rsi
-    fn push_frame(&mut self, invoke_block: bool) {
-        if invoke_block {
-            monoasm! { self.jit,
-                // set outer
-                lea  rsi, [rax - ((BP_OUTER - BP_PREV_CFP) as i32)];
-                movq [rsp - (16 + BP_OUTER)], rsi;
-                // set self
-                movq  rsi, [rax - ((BP_SELF - BP_PREV_CFP) as i32)];
-                movq [rsp - (16 + BP_SELF)], rsi;
-            };
-        } else {
-            monoasm! { self.jit,
-
-                movq [rsp - (16 + BP_OUTER)], 0;
-                // set self
-                movq [rsp - (16 + BP_SELF)], rcx;
-            };
-        }
+    fn push_frame(&mut self) {
         monoasm!(self.jit,
             // push cfp
-            movq rax, [rbx];
+            movq rsi, [rbx];
+            movq [rsp - (16 + BP_PREV_CFP)], rsi;
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rsi], rax;
             movq [rbx], rsi;
         );
     }
 
-    /// Pop control frame
+    /// Set outer.
     ///
-    /// destroy: rdi
+    /// ### in
+    /// - rax: outer_cfp
+    ///
+    /// ### destroy
+    /// - rsi
+    ///
+    fn set_block_self_outer(&mut self) {
+        monoasm! { self.jit,
+            // set outer
+            lea  rsi, [rax - ((BP_OUTER - BP_PREV_CFP) as i32)];
+            movq [rsp - (16 + BP_OUTER)], rsi;
+            // set self
+            movq  rsi, [rax - ((BP_SELF - BP_PREV_CFP) as i32)];
+            movq [rsp - (16 + BP_SELF)], rsi;
+        };
+    }
+
+    /// Set outer.
+    ///
+    /// ### in
+    /// - rcx: *self*
+    ///
+    fn set_method_outer(&mut self) {
+        monoasm! { self.jit,
+            movq [rsp - (16 + BP_OUTER)], 0;
+        };
+    }
+
+    /// Pop control frame
     fn pop_frame(&mut self) {
         monoasm!(self.jit,
-            lea  rdi, [rbp - (BP_PREV_CFP)];
-            movq [rbx], rdi;
+            // pop cfp
+            lea  r14, [rbp - (BP_PREV_CFP)];
+            movq [rbx], r14;
+            // restore lfp
             movq r14, [rbp - (BP_LFP)];
         );
     }
 
+    /// Set lfp for callee.
     fn set_lfp(&mut self) {
         monoasm!(self.jit,
             // set lfp
             lea  r14, [rsp - 16];
             movq [rsp - (16 + BP_LFP)], r14;
         );
+    }
+
+    /// ## in
+    /// - rax : CodePtr
+    ///
+    /// ## out
+    /// - rax : result
+    fn call_rax(&mut self) {
+        self.push_frame();
+        self.set_lfp();
+        monoasm!(self.jit,
+            call rax;
+        );
+        self.pop_frame();
+    }
+
+    /// ## in
+    ///
+    /// ## out
+    /// - rax : result
+    fn call_dest(&mut self, dest: DestLabel) {
+        self.push_frame();
+        self.set_lfp();
+        monoasm!(self.jit,
+            call dest;
+        );
+        self.pop_frame();
+    }
+
+    /// ## in
+    ///
+    /// ## out
+    /// - rax : result
+    fn call_codeptr(&mut self, codeptr: CodePtr) {
+        self.push_frame();
+        self.set_lfp();
+        let src_point = self.jit.get_current_address();
+        monoasm!(self.jit,
+            call (codeptr - src_point - 5);
+        );
+        self.pop_frame();
     }
 
     ///

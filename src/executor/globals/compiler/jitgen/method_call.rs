@@ -298,7 +298,8 @@ impl Codegen {
         method_resolved:
         );
 
-        self.push_frame(false);
+        self.set_method_outer();
+        self.push_frame();
         self.set_self_and_args(method_info, block, has_splat);
         self.set_lfp();
 
@@ -307,7 +308,7 @@ impl Codegen {
             movq rax, qword 0;
         patch_meta:
             movq [rsp - (16 + BP_META)], rax;
-
+            // set pc
             movq r13, qword 0;
         patch_pc:
             // patch point
@@ -548,17 +549,14 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rdx, rdi;  // self: Value
+            movq [rsp - (16 + BP_SELF)], rcx;
         );
-        self.push_frame(false);
+        self.set_method_outer();
         monoasm!(self.jit,
             lea  rcx, [r14 - (conv(args))];  // args: *const Value
             movq r8, (len);
         );
-        self.set_lfp();
-        monoasm!(self.jit,
-            call caller;
-        );
-        self.pop_frame();
+        self.call_dest(caller);
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {
@@ -582,22 +580,16 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
 
-        self.push_frame(false);
+        self.set_method_outer();
         self.set_self_and_args(method_info, block, has_splat);
         monoasm!(self.jit,
             // set meta.
-            movq rax, qword (cached.meta.get());
+            movq rax, (cached.meta.get());
             movq [rsp - (16 + BP_META)], rax;
-
-            movq r13, qword (cached.pc.get_u64());
+            // set pc.
+            movq r13, (cached.pc.get_u64());
         );
-        self.set_lfp();
-        let src_point = self.jit.get_current_address();
-        monoasm!(self.jit,
-            // patch point
-            call (cached.codeptr - src_point - 5);
-        );
-        self.pop_frame();
+        self.call_codeptr(cached.codeptr);
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {
@@ -623,7 +615,8 @@ impl Codegen {
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
         }
-        self.push_frame(true);
+
+        self.set_block_self_outer();
         monoasm! { self.jit,
             // rsi <- CodePtr
             movq rsi, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
@@ -638,7 +631,6 @@ impl Codegen {
         };
         // set arguments
         self.vm_set_arguments(args, len, true);
-        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -648,9 +640,9 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            call rsi;
+            movq rax, rsi;
         };
-        self.pop_frame();
+        self.call_rax();
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {

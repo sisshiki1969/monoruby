@@ -75,10 +75,9 @@ impl Codegen {
             movl rdi, [r13 - 4];
             cmpl rdi, [rip + class_version];
             jne  slowpath;
-
         exec:
         };
-        self.push_frame(false);
+        self.set_method_outer();
         monoasm! { self.jit,
             // set meta
             movq rdi, [r13 + 16];
@@ -104,7 +103,6 @@ impl Codegen {
             };
         }
         self.set_arguments(has_splat);
-        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -117,9 +115,8 @@ impl Codegen {
             movq rax, [r13 + 8];
             // set pc
             movq r13, [r13 + 24];    // r13: BcPc
-            call rax;
         };
-        self.pop_frame();
+        self.call_rax();
         monoasm! { self.jit,
             addq rsp, 16;
             popq r13;   // pop pc
@@ -202,11 +199,10 @@ impl Codegen {
             // set block
             movq [rsp - (16 + BP_BLOCK)], 0;
         };
-        self.push_frame(true);
+        self.set_block_self_outer();
         self.vm_get_addr_rcx(); // rcx <- *args
 
         self.set_arguments(true);
-        self.set_lfp();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -216,9 +212,9 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            call r9;
+            movq rax, r9;
         };
-        self.pop_frame();
+        self.call_rax();
         monoasm! { self.jit,
             popq r13;   // pop pc
             popq r15;   // pop %ret
@@ -269,13 +265,17 @@ impl Codegen {
                 subq rsp, 1024;
                 pushq rdi;
                 pushq rsi;
+                pushq rdx;
                 pushq rcx;
                 pushq r8;
+                pushq r9;
                 movq rdi, rax;
                 movq rax, (expand_splat);
                 call rax;
+                popq r9;
                 popq r8;
                 popq rcx;
+                popq rdx;
                 popq rsi;
                 popq rdi;
                 addq rsp, 1024;
