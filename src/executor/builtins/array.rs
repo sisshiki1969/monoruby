@@ -31,10 +31,7 @@ extern "C" fn new(
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_array_with_class(vec![], class);
-    if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
-        globals.check_arg(func_id, len)?;
-        vm.invoke_func2(globals, func_id, obj, arg, len)?;
-    };
+    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Some(obj)
 }
 

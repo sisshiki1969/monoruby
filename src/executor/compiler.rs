@@ -271,7 +271,7 @@ extern "C" fn get_error_location(
 }
 
 impl Codegen {
-    pub(crate) fn new(no_jit: bool, main_object: Value) -> Self {
+    pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(0);
         let const_version = jit.const_i64(0);
@@ -585,10 +585,27 @@ impl Codegen {
         );
     }
 
+    pub(super) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
+        let codeptr = match kind {
+            FuncKind::ISeq(_) => {
+                if !no_jit {
+                    self.gen_jit_stub()
+                } else {
+                    self.gen_vm_stub()
+                }
+            }
+            FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
+            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(ivar_name),
+            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
+        };
+        self.jit.finalize();
+        codeptr
+    }
+
     ///
     /// Set jit compilation stub code for an entry point of each Ruby methods.
     ///
-    pub(super) fn gen_jit_stub(&mut self) -> CodePtr {
+    fn gen_jit_stub(&mut self) -> CodePtr {
         let vm_entry = self.vm_entry;
         let codeptr = self.jit.get_current_address();
         let counter = self.jit.const_i32(5);
@@ -618,7 +635,7 @@ impl Codegen {
         codeptr
     }
 
-    pub(super) fn gen_vm_stub(&mut self) -> CodePtr {
+    fn gen_vm_stub(&mut self) -> CodePtr {
         let vm_entry = self.vm_entry;
         let codeptr = self.jit.get_current_address();
         monoasm!(self.jit,
@@ -664,7 +681,7 @@ impl Codegen {
     ///   r13: pc (dummy for builtin funcions)
     /// ~~~
     ///
-    pub(super) fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
+    fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
         let label = self.jit.get_current_address();
         // calculate stack offset
         monoasm!(self.jit,
@@ -709,7 +726,7 @@ impl Codegen {
     /// -0x18 |  %0 (self)  |
     ///       +-------------+
     /// ~~~
-    pub(super) fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
+    fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(0);
@@ -745,7 +762,7 @@ impl Codegen {
     /// -0x20 |   %1(val)   |
     ///       +-------------+
     /// ~~~
-    pub(super) fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
+    fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(0);

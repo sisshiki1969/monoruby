@@ -1,4 +1,3 @@
-use monoasm::DestLabel;
 use ruruby_parse::{
     BinOp, BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind,
     Parser, SourceInfoRef,
@@ -10,7 +9,6 @@ use std::path::PathBuf;
 use super::*;
 
 mod class;
-mod compiler;
 mod error;
 mod functions;
 pub use class::*;
@@ -248,21 +246,8 @@ impl Globals {
     pub(super) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
         //let func = &mut globals.func[func_id];
         if self.func[func_id].data.codeptr.is_none() {
-            let codeptr = match self.func[func_id].kind {
-                FuncKind::ISeq(_) => {
-                    let codeptr = if !self.no_jit {
-                        self.codegen.gen_jit_stub()
-                    } else {
-                        self.codegen.gen_vm_stub()
-                    };
-                    //func.data.meta.set_jit();
-                    codeptr
-                }
-                FuncKind::Builtin { abs_address } => self.codegen.wrap_native_func(abs_address),
-                FuncKind::AttrReader { ivar_name } => self.codegen.gen_attr_reader(ivar_name),
-                FuncKind::AttrWriter { ivar_name } => self.codegen.gen_attr_writer(ivar_name),
-            };
-            self.codegen.jit.finalize();
+            let kind = self.func[func_id].kind.clone();
+            let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
             self.func[func_id].data.codeptr = Some(codeptr);
         }
         &self.func[func_id].data
@@ -648,7 +633,7 @@ impl Globals {
     }
 
     #[cfg(any(feature = "emit-asm"))]
-    fn dump_disas(&mut self, sourcemap: Vec<(usize, usize)>, func_id: FuncId) {
+    pub(crate) fn dump_disas(&mut self, sourcemap: Vec<(usize, usize)>, func_id: FuncId) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
         eprintln!(
             "offset:{:?} code: {} bytes  data: {} bytes",

@@ -2,6 +2,7 @@ use super::*;
 
 mod builtins;
 mod bytecodegen;
+mod compiler;
 mod globals;
 mod inst;
 mod op;
@@ -211,10 +212,26 @@ impl Executor {
         )
     }
 
+    pub(crate) fn invoke_method2_if_exists(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: Arg,
+        len: usize,
+    ) -> Option<Value> {
+        if let Some(func_id) = globals.find_method(receiver, method) {
+            globals.check_arg(func_id, len)?;
+            self.invoke_func2(globals, func_id, receiver, args, len)
+        } else {
+            Some(Value::nil())
+        }
+    }
+
     ///
     /// Invoke func with *args*: Args.
     ///
-    pub(crate) fn invoke_func2(
+    fn invoke_func2(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,
