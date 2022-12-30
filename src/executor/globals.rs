@@ -38,6 +38,8 @@ pub struct Globals {
     global_vars: HashMap<IdentId, Value>,
     /// error information.
     error: Option<MonorubyErr>,
+    /// global method cache.
+    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<FuncId>)>,
     /// warning level.
     pub warning: u8,
     /// suppress jit compilation.
@@ -62,6 +64,7 @@ impl Globals {
             func: FnStore::new(),
             class: ClassStore::new(),
             global_vars: HashMap::default(),
+            global_method_cache: HashMap::default(),
             error: None,
             warning,
             no_jit,
@@ -110,6 +113,10 @@ impl Globals {
 
     pub(crate) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
+    }
+
+    pub(crate) fn class_version(&self) -> u32 {
+        unsafe { *self.codegen.class_version_addr }
     }
 
     pub fn exec_startup(&mut self) {
@@ -407,11 +414,13 @@ impl Globals {
     ///
     /// This fn checks whole superclass chain.
     ///
-    pub(crate) fn find_method_for_class(
-        &mut self,
-        mut class_id: ClassId,
-        name: IdentId,
-    ) -> Option<FuncId> {
+    fn find_method_for_class(&mut self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        let class_version = self.class_version();
+        if let Some((version, func)) = self.global_method_cache.get(&(name, class_id)) {
+            if *version == class_version {
+                return *func;
+            }
+        };
         #[cfg(feature = "log-jit")]
         {
             match self.method_cache_stats.get_mut(&(class_id, name)) {
@@ -421,6 +430,13 @@ impl Globals {
                 }
             };
         }
+        let func_id = self.find_method_main(class_id, name);
+        self.global_method_cache
+            .insert((name, class_id), (class_version, func_id));
+        func_id
+    }
+
+    fn find_method_main(&mut self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
