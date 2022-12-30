@@ -25,7 +25,6 @@ impl Codegen {
             len,
             callee_codeptr,
         } = method_info;
-        ctx.dealloc_xmm(ret);
         self.write_back_slot(ctx, recv);
         if let Some(codeptr) = callee_codeptr {
             let cached = InlineCached::new(pc + 1, codeptr);
@@ -35,6 +34,7 @@ impl Codegen {
             }
         }
         self.write_back_range(ctx, args, len);
+        ctx.dealloc_xmm(ret);
         self.gen_call(
             fnstore,
             ctx,
@@ -125,12 +125,12 @@ impl Codegen {
         has_splat: bool,
     ) {
         let MethodInfo { args, len, .. } = method_info;
-        ctx.dealloc_xmm(ret);
         self.write_back_range(ctx, args, len + 1);
         // We must write back and unlink all local vars since they may be accessed from block.
         let wb = ctx.get_locals_write_back();
         self.gen_write_back(wb);
         ctx.dealloc_locals();
+        ctx.dealloc_xmm(ret);
         method_info.args = args + 1;
         self.gen_call(
             fnstore,

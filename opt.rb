@@ -1,7 +1,8 @@
-def f(a,*x)
-  puts "#{x}"
-end
-
-for i in 0..10
-  f *[1,2,3,4,5,6,7,8,9]
-end
+def fact(x)
+  if x <= 1.0 then
+      1.0
+  else
+      x * fact(x-1.0)
+  end
+end;
+puts fact 130.0
