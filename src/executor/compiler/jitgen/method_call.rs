@@ -594,7 +594,7 @@ impl Codegen {
             movq rdi, (len);
         };
         // set arguments
-        self.vm_set_arguments(args, len, true);
+        self.jit_set_arguments(args, len, true);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -646,7 +646,7 @@ impl Codegen {
             movq [rsp - (16 + BP_SELF)], rax;
             movq rdi, (len);
         );
-        self.vm_set_arguments(args, len, has_splat);
+        self.jit_set_arguments(args, len, has_splat);
         // set block
         match block {
             Some(block) => {
@@ -673,18 +673,18 @@ impl Codegen {
     /// ### destroy
     ///
     /// - caller save registers
-    fn vm_set_arguments(&mut self, args: SlotId, len: u16, has_splat: bool) {
+    fn jit_set_arguments(&mut self, args: SlotId, len: u16, has_splat: bool) {
         // set arguments
         if len != 0 {
             let splat = self.splat;
-            monoasm!(self.jit,
-                lea r8, [rsp - (16 + BP_ARG0)];
-            );
-            for i in 0..len {
-                let next = self.jit.label();
-                let reg = args + i;
-                self.load_rax(reg);
-                if has_splat {
+            if has_splat {
+                monoasm!(self.jit,
+                    lea r8, [rsp - (16 + BP_ARG0)];
+                );
+                for i in 0..len {
+                    let next = self.jit.label();
+                    let reg = args + i;
+                    self.load_rax(reg);
                     let no_splat = self.jit.label();
                     monoasm! {self.jit,
                         testq rax, 0b111;
@@ -695,11 +695,19 @@ impl Codegen {
                         jmp next;
                     no_splat:
                     }
+                    monoasm! {self.jit,
+                        movq [r8], rax;
+                        subq r8, 8;
+                    next:
+                    }
                 }
-                monoasm! {self.jit,
-                    movq [r8], rax;
-                    subq r8, 8;
-                next:
+            } else {
+                for i in 0..len {
+                    let reg = args + i;
+                    self.load_rax(reg);
+                    monoasm! {self.jit,
+                        movq [rsp - ((16 + BP_ARG0 + 8 * (i as i64)) as i32)], rax;
+                    }
                 }
             }
         }

@@ -964,6 +964,7 @@ impl Codegen {
             movq r8, r15;  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
+            lea  r9, [r13 + 8];
             movq rax, (set_index);
             call rax;
         };

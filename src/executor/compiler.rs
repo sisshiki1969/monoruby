@@ -152,22 +152,40 @@ extern "C" fn get_index(
     interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 
+extern "C" fn get_array_integer_index(base: Value, index: i64) -> Option<Value> {
+    base.as_array().get_index(index)
+}
+
 extern "C" fn set_index(
     interp: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     index: Value,
     src: Value,
+    class_slot: &mut ClassIdSlot,
 ) -> Option<Value> {
-    match base.class_id() {
+    let base_classid = base.class_id();
+    class_slot.base = base_classid;
+    match base_classid {
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
+                class_slot.idx = INTEGER_CLASS;
                 return base.as_array_mut().set_index(globals, idx, src);
             }
         }
         _ => {}
     }
+    class_slot.idx = index.class_id();
     interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
+}
+
+extern "C" fn set_array_integer_index(
+    mut base: Value,
+    index: i64,
+    globals: &mut Globals,
+    src: Value,
+) -> Option<Value> {
+    base.as_array_mut().set_index(globals, index, src)
 }
 
 extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {

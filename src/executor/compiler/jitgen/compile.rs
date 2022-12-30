@@ -91,17 +91,37 @@ impl Codegen {
         ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm! { self.jit,
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq r8, (pc.get_u64() + 8);
-            movq rax, (get_index);
-            call rax;
-        };
-        self.xmm_restore(&xmm_using);
+        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            let deopt = self.gen_side_deopt(pc, ctx);
+            monoasm! { self.jit,
+                movq rdi, [r14 - (conv(base))]; // base: Value
+                movq rsi, [r14 - (conv(idx))]; // idx: Value
+            };
+            self.guard_class(ARRAY_CLASS, deopt);
+            monoasm! { self.jit,
+                testq rsi, 0b01;
+                jeq deopt;
+                sarq rsi, 1;
+            };
+            self.xmm_save(&xmm_using);
+            monoasm! { self.jit,
+                movq rax, (get_array_integer_index);
+                call rax;
+            };
+            self.xmm_restore(&xmm_using);
+        } else {
+            self.xmm_save(&xmm_using);
+            monoasm! { self.jit,
+                movq rdi, rbx; // &mut Interp
+                movq rsi, r12; // &mut Globals
+                movq rdx, [r14 - (conv(base))]; // base: Value
+                movq rcx, [r14 - (conv(idx))]; // idx: Value
+                movq r8, (pc.get_u64() + 8);
+                movq rax, (get_index);
+                call rax;
+            };
+            self.xmm_restore(&xmm_using);
+        }
         self.handle_error(pc);
         self.store_rax(ret);
     }
@@ -115,17 +135,40 @@ impl Codegen {
         ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm! { self.jit,
-            movq rdx, [r14 - (conv(base))]; // base: Value
-            movq rcx, [r14 - (conv(idx))]; // idx: Value
-            movq r8, [r14 - (conv(src))];  // src: Value
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rax, (set_index);
-            call rax;
-        };
-        self.xmm_restore(&xmm_using);
+        if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            let deopt = self.gen_side_deopt(pc, ctx);
+            monoasm! { self.jit,
+                movq rdi, [r14 - (conv(base))]; // base: Value
+                movq rsi, [r14 - (conv(idx))]; // idx: Value
+            };
+            self.guard_class(ARRAY_CLASS, deopt);
+            monoasm! { self.jit,
+                testq rsi, 0b01;
+                jeq deopt;
+                sarq rsi, 1;
+            };
+            self.xmm_save(&xmm_using);
+            monoasm! { self.jit,
+                movq rdx, r12;
+                movq rcx, [r14 - (conv(src))];
+                movq rax, (set_array_integer_index);
+                call rax;
+            };
+            self.xmm_restore(&xmm_using);
+        } else {
+            self.xmm_save(&xmm_using);
+            monoasm! { self.jit,
+                movq rdx, [r14 - (conv(base))]; // base: Value
+                movq rcx, [r14 - (conv(idx))]; // idx: Value
+                movq r8, [r14 - (conv(src))];  // src: Value
+                movq rdi, rbx; // &mut Interp
+                movq rsi, r12; // &mut Globals
+                movq r9, (pc.get_u64() + 8);
+                movq rax, (set_index);
+                call rax;
+            };
+            self.xmm_restore(&xmm_using);
+        }
         self.handle_error(pc);
     }
 
