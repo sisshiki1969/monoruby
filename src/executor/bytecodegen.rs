@@ -767,19 +767,14 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = if use_mode.use_val() {
-                    Some(info.push().into())
-                } else {
-                    None
-                };
                 return self.gen_method_call(
                     ctx,
                     info,
                     method,
                     Some(receiver),
                     arglist,
-                    ret,
-                    use_mode.is_ret(),
+                    None,
+                    use_mode,
                     loc,
                 );
             }
@@ -788,21 +783,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let ret = if use_mode.use_val() {
-                    Some(info.push().into())
-                } else {
-                    None
-                };
-                return self.gen_method_call(
-                    ctx,
-                    info,
-                    method,
-                    None,
-                    arglist,
-                    ret,
-                    use_mode.is_ret(),
-                    loc,
-                );
+                return self.gen_method_call(ctx, info, method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
                 let ret = if use_mode.use_val() {
@@ -814,21 +795,7 @@ impl IrContext {
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
-                let ret = if use_mode.use_val() {
-                    Some(info.push().into())
-                } else {
-                    None
-                };
-                return self.gen_method_call(
-                    ctx,
-                    info,
-                    method,
-                    None,
-                    arglist,
-                    ret,
-                    use_mode.is_ret(),
-                    loc,
-                );
+                return self.gen_method_call(ctx, info, method, None, arglist, None, use_mode, loc);
             }
             NodeKind::If {
                 box cond,
@@ -1124,7 +1091,16 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
-                self.gen_method_call(ctx, info, method, Some(receiver), arglist, ret, false, loc)?;
+                self.gen_method_call(
+                    ctx,
+                    info,
+                    method,
+                    Some(receiver),
+                    arglist,
+                    ret,
+                    UseMode::Use,
+                    loc,
+                )?;
             }
             NodeKind::FuncCall {
                 method,
@@ -1132,7 +1108,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
-                self.gen_method_call(ctx, info, method, None, arglist, ret, false, loc)?;
+                self.gen_method_call(ctx, info, method, None, arglist, ret, UseMode::Use, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
             NodeKind::CompStmt(nodes) => {
@@ -1298,7 +1274,7 @@ impl IrContext {
         receiver: Option<Node>,
         arglist: ArgList,
         ret: Option<BcReg>,
-        is_ret: bool,
+        use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
         let method = IdentId::get_ident_id_from_string(method);
@@ -1359,6 +1335,13 @@ impl IrContext {
             RecvKind::Local(reg) => reg,
             RecvKind::Temp => info.pop().into(),
         };
+        let ret = if ret.is_some() {
+            ret
+        } else if use_mode.use_val() {
+            Some(info.push().into())
+        } else {
+            None
+        };
         self.gen_call(
             recv,
             method,
@@ -1369,7 +1352,7 @@ impl IrContext {
             has_splat,
             loc,
         );
-        if is_ret {
+        if use_mode.is_ret() {
             self.gen_ret(info, None);
         }
         Ok(())
