@@ -95,6 +95,16 @@ impl Executor {
                     name, func_id.0, index, count
                 );
             }
+            eprintln!("method cache stats");
+            eprintln!("{:20} {:16} {:10}", "func name", "class", "count");
+            for ((class_id, name), count) in &globals.method_cache_stats {
+                eprintln!(
+                    "{:20} {:16} {:10}",
+                    IdentId::get_name(*name),
+                    class_id.get_name(globals),
+                    count
+                );
+            }
         }
 
         res.ok_or_else(|| globals.take_error().unwrap())

@@ -51,6 +51,9 @@ pub struct Globals {
     #[cfg(feature = "log-jit")]
     /// stats for deoptimization
     pub deopt_stats: HashMap<(FuncId, usize), usize>,
+    #[cfg(feature = "log-jit")]
+    /// stats for method cache miss
+    pub method_cache_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
 impl Globals {
@@ -68,6 +71,8 @@ impl Globals {
             lib_directories: vec![],
             #[cfg(feature = "log-jit")]
             deopt_stats: HashMap::default(),
+            #[cfg(feature = "log-jit")]
+            method_cache_stats: HashMap::default(),
         };
         builtins::init_builtins(&mut globals);
         globals.set_ivar(
@@ -422,6 +427,15 @@ impl Globals {
         mut class_id: ClassId,
         name: IdentId,
     ) -> Option<FuncId> {
+        #[cfg(feature = "log-jit")]
+        {
+            match self.method_cache_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c = *c + 1,
+                None => {
+                    self.method_cache_stats.insert((class_id, name), 1);
+                }
+            };
+        }
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }

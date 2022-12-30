@@ -457,7 +457,7 @@ extern "C" fn log_deoptimize(
     globals: &mut Globals,
     func_id: FuncId,
     pc: BcPc,
-    v: Value,
+    v: Option<Value>,
 ) {
     let name = globals.func[func_id].as_ruby_func().name();
     let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
@@ -476,8 +476,13 @@ extern "C" fn log_deoptimize(
                 globals.deopt_stats.insert((func_id, index), 1);
             }
         };
-        eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
+        if let Some(v) = v {
+            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
+        } else {
+            eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt}", index);
+        }
     }
 }
 
@@ -1541,11 +1546,17 @@ impl Codegen {
             ctx.recompile_flag = true;
         }
         let recompile = self.jit.label();
+        let dec = self.jit.label();
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, &ctx);
         monoasm!(self.jit,
-            subl [rip + counter], 1;
+            cmpl [rip + counter], 0;
+            jlt deopt;
             jeq recompile;
+        dec:
+            subl [rip + counter], 1;
+            xorq rdi, rdi;
+            jmp deopt;
         );
         self.jit.select_page(1);
         monoasm!(self.jit,
@@ -1567,8 +1578,7 @@ impl Codegen {
             );
         }
         monoasm!(self.jit,
-            movq rdi, (NIL_VALUE);
-            jmp deopt;
+            jmp dec;
         );
         self.jit.select_page(0);
     }

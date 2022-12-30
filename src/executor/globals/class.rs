@@ -17,7 +17,7 @@ pub const TIME_CLASS: ClassId = ClassId::new(10);
 pub const ARRAY_CLASS: ClassId = ClassId::new(11);
 pub const RANGE_CLASS: ClassId = ClassId::new(12);
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
 pub struct ClassId(pub u32);
 

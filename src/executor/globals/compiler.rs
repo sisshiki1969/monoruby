@@ -593,8 +593,11 @@ impl Codegen {
         let codeptr = self.jit.get_current_address();
         let counter = self.jit.const_i32(5);
         let entry = self.jit.label();
+        let next = self.jit.label();
         monoasm!(self.jit,
         entry:
+            jmp  next;
+        next:
             subl [rip + counter], 1;
             jne vm_entry;
             movl rsi, [rsp - (8 + BP_META_FUNCID)];
@@ -604,7 +607,6 @@ impl Codegen {
             movq rdi, r12;
             movq rax, (Self::exec_jit_compile);
             call rax;
-            movw [rip + entry], 0xe9;   // jmp
             lea rdi, [rip + entry];
             addq rdi, 5;
             subq rax, rdi;

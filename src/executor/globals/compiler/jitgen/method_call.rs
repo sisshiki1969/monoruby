@@ -240,14 +240,10 @@ impl Codegen {
         //   rdi: args len
         //
         let method_resolved = self.jit.label();
-        let patch_meta = self.jit.label();
-        let patch_adr = self.jit.label();
-        let patch_pc = self.jit.label();
         let slow_path = self.jit.label();
         let raise = self.jit.label();
         let global_class_version = self.class_version;
         let entry_find_method = self.entry_find_method;
-        let entry_panic = self.entry_panic;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         // class guard
@@ -265,38 +261,34 @@ impl Codegen {
                 movl r15, rax;  // r15: receiver class_id
             );
         }
-        monoasm!(self.jit,
+        monoasm! {self.jit,
             movq r13, (pc.get_u64());
+            // check inline cache
+            cmpq [r13 + 8], 0;
+            jeq  slow_path;
+            // class guard
             cmpl r15, [r13 - 8];
-            jne slow_path;
-        );
-        // version guard
-        monoasm!(self.jit,
+            jne  slow_path;
+            // version guard
             movl rax, [rip + global_class_version];
             cmpl [r13 - 4], rax;
-            jne slow_path;
+            jne  slow_path;
         method_resolved:
-        );
+        }
 
         self.set_method_outer();
-        self.push_frame();
         self.set_self_and_args(method_info, block, has_splat);
-        self.set_lfp();
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, qword 0;
-        patch_meta:
+            movq rax, [r13 + 16];
             movq [rsp - (16 + BP_META)], rax;
+            // set codeptr
+            movq rax, [r13 + 8];
             // set pc
-            movq r13, qword 0;
-        patch_pc:
-            // patch point
-            call entry_panic;
-        patch_adr:
+            movq r13, [r13 + 24];
         );
-
-        self.pop_frame();
+        self.call_rax();
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
             testq rax, rax;
@@ -319,25 +311,14 @@ impl Codegen {
             testq rax, rax;
             jeq raise;
 
-            lea rdi, [rip + patch_meta];
-            subq rdi, 8;
-            movq rcx, [rax + (FUNCDATA_OFFSET_META)];
-            movq [rdi], rcx;
-            movq [r13 + 16], rcx;
+            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
+            movq [r13 + 16], rdi;
 
-            lea rdi, [rip + patch_pc];
-            subq rdi, 8;
-            movq rcx, [rax + (FUNCDATA_OFFSET_PC)];
-            movq [rdi], rcx;
-            movq [r13 + 24], rcx;
+            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
+            movq [r13 + 24], rdi;
 
-            movq rax, [rax + (FUNCDATA_OFFSET_CODEPTR)];
-            movq [r13 + 8], rax;
-            lea rdi, [rip + patch_adr];
-            // calculate a displacement to the function address.
-            subq rax, rdi;
-            // apply patch.
-            movl [rdi - 4], rax;
+            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
+            movq [r13 + 8], rdi;
 
             movl rax, [rip + global_class_version];
             movl [r13 - 4], rax;
@@ -346,8 +327,8 @@ impl Codegen {
         );
         let entry_return = self.vm_return;
         // raise error.
+        self.jit.bind_label(raise);
         monoasm!(self.jit,
-        raise:
             movq r13, ((pc + 2).get_u64());
             jmp entry_return;
         );
@@ -644,9 +625,6 @@ impl Codegen {
     }
 
     /// Set *self*, len, block, and arguments.
-    ///
-    /// ### in
-    /// - rdi <- the number of arguments
     ///
     /// ### out
     /// - rdi <- the number of arguments
