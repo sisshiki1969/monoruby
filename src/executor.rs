@@ -40,7 +40,10 @@ impl std::default::Default for CFP {
 }
 
 impl CFP {
-    fn next(&self) -> Self {
+    ///
+    /// Get CFP of previous frame of *self*.
+    ///
+    fn prev(&self) -> Self {
         unsafe { *self.0 }
     }
 
@@ -54,6 +57,30 @@ impl CFP {
 
     fn bp(&self) -> *const usize {
         unsafe { self.0.add(BP_PREV_CFP as usize / 8) as _ }
+    }
+
+    ///
+    /// Get Meta of CFP.
+    ///
+    fn meta(&self) -> Meta {
+        let bp = self.bp();
+        Meta::new(unsafe { *bp.sub(BP_META as usize / 8) as u64 })
+    }
+
+    ///
+    /// Get outer of CFP.
+    ///
+    fn outer(&self) -> usize {
+        let bp = self.bp();
+        unsafe { *bp.sub(BP_OUTER as usize / 8) }
+    }
+
+    ///
+    /// Get a value of register slot *index*.
+    ///
+    fn register(&self, index: usize) -> Value {
+        let bp = self.bp();
+        Value::from(unsafe { *bp.sub(BP_SELF as usize / 8 + index) } as u64)
     }
 }
 
@@ -85,22 +112,23 @@ impl Executor {
         {
             eprintln!();
             eprintln!("deoptimization stats");
-            eprintln!(
-                "{:15} FuncId({:3}) [{:05}]  {:10}",
-                "func name", "", "index", "count"
-            );
-            for ((func_id, index), count) in &globals.deopt_stats {
+            eprintln!("{:20} FuncId [{:05}]  {:10}", "func name", "index", "count");
+            eprintln!("-----------------------------------------------");
+            let mut v: Vec<_> = globals.deopt_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((func_id, index), count) in v {
                 let name = globals.func[*func_id].as_ruby_func().name();
-                eprintln!(
-                    "{:15} FuncId({:3}) [{:05}]  {:10}",
-                    name, func_id.0, index, count
-                );
+                eprintln!("{:20}  {:5} [{:05}]  {:10}", name, func_id.0, index, count);
             }
+            eprintln!();
             eprintln!("method cache stats");
-            eprintln!("{:20} {:16} {:10}", "func name", "class", "count");
-            for ((class_id, name), count) in &globals.method_cache_stats {
+            eprintln!("{:20} {:15} {:10}", "func name", "class", "count");
+            eprintln!("-----------------------------------------------");
+            let mut v: Vec<_> = globals.method_cache_stats.iter().collect();
+            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+            for ((class_id, name), count) in v {
                 eprintln!(
-                    "{:20} {:16} {:10}",
+                    "{:20} {:15} {:10}",
                     IdentId::get_name(*name),
                     class_id.get_name(globals),
                     count

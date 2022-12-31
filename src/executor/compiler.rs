@@ -38,6 +38,7 @@ pub struct Codegen {
     pub jit: JitMemory,
     pub class_version: DestLabel,
     pub class_version_addr: *mut u32,
+    pub alloc_flag: DestLabel,
     pub const_version: DestLabel,
     pub entry_panic: DestLabel,
     pub vm_entry: DestLabel,
@@ -292,6 +293,7 @@ impl Codegen {
     pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(0);
+        let alloc_flag = jit.const_i32(0);
         let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
         let entry_find_method = jit.label();
@@ -416,6 +418,7 @@ impl Codegen {
             jit,
             class_version,
             class_version_addr: std::ptr::null_mut(),
+            alloc_flag,
             const_version,
             entry_panic,
             entry_find_method,
@@ -439,6 +442,10 @@ impl Codegen {
         codegen.jit.finalize();
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
+        let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
+        ALLOC.with(|alloc| {
+            alloc.borrow_mut().set_alloc_flag_address(address);
+        });
         codegen
     }
 
@@ -454,6 +461,25 @@ impl Codegen {
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rsi;
         );
+    }
+
+    ///
+    /// Execute garbage collection.
+    ///
+    /// ### destroy
+    /// - caller save registers
+    fn execute_gc(&mut self) {
+        let alloc_flag = self.alloc_flag;
+        let exit = self.jit.label();
+        monoasm! { self.jit,
+            cmpl [rip + alloc_flag], 0;
+            jeq  exit;
+            movq rdi, r12;
+            movq rsi, [rbx];
+            movq rax, (execute_gc);
+            call rax;
+        exit:
+        };
     }
 
     /// Set outer.

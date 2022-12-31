@@ -60,10 +60,31 @@ impl GC<RValue> for RValue {
         }
         if let Some(v) = &self.var_table {
             v.iter().for_each(|v| {
-                if let Some(v) = v {
-                    v.mark(alloc)
-                }
+                v.map(|v| {
+                    v.mark(alloc);
+                });
             });
+        }
+        match self.kind() {
+            ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+            ObjKind::CLASS | ObjKind::MODULE => {}
+            ObjKind::OBJECT => {
+                self.as_object().iter().for_each(|v| {
+                    v.map(|v| {
+                        v.mark(alloc);
+                    });
+                });
+            }
+            ObjKind::BIGNUM | ObjKind::FLOAT | ObjKind::TIME | ObjKind::BYTES => {}
+            ObjKind::ARRAY | ObjKind::SPLAT => {
+                self.as_array().iter().for_each(|v| v.mark(alloc));
+            }
+            ObjKind::RANGE => {
+                let range = self.as_range();
+                range.start.mark(alloc);
+                range.end.mark(alloc);
+            }
+            _ => unreachable!("mark"),
         }
     }
 }

@@ -551,7 +551,7 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals)
         eprint!("  [{}]: cfp:{:?} ", i, cfp);
         let ret_addr = cfp.return_addr();
         eprintln!("ret adr: {:?} ", ret_addr);
-        let prev_cfp = cfp.next();
+        let prev_cfp = cfp.prev();
         _dump_frame_info(interp, globals, cfp);
         if prev_cfp.is_null() {
             break;
@@ -562,9 +562,8 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals)
 }
 
 fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, cfp: CFP) {
-    let bp = cfp.bp();
-    let meta = Meta::new(unsafe { *bp.sub(BP_META as usize / 8) as u64 });
-    let outer = unsafe { *bp.sub(BP_OUTER as usize / 8) };
+    let meta = cfp.meta();
+    let outer = cfp.outer();
     let func_id = meta.func_id();
     eprintln!(
         "    name:[{}] outer:0x{:012x} {:?}",
@@ -576,7 +575,7 @@ fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, cfp: CFP) {
     );
     eprint!("    ");
     for r in 0..meta.reg_num() as usize {
-        let v = unsafe { Value::from(*bp.sub(BP_SELF as usize / 8 + r) as u64) };
+        let v = cfp.register(r);
         eprint!(
             "%{}{}:[{}] ",
             r,

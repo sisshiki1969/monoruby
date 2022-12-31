@@ -250,6 +250,18 @@ pub(super) struct ClassInfo {
     ivar_names: HashMap<IdentId, IvarId>,
 }
 
+impl GC<RValue> for ClassInfo {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        if let Some(v) = self.object {
+            v.mark(alloc);
+        }
+        if let Some(v) = self.is_singleton {
+            v.mark(alloc);
+        }
+        self.constants.values().for_each(|v| v.mark(alloc));
+    }
+}
+
 impl ClassInfo {
     fn new(super_class_id: Option<ClassId>) -> Self {
         Self {
@@ -296,6 +308,12 @@ impl std::ops::Index<ClassId> for ClassStore {
 impl std::ops::IndexMut<ClassId> for ClassStore {
     fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
         &mut self.classes[index.0 as usize]
+    }
+}
+
+impl GC<RValue> for ClassStore {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.classes.iter().for_each(|info| info.mark(alloc));
     }
 }
 

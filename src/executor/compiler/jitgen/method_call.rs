@@ -538,14 +538,13 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
     ) {
-        // argument registers:
-        //   rdi: args len
-        //
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-
+        self.execute_gc();
         self.set_method_outer();
         self.set_self_and_args(method_info, block, has_splat);
+        // argument registers:
+        //   rdi: args len
         monoasm!(self.jit,
             // set meta.
             movq rax, (cached.meta.get());

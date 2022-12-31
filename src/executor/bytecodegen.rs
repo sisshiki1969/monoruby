@@ -231,6 +231,7 @@ impl IrContext {
 
     fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
         let reg = BcReg::get_reg(info, dst);
+        info.literals.push(v);
         self.push(BcIr::Literal(reg, v), Loc::default());
     }
 

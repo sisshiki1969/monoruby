@@ -56,6 +56,54 @@ pub struct Globals {
     pub method_cache_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
+impl<'a> GC<RValue> for Root<'a> {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.globals.class.mark(alloc);
+        self.globals.func.mark(alloc);
+        self.globals
+            .global_vars
+            .values()
+            .for_each(|v| v.mark(alloc));
+        let mut cfp = self.current_cfp;
+        loop {
+            let meta = cfp.meta();
+            //let outer = unsafe { *bp.sub(BP_OUTER as usize / 8) };
+            for r in 0..meta.reg_num() as usize {
+                let v = cfp.register(r);
+                v.mark(alloc);
+            }
+
+            cfp = cfp.prev();
+            if cfp.is_null() {
+                break;
+            }
+        }
+    }
+}
+
+struct Root<'a> {
+    globals: &'a Globals,
+    current_cfp: CFP,
+}
+
+impl<'a> GCRoot<RValue> for Root<'a> {
+    fn startup_flag(&self) -> bool {
+        true
+    }
+}
+
+///
+/// Execute garbage collection.
+///
+pub extern "C" fn execute_gc(globals: &Globals, current_cfp: CFP) {
+    ALLOC.with(|alloc| {
+        alloc.borrow_mut().check_gc(&Root {
+            globals,
+            current_cfp,
+        })
+    });
+}
+
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
         let main_object = Value::new_object(OBJECT_CLASS);
@@ -265,7 +313,7 @@ impl Globals {
             let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
             let mut cfp = interp.cfp;
             for _ in 0..bh as i16 as u16 {
-                cfp = cfp.next();
+                cfp = cfp.prev();
             }
             let func_data = self.compile_on_demand(func_id) as _;
             return BlockData {
@@ -415,12 +463,6 @@ impl Globals {
     /// This fn checks whole superclass chain.
     ///
     fn find_method_for_class(&mut self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        let class_version = self.class_version();
-        if let Some((version, func)) = self.global_method_cache.get(&(name, class_id)) {
-            if *version == class_version {
-                return *func;
-            }
-        };
         #[cfg(feature = "log-jit")]
         {
             match self.method_cache_stats.get_mut(&(class_id, name)) {
@@ -430,6 +472,12 @@ impl Globals {
                 }
             };
         }
+        let class_version = self.class_version();
+        if let Some((version, func)) = self.global_method_cache.get(&(name, class_id)) {
+            if *version == class_version {
+                return *func;
+            }
+        };
         let func_id = self.find_method_main(class_id, name);
         self.global_method_cache
             .insert((name, class_id), (class_version, func_id));

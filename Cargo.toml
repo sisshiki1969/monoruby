@@ -22,6 +22,7 @@ emit-asm = []
 emit-bc = []
 emit-tir = []
 log-jit = []
+gc-debug = []
 
 [profile.dev]
 opt-level = 1

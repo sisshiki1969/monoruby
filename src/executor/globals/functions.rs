@@ -6,7 +6,7 @@ use std::pin::Pin;
 ///
 /// ID of function.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct FuncId(pub u32);
 
@@ -63,6 +63,12 @@ impl std::ops::Index<FuncId> for Funcs {
 impl std::ops::IndexMut<FuncId> for Funcs {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
         &mut self.0[index.0 as usize]
+    }
+}
+
+impl GC<RValue> for Funcs {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.0.iter().for_each(|info| info.mark(alloc))
     }
 }
 
@@ -299,6 +305,12 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
     }
 }
 
+impl GC<RValue> for FnStore {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.functions.mark(alloc);
+    }
+}
+
 impl FnStore {
     pub(super) fn new() -> Self {
         Self {
@@ -383,6 +395,15 @@ pub(crate) enum FuncKind {
     AttrWriter { ivar_name: IdentId },
 }
 
+impl GC<RValue> for FuncKind {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        match self {
+            FuncKind::ISeq(info) => info.literals.iter().for_each(|v| v.mark(alloc)),
+            _ => {}
+        }
+    }
+}
+
 impl std::default::Default for FuncKind {
     fn default() -> Self {
         Self::Builtin { abs_address: 0 }
@@ -402,6 +423,12 @@ pub(crate) struct FuncInfo {
     arity: i32,
     pub(crate) data: FuncData,
     pub(crate) kind: FuncKind,
+}
+
+impl GC<RValue> for FuncInfo {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.kind.mark(alloc);
+    }
 }
 
 impl FuncInfo {
@@ -580,6 +607,8 @@ pub(crate) struct ISeqInfo {
     locals: HashMap<String, u16>,
     /// outer local variables.
     outer_locals: Vec<HashMap<String, u16>>,
+    /// literal values. (for GC)
+    pub literals: Vec<Value>,
     /// The current register id.
     pub temp: u16,
     /// The number of temporary registers.
@@ -624,6 +653,7 @@ impl ISeqInfo {
             optional,
             locals: HashMap::default(),
             outer_locals,
+            literals: vec![],
             temp: 0,
             temp_num: 0,
             ast: Some(body),

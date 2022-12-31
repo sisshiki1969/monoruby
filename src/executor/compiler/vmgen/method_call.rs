@@ -61,12 +61,16 @@ impl Codegen {
         self.vm_get_rdi();
         monoasm! { self.jit,
             pushq rdi;
-            // rsp + 24:[%ret]
-            // rsp + 16:[pc]
-            // rsp + 08:[method_name:IdentId]
-            // rsp + 00:[recv:Value]
+        }
+        // rsp + 24:[%ret]
+        // rsp + 16:[pc]
+        // rsp + 08:[method_name:IdentId]
+        // rsp + 00:[recv:Value]
 
-            // rdi: receiver: Value
+        self.execute_gc();
+        // rdi: receiver: Value
+        monoasm! { self.jit,
+            movq rdi, [rsp];
             movq rax, (Value::get_class);
             call rax;
             movl r15, rax;
