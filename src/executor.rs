@@ -60,27 +60,45 @@ impl CFP {
     }
 
     ///
-    /// Get Meta of CFP.
+    /// Get LFP.
     ///
-    fn meta(&self) -> Meta {
+    fn lfp(&self) -> LFP {
         let bp = self.bp();
-        Meta::new(unsafe { *bp.sub(BP_META as usize / 8) as u64 })
+        LFP(unsafe { *bp.sub(BP_LFP as usize / 8) as _ })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct LFP(*const u8);
+
+impl LFP {
+    ///
+    /// Get outer.
+    ///
+    fn outer(&self) -> usize {
+        unsafe { *(self.0.sub(BP_OUTER as usize) as *const usize) }
     }
 
     ///
-    /// Get outer of CFP.
+    /// Get Meta.
     ///
-    fn outer(&self) -> usize {
-        let bp = self.bp();
-        unsafe { *bp.sub(BP_OUTER as usize / 8) }
+    fn meta(&self) -> Meta {
+        Meta::new(unsafe { *(self.0.sub(BP_META as usize) as *const u64) })
+    }
+
+    ///
+    /// Get block.
+    ///
+    fn block(&self) -> Option<Value> {
+        unsafe { *(self.0.sub(BP_BLOCK as usize) as *const Option<Value>) }
     }
 
     ///
     /// Get a value of register slot *index*.
     ///
     fn register(&self, index: usize) -> Value {
-        let bp = self.bp();
-        Value::from(unsafe { *bp.sub(BP_SELF as usize / 8 + index) } as u64)
+        unsafe { *(self.0.sub(BP_SELF as usize + 8 * index) as *const Value) }
     }
 }
 

@@ -551,6 +551,15 @@ mod test {
     }
 
     #[test]
+    fn test_stacktrace2() {
+        run_test_no_result_check(
+            r##"
+        1.times { 1.times { __dump } }
+        "##,
+        );
+    }
+
+    #[test]
     fn test_fibpoly() {
         run_test2(
             r#"

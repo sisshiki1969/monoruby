@@ -66,12 +66,12 @@ impl<'a> GC<RValue> for Root<'a> {
             .for_each(|v| v.mark(alloc));
         let mut cfp = self.current_cfp;
         loop {
-            let meta = cfp.meta();
-            //let outer = unsafe { *bp.sub(BP_OUTER as usize / 8) };
+            let meta = cfp.lfp().meta();
             for r in 0..meta.reg_num() as usize {
-                let v = cfp.register(r);
+                let v = cfp.lfp().register(r);
                 v.mark(alloc);
             }
+            cfp.lfp().block().map(|v| v.mark(alloc));
 
             cfp = cfp.prev();
             if cfp.is_null() {
