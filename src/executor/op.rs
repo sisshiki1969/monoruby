@@ -428,7 +428,7 @@ pub extern "C" fn make_splat(src: *mut Value) {
     unsafe { *src = Value::new_splat(*src) };
 }
 
-pub extern "C" fn alias_method(
+pub(in crate::executor) extern "C" fn alias_method(
     globals: &mut Globals,
     self_val: Value,
     new: Value,

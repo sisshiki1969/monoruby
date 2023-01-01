@@ -141,7 +141,7 @@ impl LoopAnalysis {
                 continue;
             }
 
-            match self.pc.op1() {
+            match self.pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
@@ -281,7 +281,7 @@ impl LoopAnalysis {
                         len,
                         callee_codeptr,
                     } = method_info;
-                    match (self.pc - 1).op1() {
+                    match (self.pc - 1).get_ir() {
                         TraceIr::MethodCall { ret, .. } => {
                             if let Some(codeptr) = callee_codeptr {
                                 let cached = InlineCached::new(self.pc, codeptr);

@@ -11,6 +11,7 @@ use super::*;
 mod class;
 mod error;
 mod functions;
+mod method;
 pub use class::*;
 pub use compiler::*;
 pub use error::*;
@@ -24,36 +25,9 @@ pub enum InlineMethod {
     MathSin,
 }
 
-///
-/// Global state.
-///
-pub struct Globals {
-    /// code generator.
-    pub codegen: Codegen,
-    /// function info.
-    pub(crate) func: FnStore,
-    /// class table.
-    class: ClassStore,
-    /// globals variables.
-    global_vars: HashMap<IdentId, Value>,
-    /// error information.
-    error: Option<MonorubyErr>,
-    /// global method cache.
-    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<FuncId>)>,
-    /// warning level.
-    pub warning: u8,
-    /// suppress jit compilation.
-    pub no_jit: bool,
-    /// stdout.
-    stdout: BufWriter<Stdout>,
-    /// library directries.
-    pub lib_directories: Vec<String>,
-    #[cfg(feature = "log-jit")]
-    /// stats for deoptimization
-    pub deopt_stats: HashMap<(FuncId, usize), usize>,
-    #[cfg(feature = "log-jit")]
-    /// stats for method cache miss
-    pub method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+struct Root<'a> {
+    globals: &'a Globals,
+    current_cfp: CFP,
 }
 
 impl<'a> GC<RValue> for Root<'a> {
@@ -81,11 +55,6 @@ impl<'a> GC<RValue> for Root<'a> {
     }
 }
 
-struct Root<'a> {
-    globals: &'a Globals,
-    current_cfp: CFP,
-}
-
 impl<'a> GCRoot<RValue> for Root<'a> {
     fn startup_flag(&self) -> bool {
         true
@@ -93,9 +62,41 @@ impl<'a> GCRoot<RValue> for Root<'a> {
 }
 
 ///
+/// Global state.
+///
+pub struct Globals {
+    /// code generator.
+    pub codegen: Codegen,
+    /// function info.
+    pub(crate) func: FnStore,
+    /// class table.
+    class: ClassStore,
+    /// globals variables.
+    global_vars: HashMap<IdentId, Value>,
+    /// error information.
+    error: Option<MonorubyErr>,
+    /// global method cache.
+    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<FuncId>)>,
+    /// warning level.
+    pub(super) warning: u8,
+    /// suppress jit compilation.
+    pub(super) no_jit: bool,
+    /// stdout.
+    stdout: BufWriter<Stdout>,
+    /// library directries.
+    pub lib_directories: Vec<String>,
+    #[cfg(feature = "log-jit")]
+    /// stats for deoptimization
+    pub(crate) deopt_stats: HashMap<(FuncId, usize), usize>,
+    #[cfg(feature = "log-jit")]
+    /// stats for method cache miss
+    pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+}
+
+///
 /// Execute garbage collection.
 ///
-pub extern "C" fn execute_gc(globals: &Globals, current_cfp: CFP) {
+pub(in crate::executor) extern "C" fn execute_gc(globals: &Globals, current_cfp: CFP) {
     ALLOC.with(|alloc| {
         alloc.borrow_mut().check_gc(&Root {
             globals,
@@ -140,33 +141,6 @@ impl Globals {
         }
     }
 
-    pub(crate) fn flush_stdout(&mut self) {
-        self.stdout.flush().unwrap();
-    }
-
-    pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
-        self.stdout.write_all(bytes).unwrap();
-    }
-
-    pub(crate) fn set_gvar(&mut self, name: IdentId, val: Value) {
-        self.global_vars.insert(name, val);
-    }
-
-    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Value {
-        match self.global_vars.get(&name) {
-            Some(val) => *val,
-            None => Value::nil(),
-        }
-    }
-
-    pub(crate) fn class_version_inc(&mut self) {
-        unsafe { *self.codegen.class_version_addr += 1 }
-    }
-
-    pub(crate) fn class_version(&self) -> u32 {
-        unsafe { *self.codegen.class_version_addr }
-    }
-
     pub fn exec_startup(&mut self) {
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
@@ -208,7 +182,49 @@ impl Globals {
         );
     }
 
-    pub fn load_lib(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
+    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
+        match Parser::parse_program(code, path.into()) {
+            Ok(res) => self.func.compile_script(res.node, res.source_info),
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }
+
+    pub fn compile_script_with_binding(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+        context: Option<LvarCollector>,
+    ) -> Result<(FuncId, LvarCollector)> {
+        match Parser::parse_program_binding(code, path.into(), context, None) {
+            Ok(res) => {
+                let collector = res.lvar_collector;
+                let fid = self.func.compile_script(res.node, res.source_info)?;
+                Ok((fid, collector))
+            }
+            Err(err) => Err(MonorubyErr::parse(err)),
+        }
+    }
+
+    pub(crate) fn flush_stdout(&mut self) {
+        self.stdout.flush().unwrap();
+    }
+
+    pub(crate) fn write_stdout(&mut self, bytes: &[u8]) {
+        self.stdout.write_all(bytes).unwrap();
+    }
+
+    pub(crate) fn set_gvar(&mut self, name: IdentId, val: Value) {
+        self.global_vars.insert(name, val);
+    }
+
+    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Value {
+        match self.global_vars.get(&name) {
+            Some(val) => *val,
+            None => Value::nil(),
+        }
+    }
+
+    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
         for lib in self.lib_directories.clone() {
             let mut lib = std::path::PathBuf::from(lib);
             lib.push(path);
@@ -226,47 +242,6 @@ impl Globals {
         self.err_cant_load(None, path);
         None
     }
-
-    pub fn load_file(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
-        let mut file_body = String::new();
-        match std::fs::OpenOptions::new().read(true).open(path) {
-            Ok(mut file) => match file.read_to_string(&mut file_body) {
-                Ok(_) => {}
-                Err(err) => {
-                    self.err_cant_load(Some(err), path);
-                    return None;
-                }
-            },
-            Err(err) => {
-                self.err_cant_load(Some(err), path);
-                return None;
-            }
-        };
-
-        Some((file_body, path.into()))
-    }
-
-    ///
-    /// ## stack layout for JIT-ed code (just after prologue).
-    ///
-    ///~~~text
-    ///       +-------------+
-    /// +0x08 | return addr |
-    ///       +-------------+
-    ///  0x00 |  prev rbp   | <- rbp
-    ///       +-------------+  
-    /// -0x08 |    meta     |  
-    ///       +-------------+  
-    /// -0x10 |     %0      |
-    ///       +-------------+
-    /// -0x18 |     %1      |
-    ///       +-------------+
-    ///       |      :      |
-    ///       +-------------+
-    /// -0xy0 |    %(n-1)   | <- rsp
-    ///       +-------------+
-    ///       |      :      |
-    /// ~~~
 
     /// ## ABI of JIT-compiled code.
     ///
@@ -308,7 +283,7 @@ impl Globals {
         &self.func[func_id].data
     }
 
-    pub(crate) fn get_block_data(&mut self, block_handler: Value, interp: &Executor) -> BlockData {
+    pub(super) fn get_block_data(&mut self, block_handler: Value, interp: &Executor) -> BlockData {
         if let Some(bh) = block_handler.try_fixnum() {
             let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
             let mut cfp = interp.cfp;
@@ -323,68 +298,44 @@ impl Globals {
         }
         unreachable!()
     }
-}
 
-#[repr(C)]
-pub(crate) struct BlockData {
-    pub(crate) outer_cfp: CFP,
-    pub(crate) func_data: *const FuncData,
+    pub(super) fn execute(
+        &mut self,
+        executor: &mut Executor,
+        func_data: *const FuncData,
+    ) -> Option<Value> {
+        (self.codegen.entry_point)(executor, self, func_data)
+    }
+
+    fn class_version_inc(&mut self) {
+        unsafe { *self.codegen.class_version_addr += 1 }
+    }
+
+    fn class_version(&self) -> u32 {
+        unsafe { *self.codegen.class_version_addr }
+    }
+
+    fn load_file(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
+        let mut file_body = String::new();
+        match std::fs::OpenOptions::new().read(true).open(path) {
+            Ok(mut file) => match file.read_to_string(&mut file_body) {
+                Ok(_) => {}
+                Err(err) => {
+                    self.err_cant_load(Some(err), path);
+                    return None;
+                }
+            },
+            Err(err) => {
+                self.err_cant_load(Some(err), path);
+                return None;
+            }
+        };
+
+        Some((file_body, path.into()))
+    }
 }
 
 impl Globals {
-    fn array_tos(&self, v: &ArrayInner) -> String {
-        match v.len() {
-            0 => "[]".to_string(),
-            1 => format!("[{}]", self.val_inspect(v[0])),
-            _ => {
-                let mut s = format!("[{}", self.val_inspect(v[0]));
-                for val in v[1..].iter() {
-                    s += &format!(", {}", self.val_inspect(*val));
-                }
-                s += "]";
-                s
-            }
-        }
-    }
-
-    fn object_tos(&self, val: Value) -> String {
-        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.val_tos(name)
-        } else {
-            format!(
-                "#<{}:0x{:016x}>",
-                val.class_id().get_name(self),
-                val.rvalue().id()
-            )
-        }
-    }
-
-    fn object_inspect(&self, val: Value) -> String {
-        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.val_tos(name)
-        } else {
-            let mut s = String::new();
-            for (id, v) in self.get_ivars(val).into_iter() {
-                s += &format!(" {}={}", IdentId::get_name(id), self.val_inspect(v));
-            }
-            format!(
-                "#<{}:0x{:016x}{s}>",
-                val.class_id().get_name(self),
-                val.rvalue().id()
-            )
-        }
-    }
-
-    fn range_inspect(&self, val: Value) -> String {
-        let range = val.as_range();
-        format!(
-            "{}{}{}",
-            self.val_inspect(range.start),
-            if range.exclude_end() { "..." } else { ".." },
-            self.val_inspect(range.end),
-        )
-    }
-
     pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
@@ -439,7 +390,12 @@ impl Globals {
         }
     }
 
-    pub fn generate_range(&mut self, start: Value, end: Value, exclude_end: bool) -> Option<Value> {
+    pub(crate) fn generate_range(
+        &mut self,
+        start: Value,
+        end: Value,
+        exclude_end: bool,
+    ) -> Option<Value> {
         if start.get_real_class_id(self) != end.get_real_class_id(self) {
             self.err_bad_range(start, end);
             return None;
@@ -447,76 +403,57 @@ impl Globals {
         Some(Value::new_range(start, end, exclude_end))
     }
 
-    ///
-    /// Find method *name* for object *obj*.
-    ///
-    /// This fn checks whole superclass chain.
-    ///
-    pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
-        let class_id = obj.class_id();
-        self.find_method_for_class(class_id, name)
-    }
-
-    ///
-    /// Find method *name* of class with *class_id*.
-    ///
-    /// This fn checks whole superclass chain.
-    ///
-    fn find_method_for_class(&mut self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        #[cfg(feature = "log-jit")]
-        {
-            match self.method_cache_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c = *c + 1,
-                None => {
-                    self.method_cache_stats.insert((class_id, name), 1);
+    fn array_tos(&self, v: &ArrayInner) -> String {
+        match v.len() {
+            0 => "[]".to_string(),
+            1 => format!("[{}]", self.val_inspect(v[0])),
+            _ => {
+                let mut s = format!("[{}", self.val_inspect(v[0]));
+                for val in v[1..].iter() {
+                    s += &format!(", {}", self.val_inspect(*val));
                 }
-            };
-        }
-        let class_version = self.class_version();
-        if let Some((version, func)) = self.global_method_cache.get(&(name, class_id)) {
-            if *version == class_version {
-                return *func;
+                s += "]";
+                s
             }
-        };
-        let func_id = self.find_method_main(class_id, name);
-        self.global_method_cache
-            .insert((name, class_id), (class_version, func_id));
-        func_id
+        }
     }
 
-    fn find_method_main(&mut self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        if let Some(func_id) = self.get_method(class_id, name) {
-            return Some(func_id);
+    fn object_tos(&self, val: Value) -> String {
+        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
+            self.val_tos(name)
+        } else {
+            format!(
+                "#<{}:0x{:016x}>",
+                val.class_id().get_name(self),
+                val.rvalue().id()
+            )
         }
-        while let Some(super_class) = class_id.super_class(self) {
-            class_id = super_class;
-            if let Some(func_id) = self.get_method(class_id, name) {
-                return Some(func_id);
-            }
-        }
-        None
     }
 
-    ///
-    /// Find method *name* for object *obj*. If not found, return MethodNotFound error.
-    ///
-    /// This fn checks whole superclass chain.
-    ///
-    pub(crate) fn find_method_checked(
-        &mut self,
-        obj: Value,
-        func_name: IdentId,
-        args_len: usize,
-    ) -> Option<FuncId> {
-        let func_id = match self.find_method(obj, func_name) {
-            Some(id) => id,
-            None => {
-                self.err_method_not_found(func_name, obj);
-                return None;
+    fn object_inspect(&self, val: Value) -> String {
+        if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
+            self.val_tos(name)
+        } else {
+            let mut s = String::new();
+            for (id, v) in self.get_ivars(val).into_iter() {
+                s += &format!(" {}={}", IdentId::get_name(id), self.val_inspect(v));
             }
-        };
-        self.check_arg(func_id, args_len)?;
-        Some(func_id)
+            format!(
+                "#<{}:0x{:016x}{s}>",
+                val.class_id().get_name(self),
+                val.rvalue().id()
+            )
+        }
+    }
+
+    fn range_inspect(&self, val: Value) -> String {
+        let range = val.as_range();
+        format!(
+            "{}{}{}",
+            self.val_inspect(range.start),
+            if range.exclude_end() { "..." } else { ".." },
+            self.val_inspect(range.end),
+        )
     }
 
     pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
@@ -526,160 +463,6 @@ impl Globals {
             return None;
         }
         Some(())
-    }
-
-    pub(crate) fn define_builtin_func(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        arity: i32,
-    ) -> FuncId {
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id);
-        func_id
-    }
-
-    pub(crate) fn define_builtin_func_inlinable(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        arity: i32,
-        inline_id: InlineMethod,
-    ) -> FuncId {
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id);
-        self.func.inline.insert(func_id, inline_id);
-        func_id
-    }
-
-    pub(crate) fn define_builtin_singleton_func(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        arity: i32,
-    ) -> FuncId {
-        let class_id = self.get_singleton_id(class_id);
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id);
-        func_id
-    }
-
-    pub(crate) fn define_builtin_singleton_func_inlinable(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        arity: i32,
-        inline_id: InlineMethod,
-    ) -> FuncId {
-        let class_id = self.get_singleton_id(class_id);
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id);
-        self.func.inline.insert(func_id, inline_id);
-        func_id
-    }
-
-    ///
-    /// Define attribute reader for *class_id* and *ivar_name*.
-    ///
-    pub(crate) fn define_attr_reader(
-        &mut self,
-        class_id: ClassId,
-        method_name: IdentId,
-    ) -> IdentId {
-        let ivar_name = IdentId::add_ivar_prefix(method_name);
-        let method_name_str = IdentId::get_name(method_name);
-        let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
-        self.add_method(class_id, method_name, func_id);
-        self.class_version_inc();
-        method_name
-    }
-
-    ///
-    /// Define attribute writer for *class_id* and *ivar_name*.
-    ///
-    pub(crate) fn define_attr_writer(
-        &mut self,
-        class_id: ClassId,
-        method_name: IdentId,
-    ) -> IdentId {
-        let ivar_name = IdentId::add_ivar_prefix(method_name);
-        let method_name = IdentId::add_assign_postfix(method_name);
-        let method_name_str = IdentId::get_name(method_name);
-        let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
-        self.add_method(class_id, method_name, func_id);
-        self.class_version_inc();
-        method_name
-    }
-
-    ///
-    /// Give alias *new_name* to the method *old_name* for object *obj*.
-    ///
-    pub(crate) fn alias_method(
-        &mut self,
-        obj: Value,
-        new_name: IdentId,
-        old_name: IdentId,
-    ) -> Option<()> {
-        let func = match self.find_method(obj, old_name) {
-            Some(func) => func,
-            None => {
-                self.err_method_not_found(old_name, obj);
-                return None;
-            }
-        };
-        self.add_method(obj.class_id(), new_name, func);
-        Some(())
-    }
-
-    ///
-    /// Give alias *new_name* to the instance method *old_name* of class *class_id*.
-    ///
-    pub(crate) fn alias_method_for_class(
-        &mut self,
-        class_id: ClassId,
-        new_name: IdentId,
-        old_name: IdentId,
-    ) -> Option<()> {
-        let func = match self.find_method_for_class(class_id, old_name) {
-            Some(func) => func,
-            None => {
-                self.err_method_not_found(old_name, class_id.get_obj(self));
-                return None;
-            }
-        };
-        self.add_method(class_id, new_name, func);
-        Some(())
-    }
-
-    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
-        match Parser::parse_program(code, path.into()) {
-            Ok(res) => self.func.compile_script(res.node, res.source_info),
-            Err(err) => Err(MonorubyErr::parse(err)),
-        }
-    }
-
-    pub fn compile_script_with_binding(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-        context: Option<LvarCollector>,
-    ) -> Result<(FuncId, LvarCollector)> {
-        match Parser::parse_program_binding(code, path.into(), context, None) {
-            Ok(res) => {
-                let collector = res.lvar_collector;
-                let fid = self.func.compile_script(res.node, res.source_info)?;
-                Ok((fid, collector))
-            }
-            Err(err) => Err(MonorubyErr::parse(err)),
-        }
     }
 }
 

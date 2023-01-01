@@ -835,7 +835,7 @@ impl Codegen {
                 movl rsi, [rbp - (BP_META_FUNCID)];
                 movq rdx, [rbp - (BP_SELF)];
                 lea rcx, [r13 - 16];
-                movq rax, (Self::exec_jit_partial_compile);
+                movq rax, (exec_jit_partial_compile);
                 call rax;
                 jmp rax;
             );

@@ -463,10 +463,10 @@ extern "C" fn log_deoptimize(
     let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
-    if let TraceIr::LoopEnd = pc.op1() {
+    if let TraceIr::LoopEnd = pc.get_ir() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
-    } else if let TraceIr::ClassDef { .. } = pc.op1() {
+    } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
         eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
@@ -487,7 +487,7 @@ extern "C" fn log_deoptimize(
 }
 
 impl Codegen {
-    pub(super) fn jit_compile_ruby(
+    pub(super) fn compile(
         &mut self,
         fnstore: &FnStore,
         func_id: FuncId,
@@ -889,7 +889,7 @@ impl Codegen {
         position: Option<BcPc>,
     ) -> bool {
         let mut skip = false;
-        let is_loop = matches!(func.get_pc(cc.bb_pos).op1(), TraceIr::LoopStart(_));
+        let is_loop = matches!(func.get_pc(cc.bb_pos).get_ir(), TraceIr::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
         let mut ctx = if is_loop {
             self.gen_merging_branches_loop(func, fnstore, cc, cc.bb_pos)
@@ -906,7 +906,7 @@ impl Codegen {
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
-            match pc.op1() {
+            match pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::LoopStart(_) => {
@@ -1356,7 +1356,7 @@ impl Codegen {
                     has_splat,
                     ..
                 } => {
-                    if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
+                    if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
                         if method_info.callee_codeptr.is_none() {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
@@ -1379,7 +1379,7 @@ impl Codegen {
                     has_splat,
                     ..
                 } => {
-                    if let TraceIr::MethodArgs(method_info) = (pc + 1).op1() {
+                    if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
                         if method_info.callee_codeptr.is_none() {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
@@ -1461,7 +1461,7 @@ impl Codegen {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let pc = pc - 1;
                     if pc.is_float_binop() {
-                        let kind = match pc.op1() {
+                        let kind = match pc.get_ir() {
                             TraceIr::Cmp(kind, _ret, lhs, rhs, true) => {
                                 let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                                 monoasm! { self.jit,
@@ -1488,7 +1488,7 @@ impl Codegen {
                     //    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     } else {
                         let generic = self.jit.label();
-                        let kind = match pc.op1() {
+                        let kind = match pc.get_ir() {
                             TraceIr::Cmp(kind, ret, lhs, rhs, true) => {
                                 self.write_back_slot(&mut ctx, lhs);
                                 self.write_back_slot(&mut ctx, rhs);
@@ -1568,12 +1568,12 @@ impl Codegen {
         if let Some(index) = position {
             monoasm!(self.jit,
                 movq rcx, (index.get_u64());
-                movq rax, (Self::exec_jit_partial_compile);
+                movq rax, (exec_jit_partial_compile);
                 call rax;
             );
         } else {
             monoasm!(self.jit,
-                movq rax, (Self::exec_jit_recompile);
+                movq rax, (exec_jit_recompile);
                 call rax;
             );
         }
@@ -1688,7 +1688,7 @@ impl Codegen {
             // save len in rdx.
             movq rdx, rdi;
         );
-        match pc.op1() {
+        match pc.get_ir() {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,

@@ -216,11 +216,87 @@ impl Globals {
     }
 
     ///
+    /// Find method *name* for object *obj*.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
+    pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
+        let class_id = obj.class_id();
+        self.find_method_for_class(class_id, name)
+    }
+
+    ///
+    /// Find method *name* for object *obj*. If not found, return MethodNotFound error.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
+    pub(crate) fn find_method_checked(
+        &mut self,
+        obj: Value,
+        func_name: IdentId,
+        args_len: usize,
+    ) -> Option<FuncId> {
+        let func_id = match self.find_method(obj, func_name) {
+            Some(id) => id,
+            None => {
+                self.err_method_not_found(func_name, obj);
+                return None;
+            }
+        };
+        self.check_arg(func_id, args_len)?;
+        Some(func_id)
+    }
+
+    ///
+    /// Find method *name* of class with *class_id*.
+    ///
+    /// This fn checks whole superclass chain.
+    ///
+    pub(crate) fn find_method_for_class(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<FuncId> {
+        #[cfg(feature = "log-jit")]
+        {
+            match self.method_cache_stats.get_mut(&(class_id, name)) {
+                Some(c) => *c = *c + 1,
+                None => {
+                    self.method_cache_stats.insert((class_id, name), 1);
+                }
+            };
+        }
+        let class_version = self.class_version();
+        if let Some((version, func)) = self.global_method_cache.get(&(name, class_id)) {
+            if *version == class_version {
+                return *func;
+            }
+        };
+        let func_id = self.find_method_main(class_id, name);
+        self.global_method_cache
+            .insert((name, class_id), (class_version, func_id));
+        func_id
+    }
+
+    fn find_method_main(&mut self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        if let Some(func_id) = self.get_method(class_id, name) {
+            return Some(func_id);
+        }
+        while let Some(super_class) = class_id.super_class(self) {
+            class_id = super_class;
+            if let Some(func_id) = self.get_method(class_id, name) {
+                return Some(func_id);
+            }
+        }
+        None
+    }
+
+    ///
     /// Get a method with *name* in the class of *class_id*.
     ///   
     /// If not found, simply return None with no error.
     ///
-    pub(super) fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         self.class[class_id].methods.get(&name).cloned()
     }
 

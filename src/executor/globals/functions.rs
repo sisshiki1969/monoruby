@@ -421,8 +421,8 @@ pub(crate) struct FuncInfo {
     /// arity of this function.
     /// -1 for variable numbers.
     arity: i32,
-    pub(crate) data: FuncData,
-    pub(crate) kind: FuncKind,
+    pub(in crate::executor) data: FuncData,
+    pub(in crate::executor) kind: FuncKind,
 }
 
 impl GC<RValue> for FuncInfo {
@@ -570,7 +570,7 @@ impl FuncInfo {
                 skip = false;
                 continue;
             }
-            let bcop1 = pc.op1();
+            let bcop1 = pc.get_ir();
             if let TraceIr::MethodArgs(..) = bcop1 {
                 skip = true;
                 continue;
@@ -722,7 +722,7 @@ impl ISeqInfo {
     }
 
     /// get bytecode address.
-    pub(crate) fn get_bytecode_address(&self, index: usize) -> BcPc {
+    pub(in crate::executor) fn get_bytecode_address(&self, index: usize) -> BcPc {
         BcPcBase::new(self) + index
     }
 
@@ -780,11 +780,11 @@ impl ISeqInfo {
         self.bytecode.as_ref().unwrap()
     }
 
-    pub(crate) fn get_pc(&self, idx: usize) -> BcPc {
+    pub(in crate::executor) fn get_pc(&self, idx: usize) -> BcPc {
         BcPc::from(&self.bytecode()[idx])
     }
 
-    pub(crate) fn get_pc_index(&self, pc: Option<BcPc>) -> usize {
+    pub(in crate::executor) fn get_pc_index(&self, pc: Option<BcPc>) -> usize {
         if let Some(pos) = pc {
             pos - self.get_pc(0)
         } else {
@@ -892,7 +892,7 @@ impl ISeqInfo {
                 skip = false;
                 continue;
             }
-            match pc.op1() {
+            match pc.get_ir() {
                 TraceIr::MethodArgs(..) => {
                     skip = true;
                 }
@@ -924,7 +924,7 @@ impl ISeqInfo {
                 skip = false;
                 continue;
             }
-            match pc.op1() {
+            match pc.get_ir() {
                 TraceIr::MethodArgs(..) => {
                     skip = true;
                     if let Some(ref mut elem) = bb_info[idx + 2] {
@@ -954,7 +954,7 @@ impl ISeqInfo {
 }
 
 impl ISeqInfo {
-    pub(crate) fn get_index(&self, reg: &BcReg) -> SlotId {
+    pub(in crate::executor) fn get_index(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,
             BcReg::Temp(i) => 1 + self.locals.len() as u16 + i.0,

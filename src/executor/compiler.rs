@@ -1,10 +1,13 @@
 use monoasm::*;
 use monoasm_macro::monoasm;
 
-use super::*;
-
 mod jitgen;
+mod runtime;
 mod vmgen;
+mod wrapper;
+
+use super::*;
+use runtime::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
 
@@ -36,19 +39,19 @@ type MethodInvoker2 =
 ///
 pub struct Codegen {
     pub jit: JitMemory,
-    pub class_version: DestLabel,
-    pub class_version_addr: *mut u32,
-    pub alloc_flag: DestLabel,
-    pub const_version: DestLabel,
-    pub entry_panic: DestLabel,
-    pub vm_entry: DestLabel,
-    pub vm_fetch: DestLabel,
-    pub entry_point: EntryPoint,
+    class_version: DestLabel,
+    pub(super) class_version_addr: *mut u32,
+    alloc_flag: DestLabel,
+    const_version: DestLabel,
+    entry_panic: DestLabel,
+    vm_entry: DestLabel,
+    vm_fetch: DestLabel,
+    pub(super) entry_point: EntryPoint,
     entry_find_method: DestLabel,
-    pub vm_return: DestLabel,
-    pub f64_to_val: DestLabel,
-    pub heap_to_f64: DestLabel,
-    pub div_by_zero: DestLabel,
+    vm_return: DestLabel,
+    f64_to_val: DestLabel,
+    heap_to_f64: DestLabel,
+    div_by_zero: DestLabel,
     ///
     /// expand splat argument.
     ///
@@ -60,233 +63,20 @@ pub struct Codegen {
     /// - rdi: the number of arguments
     /// ### destroy
     ///   callee save registers except *rsi*.
-    pub splat: DestLabel,
+    ///
+    splat: DestLabel,
     ///
     /// Raise "wrong number of arguments" error.
     ///
     /// ### in
     /// - rdx: actual number of arguments
     /// - r13: pc (InitBlock/InitMethod)
-    pub wrong_argument: DestLabel,
-    pub dispatch: Vec<CodePtr>,
-    pub(crate) method_invoker: MethodInvoker,
-    pub(crate) method_invoker2: MethodInvoker2,
-    pub(crate) block_invoker: BlockInvoker,
-}
-
-//
-// Runtime functions.
-//
-
-///
-/// Get an absolute address of the given method.
-///
-/// If no method was found, return None (==0u64).
-///
-extern "C" fn find_method(
-    globals: &mut Globals,
-    func_name: IdentId,
-    args_len: usize,
-    receiver: Value,
-) -> Option<&FuncData> {
-    let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
-    let data = globals.compile_on_demand(func_id);
-    Some(data)
-}
-
-extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {
-    globals.compile_on_demand(func_id)
-}
-
-extern "C" fn get_block_data(
-    globals: &mut Globals,
-    block_handler: Value,
-    interp: &Executor,
-) -> BlockData {
-    globals.get_block_data(block_handler, interp)
-}
-
-extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
-    let mut v = if len == 0 {
-        vec![]
-    } else {
-        unsafe { std::slice::from_raw_parts(src.sub(len - 1), len).to_vec() }
-    };
-    v.reverse();
-    Value::new_array_from_vec(v)
-}
-
-extern "C" fn gen_range(
-    start: Value,
-    end: Value,
-    globals: &mut Globals,
-    exclude_end: bool,
-) -> Option<Value> {
-    globals.generate_range(start, end, exclude_end)
-}
-
-#[repr(C)]
-struct ClassIdSlot {
-    base: ClassId,
-    idx: ClassId,
-}
-
-extern "C" fn get_index(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    base: Value,
-    index: Value,
-    class_slot: &mut ClassIdSlot,
-) -> Option<Value> {
-    let base_classid = base.class_id();
-    class_slot.base = base_classid;
-    match base_classid {
-        ARRAY_CLASS => {
-            if let Some(idx) = index.try_fixnum() {
-                class_slot.idx = INTEGER_CLASS;
-                return base.as_array().get_index(idx);
-            }
-        }
-        _ => {}
-    }
-    class_slot.idx = index.class_id();
-    interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
-}
-
-extern "C" fn get_array_integer_index(base: Value, index: i64) -> Option<Value> {
-    base.as_array().get_index(index)
-}
-
-extern "C" fn set_index(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    mut base: Value,
-    index: Value,
-    src: Value,
-    class_slot: &mut ClassIdSlot,
-) -> Option<Value> {
-    let base_classid = base.class_id();
-    class_slot.base = base_classid;
-    match base_classid {
-        ARRAY_CLASS => {
-            if let Some(idx) = index.try_fixnum() {
-                class_slot.idx = INTEGER_CLASS;
-                return base.as_array_mut().set_index(globals, idx, src);
-            }
-        }
-        _ => {}
-    }
-    class_slot.idx = index.class_id();
-    interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
-}
-
-extern "C" fn set_array_integer_index(
-    mut base: Value,
-    index: i64,
-    globals: &mut Globals,
-    src: Value,
-) -> Option<Value> {
-    base.as_array_mut().set_index(globals, index, src)
-}
-
-extern "C" fn get_instance_var(base: Value, name: IdentId, globals: &mut Globals) -> Value {
-    globals.get_ivar(base, name).unwrap_or_default()
-}
-
-extern "C" fn set_instance_var(
-    globals: &mut Globals,
-    base: Value,
-    name: IdentId,
-    val: Value,
-) -> Option<Value> {
-    globals.set_ivar(base, name, val)?;
-    Some(val)
-}
-
-extern "C" fn define_class(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    name: IdentId,
-    superclass: Option<Value>,
-) -> Option<Value> {
-    let parent = interp.get_class_context();
-    let self_val = match globals.get_constant(parent, name) {
-        Some(val) => {
-            let class = val.expect_class(name, globals)?;
-            if let Some(superclass) = superclass {
-                let super_name = globals.val_tos(superclass);
-                let super_name = IdentId::get_ident_id(&super_name);
-                let super_class = superclass.expect_class(super_name, globals)?;
-                if Some(super_class) != class.super_class(globals) {
-                    globals.err_superclass_mismatch(name);
-                    return None;
-                }
-            }
-            val
-        }
-        None => {
-            let superclass = match superclass {
-                Some(superclass) => {
-                    let name = globals.val_tos(superclass);
-                    let name = IdentId::get_ident_id_from_string(name);
-                    superclass.expect_class(name, globals)?
-                }
-                None => OBJECT_CLASS,
-            };
-            globals.define_class_by_ident_id(name, Some(superclass), parent)
-        }
-    };
-    //globals.get_singleton_id(self_val.as_class());
-    interp.push_class_context(self_val.as_class());
-    Some(self_val)
-}
-
-extern "C" fn pop_class_context(interp: &mut Executor, _globals: &mut Globals) {
-    interp.pop_class_context();
-}
-
-extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
-    panic!("unimplemented inst. {:016x}", opcode);
-}
-
-extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
-    panic!("panic in jit code.");
-}
-
-/*pub extern "C" fn eprintln(rdi: u64, rsi: u64) {
-    eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
-}*/
-
-extern "C" fn err_divide_by_zero(globals: &mut Globals) {
-    globals.err_divide_by_zero();
-}
-
-extern "C" fn err_wrong_number_of_arguments_range(
-    globals: &mut Globals,
-    given: usize,
-    min: usize,
-    max: usize,
-) {
-    globals.err_wrong_number_of_arguments_range(given, min..=max)
-}
-
-extern "C" fn get_error_location(
-    _interp: &mut Executor,
-    globals: &mut Globals,
-    meta: Meta,
-    pc: BcPc,
-) {
-    let func_info = &globals.func[meta.func_id()];
-    let bc_base = func_info.data.pc;
-    let normal_info = match &func_info.kind {
-        FuncKind::ISeq(info) => info,
-        FuncKind::Builtin { .. } => return,
-        FuncKind::AttrReader { .. } => return,
-        FuncKind::AttrWriter { .. } => return,
-    };
-    let sourceinfo = normal_info.sourceinfo.clone();
-    let loc = normal_info.sourcemap[pc - bc_base];
-    globals.push_error_location(loc, sourceinfo);
+    ///
+    wrong_argument: DestLabel,
+    dispatch: Vec<CodePtr>,
+    pub(super) method_invoker: MethodInvoker,
+    pub(super) method_invoker2: MethodInvoker2,
+    pub(super) block_invoker: BlockInvoker,
 }
 
 impl Codegen {
@@ -449,20 +239,6 @@ impl Codegen {
         codegen
     }
 
-    /// Push control frame and set outer.
-    ///
-    /// ### destroy
-    /// - rsi
-    fn push_frame(&mut self) {
-        monoasm!(self.jit,
-            // push cfp
-            movq rsi, [rbx];
-            movq [rsp - (16 + BP_PREV_CFP)], rsi;
-            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
-            movq [rbx], rsi;
-        );
-    }
-
     ///
     /// Execute garbage collection.
     ///
@@ -480,6 +256,20 @@ impl Codegen {
             call rax;
         exit:
         };
+    }
+
+    /// Push control frame and set outer.
+    ///
+    /// ### destroy
+    /// - rsi
+    fn push_frame(&mut self) {
+        monoasm!(self.jit,
+            // push cfp
+            movq rsi, [rbx];
+            movq [rsp - (16 + BP_PREV_CFP)], rsi;
+            lea  rsi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rbx], rsi;
+        );
     }
 
     /// Set outer.
@@ -628,248 +418,10 @@ impl Codegen {
             call rax;
         );
     }
-
-    pub(super) fn gen_wrapper(&mut self, kind: FuncKind, no_jit: bool) -> CodePtr {
-        let codeptr = match kind {
-            FuncKind::ISeq(_) => {
-                if !no_jit {
-                    self.gen_jit_stub()
-                } else {
-                    self.gen_vm_stub()
-                }
-            }
-            FuncKind::Builtin { abs_address } => self.wrap_native_func(abs_address),
-            FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(ivar_name),
-            FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(ivar_name),
-        };
-        self.jit.finalize();
-        codeptr
-    }
-
-    ///
-    /// Set jit compilation stub code for an entry point of each Ruby methods.
-    ///
-    fn gen_jit_stub(&mut self) -> CodePtr {
-        let vm_entry = self.vm_entry;
-        let codeptr = self.jit.get_current_address();
-        let counter = self.jit.const_i32(5);
-        let entry = self.jit.label();
-        let next = self.jit.label();
-        monoasm!(self.jit,
-        entry:
-            jmp  next;
-        next:
-            subl [rip + counter], 1;
-            jne vm_entry;
-            movl rsi, [rsp - (8 + BP_META_FUNCID)];
-            movq rdx, [rsp - (8 + BP_SELF)];
-            subq rsp, 1024;
-            pushq rdi;
-            movq rdi, r12;
-            movq rax, (Self::exec_jit_compile);
-            call rax;
-            lea rdi, [rip + entry];
-            addq rdi, 5;
-            subq rax, rdi;
-            movl [rdi - 4], rax;
-            popq rdi;
-            addq rsp, 1024;
-            jmp entry;
-        );
-        codeptr
-    }
-
-    fn gen_vm_stub(&mut self) -> CodePtr {
-        let vm_entry = self.vm_entry;
-        let codeptr = self.jit.get_current_address();
-        monoasm!(self.jit,
-            jmp vm_entry;
-        );
-        codeptr
-    }
-
-    ///
-    /// Generate a wrapper for a native function with C ABI.
-    ///
-    /// - stack layout at the point of just after a wrapper was called.
-    /// ~~~text
-    ///       +-------------+
-    ///  0x00 | return addr | <- rsp
-    ///       +-------------+
-    /// -0x08 |             |
-    ///       +-------------+
-    /// -0x10 |    meta     |
-    ///       +-------------+
-    /// -0x18 |  %0 (self)  |
-    ///       +-------------+
-    /// -0x20 | %1(1st arg) |
-    ///       +-------------+
-    ///
-    ///  meta
-    /// +-------------------+ -0x08
-    /// |     2:Native      |
-    /// +-------------------+ -0x0a
-    /// |    register_len   |
-    /// +-------------------+ -0x0c
-    /// |                   |
-    /// +      FuncId       + -0x0e
-    /// |                   |
-    /// +-------------------+ -0x10
-    ///
-    /// argument registers:
-    ///   rdi: number of args
-    ///
-    /// global registers:
-    ///   rbx: &mut Interp
-    ///   r12: &mut Globals
-    ///   r13: pc (dummy for builtin funcions)
-    /// ~~~
-    ///
-    fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
-        let label = self.jit.get_current_address();
-        // calculate stack offset
-        monoasm!(self.jit,
-            pushq rbp;
-            movq rbp, rsp;
-            movq r8, rdi;
-            movq rax, rdi;
-        );
-        self.calc_offset();
-        monoasm!(self.jit,
-            subq rsp, rax;
-            lea  rcx, [rbp - (BP_ARG0)];     // rcx <- *const arg[0]
-            movq  r9, [rbp - (BP_BLOCK)];     // r9 <- block
-            movq  rdx, [rbp - (BP_SELF)];    // rdx <- self
-            // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [rbp - (BP_META_REGNUM)], rdi;
-
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (abs_address);
-            // fn(&mut Interp, &mut Globals, Value, *const Value, len:usize, block:Option<Value>)
-            call rax;
-
-            leave;
-            ret;
-        );
-        label
-    }
-
-    ///
-    /// Generate attr_reader.
-    ///
-    /// - stack layout at the point of just after being called.
-    /// ~~~text
-    ///       +-------------+
-    ///  0x00 | return addr | <- rsp
-    ///       +-------------+
-    /// -0x08 |             |
-    ///       +-------------+
-    /// -0x10 |    meta     |
-    ///       +-------------+
-    /// -0x18 |  %0 (self)  |
-    ///       +-------------+
-    /// ~~~
-    fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let cached_class = self.jit.const_i32(0);
-        let cached_ivarid = self.jit.const_i32(0);
-        monoasm!(self.jit,
-            movq rdi, [rsp - (8 + BP_SELF)];  // self: Value
-            movq rsi, (ivar_name.get()); // name: IdentId
-            movq rdx, r12; // &mut Globals
-            lea  rcx, [rip + cached_class];
-            lea  r8, [rip + cached_ivarid];
-            movq rax, (get_instance_var_with_cache);
-            subq rsp, 8;
-            call rax;
-            addq rsp, 8;
-            ret;
-        );
-        label
-    }
-
-    ///
-    /// Generate attr_writer.
-    ///
-    /// - stack layout at the point of just after being called.
-    /// ~~~text
-    ///       +-------------+
-    ///  0x00 | return addr | <- rsp
-    ///       +-------------+
-    /// -0x08 |             |
-    ///       +-------------+
-    /// -0x10 |    meta     |
-    ///       +-------------+
-    /// -0x18 |  %0 (self)  |
-    ///       +-------------+
-    /// -0x20 |   %1(val)   |
-    ///       +-------------+
-    /// ~~~
-    fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let cached_class = self.jit.const_i32(0);
-        let cached_ivarid = self.jit.const_i32(0);
-        monoasm!(self.jit,
-            movq rdi, r12; //&mut Globals
-            movq rsi, [rsp - (8 + BP_SELF)];  // self: Value
-            movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rsp - (8 + BP_ARG0)];  //val: Value
-            lea  r8, [rip + cached_class];
-            lea  r9, [rip + cached_ivarid];
-            movq rax, (set_instance_var_with_cache);
-            subq rsp, 8;
-            call rax;
-            addq rsp, 8;
-            ret;
-        );
-        label
-    }
-}
-
-impl Codegen {
-    ///
-    /// Compile the Ruby method.
-    ///
-    extern "C" fn exec_jit_compile(
-        globals: &mut Globals,
-        func_id: FuncId,
-        self_value: Value,
-    ) -> CodePtr {
-        globals.func[func_id].data.meta.set_jit();
-        let label = globals.jit_compile_ruby(func_id, self_value, None);
-        globals.codegen.jit.get_label_address(label)
-    }
-
-    extern "C" fn exec_jit_recompile(
-        globals: &mut Globals,
-        func_id: FuncId,
-        self_value: Value,
-    ) -> CodePtr {
-        let codeptr = Self::exec_jit_compile(globals, func_id, self_value);
-        let target = globals.func[func_id].data.codeptr.unwrap();
-        let offset = codeptr - target - 5;
-        unsafe { *(target.as_ptr().add(1) as *mut i32) = offset as i32 };
-        codeptr
-    }
-
-    ///
-    /// Compile the loop.
-    ///
-    extern "C" fn exec_jit_partial_compile(
-        globals: &mut Globals,
-        func_id: FuncId,
-        self_value: Value,
-        pc: BcPc,
-    ) {
-        let label = globals.jit_compile_ruby(func_id, self_value, Some(pc));
-        let codeptr = globals.codegen.jit.get_label_address(label);
-        pc.write2(codeptr.as_ptr() as u64);
-    }
 }
 
 impl Globals {
-    fn jit_compile_ruby(
+    pub(super) fn jit_compile_ruby(
         &mut self,
         func_id: FuncId,
         self_value: Value,
@@ -895,7 +447,7 @@ impl Globals {
         }
         let (label, _sourcemap) = self
             .codegen
-            .jit_compile_ruby(&self.func, func_id, self_value, position);
+            .compile(&self.func, func_id, self_value, position);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);
