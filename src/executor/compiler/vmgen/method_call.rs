@@ -133,24 +133,20 @@ impl Codegen {
         self.fetch_and_dispatch();
 
         self.jit.select_page(1);
-        let entry_find_method = self.entry_find_method;
         monoasm!(self.jit,
         slowpath:
+            movq rdi, r12;
             movq rsi, [rsp + 8];  // rsi: IdentId
             movzxw rdx, [r13];  // rdx: len
             movq rcx, [rsp]; // rcx: receiver:Value
-            call entry_find_method; // rax <- Option<&FuncData>
+            lea  r8, [r13 + 8];
+            movq rax, (find_method);
+            call rax;   // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
             movl [r13 - 8], r15;
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;
-            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
-            movq [r13 + 8], rdi;
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [r13 + 16], rdi;
-            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
-            movq [r13 + 24], rdi;
             jmp exec;
         );
         self.jit.select_page(0);

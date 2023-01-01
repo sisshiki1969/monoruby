@@ -243,7 +243,6 @@ impl Codegen {
         let slow_path = self.jit.label();
         let raise = self.jit.label();
         let global_class_version = self.class_version;
-        let entry_find_method = self.entry_find_method;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         // class guard
@@ -303,22 +302,16 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm!(self.jit,
         slow_path:
+            movq rdi, r12;
             movq rsi, (u32::from(name)); // IdentId
             movq rdx, (len as usize); // args_len: usize
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
-            call entry_find_method;
+            lea  r8, [r13 + 8];
+            movq rax, (find_method);
+            call rax;
             // absolute address was returned to rax.
             testq rax, rax;
             jeq raise;
-
-            movq rdi, [rax + (FUNCDATA_OFFSET_META)];
-            movq [r13 + 16], rdi;
-
-            movq rdi, [rax + (FUNCDATA_OFFSET_PC)];
-            movq [r13 + 24], rdi;
-
-            movq rdi, [rax + (FUNCDATA_OFFSET_CODEPTR)];
-            movq [r13 + 8], rdi;
 
             movl rax, [rip + global_class_version];
             movl [r13 - 4], rax;

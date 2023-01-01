@@ -47,7 +47,6 @@ pub struct Codegen {
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
     pub(super) entry_point: EntryPoint,
-    entry_find_method: DestLabel,
     vm_return: DestLabel,
     f64_to_val: DestLabel,
     heap_to_f64: DestLabel,
@@ -86,14 +85,12 @@ impl Codegen {
         let alloc_flag = jit.const_i32(0);
         let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
-        let entry_find_method = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
         let div_by_zero = jit.label();
         let wrong_argument = jit.label();
         let heap_to_f64 = jit.label();
         let splat = jit.label();
-        //jit.select_page(1);
         monoasm!(&mut jit,
         entry_panic:
             movq rdi, rbx;
@@ -104,10 +101,6 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (panic);
             jmp rax;
-        entry_find_method:
-            movq rdi, r12;
-            movq rax, (find_method);
-            jmp  rax;
         vm_return:
             movq r15, rax;
             movq rdi, rbx;
@@ -211,7 +204,6 @@ impl Codegen {
             alloc_flag,
             const_version,
             entry_panic,
-            entry_find_method,
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },

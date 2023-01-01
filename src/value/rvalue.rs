@@ -22,7 +22,7 @@ impl std::fmt::Debug for RValue {
         assert_eq!(1, flag.flag & 0b1);
         write!(
             f,
-            "RValue {{ class:{:?} {} {:016x}}}",
+            "RValue {{ class:{:?} {} {:016x} }}",
             flag.class,
             unsafe {
                 match flag.kind {
@@ -120,57 +120,8 @@ impl RValue {
         self as *const RValue as u64
     }
 
-    pub(crate) fn class(&self) -> ClassId {
-        self.flags.class()
-    }
-
     pub(crate) fn kind(&self) -> u8 {
         self.flags.kind()
-    }
-
-    pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
-        self.flags.change_class(new_class_id);
-    }
-
-    pub(crate) fn deep_copy(&self) -> Self {
-        RValue {
-            flags: self.flags,
-            var_table: match &self.var_table {
-                Some(box table) => Some(Box::new(
-                    table
-                        .iter()
-                        .map(|v| v.map(|v| Value::deep_copy(v)))
-                        .collect(),
-                )),
-                None => None,
-            },
-            kind: match self.kind() {
-                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::CLASS => ObjKind::class(self.as_class()),
-                ObjKind::OBJECT => ObjKind::object(),
-                ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
-                ObjKind::FLOAT => ObjKind {
-                    float: self.as_float(),
-                },
-                ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
-                ObjKind::TIME => ObjKind::time(self.as_time().clone()),
-                ObjKind::ARRAY => ObjKind::array(ArrayInner::new(
-                    self.as_array()
-                        .iter()
-                        .map(|v| Value::deep_copy(*v))
-                        .collect(),
-                )),
-                ObjKind::RANGE => {
-                    let lhs = self.as_range();
-                    ObjKind::range(
-                        Value::deep_copy(lhs.start),
-                        Value::deep_copy(lhs.end),
-                        lhs.exclude_end != 0,
-                    )
-                }
-                _ => unreachable!("clone()"),
-            },
-        }
     }
 
     pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
@@ -222,13 +173,62 @@ impl RValue {
     pub(crate) extern "C" fn set_ivar(base: &mut RValue, id: IvarId, val: Value) {
         base.set_var(id, val)
     }
+
+    pub(super) fn change_class(&mut self, new_class_id: ClassId) {
+        self.flags.change_class(new_class_id);
+    }
+
+    pub(super) fn deep_copy(&self) -> Self {
+        RValue {
+            flags: self.flags,
+            var_table: match &self.var_table {
+                Some(box table) => Some(Box::new(
+                    table
+                        .iter()
+                        .map(|v| v.map(|v| Value::deep_copy(v)))
+                        .collect(),
+                )),
+                None => None,
+            },
+            kind: match self.kind() {
+                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                ObjKind::CLASS => ObjKind::class(self.as_class()),
+                ObjKind::OBJECT => ObjKind::object(),
+                ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
+                ObjKind::FLOAT => ObjKind {
+                    float: self.as_float(),
+                },
+                ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
+                ObjKind::TIME => ObjKind::time(self.as_time().clone()),
+                ObjKind::ARRAY => ObjKind::array(ArrayInner::new(
+                    self.as_array()
+                        .iter()
+                        .map(|v| Value::deep_copy(*v))
+                        .collect(),
+                )),
+                ObjKind::RANGE => {
+                    let lhs = self.as_range();
+                    ObjKind::range(
+                        Value::deep_copy(lhs.start),
+                        Value::deep_copy(lhs.end),
+                        lhs.exclude_end != 0,
+                    )
+                }
+                _ => unreachable!("clone()"),
+            },
+        }
+    }
+
+    pub(super) fn class(&self) -> ClassId {
+        self.flags.class()
+    }
 }
 
 //
 // constructors.
 //
 impl RValue {
-    pub(crate) fn new_bigint(bigint: BigInt) -> Self {
+    pub(super) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
             flags: RVFlag::new(INTEGER_CLASS, ObjKind::BIGNUM),
             kind: ObjKind::bignum(bigint),
@@ -236,7 +236,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_float(f: f64) -> Self {
+    pub(super) fn new_float(f: f64) -> Self {
         RValue {
             flags: RVFlag::new(FLOAT_CLASS, ObjKind::FLOAT),
             kind: ObjKind::float(f),
@@ -247,7 +247,7 @@ impl RValue {
     ///
     /// Create new class object with *class_id*.
     ///
-    pub(crate) fn new_class(id: ClassId) -> Self {
+    pub(super) fn new_class(id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(CLASS_CLASS, ObjKind::CLASS),
             kind: ObjKind::class(id),
@@ -258,7 +258,7 @@ impl RValue {
     ///
     /// Create new instance object of class *class_id*.
     ///
-    pub(crate) fn new_object(class_id: ClassId) -> Self {
+    pub(super) fn new_object(class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::OBJECT),
             kind: ObjKind::object(),
@@ -266,11 +266,11 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_string(s: String) -> Self {
+    pub(super) fn new_string(s: String) -> Self {
         Self::new_bytes(s.into_bytes())
     }
 
-    pub(crate) fn new_bytes(v: Vec<u8>) -> Self {
+    pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes_from_vec(v),
@@ -278,7 +278,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_bytes_from_slice(slice: &[u8]) -> Self {
+    pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes(slice),
@@ -286,7 +286,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_array(ary: ArrayInner) -> Self {
+    pub(super) fn new_array(ary: ArrayInner) -> Self {
         RValue {
             flags: RVFlag::new(ARRAY_CLASS, ObjKind::ARRAY),
             kind: ObjKind::array(ary),
@@ -294,7 +294,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+    pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::ARRAY),
             kind: ObjKind::array(ArrayInner::new(v)),
@@ -302,7 +302,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_splat(ary: ArrayInner) -> Self {
+    pub(super) fn new_splat(ary: ArrayInner) -> Self {
         RValue {
             flags: RVFlag::new(ARRAY_CLASS, ObjKind::SPLAT),
             kind: ObjKind::array(ary),
@@ -310,7 +310,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_time(time: TimeInfo) -> Self {
+    pub(super) fn new_time(time: TimeInfo) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS, ObjKind::TIME),
             kind: ObjKind::time(time),
@@ -318,7 +318,7 @@ impl RValue {
         }
     }
 
-    pub(crate) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
+    pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
             flags: RVFlag::new(RANGE_CLASS, ObjKind::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
@@ -328,11 +328,44 @@ impl RValue {
 }
 
 impl RValue {
-    pub(crate) fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
+    pub fn unpack(&self) -> RV {
+        match self.kind() {
+            ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
+            ObjKind::FLOAT => RV::Float(self.as_float()),
+            ObjKind::BYTES => RV::String(self.as_bytes()),
+            _ => RV::Object(self),
+        }
+    }
+}
+
+impl RValue {
+    /// This function is only used for system assertion.
+    pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
+        match (lhs.kind(), rhs.kind()) {
+            (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+            (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
+            (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
+            (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                let lhs = lhs.as_array();
+                let rhs = rhs.as_array();
+                lhs.len() == rhs.len()
+                    && lhs
+                        .iter()
+                        .zip(rhs.iter())
+                        .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
+            }
+            (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
+            _ => false,
+        }
+    }
+}
+
+impl RValue {
+    fn as_object(&self) -> &[Option<value::Value>; OBJECT_INLINE_IVAR] {
         unsafe { &self.kind.object }
     }
 
-    pub(crate) fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
+    fn as_object_mut(&mut self) -> &mut [Option<value::Value>; OBJECT_INLINE_IVAR] {
         unsafe { &mut self.kind.object }
     }
 
@@ -340,19 +373,19 @@ impl RValue {
         unsafe { self.kind.class }
     }
 
-    pub(crate) fn as_float(&self) -> f64 {
+    fn as_float(&self) -> f64 {
         unsafe { self.kind.float }
     }
 
-    pub(crate) fn as_bignum(&self) -> &BigInt {
+    fn as_bignum(&self) -> &BigInt {
         unsafe { &self.kind.bignum }
     }
 
-    pub(crate) fn as_bytes(&self) -> &[u8] {
+    pub(super) fn as_bytes(&self) -> &[u8] {
         unsafe { self.kind.string.0.as_ref() }
     }
 
-    pub(crate) fn as_string(&self) -> String {
+    pub(super) fn as_string(&self) -> String {
         unsafe { String::from_utf8_lossy(&self.kind.string.0).to_string() }
     }
 
@@ -364,11 +397,11 @@ impl RValue {
         unsafe { &self.kind.array }
     }
 
-    pub(crate) fn as_array_mut(&mut self) -> &mut ArrayInner {
+    pub(super) fn as_array_mut(&mut self) -> &mut ArrayInner {
         unsafe { &mut self.kind.array }
     }
 
-    pub(crate) fn as_range(&self) -> &Range {
+    pub(super) fn as_range(&self) -> &Range {
         unsafe { &self.kind.range }
     }
 
@@ -435,15 +468,15 @@ impl RVFlag {
 
 #[repr(C)]
 pub union ObjKind {
-    pub invalid: (),
-    pub class: ClassId,
-    pub object: [Option<Value>; OBJECT_INLINE_IVAR],
-    pub bignum: ManuallyDrop<BigInt>,
-    pub float: f64,
-    pub string: ManuallyDrop<StringInner>,
-    pub time: ManuallyDrop<TimeInfo>,
-    pub array: ManuallyDrop<ArrayInner>,
-    pub range: ManuallyDrop<Range>,
+    invalid: (),
+    class: ClassId,
+    object: [Option<Value>; OBJECT_INLINE_IVAR],
+    bignum: ManuallyDrop<BigInt>,
+    float: f64,
+    string: ManuallyDrop<StringInner>,
+    time: ManuallyDrop<TimeInfo>,
+    array: ManuallyDrop<ArrayInner>,
+    range: ManuallyDrop<Range>,
 }
 
 #[allow(dead_code)]
@@ -463,7 +496,7 @@ impl ObjKind {
 
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
+struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
 #[derive(Debug, PartialEq)]
 #[repr(C)]

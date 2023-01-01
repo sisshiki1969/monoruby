@@ -14,10 +14,11 @@ pub(super) extern "C" fn find_method(
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
-) -> Option<&FuncData> {
+    func_data: &mut FuncData,
+) -> Option<Value> {
     let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
-    let data = globals.compile_on_demand(func_id);
-    Some(data)
+    *func_data = globals.compile_on_demand(func_id).clone();
+    Some(Value::nil())
 }
 
 pub(super) extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {

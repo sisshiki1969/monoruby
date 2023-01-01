@@ -411,8 +411,8 @@ impl std::default::Default for FuncKind {
 }
 
 pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
-pub const FUNCDATA_OFFSET_PC: u64 = 8;
-pub const FUNCDATA_OFFSET_META: u64 = 16;
+pub const FUNCDATA_OFFSET_META: u64 = 8;
+pub const FUNCDATA_OFFSET_PC: u64 = 16;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct FuncInfo {

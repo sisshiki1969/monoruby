@@ -1,8 +1,11 @@
+use crate::alloc::{Allocator, GC};
 use crate::*;
 use num::{BigInt, ToPrimitive};
 use ruruby_parse::{Node, NodeKind};
 
-use crate::alloc::{Allocator, GC};
+mod rvalue;
+
+pub use rvalue::*;
 
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
@@ -42,22 +45,7 @@ impl Value {
             return true;
         }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
-            (Some(lhs), Some(rhs)) => match (lhs.kind(), rhs.kind()) {
-                (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
-                (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
-                (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
-                (ObjKind::ARRAY, ObjKind::ARRAY) => {
-                    let lhs = lhs.as_array();
-                    let rhs = rhs.as_array();
-                    lhs.len() == rhs.len()
-                        && lhs
-                            .iter()
-                            .zip(rhs.iter())
-                            .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
-                }
-                (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
-                _ => false,
-            },
+            (Some(lhs), Some(rhs)) => RValue::eq(lhs, rhs),
             _ => false,
         }
     }
@@ -262,12 +250,7 @@ impl Value {
         } else if self.get() == 0 {
             RV::None
         } else if let Some(rv) = self.try_rvalue() {
-            match rv.kind() {
-                ObjKind::BIGNUM => RV::BigInt(rv.as_bignum()),
-                ObjKind::FLOAT => RV::Float(rv.as_float()),
-                ObjKind::BYTES => RV::String(rv.as_bytes()),
-                _ => RV::Object(rv),
-            }
+            rv.unpack()
         } else if self.is_packed_symbol() {
             RV::Symbol(self.as_packed_symbol())
         } else {

@@ -6,7 +6,6 @@
 mod alloc;
 mod executor;
 mod id_table;
-mod rvalue;
 #[cfg(test)]
 mod tests;
 mod value;
@@ -16,7 +15,6 @@ pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 use id_table::*;
 use monoasm::CodePtr;
-use rvalue::*;
 use value::*;
 
 pub const STRING_INLINE_CAP: usize = 39;

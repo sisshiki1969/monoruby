@@ -1009,10 +1009,10 @@ impl Meta {
 struct FuncData {
     /// address of function.
     codeptr: Option<CodePtr>,
-    /// the address of program counter
-    pc: BcPc,
     /// metadata of this function.
     meta: Meta,
+    /// the address of program counter
+    pc: BcPc,
 }
 
 impl FuncData {
