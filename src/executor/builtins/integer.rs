@@ -31,7 +31,7 @@ extern "C" fn times(
     };
     if let Some(block) = block {
         for i in 0..count {
-            vm.invoke_block(globals, block, self_val, &[Value::new_integer(i)])?;
+            vm.invoke_block(globals, block, &[Value::new_integer(i)])?;
         }
     } else {
         unimplemented!("needs block.")

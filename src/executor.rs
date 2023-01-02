@@ -105,7 +105,7 @@ impl LFP {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct BlockData {
-    outer_cfp: CFP,
+    outer_lfp: LFP,
     func_data: *const FuncData,
 }
 
@@ -240,13 +240,12 @@ impl Executor {
     }
 
     ///
-    /// Invoke block for *receiver* and *method*.
+    /// Invoke block for *block_handler*.
     ///
     fn invoke_block(
         &mut self,
         globals: &mut Globals,
         block_handler: Value,
-        receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
         let data = globals.get_block_data(block_handler, self);
@@ -254,7 +253,26 @@ impl Executor {
             self,
             globals,
             &data as _,
-            receiver,
+            Value::nil(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
+
+    ///
+    /// Invoke proc.
+    ///
+    fn invoke_proc(
+        &mut self,
+        globals: &mut Globals,
+        block_data: &BlockData,
+        args: &[Value],
+    ) -> Option<Value> {
+        (globals.codegen.block_invoker)(
+            self,
+            globals,
+            block_data as _,
+            Value::nil(),
             args.as_ptr(),
             args.len(),
         )

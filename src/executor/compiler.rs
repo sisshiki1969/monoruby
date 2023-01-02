@@ -275,10 +275,10 @@ impl Codegen {
     fn set_block_self_outer(&mut self) {
         monoasm! { self.jit,
             // set outer
-            lea  rsi, [rax - ((LBP_OUTER - BP_PREV_CFP) as i32)];
+            lea  rsi, [rax - (LBP_OUTER)];
             movq [rsp - (16 + LBP_OUTER)], rsi;
             // set self
-            movq  rsi, [rax - ((LBP_SELF - BP_PREV_CFP) as i32)];
+            movq  rsi, [rax - (LBP_SELF)];
             movq [rsp - (16 + LBP_SELF)], rsi;
         };
     }

@@ -6,7 +6,7 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(PROC_CLASS, "new", new, 0);
-    globals.define_builtin_func(PROC_CLASS, "call", call, 0);
+    globals.define_builtin_func(PROC_CLASS, "call", call, -1);
 }
 
 /// ### Proc.new
@@ -30,14 +30,16 @@ extern "C" fn new(
 
 /// ### Proc#call
 extern "C" fn call(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _self_val: Value,
-    _arg: Arg,
-    _len: usize,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    Some(Value::nil())
+    let block_data = self_val.as_proc();
+    let res = vm.invoke_proc(globals, block_data, &arg.to_vec(len))?;
+    Some(res)
 }
 
 #[cfg(test)]
@@ -48,5 +50,6 @@ mod test {
     fn proc_new() {
         run_test_no_result_check("Proc.new {}");
         run_test_error("Proc.new");
+        run_test("a = 100; p = Proc.new {|x, y| a += x / y}; p.call(42, 7)");
     }
 }

@@ -123,3 +123,19 @@ impl std::ops::Index<usize> for Arg {
         unsafe { &*self.0.sub(index) }
     }
 }
+
+impl Arg {
+    pub fn to_vec(&self, len: usize) -> Vec<Value> {
+        if len == 0 {
+            return vec![];
+        }
+        unsafe {
+            let data = self.0.sub(len - 1);
+            std::slice::from_raw_parts(data, len)
+                .iter()
+                .rev()
+                .cloned()
+                .collect()
+        }
+    }
+}

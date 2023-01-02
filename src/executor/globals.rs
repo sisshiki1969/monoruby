@@ -293,7 +293,7 @@ impl Globals {
             }
             let func_data = self.compile_on_demand(func_id) as _;
             BlockData {
-                outer_cfp: cfp,
+                outer_lfp: cfp.lfp(),
                 func_data,
             }
         } else {

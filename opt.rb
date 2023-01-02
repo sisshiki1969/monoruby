@@ -1,8 +1,5 @@
-def fact(x)
-  if x <= 1.0 then
-      1.0
-  else
-      x * fact(x-1.0)
-  end
-end;
-puts fact 130.0
+a = 100
+p = Proc.new { 1.times { a+=1 } }
+puts a
+p.call
+puts a
