@@ -13,7 +13,7 @@ impl Codegen {
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         monoasm!(self.jit,
-            movq rdi, [rbp - (BP_SELF)];  // base: Value
+            movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
         if ctx.self_class == cached_class {
             if ctx.self_kind == Some(ObjKind::OBJECT)
@@ -53,7 +53,7 @@ impl Codegen {
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
         monoasm!(self.jit,
-            movq rdi, [rbp - (BP_SELF)];  // base: Value
+            movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
         if ctx.self_class == cached_class {
             if ctx.self_kind == Some(ObjKind::OBJECT)
@@ -228,9 +228,9 @@ impl Codegen {
             //
             movq r8, rax;
             movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + BP_META)], rdi;
-            movq [rsp - (16 + BP_BLOCK)], 0;
-            movq [rsp - (16 + BP_SELF)], r15;
+            movq [rsp - (16 + LBP_META)], rdi;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_SELF)], r15;
         }
         self.set_method_outer();
         monoasm! {self.jit,

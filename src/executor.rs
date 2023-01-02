@@ -18,16 +18,16 @@ pub type BuiltinFn =
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;
-const BP_OUTER: i64 = 24;
+const LBP_OUTER: i64 = 24;
 /// Meta 8bytes
-const BP_META: i64 = 32;
+const LBP_META: i64 = 32;
 /// Meta::Regnum 2bytes
-const BP_META_REGNUM: i64 = BP_META - 4;
+const LBP_META_REGNUM: i64 = LBP_META - 4;
 /// Meta::FuncId 4bytes
-const BP_META_FUNCID: i64 = BP_META;
-const BP_BLOCK: i64 = 40;
-const BP_SELF: i64 = 48;
-const BP_ARG0: i64 = BP_SELF + 8;
+const LBP_META_FUNCID: i64 = LBP_META;
+const LBP_BLOCK: i64 = 40;
+const LBP_SELF: i64 = 48;
+const LBP_ARG0: i64 = LBP_SELF + 8;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
@@ -77,28 +77,28 @@ impl LFP {
     /// Get outer.
     ///
     fn outer(&self) -> usize {
-        unsafe { *(self.0.sub(BP_OUTER as usize) as *const usize) }
+        unsafe { *(self.0.sub(LBP_OUTER as usize) as *const usize) }
     }
 
     ///
     /// Get Meta.
     ///
     fn meta(&self) -> Meta {
-        Meta::new(unsafe { *(self.0.sub(BP_META as usize) as *const u64) })
+        Meta::new(unsafe { *(self.0.sub(LBP_META as usize) as *const u64) })
     }
 
     ///
     /// Get block.
     ///
     fn block(&self) -> Option<Value> {
-        unsafe { *(self.0.sub(BP_BLOCK as usize) as *const Option<Value>) }
+        unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const Option<Value>) }
     }
 
     ///
     /// Get a value of register slot *index*.
     ///
     fn register(&self, index: usize) -> Value {
-        unsafe { *(self.0.sub(BP_SELF as usize + 8 * index) as *const Value) }
+        unsafe { *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value) }
     }
 }
 

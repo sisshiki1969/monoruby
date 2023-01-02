@@ -33,8 +33,8 @@ impl Codegen {
         next:
             subl [rip + counter], 1;
             jne vm_entry;
-            movl rsi, [rsp - (8 + BP_META_FUNCID)];
-            movq rdx, [rsp - (8 + BP_SELF)];
+            movl rsi, [rsp - (8 + LBP_META_FUNCID)];
+            movq rdx, [rsp - (8 + LBP_SELF)];
             subq rsp, 1024;
             pushq rdi;
             movq rdi, r12;
@@ -109,11 +109,11 @@ impl Codegen {
         self.calc_offset();
         monoasm!(self.jit,
             subq rsp, rax;
-            lea  rcx, [rbp - (BP_ARG0)];     // rcx <- *const arg[0]
-            movq  r9, [rbp - (BP_BLOCK)];     // r9 <- block
-            movq  rdx, [rbp - (BP_SELF)];    // rdx <- self
+            lea  rcx, [r14 - (LBP_ARG0)];     // rcx <- *const arg[0]
+            movq  r9, [r14 - (LBP_BLOCK)];     // r9 <- block
+            movq  rdx, [r14 - (LBP_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [rbp - (BP_META_REGNUM)], rdi;
+            movw [r14 - (LBP_META_REGNUM)], rdi;
 
             movq rdi, rbx;
             movq rsi, r12;
@@ -147,7 +147,7 @@ impl Codegen {
         let cached_class = self.jit.const_i32(0);
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
-            movq rdi, [rsp - (8 + BP_SELF)];  // self: Value
+            movq rdi, [rsp - (8 + LBP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cached_class];
@@ -184,9 +184,9 @@ impl Codegen {
         let cached_ivarid = self.jit.const_i32(0);
         monoasm!(self.jit,
             movq rdi, r12; //&mut Globals
-            movq rsi, [rsp - (8 + BP_SELF)];  // self: Value
+            movq rsi, [rsp - (8 + LBP_SELF)];  // self: Value
             movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rsp - (8 + BP_ARG0)];  //val: Value
+            movq rcx, [rsp - (8 + LBP_ARG0)];  //val: Value
             lea  r8, [rip + cached_class];
             lea  r9, [rip + cached_ivarid];
             movq rax, (set_instance_var_with_cache);

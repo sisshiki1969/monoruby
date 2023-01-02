@@ -85,12 +85,12 @@ impl Codegen {
         monoasm! { self.jit,
             // set meta
             movq rdi, [r13 + 16];
-            movq [rsp -(16 + BP_META)], rdi;
+            movq [rsp -(16 + LBP_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
             // set self (= receiver)
             movq rax, [rsp];
-            movq [rsp - (16 + BP_SELF)], rax;
+            movq [rsp - (16 + LBP_SELF)], rax;
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
@@ -98,12 +98,12 @@ impl Codegen {
             // set block
             monoasm! { self.jit,
                 movq rax, [rcx];
-                movq [rsp - (16 + BP_BLOCK)], rax;
+                movq [rsp - (16 + LBP_BLOCK)], rax;
                 subq rcx, 8;
             };
         } else {
             monoasm! { self.jit,
-                movq [rsp - (16 + BP_BLOCK)], 0;
+                movq [rsp - (16 + LBP_BLOCK)], 0;
             };
         }
         self.set_arguments(has_splat);
@@ -182,7 +182,7 @@ impl Codegen {
             pushq rdi;
             pushq rsi;
             movq rdi, r12;
-            movq rsi, [rbp - (BP_BLOCK)];
+            movq rsi, [r14 - (LBP_BLOCK)];
             movq rdx, rbx;
             movq rax, (get_block_data);
             call rax;
@@ -193,11 +193,11 @@ impl Codegen {
             movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
             movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp -(16 + BP_META)], rsi;
+            movq [rsp -(16 + LBP_META)], rsi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
             // set block
-            movq [rsp - (16 + BP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         self.set_block_self_outer();
         self.vm_get_addr_rcx(); // rcx <- *args
@@ -251,7 +251,7 @@ impl Codegen {
             testq rdi, rdi;
             jeq  loop_exit;
             movl r15, rdi;
-            lea  rsi, [rsp - (16 + BP_ARG0)];
+            lea  rsi, [rsp - (16 + LBP_ARG0)];
             loop_:
             movq rax, [rcx];
         }

@@ -105,7 +105,7 @@ impl Codegen {
             movq r15, rax;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - (BP_META)];
+            movq rdx, [r14 - (LBP_META)];
             movq rcx, r13;
             subq rcx, 8;
             movq rax, (get_error_location);
@@ -275,18 +275,18 @@ impl Codegen {
     fn set_block_self_outer(&mut self) {
         monoasm! { self.jit,
             // set outer
-            lea  rsi, [rax - ((BP_OUTER - BP_PREV_CFP) as i32)];
-            movq [rsp - (16 + BP_OUTER)], rsi;
+            lea  rsi, [rax - ((LBP_OUTER - BP_PREV_CFP) as i32)];
+            movq [rsp - (16 + LBP_OUTER)], rsi;
             // set self
-            movq  rsi, [rax - ((BP_SELF - BP_PREV_CFP) as i32)];
-            movq [rsp - (16 + BP_SELF)], rsi;
+            movq  rsi, [rax - ((LBP_SELF - BP_PREV_CFP) as i32)];
+            movq [rsp - (16 + LBP_SELF)], rsi;
         };
     }
 
     /// Set outer.
     fn set_method_outer(&mut self) {
         monoasm! { self.jit,
-            movq [rsp - (16 + BP_OUTER)], 0;
+            movq [rsp - (16 + LBP_OUTER)], 0;
         };
     }
 
@@ -356,7 +356,7 @@ impl Codegen {
     ///
     fn calc_offset(&mut self) {
         monoasm!(self.jit,
-            addq rax, (BP_ARG0 / 8 + 1);
+            addq rax, (LBP_ARG0 / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
         );

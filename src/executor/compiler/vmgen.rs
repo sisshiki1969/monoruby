@@ -80,10 +80,10 @@ impl Codegen {
             movq r12, rsi;  // rsi: &mut Globals
             // set meta func_id
             movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
-            movq [rsp - (16 + BP_META)], rax;
+            movq [rsp - (16 + LBP_META)], rax;
             // set block
-            movq [rsp - (16 + BP_BLOCK)], 0;
-            movq [rsp - (16 + BP_OUTER)], 0;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_OUTER)], 0;
             movq [rsp - (16 + BP_PREV_CFP)], 0;
             lea  rax, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rax;
@@ -112,7 +112,7 @@ impl Codegen {
             //
             // set self
             movq rax, (main_object.get());
-            movq [rsp - (16 + BP_SELF)], rax;
+            movq [rsp - (16 + LBP_SELF)], rax;
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
             call rax;
@@ -359,7 +359,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r9 * 8 + 8];
-            movq [rsp + r9 * 8 - (16 + BP_SELF)], rax;
+            movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
             addq r9, 1;
             jne  loop_;
         loop_exit:
@@ -389,10 +389,10 @@ impl Codegen {
             movq rbx, rdi;
             movq r12, rsi;
             // set block
-            movq [rsp - (16 + BP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
             // set meta
             movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + BP_META)], rdi;
+            movq [rsp - (16 + LBP_META)], rdi;
             // set pc
             movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
         };
@@ -400,7 +400,7 @@ impl Codegen {
             self.set_block_self_outer()
         } else {
             monoasm! { self.jit,
-                movq [rsp - (16 + BP_SELF)], rcx;
+                movq [rsp - (16 + LBP_SELF)], rcx;
             }
             self.set_method_outer()
         }
@@ -438,7 +438,7 @@ impl Codegen {
             negq r9;
         loop_:
             movq rax, [r8 + r10 * 8 - 8];
-            movq [rsp + r9 * 8 - (16 + BP_SELF)], rax;
+            movq [rsp + r9 * 8 - (16 + LBP_SELF)], rax;
             subq r10, 1;
             addq r9, 1;
             jne  loop_;
@@ -499,7 +499,7 @@ impl Codegen {
     fn vm_get_addr_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            lea rdi, [r14 + rdi * 8 - (BP_SELF)];
+            lea rdi, [r14 + rdi * 8 - (LBP_SELF)];
         };
     }
 
@@ -513,7 +513,7 @@ impl Codegen {
     fn vm_get_addr_rcx(&mut self) {
         monoasm! { self.jit,
             negq rcx;
-            lea rcx, [r14 + rcx * 8 - (BP_SELF)];
+            lea rcx, [r14 + rcx * 8 - (LBP_SELF)];
         };
     }
 
@@ -527,7 +527,7 @@ impl Codegen {
     fn vm_get_rdi(&mut self) {
         monoasm! { self.jit,
             negq rdi;
-            movq rdi, [r14 + rdi * 8 - (BP_SELF)];
+            movq rdi, [r14 + rdi * 8 - (LBP_SELF)];
         };
     }
 
@@ -541,7 +541,7 @@ impl Codegen {
     fn vm_get_rsi(&mut self) {
         monoasm! { self.jit,
             negq rsi;
-            movq rsi, [r14 + rsi * 8 - (BP_SELF)];
+            movq rsi, [r14 + rsi * 8 - (LBP_SELF)];
         };
     }
 
@@ -555,7 +555,7 @@ impl Codegen {
     fn vm_get_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            movq r15, [r14 + r15 * 8 - (BP_SELF)];
+            movq r15, [r14 + r15 * 8 - (LBP_SELF)];
         };
     }
 
@@ -585,7 +585,7 @@ impl Codegen {
     fn vm_get_addr_r15(&mut self) {
         monoasm! { self.jit,
             negq r15;
-            lea r15, [r14 + r15 * 8 - (BP_SELF)];
+            lea r15, [r14 + r15 * 8 - (LBP_SELF)];
         };
     }
 
@@ -721,10 +721,10 @@ impl Codegen {
             movq rdx, rsi;
             // rsi <- dst
             negq rdi;
-            lea rsi, [r14 + rdi * 8 - (BP_SELF)];
+            lea rsi, [r14 + rdi * 8 - (LBP_SELF)];
             // rdi <- *src
             negq r15;
-            movq rdi, [r14 + r15 * 8 - (BP_SELF)];
+            movq rdi, [r14 + r15 * 8 - (LBP_SELF)];
             movq rax, (expand_array);
             call rax;
         };
@@ -747,13 +747,13 @@ impl Codegen {
         monoasm! { self.jit,
             movl rdx, rdi;
             negq rdx;
-            movq rdx, [r14 + rdx * 8 - (BP_SELF)];
+            movq rdx, [r14 + rdx * 8 - (LBP_SELF)];
             movl rcx, rsi;
             negq rcx;
-            movq rcx, [r14 + rcx * 8 - (BP_SELF)];
+            movq rcx, [r14 + rcx * 8 - (LBP_SELF)];
             movq rdi, r12;
-            movq rsi, [r14 - (BP_SELF)];
-            movq r8, [rbp - (BP_META)];
+            movq rsi, [r14 - (LBP_SELF)];
+            movq r8, [r14 - (LBP_META)];
             movq rax, (alias_method);
             call rax;
         };
@@ -776,7 +776,7 @@ impl Codegen {
         monoasm! { self.jit,
             // rdi <- *mut Value
             negq r15;
-            lea rdi, [r14 + r15 * 8 - (BP_SELF)];
+            lea rdi, [r14 + r15 * 8 - (LBP_SELF)];
             movq rax, (make_splat);
             call rax;
         };
@@ -832,8 +832,8 @@ impl Codegen {
             monoasm!(self.jit,
             compile:
                 movq rdi, r12;
-                movl rsi, [rbp - (BP_META_FUNCID)];
-                movq rdx, [rbp - (BP_SELF)];
+                movl rsi, [r14 - (LBP_META_FUNCID)];
+                movq rdx, [r14 - (LBP_SELF)];
                 lea rcx, [r13 - 16];
                 movq rax, (exec_jit_partial_compile);
                 call rax;
@@ -983,7 +983,7 @@ impl Codegen {
         let panic = self.entry_panic;
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rax, [rbp - (BP_BLOCK)];
+            movq rax, [r14 - (LBP_BLOCK)];
             testq rax, 0b1;
             jeq panic;
             addq rax, 0b10;
@@ -1237,9 +1237,9 @@ impl Codegen {
             //
             movq r8, rax;
             movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + BP_META)], rdi;
-            movq [rsp - (16 + BP_BLOCK)], 0;
-            movq [rsp - (16 + BP_SELF)], r15;
+            movq [rsp - (16 + LBP_META)], rdi;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_SELF)], r15;
         };
         self.set_method_outer();
         monoasm! { self.jit,
