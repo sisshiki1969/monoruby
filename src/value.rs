@@ -242,6 +242,10 @@ impl Value {
         RValue::new_time(time).pack()
     }
 
+    pub(crate) fn new_proc(block: BlockData) -> Self {
+        RValue::new_proc(block).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Integer(i)
@@ -467,6 +471,11 @@ impl Value {
     pub(crate) fn as_range(&self) -> &Range {
         assert_eq!(ObjKind::RANGE, self.rvalue().kind());
         self.rvalue().as_range()
+    }
+
+    pub(crate) fn as_proc(&self) -> &BlockData {
+        assert_eq!(ObjKind::PROC, self.rvalue().kind());
+        self.rvalue().as_proc()
     }
 }
 

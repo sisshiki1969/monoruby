@@ -16,6 +16,7 @@ pub const SYMBOL_CLASS: ClassId = ClassId::new(9);
 pub const TIME_CLASS: ClassId = ClassId::new(10);
 pub const ARRAY_CLASS: ClassId = ClassId::new(11);
 pub const RANGE_CLASS: ClassId = ClassId::new(12);
+pub const PROC_CLASS: ClassId = ClassId::new(13);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -55,6 +56,7 @@ impl std::fmt::Debug for ClassId {
             10 => write!(f, "TIME"),
             11 => write!(f, "ARRAY"),
             12 => write!(f, "RANGE"),
+            13 => write!(f, "PROC"),
             n => write!(f, "ClassId({})", n),
         }
     }

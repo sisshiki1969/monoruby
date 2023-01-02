@@ -40,12 +40,13 @@ impl<'a> GC<RValue> for Root<'a> {
             .for_each(|v| v.mark(alloc));
         let mut cfp = self.current_cfp;
         loop {
-            let meta = cfp.lfp().meta();
+            let lfp = cfp.lfp();
+            let meta = lfp.meta();
             for r in 0..meta.reg_num() as usize {
-                let v = cfp.lfp().register(r);
+                let v = lfp.register(r);
                 v.mark(alloc);
             }
-            cfp.lfp().block().map(|v| v.mark(alloc));
+            lfp.block().map(|v| v.mark(alloc));
 
             cfp = cfp.prev();
             if cfp.is_null() {
@@ -291,12 +292,13 @@ impl Globals {
                 cfp = cfp.prev();
             }
             let func_data = self.compile_on_demand(func_id) as _;
-            return BlockData {
+            BlockData {
                 outer_cfp: cfp,
                 func_data,
-            };
+            }
+        } else {
+            block_handler.as_proc().clone()
         }
-        unreachable!()
     }
 
     pub(super) fn execute(
@@ -354,6 +356,8 @@ impl Globals {
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_tos(val),
+                ObjKind::RANGE => self.range_tos(val),
+                ObjKind::PROC => self.proc_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -384,7 +388,8 @@ impl Globals {
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY | ObjKind::SPLAT => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
-                ObjKind::RANGE => self.range_inspect(val),
+                ObjKind::RANGE => self.range_tos(val),
+                ObjKind::PROC => self.proc_tos(val),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
@@ -430,6 +435,10 @@ impl Globals {
         }
     }
 
+    fn proc_tos(&self, val: Value) -> String {
+        format!("#<Proc:0x{:016x}>", val.rvalue().id())
+    }
+
     fn object_inspect(&self, val: Value) -> String {
         if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
             self.val_tos(name)
@@ -446,7 +455,7 @@ impl Globals {
         }
     }
 
-    fn range_inspect(&self, val: Value) -> String {
+    fn range_tos(&self, val: Value) -> String {
         let range = val.as_range();
         format!(
             "{}{}{}",

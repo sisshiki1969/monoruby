@@ -40,6 +40,7 @@ impl std::fmt::Debug for RValue {
                     8 => format!("ARRAY({:?})", self.kind.array),
                     9 => format!("RANGE({:?})", self.kind.range),
                     10 => format!("SPLAT({:?})", self.kind.array),
+                    11 => format!("PROC({:?})", self.kind.proc),
                     _ => unreachable!(),
                 }
             },
@@ -325,6 +326,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_proc(block_data: BlockData) -> Self {
+        RValue {
+            flags: RVFlag::new(PROC_CLASS, ObjKind::PROC),
+            kind: ObjKind::proc(block_data),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -405,6 +414,10 @@ impl RValue {
         unsafe { &self.kind.range }
     }
 
+    pub(super) fn as_proc(&self) -> &BlockData {
+        unsafe { &self.kind.proc }
+    }
+
     pub(crate) fn as_time(&self) -> &TimeInfo {
         unsafe { &self.kind.time }
     }
@@ -477,6 +490,7 @@ pub union ObjKind {
     time: ManuallyDrop<TimeInfo>,
     array: ManuallyDrop<ArrayInner>,
     range: ManuallyDrop<Range>,
+    proc: ManuallyDrop<BlockData>,
 }
 
 #[allow(dead_code)]
@@ -492,6 +506,7 @@ impl ObjKind {
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
     pub const SPLAT: u8 = 10;
+    pub const PROC: u8 = 11;
 }
 
 #[derive(Clone)]
@@ -568,6 +583,12 @@ impl ObjKind {
     fn time(info: TimeInfo) -> Self {
         Self {
             time: ManuallyDrop::new(info),
+        }
+    }
+
+    fn proc(block_data: BlockData) -> Self {
+        Self {
+            proc: ManuallyDrop::new(block_data),
         }
     }
 }

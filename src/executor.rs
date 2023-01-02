@@ -102,8 +102,9 @@ impl LFP {
     }
 }
 
+#[derive(Debug, Clone)]
 #[repr(C)]
-struct BlockData {
+pub(crate) struct BlockData {
     outer_cfp: CFP,
     func_data: *const FuncData,
 }

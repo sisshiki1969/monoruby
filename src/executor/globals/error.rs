@@ -101,6 +101,10 @@ impl Globals {
         self.set_error(MonorubyErr::argumenterr(msg.to_string()));
     }
 
+    pub(crate) fn err_create_proc_no_block(&mut self) {
+        self.err_argument("tried to create Proc object without a block");
+    }
+
     pub(crate) fn err_wrong_number_of_arguments_range(
         &mut self,
         given: usize,
@@ -329,14 +333,6 @@ impl MonorubyErr {
             sourceinfo,
         )
     }
-
-    /*pub(crate) fn undefined_local(
-        ident: String,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> MonorubyErr {
-        MonorubyErr::new_with_loc(MonorubyErrKind::UndefinedLocal(ident), loc, sourceinfo)
-    }*/
 }
 
 // Executor level errors.
