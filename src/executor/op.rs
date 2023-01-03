@@ -548,59 +548,15 @@ pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals)
     let mut cfp = interp.cfp;
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
-        eprint!("  [{}]: cfp:{:?} ", i, cfp);
+        eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
         let ret_addr = cfp.return_addr();
         eprintln!("ret adr: {:?} ", ret_addr);
         let prev_cfp = cfp.prev();
-        _dump_frame_info(interp, globals, cfp.lfp());
+        globals.dump_frame_info(cfp.lfp());
         if prev_cfp.is_null() {
             break;
         }
         cfp = prev_cfp;
     }
     eprintln!("-----end stacktrace");
-}
-
-fn _dump_frame_info(_interp: &mut Executor, globals: &mut Globals, lfp: LFP) {
-    let meta = lfp.meta();
-    let outer = lfp.outer();
-    let func_id = meta.func_id();
-    let block = lfp.block();
-    eprintln!(
-        "    name:[{}] block:{} outer:{} {:?}",
-        globals.func[func_id]
-            .name()
-            .unwrap_or(&"<unnamed>".to_string()),
-        match block {
-            Some(block) => {
-                match block.unpack() {
-                    RV::Integer(i) => {
-                        let i = i as u64;
-                        let func_id = u32::try_from(i >> 16).unwrap();
-                        let idx = i as u64 as u16;
-                        format!("BlockArgProxy {{ {:?}, {} }}", FuncId(func_id), idx)
-                    }
-                    _ => unimplemented!(),
-                }
-            }
-            None => "None".to_string(),
-        },
-        if outer == 0 {
-            "None".to_string()
-        } else {
-            format!("0x{:012x}", outer)
-        },
-        meta,
-    );
-    eprint!("    ");
-    for r in 0..meta.reg_num() as usize {
-        let v = lfp.register(r);
-        eprint!(
-            "%{}{}:[{}] ",
-            r,
-            if r == 0 { "(self)" } else { "" },
-            globals.val_inspect(v)
-        );
-    }
-    eprintln!();
 }

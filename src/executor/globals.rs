@@ -544,4 +544,48 @@ impl Globals {
             eprintln!("  {:05x}: {}", i, text);
         }
     }
+
+    pub(in crate::executor) fn dump_frame_info(&mut self, lfp: LFP) {
+        let meta = lfp.meta();
+        let outer = lfp.outer();
+        let func_id = meta.func_id();
+        let block = lfp.block();
+        eprintln!(
+            "    name:[{}] block:{} outer:{} {:?}",
+            self.func[func_id]
+                .name()
+                .unwrap_or(&"<unnamed>".to_string()),
+            match block {
+                Some(block) => {
+                    match block.unpack() {
+                        RV::Integer(i) => {
+                            let i = i as u64;
+                            let func_id = u32::try_from(i >> 16).unwrap();
+                            let idx = i as u64 as u16;
+                            format!("BlockArgProxy {{ {:?}, {} }}", FuncId(func_id), idx)
+                        }
+                        _ => unimplemented!(),
+                    }
+                }
+                None => "None".to_string(),
+            },
+            if outer == 0 {
+                "None".to_string()
+            } else {
+                format!("0x{:012x}", outer)
+            },
+            meta,
+        );
+        eprint!("    ");
+        for r in 0..meta.reg_num() as usize {
+            let v = lfp.register(r);
+            eprint!(
+                "%{}{}:[{}] ",
+                r,
+                if r == 0 { "(self)" } else { "" },
+                self.val_inspect(v)
+            );
+        }
+        eprintln!();
+    }
 }

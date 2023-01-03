@@ -231,6 +231,74 @@ impl Codegen {
         codegen
     }
 
+    fn gen_entry_point(&mut self, main_object: Value) {
+        // "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>
+        let entry = self.jit.get_current_address();
+        monoasm! { self.jit,
+            pushq rbx;
+            pushq r12;
+            pushq r13;
+            pushq r14;
+            pushq r15;
+            pushq rbp;
+            subq rsp, 8;
+
+            movq rbx, rdi;  // rdi: &mut Interp
+            movq r12, rsi;  // rsi: &mut Globals
+            // set meta func_id
+            movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
+            movq [rsp - (16 + LBP_META)], rax;
+            // set block
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_OUTER)], 0;
+            movq [rsp - (16 + BP_PREV_CFP)], 0;
+            lea  rax, [rsp - (16 + BP_PREV_CFP)];
+            movq [rbx], rax;
+            // set pc
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+        }
+        self.set_lfp();
+        monoasm! {self.jit,
+            movq [rbx + 8], r14;
+            //
+            //       +-------------+
+            //  0x00 |             | <- rsp
+            //       +-------------+
+            // -0x08 | return addr |
+            //       +-------------+
+            // -0x10 |   old rbp   |
+            //       +-------------+
+            // -0x18 |    meta     |
+            //       +-------------+
+            // -0x20 |    block    |
+            //       +-------------+
+            // -0x28 |     %0      |
+            //       +-------------+
+            // -0x30 | %1(1st arg) |
+            //       +-------------+
+            //       |             |
+            //
+            // set self
+            movq rax, (main_object.get());
+            movq [rsp - (16 + LBP_SELF)], rax;
+            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
+            call rax;
+            // pop frame
+            movq [rbx], 0;
+            addq rsp, 8;
+            popq rbp;
+            popq r15;
+            popq r14;
+            popq r13;
+            popq r12;
+            popq rbx;
+            ret;
+        };
+
+        self.entry_point = unsafe { std::mem::transmute(entry.as_ptr()) };
+    }
+
     ///
     /// Execute garbage collection.
     ///
@@ -301,7 +369,7 @@ impl Codegen {
         );
     }
 
-    /// Set lfp for callee.
+    /// Set lfp(r14) for callee.
     fn set_lfp(&mut self) {
         monoasm!(self.jit,
             // set lfp

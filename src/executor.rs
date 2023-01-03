@@ -29,7 +29,7 @@ const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
 const LBP_ARG0: i64 = LBP_SELF + 8;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 struct CFP(*const CFP);
 
@@ -66,18 +66,51 @@ impl CFP {
         let bp = self.bp();
         LFP(unsafe { *bp.sub(BP_LFP as usize / 8) as _ })
     }
+
+    ///
+    /// Set LFP.
+    ///
+    fn set_lfp(&mut self, lfp: LFP) {
+        let bp = self.bp() as *mut usize;
+        unsafe {
+            *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 struct LFP(*const u8);
 
+impl std::default::Default for LFP {
+    fn default() -> Self {
+        Self(std::ptr::null())
+    }
+}
+
 impl LFP {
+    fn cfp_address(&self) -> CFP {
+        CFP(unsafe { self.0.sub(BP_PREV_CFP as usize) as _ })
+    }
+
+    fn outer_address(&self) -> u64 {
+        unsafe { self.0.sub(LBP_OUTER as usize) as u64 }
+    }
+
     ///
     /// Get outer.
     ///
-    fn outer(&self) -> usize {
-        unsafe { *(self.0.sub(LBP_OUTER as usize) as *const usize) }
+    fn outer(&self) -> u64 {
+        unsafe { *(self.outer_address() as *const u64) }
+    }
+
+    ///
+    /// Set outer.
+    ///
+    fn set_outer(&mut self, outer: u64) {
+        unsafe {
+            *(self.outer_address() as *mut u64) = outer;
+        }
     }
 
     ///
@@ -115,8 +148,15 @@ pub(crate) struct BlockData {
 #[derive(Default)]
 #[repr(C)]
 pub struct Executor {
-    cfp: CFP,
+    cfp: CFP,     // [rbx]
+    lfp_top: LFP, // [rbx + 8]
     lexical_class: Vec<ClassId>,
+}
+
+impl Executor {
+    fn within_stack(&self, lfp: LFP) -> bool {
+        self.lfp_top >= lfp && lfp.0 > self.cfp.0 as _
+    }
 }
 
 impl Executor {
@@ -924,7 +964,9 @@ impl std::fmt::Debug for InstId {
 struct Meta {
     func_id: FuncId,
     reg_num: u16,
+    /// interpreter:0 native:2
     kind: u8,
+    /// method:0 class_def:1
     mode: u8,
 }
 
@@ -1000,10 +1042,12 @@ impl Meta {
         self.reg_num as i16 as i64
     }
 
+    /// interpreter:0 JIT code: 1 native:2
     fn kind(&self) -> u8 {
         self.kind
     }
 
+    /// method:0 class_def:1
     fn mode(&self) -> u8 {
         self.mode
     }
