@@ -47,7 +47,7 @@ impl Executor {
             let lfp = cfp.lfp();
             self.move_frame_to_heap(lfp);
         }
-        crate::executor::op::_dump_stacktrace(self, globals);
+        //crate::executor::op::_dump_stacktrace(self, globals);
         let block_data = globals.get_block_data(block_handler, self);
         Some(Value::new_proc(block_data))
     }
