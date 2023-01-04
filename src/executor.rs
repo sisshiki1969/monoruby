@@ -43,38 +43,36 @@ impl CFP {
     ///
     /// Get CFP of previous frame of *self*.
     ///
-    fn prev(&self) -> Self {
-        unsafe { *self.0 }
+    unsafe fn prev(&self) -> Self {
+        *self.0
     }
 
     fn is_null(&self) -> bool {
         self.0.is_null()
     }
 
-    fn return_addr(&self) -> *const usize {
-        unsafe { (*self.0.add(2)).0 as _ }
+    unsafe fn return_addr(&self) -> *const usize {
+        (*self.0.add(2)).0 as _
     }
 
-    fn bp(&self) -> *const usize {
-        unsafe { self.0.add(BP_PREV_CFP as usize / 8) as _ }
+    unsafe fn bp(&self) -> *const usize {
+        self.0.add(BP_PREV_CFP as usize / 8) as _
     }
 
     ///
     /// Get LFP.
     ///
-    fn lfp(&self) -> LFP {
+    unsafe fn lfp(&self) -> LFP {
         let bp = self.bp();
-        LFP(unsafe { *bp.sub(BP_LFP as usize / 8) as _ })
+        LFP(*bp.sub(BP_LFP as usize / 8) as _)
     }
 
     ///
     /// Set LFP.
     ///
-    fn set_lfp(&mut self, lfp: LFP) {
+    unsafe fn set_lfp(&mut self, lfp: LFP) {
         let bp = self.bp() as *mut usize;
-        unsafe {
-            *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
-        }
+        *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
     }
 }
 
@@ -89,49 +87,77 @@ impl std::default::Default for LFP {
 }
 
 impl LFP {
-    fn cfp_address(&self) -> CFP {
-        CFP(unsafe { self.0.sub(BP_PREV_CFP as usize) as _ })
+    unsafe fn cfp(&self) -> CFP {
+        CFP(self.0.sub(BP_PREV_CFP as usize) as _)
     }
 
-    fn outer_address(&self) -> u64 {
-        unsafe { self.0.sub(LBP_OUTER as usize) as u64 }
+    unsafe fn outer_address(&self) -> DFP {
+        DFP(self.0.sub(LBP_OUTER as usize) as _)
     }
 
     ///
     /// Get outer.
     ///
-    fn outer(&self) -> u64 {
-        unsafe { *(self.outer_address() as *const u64) }
+    unsafe fn outer(&self) -> DFP {
+        self.outer_address().outer()
     }
 
     ///
     /// Set outer.
     ///
-    fn set_outer(&mut self, outer: u64) {
-        unsafe {
-            *(self.outer_address() as *mut u64) = outer;
-        }
+    unsafe fn set_outer(&mut self, outer: DFP) {
+        *self.outer_address().0 = outer;
     }
 
     ///
     /// Get Meta.
     ///
-    fn meta(&self) -> Meta {
-        Meta::new(unsafe { *(self.0.sub(LBP_META as usize) as *const u64) })
+    unsafe fn meta(&self) -> Meta {
+        Meta::new(*(self.0.sub(LBP_META as usize) as *const u64))
     }
 
     ///
     /// Get block.
     ///
-    fn block(&self) -> Option<Value> {
-        unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const Option<Value>) }
+    unsafe fn block(&self) -> Option<Value> {
+        *(self.0.sub(LBP_BLOCK as usize) as *const Option<Value>)
     }
 
     ///
     /// Get a value of register slot *index*.
     ///
-    fn register(&self, index: usize) -> Value {
-        unsafe { *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value) }
+    unsafe fn register(&self, index: usize) -> Value {
+        *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[repr(transparent)]
+struct DFP(*mut DFP);
+
+impl std::default::Default for DFP {
+    fn default() -> Self {
+        Self(std::ptr::null_mut())
+    }
+}
+
+impl DFP {
+    ///
+    /// Get CFP of previous frame of *self*.
+    ///
+    unsafe fn outer(&self) -> Self {
+        *self.0
+    }
+
+    fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    ///
+    /// Get LFP.
+    ///
+    unsafe fn lfp(&self) -> LFP {
+        LFP(self.0.add(LBP_OUTER as usize / 8) as _)
     }
 }
 

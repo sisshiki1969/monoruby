@@ -172,7 +172,9 @@ extern "C" fn dump(
     _len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    super::op::_dump_stacktrace(vm, globals);
+    unsafe {
+        super::op::_dump_stacktrace(vm, globals);
+    }
     Some(Value::nil())
 }
 

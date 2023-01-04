@@ -43,9 +43,11 @@ extern "C" fn call(
 impl Executor {
     fn generate_proc(&mut self, globals: &mut Globals, block_handler: Value) -> Option<Value> {
         if let Some(_bh) = block_handler.try_fixnum() {
-            let cfp = self.cfp.prev();
-            let lfp = cfp.lfp();
-            self.move_frame_to_heap(lfp);
+            unsafe {
+                let cfp = self.cfp.prev();
+                let lfp = cfp.lfp();
+                self.move_frame_to_heap(lfp);
+            }
         }
         //crate::executor::op::_dump_stacktrace(self, globals);
         let block_data = globals.get_block_data(block_handler, self);
@@ -54,9 +56,9 @@ impl Executor {
 
     /// ## return
     /// - the address of outer in *lfp*.
-    fn move_frame_to_heap(&self, lfp: LFP) -> u64 {
+    unsafe fn move_frame_to_heap(&self, lfp: LFP) -> DFP {
         if self.within_stack(lfp) {
-            let mut cfp = lfp.cfp_address();
+            let mut cfp = lfp.cfp();
             let len = LBP_SELF as usize + 8 * lfp.meta().reg_num as usize;
             let v = unsafe {
                 std::slice::from_raw_parts((lfp.0 as usize + 8 - len) as *const u8, len)
@@ -66,8 +68,8 @@ impl Executor {
             let mut heap_lfp = LFP((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
             cfp.set_lfp(heap_lfp);
             let outer = heap_lfp.outer();
-            if outer != 0 {
-                let outer_lfp = LFP((outer + LBP_OUTER as u64) as _);
+            if !outer.is_null() {
+                let outer_lfp = outer.lfp();
                 let outer = self.move_frame_to_heap(outer_lfp);
                 heap_lfp.set_outer(outer);
             }
@@ -111,5 +113,45 @@ mod test {
         a
         ",
         )
+    }
+
+    #[test]
+    fn proc2() {
+        run_test(
+            "
+            a = 100
+            p = nil
+            q = nil
+            3.times {
+              p = Proc.new {
+                3.times {
+                  a+=1
+                }
+              }
+              q = Proc.new {
+                5.times {
+                  a+=10
+                }
+              }
+            }
+            p.call
+            q.call
+            a
+        ",
+        );
+    }
+
+    #[test]
+    fn proc_param() {
+        run_test(
+            "
+            a = []
+            p = Proc.new {|x|
+                a << x
+            }
+            5.times(&p)
+            a
+        ",
+        );
     }
 }

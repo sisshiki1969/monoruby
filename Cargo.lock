@@ -859,6 +859,7 @@ dependencies = [
  "escape_string",
  "fxhash",
  "hex",
+ "indexmap",
  "monoasm",
  "monoasm_macro",
  "num",

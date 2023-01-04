@@ -3,7 +3,7 @@ use crate::*;
 use num::{BigInt, ToPrimitive};
 use ruruby_parse::{Node, NodeKind};
 
-mod rvalue;
+pub mod rvalue;
 
 pub use rvalue::*;
 
@@ -30,6 +30,15 @@ impl std::default::Default for Value {
     }
 }
 
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.try_rvalue() {
+            None => self.0.hash(state),
+            Some(rval) => rval.hash(state),
+        }
+    }
+}
+
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         if let Some(rvalue) = self.try_rvalue() {
@@ -48,6 +57,10 @@ impl Value {
             (Some(lhs), Some(rhs)) => RValue::eq(lhs, rhs),
             _ => false,
         }
+    }
+
+    pub(crate) fn eql(&self, other: &Self) -> bool {
+        HashKey(*self) == HashKey(*other)
     }
 }
 
@@ -221,6 +234,14 @@ impl Value {
 
     pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue::new_array_with_class(v, class_id).pack()
+    }
+
+    /*pub(crate) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+        RValue::new_hash(map).pack()
+    }*/
+
+    pub(crate) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
+        RValue::new_hash_with_class(map, class_id).pack()
     }
 
     pub(crate) fn new_splat(val: Value) -> Self {
@@ -408,6 +429,16 @@ impl Value {
     pub(crate) fn as_splat(&self) -> &ArrayInner {
         assert_eq!(ObjKind::SPLAT, self.rvalue().kind());
         self.rvalue().as_array()
+    }
+
+    pub(crate) fn as_hash(&self) -> &HashInfo {
+        assert_eq!(ObjKind::HASH, self.rvalue().kind());
+        self.rvalue().as_hash()
+    }
+
+    pub(crate) fn as_hash_mut(&mut self) -> &mut HashInfo {
+        assert_eq!(ObjKind::HASH, self.rvalue().kind());
+        self.rvalue_mut().as_hash_mut()
     }
 
     pub(crate) fn is_class(&self) -> Option<ClassId> {

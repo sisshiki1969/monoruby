@@ -4,6 +4,7 @@ mod array;
 mod class;
 mod file;
 mod float;
+mod hash;
 mod integer;
 mod math;
 mod object;
@@ -97,6 +98,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Proc", PROC_CLASS)
             .as_class()
     );
+    assert_eq!(
+        HASH_CLASS,
+        globals
+            .define_builtin_class_under_obj("Hash", HASH_CLASS)
+            .as_class()
+    );
     let math_class = globals.define_class_under_obj("Math").as_class();
     let file_class = globals.define_class_under_obj("File").as_class();
 
@@ -106,6 +113,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     class::init(globals);
     string::init(globals);
     array::init(globals);
+    hash::init(globals);
     range::init(globals);
     proc::init(globals);
     time::init(globals);

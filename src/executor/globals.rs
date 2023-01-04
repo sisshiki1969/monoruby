@@ -39,18 +39,20 @@ impl<'a> GC<RValue> for Root<'a> {
             .values()
             .for_each(|v| v.mark(alloc));
         let mut cfp = self.current_cfp;
-        loop {
-            let lfp = cfp.lfp();
-            let meta = lfp.meta();
-            for r in 0..meta.reg_num() as usize {
-                let v = lfp.register(r);
-                v.mark(alloc);
-            }
-            lfp.block().map(|v| v.mark(alloc));
+        unsafe {
+            loop {
+                let lfp = cfp.lfp();
+                let meta = lfp.meta();
+                for r in 0..meta.reg_num() as usize {
+                    let v = lfp.register(r);
+                    v.mark(alloc);
+                }
+                lfp.block().map(|v| v.mark(alloc));
 
-            cfp = cfp.prev();
-            if cfp.is_null() {
-                break;
+                cfp = cfp.prev();
+                if cfp.is_null() {
+                    break;
+                }
             }
         }
     }
@@ -288,13 +290,15 @@ impl Globals {
         if let Some(bh) = block_handler.try_fixnum() {
             let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
             let mut cfp = interp.cfp;
-            for _ in 0..bh as i16 as u16 {
-                cfp = cfp.prev();
-            }
-            let func_data = self.compile_on_demand(func_id) as _;
-            BlockData {
-                outer_lfp: cfp.lfp(),
-                func_data,
+            unsafe {
+                for _ in 0..bh as i16 as u16 {
+                    cfp = cfp.prev();
+                }
+                let func_data = self.compile_on_demand(func_id) as _;
+                BlockData {
+                    outer_lfp: cfp.lfp(),
+                    func_data,
+                }
             }
         } else {
             block_handler.as_proc().clone()
@@ -358,6 +362,7 @@ impl Globals {
                 ObjKind::OBJECT => self.object_tos(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => self.proc_tos(val),
+                ObjKind::HASH => self.hash_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -390,6 +395,7 @@ impl Globals {
                 ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => self.proc_tos(val),
+                ObjKind::HASH => self.hash_tos(val),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
@@ -452,6 +458,36 @@ impl Globals {
                 val.class_id().get_name(self),
                 val.rvalue().id()
             )
+        }
+    }
+
+    fn hash_tos(&self, val: Value) -> String {
+        let hash = val.as_hash();
+        match hash.len() {
+            0 => "{}".to_string(),
+            _ => {
+                let mut result = "".to_string();
+                let mut first = true;
+                for (k, v) in hash.iter() {
+                    let k_inspect = if k == val {
+                        "{...}".to_string()
+                    } else {
+                        k.inspect(self)
+                    };
+                    let v_inspect = if v == val {
+                        "{...}".to_string()
+                    } else {
+                        v.inspect(self)
+                    };
+                    result = if first {
+                        format!("{k_inspect}=>{v_inspect}")
+                    } else {
+                        format!("{result}, {k_inspect}=>{v_inspect}")
+                    };
+                    first = false;
+                }
+                format! {"{{{}}}", result}
+            }
         }
     }
 
@@ -545,7 +581,7 @@ impl Globals {
         }
     }
 
-    pub(in crate::executor) fn dump_frame_info(&mut self, lfp: LFP) {
+    pub(in crate::executor) unsafe fn dump_frame_info(&mut self, lfp: LFP) {
         let meta = lfp.meta();
         let outer = lfp.outer();
         let func_id = meta.func_id();
@@ -569,10 +605,10 @@ impl Globals {
                 }
                 None => "None".to_string(),
             },
-            if outer == 0 {
+            if outer.is_null() {
                 "None".to_string()
             } else {
-                format!("0x{:012x}", outer)
+                format!("{:?}", outer)
             },
             meta,
         );

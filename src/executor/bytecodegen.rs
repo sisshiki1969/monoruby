@@ -1314,12 +1314,17 @@ impl IrContext {
                     let block_handler = ((func_id.0 as i64) << 16) + 1;
                     self.gen_literal(info, None, Value::new_integer(block_handler));
                 }
-                NodeKind::LocalVar(proc_local) if Some(&proc_local) == info.block_param_name() => {
-                    let proc_temp = info.push().into();
-                    self.push(BcIr::BlockArgProxy(proc_temp), loc);
+                NodeKind::LocalVar(proc_local) => {
+                    if Some(&proc_local) == info.block_param_name() {
+                        let proc_temp = info.push().into();
+                        self.push(BcIr::BlockArgProxy(proc_temp), loc);
+                    } else {
+                        let local = info.refer_local(&proc_local).into();
+                        self.gen_temp_mov(info, local);
+                    }
                 }
                 _ => {
-                    return Err(MonorubyErr::unsupported_lhs(
+                    return Err(MonorubyErr::unsupported_block_param(
                         &block,
                         info.sourceinfo.clone(),
                     ))

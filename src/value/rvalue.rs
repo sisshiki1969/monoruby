@@ -3,6 +3,10 @@ use num::BigInt;
 use smallvec::SmallVec;
 use std::mem::ManuallyDrop;
 
+pub use self::hash::*;
+
+mod hash;
+
 pub const OBJECT_INLINE_IVAR: usize = 6;
 
 /// Heap-allocated objects.
@@ -41,6 +45,7 @@ impl std::fmt::Debug for RValue {
                     9 => format!("RANGE({:?})", self.kind.range),
                     10 => format!("SPLAT({:?})", self.kind.array),
                     11 => format!("PROC({:?})", self.kind.proc),
+                    12 => format!("HASH({:?})", self.kind.hash),
                     _ => unreachable!(),
                 }
             },
@@ -54,6 +59,62 @@ impl PartialEq for RValue {
         self.id() == other.id()
     }
 }
+
+impl std::hash::Hash for RValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.kind() {
+            ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+            ObjKind::BIGNUM => self.as_bignum().hash(state),
+            ObjKind::FLOAT => self.as_float().to_bits().hash(state),
+            ObjKind::BYTES => self.as_bytes().hash(state),
+            ObjKind::ARRAY => self.as_array().hash(state),
+            ObjKind::RANGE => self.as_range().hash(state),
+            ObjKind::HASH => self.as_hash().hash(state),
+            //ObjKind::METHOD => lhs.method().hash(state),
+            _ => self.hash(state),
+        }
+    }
+}
+
+impl RValue {
+    // This type of equality is used for comparison for keys of Hash.
+    pub(crate) fn eql(&self, other: &Self) -> bool {
+        match (self.kind(), other.kind()) {
+            (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
+            (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
+            (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
+            //(ObjKind::COMPLEX, ObjKind::COMPLEX) => {
+            //    self.complex().r.eql(&other.complex().r) && self.complex().i.eql(&other.complex().i)
+            //}
+            (ObjKind::BYTES, ObjKind::BYTES) => self.as_bytes() == other.as_bytes(),
+            (ObjKind::ARRAY, ObjKind::ARRAY) => {
+                let lhs = self.as_array();
+                let rhs = other.as_array();
+                if lhs.len() != rhs.len() {
+                    return false;
+                }
+                lhs.iter().zip(rhs.iter()).all(|(a1, a2)| {
+                    // Support self-containing arrays.
+                    if self.id() == a1.get() && other.id() == a2.get() {
+                        true
+                    } else if self.id() == a1.get() || other.id() == a2.get() {
+                        false
+                    } else {
+                        a1.eql(a2)
+                    }
+                })
+            }
+            (ObjKind::RANGE, ObjKind::RANGE) => self.as_range().eql(other.as_range()),
+            (ObjKind::HASH, ObjKind::HASH) => self.as_hash() == other.as_hash(),
+            //(ObjKind::METHOD, ObjKind::METHOD) => *self.method() == *other.method(),
+            //(ObjKind::UNBOUND_METHOD, ObjKind::UNBOUND_METHOD) => *self.method() == *other.method(),
+            (ObjKind::INVALID, _) => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
+            (_, ObjKind::INVALID) => panic!("Invalid rvalue. (maybe GC problem) {:?}", other),
+            _ => false,
+        }
+    }
+}
+
 impl GC<RValue> for RValue {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         if alloc.gc_check_and_mark(self) {
@@ -84,6 +145,12 @@ impl GC<RValue> for RValue {
                 let range = self.as_range();
                 range.start.mark(alloc);
                 range.end.mark(alloc);
+            }
+            ObjKind::HASH => {
+                for (k, v) in self.as_hash().iter() {
+                    k.mark(alloc);
+                    v.mark(alloc);
+                }
             }
             _ => unreachable!("mark"),
         }
@@ -215,6 +282,14 @@ impl RValue {
                         lhs.exclude_end != 0,
                     )
                 }
+                ObjKind::HASH => {
+                    let mut map = IndexMap::default();
+                    let hash = self.as_hash();
+                    for (k, v) in hash.iter() {
+                        map.insert(HashKey(Value::deep_copy(k)), Value::deep_copy(v));
+                    }
+                    ObjKind::hash(map)
+                }
                 _ => unreachable!("clone()"),
             },
         }
@@ -299,6 +374,22 @@ impl RValue {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::ARRAY),
             kind: ObjKind::array(ArrayInner::new(v)),
+            var_table: None,
+        }
+    }
+
+    /*pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+        RValue {
+            flags: RVFlag::new(HASH_CLASS, ObjKind::HASH),
+            kind: ObjKind::hash(map),
+            var_table: None,
+        }
+    }*/
+
+    pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
+        RValue {
+            flags: RVFlag::new(class_id, ObjKind::HASH),
+            kind: ObjKind::hash(map),
             var_table: None,
         }
     }
@@ -414,6 +505,14 @@ impl RValue {
         unsafe { &self.kind.range }
     }
 
+    pub(super) fn as_hash(&self) -> &HashInfo {
+        unsafe { &self.kind.hash }
+    }
+
+    pub(super) fn as_hash_mut(&mut self) -> &mut HashInfo {
+        unsafe { &mut self.kind.hash }
+    }
+
     pub(super) fn as_proc(&self) -> &BlockData {
         unsafe { &self.kind.proc }
     }
@@ -491,6 +590,7 @@ pub union ObjKind {
     array: ManuallyDrop<ArrayInner>,
     range: ManuallyDrop<Range>,
     proc: ManuallyDrop<BlockData>,
+    hash: ManuallyDrop<HashInfo>,
 }
 
 #[allow(dead_code)]
@@ -507,6 +607,7 @@ impl ObjKind {
     pub const RANGE: u8 = 9;
     pub const SPLAT: u8 = 10;
     pub const PROC: u8 = 11;
+    pub const HASH: u8 = 12;
 }
 
 #[derive(Clone)]
@@ -521,7 +622,21 @@ pub struct Range {
     pub exclude_end: u32,
 }
 
+impl std::hash::Hash for Range {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.start.hash(state);
+        self.end.hash(state);
+        self.exclude_end.hash(state);
+    }
+}
+
 impl Range {
+    pub(crate) fn eql(&self, other: &Self) -> bool {
+        self.start.eql(&other.start)
+            && self.end.eql(&other.end)
+            && self.exclude_end() == other.exclude_end()
+    }
+
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }
@@ -577,6 +692,12 @@ impl ObjKind {
                 end,
                 exclude_end: if exclude_end { 1 } else { 0 },
             }),
+        }
+    }
+
+    fn hash(map: IndexMap<HashKey, Value>) -> Self {
+        Self {
+            hash: ManuallyDrop::new(HashInfo::new(map)),
         }
     }
 

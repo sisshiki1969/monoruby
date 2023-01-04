@@ -306,6 +306,17 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn unsupported_block_param(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Unimplemented(format!(
+                "unsupported block parameter type {:?}",
+                lhs.kind
+            )),
+            lhs.loc,
+            sourceinfo,
+        )
+    }
+
     pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported nodekind {:?}", expr.kind)),

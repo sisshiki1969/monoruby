@@ -544,7 +544,7 @@ pub extern "C" fn define_method(
     globals.add_method(parent, name, func);
 }
 
-pub extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals) {
+pub unsafe extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals) {
     let mut cfp = interp.cfp;
     eprintln!("-----begin stacktrace");
     for i in 0..16 {
