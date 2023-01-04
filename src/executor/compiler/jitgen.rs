@@ -977,6 +977,17 @@ impl Codegen {
                     );
                     self.store_rax(ret);
                 }
+                TraceIr::Hash { ret, args, len } => {
+                    self.write_back_range(&mut ctx, args, len);
+                    ctx.dealloc_xmm(ret);
+                    monoasm!(self.jit,
+                        lea  rdi, [r14 - (conv(args))];
+                        movq rsi, (len);
+                        movq rax, (gen_hash);
+                        call rax;
+                    );
+                    self.store_rax(ret);
+                }
                 TraceIr::Range {
                     ret,
                     start,

@@ -200,6 +200,7 @@ impl Codegen {
         self.dispatch[171] = self.vm_expand_array();
         self.dispatch[172] = self.vm_init_block();
         self.dispatch[173] = self.vm_alias_method();
+        self.dispatch[174] = self.vm_hash();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;
@@ -820,6 +821,21 @@ impl Codegen {
             // src: *const Value
             movzxw rsi, rsi;  // len: usize
             movq rax, (gen_array);
+            call rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_hash(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        self.vm_get_addr_rdi();
+        monoasm! { self.jit,
+            // src: *const Value
+            movzxw rsi, rsi;  // len: usize
+            movq rax, (gen_hash);
             call rax;
         };
         self.vm_store_r15();

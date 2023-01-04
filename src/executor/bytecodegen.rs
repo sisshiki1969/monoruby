@@ -268,6 +268,17 @@ impl IrContext {
         self.push(BcIr::Array(ret, src, len as u16), loc);
     }
 
+    fn emit_hash(&mut self, ret: BcReg, args: BcReg, len: usize, loc: Loc) {
+        self.push(
+            BcIr::Hash {
+                ret,
+                args,
+                len: len as u16,
+            },
+            loc,
+        );
+    }
+
     fn gen_array(
         &mut self,
         ctx: &mut FnStore,
@@ -283,6 +294,28 @@ impl IrContext {
         self.emit_array(ret, src, len, loc);
         Ok(())
     }
+
+    fn gen_hash(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        ret: Option<BcReg>,
+        nodes: Vec<(Node, Node)>,
+        loc: Loc,
+    ) -> Result<()> {
+        let len = nodes.len();
+        let old_reg = info.temp;
+        let args = info.next_reg();
+        for (k, v) in nodes {
+            self.push_expr(ctx, info, k)?;
+            self.push_expr(ctx, info, v)?;
+        }
+        info.temp = old_reg;
+        let ret = BcReg::get_reg(info, ret);
+        self.emit_hash(ret, args.into(), len, loc);
+        Ok(())
+    }
+
     fn gen_range(
         &mut self,
         ctx: &mut FnStore,
@@ -659,15 +692,14 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
             NodeKind::Float(f) => self.gen_float(info, None, f),
             NodeKind::String(s) => self.gen_string(info, None, s),
-            NodeKind::Array(_, true) => {
+            NodeKind::Array(_, true)
+            | NodeKind::Hash(_, true)
+            | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&expr);
                 self.gen_literal(info, None, val);
             }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
-            NodeKind::Range { is_const: true, .. } => {
-                let val = Value::from_ast2(&expr);
-                self.gen_literal(info, None, val);
-            }
+            NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, None, nodes, loc)?,
             NodeKind::Range {
                 box start,
                 box end,
@@ -1014,12 +1046,11 @@ impl IrContext {
             NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(dst), bigint),
             NodeKind::Float(f) => self.gen_float(info, Some(dst), f),
             NodeKind::String(s) => self.gen_string(info, Some(dst), s),
-            NodeKind::Array(_, true) => {
-                let val = Value::from_ast2(&rhs);
-                self.gen_literal(info, Some(dst), val);
-            }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
-            NodeKind::Range { is_const: true, .. } => {
+            NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, Some(dst), nodes, loc)?,
+            NodeKind::Array(_, true)
+            | NodeKind::Hash(_, true)
+            | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&rhs);
                 self.gen_literal(info, Some(dst), val);
             }

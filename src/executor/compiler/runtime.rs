@@ -43,6 +43,20 @@ pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     Value::new_array_from_vec(v)
 }
 
+pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
+    let mut map = IndexMap::default();
+    if len > 0 {
+        let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
+            .iter()
+            .copied()
+            .rev();
+        while let Ok(chunk) = iter.next_chunk::<2>() {
+            map.insert(HashKey(chunk[0]), chunk[1]);
+        }
+    }
+    Value::new_hash(map)
+}
+
 pub(super) extern "C" fn gen_range(
     start: Value,
     end: Value,

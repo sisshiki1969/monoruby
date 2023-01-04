@@ -108,6 +108,11 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_www(131, op1.0, op2.0, *len))
                 }
+                BcIr::Hash { ret, args, len } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(args);
+                    Bc::from(enc_www(174, op1.0, op2.0, *len))
+                }
                 BcIr::Index(ret, base, idx) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(base);

@@ -557,6 +557,9 @@ impl BcPc {
             TraceIr::Array(ret, src, len) => {
                 format!("{:?} = array[{:?}; {}]", ret, src, len)
             }
+            TraceIr::Hash { ret, args, len } => {
+                format!("{:?} = hash[{:?}; {}]", ret, args, len)
+            }
             TraceIr::Index(ret, base, idx) => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", ret, base, idx);
                 format!(

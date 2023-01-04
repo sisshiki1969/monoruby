@@ -3,6 +3,7 @@
 #![feature(const_option)]
 #![feature(once_cell)]
 #![allow(clippy::too_many_arguments)]
+#![feature(iter_next_chunk)]
 mod alloc;
 mod executor;
 mod id_table;

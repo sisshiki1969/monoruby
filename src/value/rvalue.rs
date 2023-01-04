@@ -378,13 +378,13 @@ impl RValue {
         }
     }
 
-    /*pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue {
             flags: RVFlag::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
-    }*/
+    }
 
     pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue {
@@ -455,6 +455,15 @@ impl RValue {
                         .all(|(lhs, rhs)| Value::eq(*lhs, *rhs))
             }
             (ObjKind::RANGE, ObjKind::RANGE) => lhs.as_range() == rhs.as_range(),
+            (ObjKind::HASH, ObjKind::HASH) => {
+                let lhs = lhs.as_hash();
+                let rhs = rhs.as_hash();
+                lhs.len() == rhs.len()
+                    && lhs
+                        .iter()
+                        .zip(rhs.iter())
+                        .all(|(lhs, rhs)| Value::eq(lhs.0, rhs.0) && Value::eq(lhs.1, rhs.1))
+            }
             _ => false,
         }
     }

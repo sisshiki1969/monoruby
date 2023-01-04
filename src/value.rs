@@ -236,9 +236,9 @@ impl Value {
         RValue::new_array_with_class(v, class_id).pack()
     }
 
-    /*pub(crate) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub(crate) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue::new_hash(map).pack()
-    }*/
+    }
 
     pub(crate) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue::new_hash_with_class(map, class_id).pack()
@@ -551,6 +551,15 @@ impl Value {
                 let end = Self::from_ast(end, globals);
                 Value::new_range(start, end, *exclude_end)
             }
+            NodeKind::Hash(v, ..) => {
+                let mut map = IndexMap::default();
+                for (k, v) in v.iter() {
+                    let k = Self::from_ast(k, globals);
+                    let v = Self::from_ast(v, globals);
+                    map.insert(HashKey(k), v);
+                }
+                Value::new_hash(map)
+            }
             _ => unreachable!(),
         }
     }
@@ -577,6 +586,13 @@ impl Value {
                 let start = Self::from_ast2(start);
                 let end = Self::from_ast2(end);
                 Value::new_range(start, end, *exclude_end)
+            }
+            NodeKind::Hash(v, true) => {
+                let mut map = IndexMap::default();
+                for (k, v) in v.iter() {
+                    map.insert(HashKey(Self::from_ast2(k)), Self::from_ast2(v));
+                }
+                Value::new_hash(map)
             }
             _ => unreachable!(),
         }

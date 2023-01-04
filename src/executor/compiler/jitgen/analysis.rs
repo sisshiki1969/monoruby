@@ -157,6 +157,7 @@ impl LoopAnalysis {
                 TraceIr::Integer(ret, ..)
                 | TraceIr::Symbol(ret, ..)
                 | TraceIr::Array(ret, ..)
+                | TraceIr::Hash { ret, .. }
                 | TraceIr::Index(ret, ..)
                 | TraceIr::Nil(ret) => {
                     reg_info.def_as(ret, false);

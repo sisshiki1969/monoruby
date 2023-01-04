@@ -11,6 +11,11 @@ pub(super) enum BcIr {
     Symbol(BcReg, IdentId),
     Literal(BcReg, Value),
     Array(BcReg, BcReg, u16),
+    Hash {
+        ret: BcReg,
+        args: BcReg,
+        len: u16,
+    },
     Range {
         ret: BcReg,
         start: BcReg,
@@ -282,6 +287,11 @@ pub(super) enum TraceIr {
     Literal(SlotId, Value),
     /// array(%ret, %src, len)
     Array(SlotId, SlotId, u16),
+    Hash {
+        ret: SlotId,
+        args: SlotId,
+        len: u16,
+    },
     Range {
         ret: SlotId,
         start: SlotId,
@@ -651,6 +661,11 @@ impl TraceIr {
                 173 => Self::AliasMethod {
                     new: SlotId::new(op2),
                     old: SlotId::new(op3),
+                },
+                174 => Self::Hash {
+                    ret: SlotId::new(op1),
+                    args: SlotId::new(op2),
+                    len: op3,
                 },
                 180..=199 => Self::BinOpIr {
                     kind: BinOpK::from(opcode - 180),
