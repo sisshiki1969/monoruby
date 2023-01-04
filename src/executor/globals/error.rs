@@ -397,3 +397,55 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Load(msg))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::tests::*;
+
+    #[test]
+    fn error() {
+        run_test_error(
+            r##"
+        A=3
+        class A
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        A=3
+        class C < A
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        class S1; end
+        class S2; end
+        class C < S1; end
+        class C < S2; end
+        end
+        "##,
+        );
+        run_test_error(
+            r##"
+        attr_accessor 2
+        "##,
+        );
+        run_test_error(
+            r##"
+        require 2
+        "##,
+        );
+        run_test_error(
+            r##"
+        Math.sqrt("e")
+        "##,
+        );
+        run_test_error(
+            r##"
+        require "ffff"
+        "##,
+        );
+    }
+}
