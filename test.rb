@@ -1,5 +1,9 @@
-def f
-  yield 1,2,3,4
+def fib(x)
+  if x<3
+      1
+  else
+      fib(x-1)+fib(x-2)
+  end
 end
 
-8.times { f {|a,b,c,d| e=42; puts a,b,c,d,e} }
+puts fib(40)

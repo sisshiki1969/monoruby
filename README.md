@@ -13,10 +13,8 @@ another toy Ruby implementation with a fast JIT compiler written in Rust.
 
 ## Status of this project
 
-This project still remains in early-alpha stage. Currently, only the functionalities described below are implemented.
+This project still remains in alpha stage. Currently, functionalities described below are implemented.
 
-- classes: Object, Integer, Float, String, Symbol, Class, Array, ..
-- superclass and singleton class and methods
 - local variables
 - instance variables & accessor
 - global variables
@@ -24,13 +22,16 @@ This project still remains in early-alpha stage. Currently, only the functionali
 - if-then-elsif-end statement
 - for-in statement
 - while/until statement and postfix while/until modifier
+- Object-oriented features
+  - classes: Object, Integer, Float, String, Symbol, Class, Array, Hash, Proc, ..
+  - superclass and singleton class and methods
+- class definition
 - method definition
   - required parameter
   - optional parameter
   - rest parameter
   - block parameter
-- class definition
-- garbage collector
+- garbage collection
 
 ## Benchmark
 

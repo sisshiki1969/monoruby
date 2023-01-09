@@ -255,12 +255,12 @@ impl HashInfo {
         };
     }
 
-    pub(crate) fn remove(&mut self, k: Value) -> Option<Value> {
+    /*pub(crate) fn remove(&mut self, k: Value) -> Option<Value> {
         match self {
             HashInfo::Map(map) => map.remove(&HashKey(k)),
             HashInfo::IdentMap(map) => map.remove(&IdentKey(k)),
         }
-    }
+    }*/
 
     pub(crate) fn contains_key(&self, k: Value) -> bool {
         match self {
