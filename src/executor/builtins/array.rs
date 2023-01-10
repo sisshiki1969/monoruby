@@ -27,7 +27,7 @@ extern "C" fn new(
     self_val: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _block: Option<Value>,
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_array_with_class(vec![], class);

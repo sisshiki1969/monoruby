@@ -8,6 +8,7 @@ mod inst;
 mod op;
 pub use builtins::*;
 use bytecodegen::*;
+use fancy_regex::Captures;
 pub use globals::*;
 use inst::*;
 use op::*;
@@ -177,6 +178,9 @@ pub struct Executor {
     cfp: CFP,     // [rbx]
     lfp_top: LFP, // [rbx + 8]
     lexical_class: Vec<ClassId>,
+    sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
+    sp_post_match: Option<String>,   // $'        : Regexp.post_match
+    sp_matches: Vec<Option<String>>, // $1 ... $n : Regexp.last_match(n)
 }
 
 impl Executor {
@@ -308,7 +312,7 @@ impl Executor {
     ///
     /// Invoke block for *block_handler*.
     ///
-    fn invoke_block(
+    pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
         block_handler: Value,
@@ -374,6 +378,70 @@ impl Executor {
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
     }
+}
+
+// Handling special variables.
+
+impl Executor {
+    /*pub(crate) fn get_special_var(&self, id: u32) -> Value {
+        if id == 0 {
+            self.sp_last_match
+                .as_ref()
+                .map(|s| Value::new_string_from_str(s))
+                .unwrap_or_default()
+        } else if id == 1 {
+            self.sp_post_match
+                .as_ref()
+                .map(|s| Value::new_string_from_str(s))
+                .unwrap_or_default()
+        } else if id >= 100 {
+            self.get_special_matches(id as usize - 100)
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
+        unreachable!()
+    }*/
+
+    /// Save captured strings to special variables.
+    /// $n (n:0,1,2,3...) <- The string which matched with nth parenthesis in the last successful match.
+    /// $& <- The string which matched successfully at last.
+    /// $' <- The string after $&.
+    pub(crate) fn get_captures(&mut self, captures: &Captures, given: &str) {
+        //let id1 = IdentId::get_id("$&");
+        //let id2 = IdentId::get_id("$'");
+        match captures.get(0) {
+            Some(m) => {
+                self.sp_last_match = Some(given[m.start()..m.end()].to_string());
+                self.sp_post_match = Some(given[m.end()..].to_string());
+            }
+            None => {
+                self.sp_last_match = None;
+                self.sp_post_match = None;
+            }
+        };
+
+        self.sp_matches.clear();
+        for i in 1..captures.len() {
+            self.sp_matches.push(
+                captures
+                    .get(i)
+                    .map(|m| given[m.start()..m.end()].to_string()),
+            );
+        }
+    }
+
+    /*pub(crate) fn get_special_matches(&self, nth: usize) -> Value {
+        match self.sp_matches.get(nth - 1) {
+            None => Value::nil(),
+            Some(s) => s
+                .as_ref()
+                .map(|s| Value::new_string_from_str(s))
+                .unwrap_or_default(),
+        }
+    }*/
 }
 
 ///

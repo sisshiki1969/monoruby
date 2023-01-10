@@ -10,6 +10,7 @@ mod math;
 mod object;
 mod proc;
 mod range;
+mod regexp;
 mod string;
 mod time;
 
@@ -104,6 +105,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Hash", HASH_CLASS)
             .as_class()
     );
+    assert_eq!(
+        REGEXP_CLASS,
+        globals
+            .define_builtin_class_under_obj("Regexp", REGEXP_CLASS)
+            .as_class()
+    );
     let math_class = globals.define_class_under_obj("Math").as_class();
     let file_class = globals.define_class_under_obj("File").as_class();
 
@@ -114,6 +121,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     string::init(globals);
     array::init(globals);
     hash::init(globals);
+    regexp::init(globals);
     range::init(globals);
     proc::init(globals);
     time::init(globals);

@@ -7,6 +7,8 @@ pub mod rvalue;
 
 pub use rvalue::*;
 
+use self::rvalue::regexp::RegexpInfo;
+
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
@@ -244,6 +246,10 @@ impl Value {
         RValue::new_hash_with_class(map, class_id).pack()
     }
 
+    pub(crate) fn new_regexp(regexp: RegexpInfo) -> Self {
+        RValue::new_regexp(regexp).pack()
+    }
+
     pub(crate) fn new_splat(val: Value) -> Self {
         match val.is_array() {
             Some(ary) => RValue::new_splat(ary.clone()).pack(),
@@ -441,6 +447,14 @@ impl Value {
         self.rvalue_mut().as_hash_mut()
     }
 
+    pub(crate) fn is_regex(&self) -> Option<&RegexpInfo> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::REGEXP => Some(rv.as_regex()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
@@ -492,6 +506,14 @@ impl Value {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_bytes()
+    }
+
+    pub(crate) fn is_string(&self) -> Option<String> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::BYTES => Some(rv.as_string()),
+            _ => None,
+        }
     }
 
     pub(crate) fn as_string(&self) -> String {

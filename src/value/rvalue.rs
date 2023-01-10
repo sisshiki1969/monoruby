@@ -4,8 +4,10 @@ use smallvec::SmallVec;
 use std::mem::ManuallyDrop;
 
 pub use self::hash::*;
+use self::regexp::RegexpInfo;
 
 mod hash;
+pub mod regexp;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 
@@ -46,6 +48,7 @@ impl std::fmt::Debug for RValue {
                     10 => format!("SPLAT({:?})", self.kind.array),
                     11 => format!("PROC({:?})", self.kind.proc),
                     12 => format!("HASH({:?})", self.kind.hash),
+                    13 => format!("REGEXP({:?})", self.kind.regexp),
                     _ => unreachable!(),
                 }
             },
@@ -290,6 +293,10 @@ impl RValue {
                     }
                     ObjKind::hash(map)
                 }
+                ObjKind::REGEXP => {
+                    let regexp = self.as_regex();
+                    ObjKind::regexp(regexp.clone())
+                }
                 _ => unreachable!("clone()"),
             },
         }
@@ -390,6 +397,14 @@ impl RValue {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::HASH),
             kind: ObjKind::hash(map),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_regexp(regexp: RegexpInfo) -> Self {
+        RValue {
+            flags: RVFlag::new(REGEXP_CLASS, ObjKind::REGEXP),
+            kind: ObjKind::regexp(regexp),
             var_table: None,
         }
     }
@@ -522,6 +537,10 @@ impl RValue {
         unsafe { &mut self.kind.hash }
     }
 
+    pub(super) fn as_regex(&self) -> &RegexpInfo {
+        unsafe { &self.kind.regexp }
+    }
+
     pub(super) fn as_proc(&self) -> &BlockData {
         unsafe { &self.kind.proc }
     }
@@ -600,6 +619,7 @@ pub union ObjKind {
     range: ManuallyDrop<Range>,
     proc: ManuallyDrop<BlockData>,
     hash: ManuallyDrop<HashInfo>,
+    regexp: ManuallyDrop<RegexpInfo>,
 }
 
 #[allow(dead_code)]
@@ -617,6 +637,7 @@ impl ObjKind {
     pub const SPLAT: u8 = 10;
     pub const PROC: u8 = 11;
     pub const HASH: u8 = 12;
+    pub const REGEXP: u8 = 13;
 }
 
 #[derive(Clone)]
@@ -707,6 +728,12 @@ impl ObjKind {
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
             hash: ManuallyDrop::new(HashInfo::new(map)),
+        }
+    }
+
+    fn regexp(regexp: RegexpInfo) -> Self {
+        Self {
+            regexp: ManuallyDrop::new(regexp),
         }
     }
 

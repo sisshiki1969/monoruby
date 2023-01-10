@@ -18,6 +18,7 @@ pub const ARRAY_CLASS: ClassId = ClassId::new(11);
 pub const RANGE_CLASS: ClassId = ClassId::new(12);
 pub const PROC_CLASS: ClassId = ClassId::new(13);
 pub const HASH_CLASS: ClassId = ClassId::new(14);
+pub const REGEXP_CLASS: ClassId = ClassId::new(15);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -59,6 +60,7 @@ impl std::fmt::Debug for ClassId {
             12 => write!(f, "RANGE"),
             13 => write!(f, "PROC"),
             14 => write!(f, "HASH"),
+            15 => write!(f, "REGEXP"),
             n => write!(f, "ClassId({})", n),
         }
     }

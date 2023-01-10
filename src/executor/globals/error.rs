@@ -101,6 +101,14 @@ impl Globals {
         self.set_error(MonorubyErr::argumenterr(msg.to_string()));
     }
 
+    pub(crate) fn err_internal(&mut self, msg: String) {
+        self.set_error(MonorubyErr::internalerr(msg));
+    }
+
+    pub(crate) fn err_regex(&mut self, msg: String) {
+        self.set_error(MonorubyErr::regexerr(msg));
+    }
+
     pub(crate) fn err_create_proc_no_block(&mut self) {
         self.err_argument("tried to create Proc object without a block");
     }
@@ -186,6 +194,8 @@ pub enum MonorubyErrKind {
     Index(String),
     Frozen(String),
     Load(String),
+    Internal(String),
+    Regex(String),
 }
 
 impl MonorubyErr {
@@ -257,6 +267,8 @@ impl MonorubyErr {
             MonorubyErrKind::Index(msg) => msg.to_string(),
             MonorubyErrKind::Frozen(msg) => msg.to_string(),
             MonorubyErrKind::Load(msg) => msg.to_string(),
+            MonorubyErrKind::Internal(msg) => msg.to_string(),
+            MonorubyErrKind::Regex(msg) => msg.to_string(),
         }
     }
 }
@@ -337,6 +349,14 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn syntax(msg: String, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        MonorubyErr::new_with_loc(
+            MonorubyErrKind::Syntax(ParseErrKind::SyntaxError(msg)),
+            loc,
+            sourceinfo,
+        )
+    }
+
     pub(crate) fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
@@ -395,6 +415,14 @@ impl MonorubyErr {
 
     pub(crate) fn loaderr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Load(msg))
+    }
+
+    pub(crate) fn internalerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Internal(msg))
+    }
+
+    pub(crate) fn regexerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Regex(msg))
     }
 }
 

@@ -1,3 +1,4 @@
+use fancy_regex::Regex;
 use ruruby_parse::{
     BinOp, BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind,
     Parser, SourceInfoRef,
@@ -5,6 +6,7 @@ use ruruby_parse::{
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use super::*;
 
@@ -80,6 +82,8 @@ pub struct Globals {
     error: Option<MonorubyErr>,
     /// global method cache.
     global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<FuncId>)>,
+    /// regex cache.
+    pub regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
     pub(super) warning: u8,
     /// suppress jit compilation.
@@ -117,6 +121,7 @@ impl Globals {
             class: ClassStore::new(),
             global_vars: HashMap::default(),
             global_method_cache: HashMap::default(),
+            regexp_cache: HashMap::default(),
             error: None,
             warning,
             no_jit,
@@ -396,6 +401,7 @@ impl Globals {
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
+                ObjKind::REGEXP => self.regexp_tos(val),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
@@ -489,6 +495,11 @@ impl Globals {
                 format! {"{{{}}}", result}
             }
         }
+    }
+
+    fn regexp_tos(&self, val: Value) -> String {
+        let regexp = val.is_regex().unwrap();
+        format!("/{}/", regexp.as_str())
     }
 
     fn range_tos(&self, val: Value) -> String {

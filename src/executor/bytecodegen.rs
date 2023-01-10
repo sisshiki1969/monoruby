@@ -1,3 +1,5 @@
+use crate::value::rvalue::regexp::RegexpInfo;
+
 use super::*;
 use num::BigInt;
 use paste::paste;
@@ -698,6 +700,10 @@ impl IrContext {
                 let val = Value::from_ast2(&expr);
                 self.gen_literal(info, None, val);
             }
+            NodeKind::RegExp(nodes, true) => {
+                let val = self.const_regexp(info, nodes, loc)?;
+                self.gen_literal(info, None, val);
+            }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, None, nodes, loc)?,
             NodeKind::Range {
@@ -1054,6 +1060,10 @@ impl IrContext {
                 let val = Value::from_ast2(&rhs);
                 self.gen_literal(info, Some(dst), val);
             }
+            NodeKind::RegExp(nodes, true) => {
+                let val = self.const_regexp(info, nodes, loc)?;
+                self.gen_literal(info, Some(dst), val);
+            }
             NodeKind::Range {
                 box start,
                 box end,
@@ -1171,6 +1181,35 @@ impl IrContext {
             }
         };
         Ok(())
+    }
+
+    fn const_regexp(&self, info: &ISeqInfo, nodes: Vec<Node>, loc: Loc) -> Result<Value> {
+        let mut string = String::new();
+        for node in nodes {
+            match &node.kind {
+                NodeKind::String(s) => string += s,
+                _ => unreachable!(),
+            }
+        }
+        match string.pop().unwrap() {
+            'i' => string.insert_str(0, "(?mi)"),
+            'm' => string.insert_str(0, "(?ms)"),
+            'x' => string.insert_str(0, "(?mx)"),
+            'o' => string.insert_str(0, "(?mo)"),
+            '-' => string.insert_str(0, "(?m)"),
+            _ => {
+                return Err(MonorubyErr::syntax(
+                    "Illegal internal regexp expression.".to_string(),
+                    loc,
+                    info.sourceinfo.clone(),
+                ))
+            }
+        };
+        let re = match RegexpInfo::new(string) {
+            Ok(re) => re,
+            Err(err) => return Err(MonorubyErr::syntax(err, loc, info.sourceinfo.clone())),
+        };
+        Ok(Value::new_regexp(re))
     }
 
     fn gen_method_def(
