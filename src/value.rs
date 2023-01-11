@@ -7,8 +7,6 @@ pub mod rvalue;
 
 pub use rvalue::*;
 
-use self::rvalue::regexp::RegexpInfo;
-
 pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
@@ -519,6 +517,11 @@ impl Value {
     pub(crate) fn as_string(&self) -> String {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_string()
+    }
+
+    pub(crate) fn replace_string(&mut self, replace: String) {
+        assert_eq!(ObjKind::BYTES, self.rvalue().kind());
+        *self.rvalue_mut() = RValue::new_string(replace);
     }
 
     pub(crate) fn as_range(&self) -> &Range {

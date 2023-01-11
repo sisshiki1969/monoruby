@@ -72,12 +72,14 @@ impl RegexpInfo {
         re_val: Value,
         given: &str,
         replace: &str,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         if let Some(s) = re_val.is_string() {
             let re = Self::from_escaped(globals, &s)?;
-            re.replace_once(vm, globals, given, replace).map(|x| x.0)
+            re.replace_once(vm, globals, given, replace)
+                .map(|(s, c)| (s, c.is_some()))
         } else if let Some(re) = re_val.is_regex() {
-            re.replace_once(vm, globals, given, replace).map(|x| x.0)
+            re.replace_once(vm, globals, given, replace)
+                .map(|(s, c)| (s, c.is_some()))
         } else {
             globals.err_argument("1st arg must be RegExp or String.");
             None

@@ -9,6 +9,10 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
+    globals.define_builtin_func(STRING_CLASS, "gsub", gsub, -1);
+    globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_, -1);
+    globals.define_builtin_func(STRING_CLASS, "sub", sub, -1);
+    globals.define_builtin_func(STRING_CLASS, "sub!", sub_, -1);
 }
 
 /// ### String#+
@@ -135,7 +139,7 @@ extern "C" fn rem(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _block: Option<Value>,
 ) -> Option<Value> {
     let arguments = match arg[0].is_array() {
         Some(ary) => ary.to_vec(),
@@ -298,6 +302,138 @@ extern "C" fn rem(
     Some(res)
 }
 
+/// ### String#sub
+/// - sub(pattern, replace) -> String
+/// - sub(pattern) {|matched| .... } -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub.html]
+extern "C" fn sub(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<Value> {
+    let (res, _) = sub_main(vm, globals, self_val, arg, len, block)?;
+    Some(Value::new_string(res))
+}
+
+/// ### String#sub
+/// - sub!(pattern, replace) -> self | nil
+/// - sub!(pattern) {|matched| .... } -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub=21.html]
+extern "C" fn sub_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<Value> {
+    let (res, changed) = sub_main(vm, globals, self_val, arg, len, block)?;
+    self_val.replace_string(res);
+    let res = if changed { self_val } else { Value::nil() };
+    Some(res)
+}
+
+fn sub_main(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<(String, bool)> {
+    match block {
+        None => {
+            if len != 2 {
+                globals.err_wrong_number_of_arguments_range(len, 2..=2);
+                return None;
+            }
+            let given = self_val.expect_string(globals)?;
+            let replace = arg[1].expect_string(globals)?;
+            RegexpInfo::replace_one(vm, globals, arg[0], &given, &replace)
+        }
+        Some(block) => {
+            if len != 1 {
+                globals.err_wrong_number_of_arguments_range(len, 1..=1);
+                return None;
+            }
+            let given = self_val.expect_string(globals)?;
+            RegexpInfo::replace_one_block(vm, globals, arg[0], &given, block)
+        }
+    }
+}
+
+/// ### String#gsub
+/// - gsub(pattern, replace) -> String
+/// - gsub(pattern) {|matched| .... } -> String
+/// - gsub(pattern) -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub.html]
+extern "C" fn gsub(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<Value> {
+    let (res, _) = gsub_main(vm, globals, self_val, arg, len, block)?;
+    Some(Value::new_string(res))
+}
+
+/// ### String#gsub!
+/// - gsub!(pattern, replace) -> self | nil
+/// - gsub!(pattern) {|matched| .... } -> self | nil
+/// - gsub!(pattern) -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub=21.html]
+extern "C" fn gsub_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<Value> {
+    let (res, changed) = gsub_main(vm, globals, self_val, arg, len, block)?;
+    self_val.replace_string(res);
+    let res = if changed { self_val } else { Value::nil() };
+    Some(res)
+}
+
+fn gsub_main(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    args: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<(String, bool)> {
+    match block {
+        None => {
+            if len != 2 {
+                globals.err_wrong_number_of_arguments_range(len, 2..=2);
+                return None;
+            }
+            let given = self_val.expect_string(globals)?;
+            let replace = args[1].expect_string(globals)?;
+            RegexpInfo::replace_all(vm, globals, args[0], &given, &replace)
+        }
+        Some(block) => {
+            if len != 1 {
+                globals.err_wrong_number_of_arguments_range(len, 1..=1);
+                return None;
+            }
+            let given = self_val.expect_string(globals)?;
+            RegexpInfo::replace_all_block(vm, globals, args[0], &given, block)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -332,5 +468,69 @@ mod test {
         run_test2(r###""%15.1e" % 12785.34578e-127"###);
         run_test2(r###""%15.1E" % 12785.34578e-127"###);
         run_test2(r###""%c %c %c" % [46, 52.0, "r"]"###);
+    }
+
+    #[test]
+    fn gsub() {
+        run_test(r##""abcdefgdef".gsub(/def/, "!!")"##);
+        run_test(r##""2.5".gsub(".", ",")"##);
+        run_test(
+            r##"
+        "abcdefgdddefjklefl".gsub(/d*ef/) {
+            |matched| "+" + matched + "+"
+        }
+        "##,
+        );
+        run_test(
+            r##"
+        s = "abcdefghdefr"
+        s.gsub!(/def/, "!!")
+        s
+        "##,
+        );
+        run_test(
+            r##"
+        s = "2.5.3..75841."
+        s.gsub!(".", ",")
+        s
+        "##,
+        );
+        run_test(
+            r##"
+        s = "abcdefghdefr"
+        s.gsub!(/def1/, "!!")
+        "##,
+        );
+    }
+
+    #[test]
+    fn sub() {
+        run_test(r##""abcdefgdef".sub(/def/, "!!")"##);
+        run_test(r##""2.5".sub(".", ",")"##);
+        run_test(
+            r##"
+        "abcdefgdddefjklefl".sub(/d*ef/) {
+            |matched| "+" + matched + "+"
+        }
+        "##,
+        );
+        run_test(
+            r##"
+        s = "abcdefghdefr"
+        s.sub!(/def/, "!!")
+        "##,
+        );
+        run_test(
+            r##"
+        s = "2.5.3..75841."
+        s.sub!(".", ",")
+        "##,
+        );
+        run_test(
+            r##"
+        s = "abcdefghdefr"
+        s.sub!(/def1/, "!!")
+        "##,
+        );
     }
 }

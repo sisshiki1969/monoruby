@@ -19,4 +19,6 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 use monoasm::CodePtr;
 use value::*;
 
+pub use value::rvalue::regexp::RegexpInfo;
+
 pub const STRING_INLINE_CAP: usize = 39;
