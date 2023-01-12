@@ -253,7 +253,6 @@ impl IrContext {
                     let op2 = info.get_index(args);
                     Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
                 }
-                BcIr::InlineCache => Bc::from(0),
                 BcIr::MethodDef(name, func_id) => {
                     Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
                 }

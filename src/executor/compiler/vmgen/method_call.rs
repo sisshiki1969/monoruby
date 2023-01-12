@@ -10,7 +10,7 @@ impl Codegen {
     /// +---+---+---+---++---+---+---+---+
     /// MethodArgs
     /// +---+---+---+---++---+---+---+---+
-    /// | op|rcv|arg|len||   code ptr    |
+    /// | op|rcv|arg|len||   func data   |
     /// +---+---+---+---++---+---+---+---+
     ///
     /// operands
@@ -23,7 +23,7 @@ impl Codegen {
     /// inline method cache
     /// class:    a class of the receiver
     /// version:  class version
-    /// code ptr: code pointer of the function
+    /// func data: the data of the function
     /// ~~~
     pub(super) fn vm_method_call(&mut self, has_block: bool, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -36,9 +36,7 @@ impl Codegen {
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
         //      +------+------+------+------+
-        // r13->| MethodArgs  |   CodePtr   |
-        //      +------+------+------+------+
-        //      |     Meta    |     PC      |
+        // r13->| MethodArgs  |  FuncData   |
         //      +------+------+------+------+
         //
         // rdi: IdentId
@@ -48,9 +46,7 @@ impl Codegen {
         // [r13 +  0]; len
         // [r13 +  2]; %args
         // [r13 +  4]: %recv
-        // [r13 +  8]: CodePtr
-        // [r13 + 16]: Meta
-        // [r13 + 24]: PC
+        // [r13 +  8]: FuncData
 
         monoasm! { self.jit,
             pushq r15;
@@ -84,7 +80,8 @@ impl Codegen {
         self.set_method_outer();
         monoasm! { self.jit,
             // set meta
-            movq rdi, [r13 + 16];
+            movq rdi, [r13 + 8];
+            movq rdi, [rdi + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
@@ -116,16 +113,17 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, [r13 + 8];
+            movq r13, [r13 + 8];
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
-            movq r13, [r13 + 24];    // r13: BcPc
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
         };
         self.call_rax();
         monoasm! { self.jit,
             addq rsp, 16;
             popq r13;   // pop pc
             popq r15;   // pop %ret
-            addq r13, 32;
+            addq r13, 16;
             testq rax, rax;
             jeq vm_return;
         };
@@ -139,11 +137,11 @@ impl Codegen {
             movq rsi, [rsp + 8];  // rsi: IdentId
             movzxw rdx, [r13];  // rdx: len
             movq rcx, [rsp]; // rcx: receiver:Value
-            lea  r8, [r13 + 8];
             movq rax, (find_method);
             call rax;   // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
+            movq [r13 + 8], rax;
             movl [r13 - 8], r15;
             movl rdi, [rip + class_version];
             movl [r13 - 4], rdi;

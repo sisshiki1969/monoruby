@@ -14,11 +14,10 @@ pub(super) extern "C" fn find_method(
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
-    func_data: &mut FuncData,
-) -> Option<Value> {
+) -> Option<std::ptr::NonNull<FuncData>> {
     let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
-    *func_data = globals.compile_on_demand(func_id).clone();
-    Some(Value::nil())
+    let func_data = globals.compile_on_demand(func_id);
+    Some(std::ptr::NonNull::new(func_data as *const _ as _).unwrap())
 }
 
 pub(super) extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {

@@ -297,22 +297,22 @@ impl BBContext {
 
 #[derive(Debug)]
 struct InlineCached {
-    codeptr: CodePtr,
-    meta: Meta,
     class_id: ClassId,
     version: u32,
+    codeptr: CodePtr,
+    meta: Meta,
     pc: BcPc,
 }
 
 impl InlineCached {
-    fn new(pc: BcPc, codeptr: CodePtr) -> Self {
+    fn new(pc: BcPc, func_data: &FuncData) -> Self {
         let (class_id, version) = (pc - 1).class_version();
         InlineCached {
-            codeptr,
-            meta: (pc + 1).meta(),
             class_id,
             version,
-            pc: (pc + 1).pc(),
+            codeptr: func_data.codeptr.unwrap(),
+            meta: func_data.meta,
+            pc: func_data.pc,
         }
     }
 
@@ -888,7 +888,6 @@ impl Codegen {
         cc: &mut JitContext,
         position: Option<BcPc>,
     ) -> bool {
-        let mut skip = false;
         let is_loop = matches!(func.get_pc(cc.bb_pos).get_ir(), TraceIr::LoopStart(_));
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
         let mut ctx = if is_loop {
@@ -898,11 +897,6 @@ impl Codegen {
         };
         for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
             let pc = BcPc::from(pc);
-            if skip {
-                skip = false;
-                continue;
-            }
-
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
@@ -1368,7 +1362,7 @@ impl Codegen {
                     ..
                 } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
-                        if method_info.callee_codeptr.is_none() {
+                        if method_info.func_data.is_none() {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.gen_method_call(
@@ -1391,7 +1385,7 @@ impl Codegen {
                     ..
                 } => {
                     if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
-                        if method_info.callee_codeptr.is_none() {
+                        if method_info.func_data.is_none() {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.gen_method_call_with_block(
@@ -1412,9 +1406,7 @@ impl Codegen {
                     self.write_back_range(&mut ctx, args, len);
                     self.gen_yield(&mut ctx, args, len, ret, pc);
                 }
-                TraceIr::MethodArgs(_) => {
-                    skip = true;
-                }
+                TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef(name, func) => {
                     let class_version = self.class_version;
                     let xmm_using = ctx.get_xmm_using();

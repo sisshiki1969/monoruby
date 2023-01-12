@@ -1293,7 +1293,6 @@ impl IrContext {
             self.push(BcIr::MethodCall(ret, method, has_splat), loc)
         };
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
-        self.push(BcIr::InlineCache, loc);
     }
 
     fn gen_dummy_init(&mut self, is_block: bool) {

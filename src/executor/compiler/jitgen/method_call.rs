@@ -23,11 +23,11 @@ impl Codegen {
             recv,
             args,
             len,
-            callee_codeptr,
+            func_data,
         } = method_info;
         self.write_back_slot(ctx, recv);
-        if let Some(codeptr) = callee_codeptr {
-            let cached = InlineCached::new(pc + 1, codeptr);
+        if let Some(func_data) = func_data {
+            let cached = InlineCached::new(pc + 1, func_data);
             if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
                 self.gen_inlinable(ctx, &method_info, inline_id, ret, pc);
                 return;
@@ -156,12 +156,10 @@ impl Codegen {
         has_splat: bool,
     ) {
         let MethodInfo {
-            callee_codeptr,
-            recv,
-            ..
+            func_data, recv, ..
         } = method_info;
-        if let Some(codeptr) = callee_codeptr {
-            let cached = InlineCached::new(pc, codeptr);
+        if let Some(func_data) = func_data {
+            let cached = InlineCached::new(pc, func_data);
             if recv.is_zero() && ctx.self_class != cached.class_id {
                 self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
             } else {
@@ -280,12 +278,13 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq rax, [r13 + 16];
+            movq r13, [r13 + 8];
+            movq rax, [r13 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rax;
             // set codeptr
-            movq rax, [r13 + 8];
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
-            movq r13, [r13 + 24];
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
         );
         self.call_rax();
         self.xmm_restore(&xmm_using);
@@ -306,12 +305,12 @@ impl Codegen {
             movq rsi, (u32::from(name)); // IdentId
             movq rdx, (len as usize); // args_len: usize
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
-            lea  r8, [r13 + 8];
             movq rax, (find_method);
             call rax;
             // absolute address was returned to rax.
             testq rax, rax;
             jeq raise;
+            movq [r13 + 8], rax;
 
             movl rax, [rip + global_class_version];
             movl [r13 - 4], rax;
