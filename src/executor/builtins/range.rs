@@ -23,10 +23,7 @@ extern "C" fn range_new(
     len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    if len < 2 || len > 3 {
-        globals.err_wrong_number_of_arguments_range(len, 2..=3);
-        return None;
-    }
+    globals.check_number_of_arguments(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
 }
 

@@ -1,4 +1,4 @@
-use num::{ToPrimitive, Zero};
+use num::Zero;
 
 use crate::*;
 
@@ -242,17 +242,11 @@ extern "C" fn rand(
     len: usize,
     _: Option<Value>,
 ) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
     let i = match len {
         0 => 0i64,
-        1 => match arg[0].unpack() {
-            RV::Integer(i) => i,
-            RV::Float(f) => f.to_i64().unwrap(),
-            _ => unimplemented!(),
-        },
-        n => {
-            globals.err_wrong_number_of_arguments_range(n, 0..=1);
-            return None;
-        }
+        1 => arg[0].coerce_to_fixnum(globals)?,
+        __ => unreachable!(),
     };
     if !i.is_zero() {
         Some(Value::new_integer(

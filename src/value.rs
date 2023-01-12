@@ -348,6 +348,17 @@ impl Value {
         }
     }
 
+    pub(crate) fn coerce_to_fixnum(&self, globals: &mut Globals) -> Option<i64> {
+        match self.unpack() {
+            RV::Integer(i) => Some(i),
+            RV::Float(f) => Some(f.trunc() as i64),
+            _ => {
+                globals.err_no_implicit_conversion(*self, INTEGER_CLASS);
+                None
+            }
+        }
+    }
+
     fn as_flonum(&self) -> f64 {
         let u = self.0.get();
         if u == FLOAT_ZERO {
@@ -499,6 +510,17 @@ impl Value {
         }
         globals.err_no_implicit_conversion(*self, STRING_CLASS);
         None
+    }
+
+    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Option<RegexpInfo> {
+        if let Some(re) = self.is_regex() {
+            Some(re.clone())
+        } else if let Some(string) = self.is_string() {
+            RegexpInfo::from_string(globals, string)
+        } else {
+            globals.err_is_not_regexp_nor_string(*self);
+            None
+        }
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {

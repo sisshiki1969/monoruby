@@ -42,7 +42,7 @@ fn main() {
     globals.exec_startup();
 
     if !args.exec.is_empty() {
-        let path = std::path::Path::new("REPL");
+        let path = std::path::Path::new("irm");
         for code in args.exec {
             match globals.compile_and_run(&code, path) {
                 Ok(_val) => {

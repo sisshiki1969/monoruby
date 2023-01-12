@@ -67,7 +67,7 @@ impl Globals {
     }
 
     ///
-    /// Set TypeError with message "*name* is not a class".
+    /// Set TypeError with message "*name* is not Symbol nor String".
     ///
     pub(crate) fn err_is_not_symbol_nor_string(&mut self, val: Value) {
         self.set_error(MonorubyErr::typeerr(format!(
@@ -77,11 +77,21 @@ impl Globals {
     }
 
     ///
+    /// Set TypeError with message "*name* is not Regexp nor String".
+    ///
+    pub(crate) fn err_is_not_regexp_nor_string(&mut self, val: Value) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "{} is not a regexp nor a string",
+            self.val_tos(val)
+        )));
+    }
+
+    ///
     /// Set TypeError with message "no_implicit_conversion of {} into {}".
     ///
     pub(crate) fn err_no_implicit_conversion(&mut self, val: Value, target_class: ClassId) {
         self.set_error(MonorubyErr::typeerr(format!(
-            "no_implicit_conversion of {} into {}",
+            "no implicit conversion of {} into {}",
             val.get_real_class_name(self),
             target_class.get_name(self),
         )));
@@ -113,18 +123,23 @@ impl Globals {
         self.err_argument("tried to create Proc object without a block");
     }
 
-    pub(crate) fn err_wrong_number_of_arguments_range(
+    pub(crate) fn check_number_of_arguments(
         &mut self,
         given: usize,
         range: std::ops::RangeInclusive<usize>,
-    ) {
-        if range.start() == range.end() {
-            self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
+    ) -> Option<()> {
+        if range.contains(&given) {
+            Some(())
         } else {
-            self.err_argument(&format!(
-                "wrong number of arguments (given {given}, expeted {:?})",
-                range
-            ));
+            if range.start() == range.end() {
+                self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
+            } else {
+                self.err_argument(&format!(
+                    "wrong number of arguments (given {given}, expeted {:?})",
+                    range
+                ));
+            };
+            None
         }
     }
 

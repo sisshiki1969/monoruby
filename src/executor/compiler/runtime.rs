@@ -212,7 +212,7 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     min: usize,
     max: usize,
 ) {
-    globals.err_wrong_number_of_arguments_range(given, min..=max)
+    globals.check_number_of_arguments(given, min..=max);
 }
 
 pub(super) extern "C" fn get_error_location(

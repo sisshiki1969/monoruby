@@ -13,6 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_, -1);
     globals.define_builtin_func(STRING_CLASS, "sub", sub, -1);
     globals.define_builtin_func(STRING_CLASS, "sub!", sub_, -1);
+    globals.define_builtin_func(STRING_CLASS, "match", string_match, -1);
+    globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
 }
 
 /// ### String#+
@@ -348,19 +350,13 @@ fn sub_main(
 ) -> Option<(String, bool)> {
     match block {
         None => {
-            if len != 2 {
-                globals.err_wrong_number_of_arguments_range(len, 2..=2);
-                return None;
-            }
+            globals.check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = arg[1].expect_string(globals)?;
             RegexpInfo::replace_one(vm, globals, arg[0], &given, &replace)
         }
         Some(block) => {
-            if len != 1 {
-                globals.err_wrong_number_of_arguments_range(len, 1..=1);
-                return None;
-            }
+            globals.check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInfo::replace_one_block(vm, globals, arg[0], &given, block)
         }
@@ -415,23 +411,61 @@ fn gsub_main(
 ) -> Option<(String, bool)> {
     match block {
         None => {
-            if len != 2 {
-                globals.err_wrong_number_of_arguments_range(len, 2..=2);
-                return None;
-            }
+            globals.check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = args[1].expect_string(globals)?;
             RegexpInfo::replace_all(vm, globals, args[0], &given, &replace)
         }
         Some(block) => {
-            if len != 1 {
-                globals.err_wrong_number_of_arguments_range(len, 1..=1);
-                return None;
-            }
+            globals.check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInfo::replace_all_block(vm, globals, args[0], &given, block)
         }
     }
+}
+
+/// ### String#match
+/// - match(regexp, pos = 0) -> MatchData | nil
+/// - match(regexp, pos = 0) {|m| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/match.html]
+extern "C" fn string_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<Value>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let pos = match len {
+        1 => 0usize,
+        2 => match arg[1].coerce_to_fixnum(globals)? {
+            pos if pos >= 0 => pos as usize,
+            _ => return Some(Value::nil()),
+        },
+        _ => unreachable!(),
+    };
+    let given = self_val.expect_string(globals)?;
+    let re = arg[0].expect_regexp_or_string(globals)?;
+
+    match block {
+        None => RegexpInfo::match_one(vm, globals, &re, &given, pos),
+        Some(block) => RegexpInfo::match_one_block(vm, globals, &re, &given, block, pos),
+    }
+}
+
+/// ### String#to_s
+extern "C" fn tos(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    len: usize,
+    _block: Option<Value>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=0)?;
+    Some(self_val)
 }
 
 #[cfg(test)]
@@ -477,6 +511,23 @@ mod test {
         run_test(
             r##"
         "abcdefgdddefjklefl".gsub(/d*ef/) {
+            |matched| "+" + matched + "+"
+        }
+        "##,
+        );
+        run_test_error(
+            r##"
+        "abcdefgdef".gsub(/def/, 3)
+        "##,
+        );
+        run_test_error(
+            r##"
+        "abcdefgdef".gsub(/def/, "!!", 1)
+        "##,
+        );
+        run_test_error(
+            r##"
+        "abcdefgdddefjklefl".gsub(/d*ef/, 10) {
             |matched| "+" + matched + "+"
         }
         "##,
@@ -532,5 +583,18 @@ mod test {
         s.sub!(/def1/, "!!")
         "##,
         );
+    }
+
+    #[test]
+    fn set_match() {
+        run_test(
+            r##"
+        "abcdefgdddefjklefl".match(/d*ef/) {
+            |matched| matched.to_s
+        }
+        "##,
+        );
+        run_test(r##"'hoge hige hege bar'.match('h.ge', 0)[0]"##);
+        run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
     }
 }
