@@ -2,8 +2,6 @@ use crate::*;
 use fancy_regex::{Captures, Match, Regex};
 use std::rc::Rc;
 
-//type Result<T> = std::result::Result<T, MonorubyErr>;
-
 #[derive(Clone, Debug)]
 pub struct RegexpInfo(Rc<Regex>);
 
@@ -13,6 +11,13 @@ impl PartialEq for RegexpInfo {
             return true;
         }
         self.as_str() == other.as_str()
+    }
+}
+
+impl std::ops::Deref for RegexpInfo {
+    type Target = Regex;
+    fn deref(&self) -> &Regex {
+        &self.0
     }
 }
 
@@ -433,12 +438,5 @@ impl RegexpInfo {
                 None
             }
         }
-    }
-}
-
-impl std::ops::Deref for RegexpInfo {
-    type Target = Regex;
-    fn deref(&self) -> &Regex {
-        &self.0
     }
 }

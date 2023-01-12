@@ -370,9 +370,8 @@ impl Value {
     }
 
     pub(crate) fn try_flonum(&self) -> Option<f64> {
-        let u = self.0.get();
-        if u & 0b11 == 2 {
-            Some(Self::as_flonum(self))
+        if self.is_flonum() {
+            Some(self.as_flonum())
         } else {
             None
         }
