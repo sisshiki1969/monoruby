@@ -315,9 +315,14 @@ fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
 }
 
 macro_rules! cmp_values {
-    ($op:ident) => {
+    (($op:ident, $op_str:expr)) => {
         paste! {
-            pub(super) extern "C" fn [<cmp_ $op _values>](lhs: Value, rhs: Value) -> Value {
+            pub(super) extern "C" fn [<cmp_ $op _values>](
+                interp: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value
+            ) -> Option<Value> {
                 let b = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
                     (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
@@ -328,24 +333,36 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                    (lhs, rhs) => unreachable!("{:?} cmp {:?}", lhs, rhs),
+                    _ => {
+                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                    }
                 };
-                Value::bool(b)
+                Some(Value::bool(b))
             }
         }
     };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_values!($op1);
-        cmp_values!($($op2),+);
+    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
+        cmp_values!(($op1, $op_str1));
+        cmp_values!($(($op2, $op_str2)),+);
     };
 }
 
-cmp_values!(ge, gt, le, lt);
+cmp_values!(
+    (ge, IdentId::_GE),
+    (gt, IdentId::_GT),
+    (le, IdentId::_LE),
+    (lt, IdentId::_LT)
+);
 
 macro_rules! eq_values {
-    ($op:ident) => {
+    (($op:ident, $op_str:expr)) => {
         paste! {
-            pub(super) extern "C" fn [<cmp_ $op _values>](lhs: Value, rhs: Value) -> Value {
+            pub(super) extern "C" fn [<cmp_ $op _values>](
+                interp: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value
+            ) -> Option<Value> {
                 let b = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
                     (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
@@ -357,19 +374,21 @@ macro_rules! eq_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
-                    _ => unreachable!("{:?} {:?}", lhs, rhs),
+                    _ => {
+                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                    }
                 };
-                Value::bool(b)
+                Some(Value::bool(b))
             }
         }
     };
-    ($op1:ident, $($op2:ident),+) => {
-        eq_values!($op1);
-        eq_values!($($op2),+);
+    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
+        eq_values!(($op1, $op_str1));
+        eq_values!($(($op2, $op_str2)),+);
     };
 }
 
-eq_values!(eq, ne);
+eq_values!((eq, IdentId::_EQ), (ne, IdentId::_NEQ));
 
 pub(super) extern "C" fn neg_value(
     interp: &mut Executor,

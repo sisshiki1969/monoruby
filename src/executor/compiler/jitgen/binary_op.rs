@@ -11,11 +11,7 @@ macro_rules! cmp_main {
                 self.jit.select_page(1);
                 self.jit.bind_label(generic);
                 self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                );
+                self.call_binop([<cmp_ $op _values>] as _);
                 self.xmm_restore(&xmm_using);
                 monoasm!(self.jit,
                     jmp  exit;
@@ -23,7 +19,7 @@ macro_rules! cmp_main {
                 self.jit.select_page(0);
             }
 
-            fn [<integer_cmp_ $op>](&mut self) {
+            pub(in crate::executor::compiler) fn [<integer_cmp_ $op>](&mut self) {
                 monoasm! { self.jit,
                     xorq rax, rax;
                     cmpq rdi, rsi;
@@ -31,23 +27,6 @@ macro_rules! cmp_main {
                     shlq rax, 3;
                     orq rax, (FALSE_VALUE);
                 };
-            }
-
-            pub(crate) fn [<vm_cmp_ $op>](&mut self, generic:DestLabel) {
-                let exit = self.jit.label();
-                self.[<integer_cmp_ $op>]();
-                self.jit.bind_label(exit);
-                self.jit.select_page(1);
-                self.jit.bind_label(generic);
-                monoasm!(self.jit,
-                    // generic path
-                    movq rax, ([<cmp_ $op _values>]);
-                    call rax;
-                );
-                monoasm!(self.jit,
-                    jmp  exit;
-                );
-                self.jit.select_page(0);
             }
         }
     };
@@ -74,11 +53,7 @@ macro_rules! cmp_opt_main {
                 self.jit.select_page(1);
                 self.jit.bind_label(generic);
                 self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
-                    // generic path
-                    movq rax, ([<cmp_ $sop _values>]);
-                    call rax;
-                );
+                self.call_binop([<cmp_ $sop _values>] as _);
                 self.xmm_restore(&xmm_using);
                 monoasm!(self.jit,
                     orq  rax, 0x10;
@@ -551,6 +526,7 @@ impl Codegen {
         generic: DestLabel,
         ret: SlotId,
         ctx: &BBContext,
+        pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
         match kind {
@@ -562,10 +538,11 @@ impl Codegen {
             CmpKind::Lt => self.cmp_lt(generic, xmm_using),
             _ => unimplemented!(),
         }
+        self.handle_error(pc);
         self.store_rax(ret);
     }
 
-    pub(super) fn gen_integer_cmp_kind(&mut self, kind: CmpKind, ret: SlotId) {
+    pub(super) fn gen_integer_cmp_kind(&mut self, kind: CmpKind, ret: SlotId, pc: BcPc) {
         match kind {
             CmpKind::Eq => self.integer_cmp_eq(),
             CmpKind::Ne => self.integer_cmp_ne(),
@@ -575,6 +552,7 @@ impl Codegen {
             CmpKind::Lt => self.integer_cmp_lt(),
             _ => unimplemented!(),
         }
+        self.handle_error(pc);
         self.store_rax(ret);
     }
 

@@ -1255,7 +1255,7 @@ impl Codegen {
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, deopt);
-                        self.gen_integer_cmp_kind(kind, ret);
+                        self.gen_integer_cmp_kind(kind, ret, pc);
                     } else {
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1265,7 +1265,7 @@ impl Codegen {
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmp_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, &ctx);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
                     }
                 }
                 TraceIr::Cmp(_, _, _, _, true) => {}
@@ -1285,7 +1285,7 @@ impl Codegen {
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, deopt);
-                        self.gen_integer_cmp_kind(kind, ret);
+                        self.gen_integer_cmp_kind(kind, ret, pc);
                     } else {
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1294,7 +1294,7 @@ impl Codegen {
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
                         self.gen_cmpri_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, &ctx);
+                        self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
                     }
                 }
                 TraceIr::Cmpri(_, _, _, _, true) => {}

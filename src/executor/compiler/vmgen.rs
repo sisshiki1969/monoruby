@@ -11,49 +11,35 @@ macro_rules! cmp_ops {
       paste! {
           fn [<vm_ $op rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
-              let generic0 = self.jit.label();
-              let generic1 = self.jit.label();
-              self.vm_get_rdi(); // rdi <- lhs addr
-              self.vm_get_rsi(); // rsi <- rhs addr
-              self.vm_get_addr_r15(); // r15 <- ret addr
-              self.guard_rdi_fixnum(generic0);
-              self.guard_rsi_fixnum(generic0);
+              let generic = self.jit.label();
+              self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+              self.guard_rdi_rsi_fixnum(generic);
               self.vm_save_binary_integer();
-              self.[<vm_cmp_ $op>](generic1);
+
+              self.[<integer_cmp_ $op>]();
               self.vm_store_r15();
               self.fetch_and_dispatch();
-              self.jit.select_page(1);
-              self.jit.bind_label(generic0);
-              self.vm_save_binary_class();
-              monoasm!(self.jit,
-                  jmp  generic1;
-              );
-              self.jit.select_page(0);
+
+              self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
+              self.fetch_and_dispatch();
+
               label
           }
 
           fn [<vm_ $op ri>](&mut self) -> CodePtr {
             let label = self.jit.get_current_address();
-            let generic0 = self.jit.label();
-            let generic1 = self.jit.label();
-            self.vm_get_rdi();      // rdi <- lhs addr
-            self.vm_get_addr_r15(); // r15 <- ret addr
-            monoasm! { self.jit,
-              shlq rsi, 1;
-              orq  rsi, 1;
-            };
-            self.guard_rdi_fixnum(generic0);
+            let generic = self.jit.label();
+            self.vm_get_ri_r15();
+            self.guard_rdi_fixnum(generic);
             self.vm_save_binary_integer();
-            self.[<vm_cmp_ $op>](generic1);
+
+            self.[<integer_cmp_ $op>]();
             self.vm_store_r15();
             self.fetch_and_dispatch();
-            self.jit.select_page(1);
-            self.jit.bind_label(generic0);
-            self.vm_save_lhs_class();
-            monoasm!(self.jit,
-                jmp  generic1;
-            );
-            self.jit.select_page(0);
+
+            self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
+            self.fetch_and_dispatch();
+
             label
           }
       }
@@ -480,7 +466,7 @@ impl Codegen {
         monoasm! { self.jit,
             movsxw rdi, rdi;
             shlq rdi, 1;
-            addq rdi, 1;
+            orq  rdi, 1;
         };
     }
 
@@ -488,7 +474,7 @@ impl Codegen {
         monoasm! { self.jit,
             movsxw rsi, rsi;
             shlq rsi, 1;
-            addq rsi, 1;
+            orq  rsi, 1;
         };
     }
 
@@ -609,15 +595,12 @@ impl Codegen {
         self.fetch_and_dispatch();
     }
 
-    fn vm_generic_binop(&mut self, generic: DestLabel, exit: DestLabel, func: usize) {
+    fn vm_generic_binop(&mut self, generic: DestLabel, func: usize) {
         self.jit.bind_label(generic);
         self.vm_save_binary_class();
         self.call_binop(func);
         self.vm_handle_error();
         self.vm_store_r15();
-        monoasm! { self.jit,
-            jmp exit;
-        };
     }
 
     /// Expand array
@@ -977,7 +960,9 @@ impl Codegen {
         self.vm_store_r15();
         self.jit.bind_label(exit);
         self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, generic_func);
+
+        self.vm_generic_binop(generic, generic_func);
+        monoasm! { self.jit, jmp exit; };
 
         let ptr_ri = self.jit.get_current_address();
         self.vm_get_ri_r15();
@@ -1000,11 +985,7 @@ impl Codegen {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.jit.bind_label(common);
-        self.vm_save_binary_class();
-        self.call_binop(func);
-        self.vm_handle_error();
-        self.vm_store_r15();
+        self.vm_generic_binop(common, func);
         self.fetch_and_dispatch();
 
         let ptr_ri = self.jit.get_current_address();
@@ -1023,11 +1004,9 @@ impl Codegen {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.jit.bind_label(common);
-        self.vm_save_binary_class();
-        self.call_binop(rem_values as _);
-        self.vm_handle_error();
-        self.vm_store_r15();
+
+        self.vm_generic_binop(common, rem_values as _);
+
         self.fetch_and_dispatch();
         ptr_rr
     }
@@ -1045,31 +1024,32 @@ impl Codegen {
         exit:
         };
         self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, bitor_values as _);
+
+        self.vm_generic_binop(generic, bitor_values as _);
+        self.fetch_and_dispatch();
         label
     }
 
     fn vm_bitandrr(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
-        let exit = self.jit.label();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
         self.guard_rdi_rsi_fixnum(generic);
         self.vm_save_binary_integer();
         monoasm! { self.jit,
             andq rdi, rsi;
             movq [r15], rdi;
-        exit:
         };
         self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, bitand_values as _);
+
+        self.vm_generic_binop(generic, bitand_values as _);
+        self.fetch_and_dispatch();
         label
     }
 
     fn vm_bitxorrr(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
-        let exit = self.jit.label();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
         self.guard_rdi_rsi_fixnum(generic);
         self.vm_save_binary_integer();
@@ -1077,10 +1057,11 @@ impl Codegen {
             xorq rdi, rsi;
             addq rdi, 1;
             movq [r15], rdi;
-        exit:
         };
         self.fetch_and_dispatch();
-        self.vm_generic_binop(generic, exit, bitxor_values as _);
+
+        self.vm_generic_binop(generic, bitxor_values as _);
+        self.fetch_and_dispatch();
         label
     }
 
@@ -1088,15 +1069,13 @@ impl Codegen {
         let shl_label = self.jit.get_current_address();
         let generic_shl = self.jit.label();
         let generic_shr = self.jit.label();
-        let exit = self.jit.label();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_generic_binop(generic_shl, exit, shl_values as _);
+        self.vm_generic_binop(generic_shl, shl_values as _);
+        self.fetch_and_dispatch();
 
         let shr_label = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_generic_binop(generic_shr, exit, shr_values as _);
-
-        self.jit.bind_label(exit);
+        self.vm_generic_binop(generic_shr, shr_values as _);
         self.fetch_and_dispatch();
 
         (shl_label, shr_label)
