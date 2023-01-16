@@ -14,8 +14,14 @@ use inst::*;
 use op::*;
 
 type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn =
-    extern "C" fn(&mut Executor, &mut Globals, Value, Arg, usize, Option<Value>) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(
+    &mut Executor,
+    &mut Globals,
+    Value,
+    Arg,
+    usize,
+    Option<BlockHandler>,
+) -> Option<Value>;
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;
@@ -169,6 +175,24 @@ pub(crate) struct BlockData {
     func_data: *const FuncData,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct BlockHandler(Value);
+
+impl BlockHandler {
+    pub fn new(val: Value) -> Self {
+        Self(val)
+    }
+
+    pub fn try_fixnum(&self) -> Option<i64> {
+        self.0.try_fixnum()
+    }
+
+    pub(crate) fn as_proc(&self) -> &BlockData {
+        self.0.as_proc()
+    }
+}
+
 ///
 /// Bytecode interpreter.
 ///
@@ -315,7 +339,7 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        block_handler: Value,
+        block_handler: BlockHandler,
         args: &[Value],
     ) -> Option<Value> {
         let data = globals.get_block_data(block_handler, self);

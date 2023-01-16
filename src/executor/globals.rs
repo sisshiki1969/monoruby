@@ -291,7 +291,11 @@ impl Globals {
         &self.func[func_id].data
     }
 
-    pub(super) fn get_block_data(&mut self, block_handler: Value, interp: &Executor) -> BlockData {
+    pub(super) fn get_block_data(
+        &mut self,
+        block_handler: BlockHandler,
+        interp: &Executor,
+    ) -> BlockData {
         if let Some(bh) = block_handler.try_fixnum() {
             let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
             let mut cfp = interp.cfp;

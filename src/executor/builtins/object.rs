@@ -71,7 +71,7 @@ extern "C" fn puts(
     _: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.is_array() {
@@ -105,7 +105,7 @@ extern "C" fn print(
     _: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     for i in 0..len {
         globals.write_stdout(&arg[i].to_bytes(globals));
@@ -123,7 +123,7 @@ extern "C" fn p(
     _: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut buf = String::new();
     for i in 0..len {
@@ -150,7 +150,7 @@ extern "C" fn assert(
     _: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
@@ -170,7 +170,7 @@ extern "C" fn dump(
     _: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     unsafe {
         super::op::_dump_stacktrace(vm, globals);
@@ -188,7 +188,7 @@ extern "C" fn respond_to(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
@@ -208,7 +208,7 @@ extern "C" fn inspect(
     self_val: Value,
     _: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let s = self_val.inspect(globals);
     Some(Value::new_string(s))
@@ -224,7 +224,7 @@ extern "C" fn class(
     self_val: Value,
     _: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val.get_real_class_id(globals).get_obj(globals))
 }
@@ -240,7 +240,7 @@ extern "C" fn rand(
     _: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let i = match len {
@@ -267,7 +267,7 @@ extern "C" fn singleton_class(
     self_val: Value,
     _: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val.get_singleton(globals))
 }
@@ -282,7 +282,7 @@ extern "C" fn instance_variable_defined(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
@@ -303,7 +303,7 @@ extern "C" fn instance_variable_set(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let val = arg[1];
@@ -321,7 +321,7 @@ extern "C" fn instance_variable_get(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let v = globals.get_ivar(self_val, id).unwrap_or_default();
@@ -338,7 +338,7 @@ extern "C" fn kernel_integer(
     _: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {
@@ -373,7 +373,7 @@ extern "C" fn require(
     _: Value,
     arg: Arg,
     _: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);

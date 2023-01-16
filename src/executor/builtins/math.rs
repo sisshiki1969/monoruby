@@ -28,7 +28,7 @@ extern "C" fn sqrt(
     _self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {
@@ -53,7 +53,7 @@ extern "C" fn sin(
     _self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {
@@ -78,7 +78,7 @@ extern "C" fn cos(
     _self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {

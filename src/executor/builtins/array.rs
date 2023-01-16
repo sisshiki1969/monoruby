@@ -27,7 +27,7 @@ extern "C" fn new(
     self_val: Value,
     arg: Arg,
     len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_array_with_class(vec![], class);
@@ -46,7 +46,7 @@ extern "C" fn size(
     mut self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let len = self_val.as_array_mut().len();
     Some(Value::new_integer(len as i64))
@@ -62,7 +62,7 @@ extern "C" fn add(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut lhs = self_val.as_array().clone();
     let rhs = match arg[0].is_array() {
@@ -86,7 +86,7 @@ extern "C" fn shl(
     mut self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     self_val.as_array_mut().push(arg[0]);
     Some(self_val)
@@ -102,7 +102,7 @@ extern "C" fn index_assign(
     mut self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let i = arg[0];
     let val = arg[1];

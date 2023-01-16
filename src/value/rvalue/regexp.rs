@@ -1,5 +1,5 @@
 use crate::*;
-use fancy_regex::{Captures, Match, Regex};
+use fancy_regex::{Captures, Regex};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
@@ -96,14 +96,14 @@ impl RegexpInfo {
         globals: &mut Globals,
         re_val: Value,
         given: &str,
-        block_handler: Value,
+        block_handler: BlockHandler,
     ) -> Option<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInfo,
             given: &str,
-            block_handler: Value,
+            block_handler: BlockHandler,
         ) -> Option<(String, bool)> {
             let (start, end, matched_str) = match re.captures_from_pos(given, 0) {
                 Ok(None) => return Some((given.to_string(), false)),
@@ -162,14 +162,14 @@ impl RegexpInfo {
         globals: &mut Globals,
         re_val: Value,
         given: &str,
-        block_handler: Value,
+        block_handler: BlockHandler,
     ) -> Option<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInfo,
             given: &str,
-            block_handler: Value,
+            block_handler: BlockHandler,
         ) -> Option<(String, bool)> {
             let mut range = vec![];
             let mut i = 0;
@@ -246,7 +246,7 @@ impl RegexpInfo {
         globals: &mut Globals,
         re: &Regex,
         given: &'a str,
-        block_handler: Value,
+        block_handler: BlockHandler,
         pos: usize,
     ) -> Option<Value> {
         let pos = match given.char_indices().nth(pos) {
@@ -267,6 +267,7 @@ impl RegexpInfo {
         }
     }
 
+    /*
     /// Find the leftmost-first match for `given`.
     /// Returns `Match`s.
     pub(crate) fn find_one<'a>(
@@ -337,7 +338,7 @@ impl RegexpInfo {
             None => {}
         }
         Some(ary)
-    }
+    }*/
 }
 
 impl RegexpInfo {

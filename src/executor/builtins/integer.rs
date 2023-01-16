@@ -23,7 +23,7 @@ extern "C" fn times(
     self_val: Value,
     _: Arg,
     _: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     let count = match self_val.try_fixnum() {
         Some(i) => i,
@@ -51,7 +51,7 @@ extern "C" fn chr(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     if let Some(i) = self_val.try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
@@ -68,7 +68,7 @@ extern "C" fn tof(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let f = match self_val.unpack() {
         RV::Integer(i) => i as f64,

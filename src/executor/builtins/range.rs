@@ -21,7 +21,7 @@ extern "C" fn range_new(
     _: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
@@ -37,7 +37,7 @@ extern "C" fn begin(
     self_val: Value,
     _: Arg,
     _: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val.as_range().start)
 }
@@ -52,7 +52,7 @@ extern "C" fn end(
     self_val: Value,
     _: Arg,
     _: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val.as_range().end)
 }
@@ -67,7 +67,7 @@ extern "C" fn exclude_end(
     self_val: Value,
     _: Arg,
     _: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(Value::bool(self_val.as_range().exclude_end()))
 }

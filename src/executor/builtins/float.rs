@@ -15,7 +15,7 @@ extern "C" fn tof(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val)
 }
@@ -26,7 +26,7 @@ extern "C" fn toi(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     match self_val.unpack() {
         RV::Float(f) => Some(Value::new_integer(f.trunc() as i64)),
