@@ -16,7 +16,7 @@ extern "C" fn new(
     _self_val: Value,
     _arg: Arg,
     _len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     if let Some(block_handler) = block {
         vm.generate_proc(globals, block_handler)
@@ -33,7 +33,7 @@ extern "C" fn call(
     self_val: Value,
     arg: Arg,
     len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let block_data = self_val.as_proc();
     let res = vm.invoke_proc(globals, block_data, &arg.to_vec(len))?;
@@ -41,7 +41,11 @@ extern "C" fn call(
 }
 
 impl Executor {
-    fn generate_proc(&mut self, globals: &mut Globals, block_handler: Value) -> Option<Value> {
+    fn generate_proc(
+        &mut self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+    ) -> Option<Value> {
         if let Some(_bh) = block_handler.try_fixnum() {
             unsafe {
                 let cfp = self.cfp.prev();

@@ -27,7 +27,7 @@ pub(super) extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -
 
 pub(super) extern "C" fn get_block_data(
     globals: &mut Globals,
-    block_handler: Value,
+    block_handler: BlockHandler,
     interp: &Executor,
 ) -> BlockData {
     globals.get_block_data(block_handler, interp)

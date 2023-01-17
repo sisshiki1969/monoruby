@@ -32,7 +32,7 @@ extern "C" fn new(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = self_val.as_class();
     let map = IndexMap::default();
@@ -51,7 +51,7 @@ extern "C" fn size(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let len = self_val.as_hash().len();
     Some(Value::new_integer(len as i64))
@@ -68,7 +68,7 @@ extern "C" fn index_assign(
     mut self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let key = arg[0];
     let val = arg[1];
@@ -86,7 +86,7 @@ extern "C" fn index(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let key = arg[0];
     let val = self_val.as_hash().get(key).unwrap_or_default();
@@ -103,7 +103,7 @@ extern "C" fn clear(
     mut self_val: Value,
     _arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     self_val.as_hash_mut().clear();
     Some(self_val)
@@ -119,7 +119,7 @@ extern "C" fn keys(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let keys = self_val.as_hash().keys();
     Some(Value::new_array_from_vec(keys))
@@ -135,7 +135,7 @@ extern "C" fn values(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let keys = self_val.as_hash().values();
     Some(Value::new_array_from_vec(keys))
@@ -154,7 +154,7 @@ extern "C" fn include(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let b = self_val.as_hash().contains_key(arg[0]);
     Some(Value::bool(b))
@@ -171,7 +171,7 @@ extern "C" fn inspect(
     self_val: Value,
     _arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let s = globals.val_inspect(self_val);
     Some(Value::new_string(s))

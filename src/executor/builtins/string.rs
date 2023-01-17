@@ -27,7 +27,7 @@ extern "C" fn add(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut b = self_val.as_bytes().to_vec();
     b.extend_from_slice(arg[0].as_bytes());
@@ -141,7 +141,7 @@ extern "C" fn rem(
     self_val: Value,
     arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arguments = match arg[0].is_array() {
         Some(ary) => ary.to_vec(),
@@ -315,7 +315,7 @@ extern "C" fn sub(
     self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     let (res, _) = sub_main(vm, globals, self_val, arg, len, block)?;
     Some(Value::new_string(res))
@@ -332,7 +332,7 @@ extern "C" fn sub_(
     mut self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     let (res, changed) = sub_main(vm, globals, self_val, arg, len, block)?;
     self_val.replace_string(res);
@@ -346,7 +346,7 @@ fn sub_main(
     self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<(String, bool)> {
     match block {
         None => {
@@ -375,7 +375,7 @@ extern "C" fn gsub(
     self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     let (res, _) = gsub_main(vm, globals, self_val, arg, len, block)?;
     Some(Value::new_string(res))
@@ -393,7 +393,7 @@ extern "C" fn gsub_(
     mut self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     let (res, changed) = gsub_main(vm, globals, self_val, arg, len, block)?;
     self_val.replace_string(res);
@@ -407,7 +407,7 @@ fn gsub_main(
     self_val: Value,
     args: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<(String, bool)> {
     match block {
         None => {
@@ -435,7 +435,7 @@ extern "C" fn string_match(
     self_val: Value,
     arg: Arg,
     len: usize,
-    block: Option<Value>,
+    block: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     let pos = match len {
@@ -462,7 +462,7 @@ extern "C" fn tos(
     self_val: Value,
     _arg: Arg,
     len: usize,
-    _block: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=0)?;
     Some(self_val)

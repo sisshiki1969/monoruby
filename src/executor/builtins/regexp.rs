@@ -26,7 +26,7 @@ extern "C" fn regexp_new(
     _self_val: Value,
     arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
@@ -46,7 +46,7 @@ extern "C" fn regexp_escape(
     _self_val: Value,
     arg: Arg,
     _len: usize,
-    _block: Option<Value>,
+    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
