@@ -132,15 +132,9 @@ impl LoopAnalysis {
         mut reg_info: RegInfo,
         bb_pos: usize,
     ) -> Option<RegInfo> {
-        let mut skip = false;
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
             self.pc = BcPc::from(pc);
             let idx = bb_pos + ofs;
-            if skip {
-                skip = false;
-                continue;
-            }
-
             match self.pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
@@ -280,12 +274,12 @@ impl LoopAnalysis {
                         recv,
                         args,
                         len,
-                        callee_codeptr,
+                        func_data,
                     } = method_info;
                     match (self.pc - 1).get_ir() {
                         TraceIr::MethodCall { ret, .. } => {
-                            if let Some(codeptr) = callee_codeptr {
-                                let cached = InlineCached::new(self.pc, codeptr);
+                            if let Some(func_data) = func_data {
+                                let cached = InlineCached::new(self.pc, func_data);
                                 if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
                                     match inline_id {
                                         InlineMethod::IntegerTof => {
@@ -328,7 +322,6 @@ impl LoopAnalysis {
                         }
                         _ => unreachable!(),
                     };
-                    skip = true;
                 }
                 TraceIr::Ret(_ret) => {
                     self.add_return(&reg_info);

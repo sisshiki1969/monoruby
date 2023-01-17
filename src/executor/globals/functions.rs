@@ -562,19 +562,9 @@ impl FuncInfo {
             BcPcBase::new(info),
             self.data.meta,
         );
-        let mut skip = false;
         let bb_info = info.get_bb_info();
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            if skip {
-                skip = false;
-                continue;
-            }
-            let bcop1 = pc.get_ir();
-            if let TraceIr::MethodArgs(..) = bcop1 {
-                skip = true;
-                continue;
-            };
             if let Some(fmt) = pc.format(globals, i) {
                 eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i);
                 eprintln!("{}", fmt);
@@ -885,17 +875,9 @@ impl ISeqInfo {
     ///
     pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
-        let mut skip = false;
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            if skip {
-                skip = false;
-                continue;
-            }
             match pc.get_ir() {
-                TraceIr::MethodArgs(..) => {
-                    skip = true;
-                }
                 TraceIr::Br(disp)
                 | TraceIr::CondBr(_, disp, _, _)
                 | TraceIr::CheckLocal(_, disp) => {
@@ -920,17 +902,7 @@ impl ISeqInfo {
             .collect();
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            if skip {
-                skip = false;
-                continue;
-            }
             match pc.get_ir() {
-                TraceIr::MethodArgs(..) => {
-                    skip = true;
-                    if let Some(ref mut elem) = bb_info[idx + 2] {
-                        elem.1.push(idx);
-                    }
-                }
                 TraceIr::Br(_) | TraceIr::Ret(_) => {}
                 _ => {
                     if let Some(ref mut elem) = bb_info[idx + 1] {

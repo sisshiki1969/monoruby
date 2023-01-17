@@ -507,10 +507,6 @@ impl BcPc {
         Self(bc as *const _)
     }
 
-    pub(crate) fn from_u64(ptr: u64) -> Self {
-        Self(ptr as *const _)
-    }
-
     pub(crate) fn get_u64(self) -> u64 {
         self.0 as _
     }

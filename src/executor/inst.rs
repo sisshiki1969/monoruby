@@ -74,7 +74,6 @@ pub(super) enum BcIr {
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
-    InlineCache,
     MethodDef(IdentId, FuncId),
     ClassDef {
         ret: Option<BcReg>,
@@ -185,21 +184,13 @@ impl Bc {
         (self.op2.0 >> (id * 16)) as u16
     }
 
-    fn codeptr(&self) -> Option<CodePtr> {
+    fn func_data(&self) -> Option<&'static FuncData> {
         let op = self.op2.0;
         if op == 0 {
             None
         } else {
-            Some(CodePtr::from(op as _))
+            Some(unsafe { &*(op as *const FuncData) })
         }
-    }
-
-    pub(super) fn meta(&self) -> Meta {
-        Meta::new(self.op1)
-    }
-
-    pub(in crate::executor) fn pc(&self) -> BcPc {
-        BcPc::from_u64(self.op2.0)
     }
 
     pub(crate) fn value(&self) -> Option<Value> {
@@ -439,16 +430,16 @@ pub(super) struct MethodInfo {
     pub recv: SlotId,
     pub args: SlotId,
     pub len: u16,
-    pub callee_codeptr: Option<CodePtr>,
+    pub func_data: Option<&'static FuncData>,
 }
 
 impl MethodInfo {
-    fn new(recv: SlotId, args: SlotId, len: u16, callee_codeptr: Option<CodePtr>) -> Self {
+    fn new(recv: SlotId, args: SlotId, len: u16, func_data: Option<&'static FuncData>) -> Self {
         MethodInfo {
             recv,
             args,
             len,
-            callee_codeptr,
+            func_data,
         }
     }
 }
@@ -588,7 +579,7 @@ impl TraceIr {
                     SlotId::new(op1),
                     SlotId::new(op2),
                     op3,
-                    pc.codeptr(),
+                    pc.func_data(),
                 )),
                 131 => Self::Array(SlotId::new(op1), SlotId::new(op2), op3),
                 132 => Self::Index(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
