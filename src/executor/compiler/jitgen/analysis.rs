@@ -139,6 +139,7 @@ impl LoopAnalysis {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
+                TraceIr::MethodDef(..) => {}
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }
@@ -148,12 +149,7 @@ impl LoopAnalysis {
                         return Some(reg_info);
                     }
                 }
-                TraceIr::Integer(ret, ..)
-                | TraceIr::Symbol(ret, ..)
-                | TraceIr::Array(ret, ..)
-                | TraceIr::Hash { ret, .. }
-                | TraceIr::Index(ret, ..)
-                | TraceIr::Nil(ret) => {
+                TraceIr::Integer(ret, ..) | TraceIr::Symbol(ret, ..) | TraceIr::Nil(ret) => {
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::Literal(dst, val) => {
@@ -163,6 +159,23 @@ impl LoopAnalysis {
                         reg_info.def_as(dst, false);
                     }
                 }
+                TraceIr::Array { ret, args, len } => {
+                    for r in args.0..args.0 + len {
+                        reg_info.use_non_float(SlotId(r));
+                    }
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::Hash { ret, args, len } => {
+                    for r in args.0..args.0 + len * 2 {
+                        reg_info.use_non_float(SlotId(r));
+                    }
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::Index { ret, base, idx } => {
+                    reg_info.def_as(ret, false);
+                    reg_info.use_non_float(base);
+                    reg_info.use_non_float(idx);
+                }
                 TraceIr::Range {
                     ret, start, end, ..
                 } => {
@@ -170,8 +183,11 @@ impl LoopAnalysis {
                     reg_info.use_non_float(start);
                     reg_info.use_non_float(end);
                 }
-                TraceIr::IndexAssign(..) => {}
-                TraceIr::MethodDef(..) => {}
+                TraceIr::IndexAssign { src, base, idx } => {
+                    reg_info.use_non_float(src);
+                    reg_info.use_non_float(base);
+                    reg_info.use_non_float(idx);
+                }
                 TraceIr::ClassDef { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
@@ -183,27 +199,17 @@ impl LoopAnalysis {
                     };
                     reg_info.def_as(dst, is_float);
                 }
-                TraceIr::StoreConst(..) => {}
-                TraceIr::BlockArgProxy(dst) => {
+                TraceIr::BlockArgProxy(dst)
+                | TraceIr::LoadDynVar(dst, ..)
+                | TraceIr::LoadIvar(dst, ..)
+                | TraceIr::LoadGvar { dst, .. } => {
                     reg_info.def_as(dst, false);
                 }
-                TraceIr::LoadDynVar(dst, ..) => {
-                    reg_info.def_as(dst, false);
-                }
-                TraceIr::StoreDynVar(_dst, src) => {
+                TraceIr::StoreConst(src, _)
+                | TraceIr::StoreDynVar(_, src)
+                | TraceIr::StoreIvar(src, ..)
+                | TraceIr::StoreGvar { src, .. } => {
                     reg_info.use_non_float(src);
-                }
-                TraceIr::LoadIvar(dst, ..) => {
-                    reg_info.def_as(dst, false);
-                }
-                TraceIr::StoreIvar(src, ..) => {
-                    reg_info.use_non_float(src);
-                }
-                TraceIr::LoadGvar { ret, .. } => {
-                    reg_info.def_as(ret, false);
-                }
-                TraceIr::StoreGvar { val, .. } => {
-                    reg_info.use_non_float(val);
                 }
                 TraceIr::Neg(dst, src) => {
                     let is_float = pc.is_float1();
@@ -267,61 +273,84 @@ impl LoopAnalysis {
                     }
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::MethodCall { .. } => {}
-                TraceIr::MethodCallBlock { .. } => {}
-                TraceIr::MethodArgs(method_info) => {
+                TraceIr::MethodCall { ret, info, .. } => {
                     let MethodInfo {
                         recv,
                         args,
                         len,
                         func_data,
-                    } = method_info;
-                    match (self.pc - 1).get_ir() {
-                        TraceIr::MethodCall { ret, .. } => {
-                            if let Some(func_data) = func_data {
-                                let cached = InlineCached::new(self.pc, func_data);
-                                if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
-                                    match inline_id {
-                                        InlineMethod::IntegerTof => {
-                                            reg_info.use_non_float(recv);
-                                            reg_info.def_as(ret, true);
-                                        }
-                                        InlineMethod::MathSqrt => {
-                                            reg_info.use_non_float(recv);
-                                            reg_info.use_as(args, true, FLOAT_CLASS);
-                                            reg_info.def_as(ret, true);
-                                        }
-                                        InlineMethod::MathCos => {
-                                            reg_info.use_non_float(recv);
-                                            reg_info.use_as(args, true, FLOAT_CLASS);
-                                            reg_info.def_as(ret, true);
-                                        }
-                                        InlineMethod::MathSin => {
-                                            reg_info.use_non_float(recv);
-                                            reg_info.use_as(args, true, FLOAT_CLASS);
-                                            reg_info.def_as(ret, true);
-                                        }
-                                    }
-                                } else {
-                                    reg_info.call_method(recv, args, len, ret);
+                    } = info;
+                    if let Some(func_data) = func_data {
+                        let cached = InlineCached::new(self.pc + 1, func_data);
+                        if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
+                            match inline_id {
+                                InlineMethod::IntegerTof => {
+                                    reg_info.use_non_float(recv);
+                                    reg_info.def_as(ret, true);
                                 }
-                            } else {
-                                reg_info.call_method(recv, args, len, ret);
+                                InlineMethod::MathSqrt => {
+                                    reg_info.use_non_float(recv);
+                                    reg_info.use_as(args, true, FLOAT_CLASS);
+                                    reg_info.def_as(ret, true);
+                                }
+                                InlineMethod::MathCos => {
+                                    reg_info.use_non_float(recv);
+                                    reg_info.use_as(args, true, FLOAT_CLASS);
+                                    reg_info.def_as(ret, true);
+                                }
+                                InlineMethod::MathSin => {
+                                    reg_info.use_non_float(recv);
+                                    reg_info.use_as(args, true, FLOAT_CLASS);
+                                    reg_info.def_as(ret, true);
+                                }
                             }
+                        } else {
+                            reg_info.call_method(func, recv, args, len, ret);
                         }
-                        TraceIr::MethodCallBlock { ret, .. } => {
+                    } else {
+                        reg_info.call_method(func, recv, args, len, ret);
+                    }
+                }
+                TraceIr::MethodCallBlock { ret, info, .. } => {
+                    let MethodInfo {
+                        recv, args, len, ..
+                    } = info;
+                    reg_info.use_non_float(recv);
+                    for i in 0..len + 1 {
+                        reg_info.use_non_float(args + i);
+                    }
+                    // unlink all local variables.
+                    for i in 1..1 + func.local_num() as u16 {
+                        reg_info.unlink(SlotId(i));
+                    }
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::MethodArgs(..) => {}
+                TraceIr::InlineCall {
+                    ret, method, info, ..
+                } => {
+                    let MethodInfo { recv, args, .. } = info;
+                    match method {
+                        InlineMethod::IntegerTof => {
                             reg_info.use_non_float(recv);
-                            for i in 0..len + 1 {
-                                reg_info.use_non_float(args + i);
-                            }
-                            // unlink all local variables.
-                            for i in 1..1 + func.local_num() as u16 {
-                                reg_info.unlink(SlotId(i));
-                            }
-                            reg_info.def_as(ret, false);
+                            reg_info.def_as(ret, true);
                         }
-                        _ => unreachable!(),
-                    };
+                        InlineMethod::MathSqrt => {
+                            reg_info.use_non_float(recv);
+                            reg_info.use_as(args, true, FLOAT_CLASS);
+                            reg_info.def_as(ret, true);
+                        }
+                        InlineMethod::MathCos => {
+                            reg_info.use_non_float(recv);
+                            reg_info.use_as(args, true, FLOAT_CLASS);
+                            reg_info.def_as(ret, true);
+                        }
+                        InlineMethod::MathSin => {
+                            reg_info.use_non_float(recv);
+                            reg_info.use_as(args, true, FLOAT_CLASS);
+                            reg_info.def_as(ret, true);
+                        }
+                    }
                 }
                 TraceIr::Ret(_ret) => {
                     self.add_return(&reg_info);
@@ -401,10 +430,13 @@ impl RegInfo {
             .collect()
     }
 
-    fn call_method(&mut self, recv: SlotId, args: SlotId, len: u16, ret: SlotId) {
+    fn call_method(&mut self, func: &ISeqInfo, recv: SlotId, args: SlotId, len: u16, ret: SlotId) {
         self.use_non_float(recv);
         for i in 0..len {
             self.use_non_float(args + i);
+        }
+        for i in 1..1 + func.local_num() as u16 {
+            self.unlink(SlotId(i));
         }
         self.def_as(ret, false);
     }

@@ -276,8 +276,11 @@ pub(super) enum TraceIr {
     Symbol(SlotId, IdentId),
     /// literal(%ret, value)
     Literal(SlotId, Value),
-    /// array(%ret, %src, len)
-    Array(SlotId, SlotId, u16),
+    Array {
+        ret: SlotId,
+        args: SlotId,
+        len: u16,
+    },
     Hash {
         ret: SlotId,
         args: SlotId,
@@ -289,10 +292,16 @@ pub(super) enum TraceIr {
         end: SlotId,
         exclude_end: bool,
     },
-    /// index(%ret, %base, %idx)
-    Index(SlotId, SlotId, SlotId),
-    /// index(%src, %base, %idx)
-    IndexAssign(SlotId, SlotId, SlotId),
+    Index {
+        ret: SlotId,
+        base: SlotId,
+        idx: SlotId,
+    },
+    IndexAssign {
+        src: SlotId,
+        base: SlotId,
+        idx: SlotId,
+    },
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, IdentId),
     LoadDynVar(SlotId, DynVar),
@@ -301,11 +310,11 @@ pub(super) enum TraceIr {
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     LoadGvar {
-        ret: SlotId,
+        dst: SlotId,
         name: IdentId,
     },
     StoreGvar {
-        val: SlotId,
+        src: SlotId,
         name: IdentId,
     },
     /// nil(%reg)
@@ -393,6 +402,13 @@ pub(super) enum TraceIr {
         name: IdentId,
         _class: ClassId,
         has_splat: bool,
+        _version: u32,
+        info: MethodInfo,
+    },
+    InlineCall {
+        ret: SlotId,
+        method: InlineMethod,
+        _class: ClassId,
         _version: u32,
         info: MethodInfo,
     },
@@ -531,11 +547,11 @@ impl TraceIr {
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1)),
                 25 => Self::LoadGvar {
-                    ret: SlotId::new(op1),
+                    dst: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
                 26 => Self::StoreGvar {
-                    val: SlotId::new(op1),
+                    src: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
                 27 => Self::Splat(SlotId::new(op1)),
@@ -581,9 +597,21 @@ impl TraceIr {
                     op3,
                     pc.func_data(),
                 )),
-                131 => Self::Array(SlotId::new(op1), SlotId::new(op2), op3),
-                132 => Self::Index(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
-                133 => Self::IndexAssign(SlotId::new(op1), SlotId::new(op2), SlotId::new(op3)),
+                131 => Self::Array {
+                    ret: SlotId::new(op1),
+                    args: SlotId::new(op2),
+                    len: op3,
+                },
+                132 => Self::Index {
+                    ret: SlotId::new(op1),
+                    base: SlotId::new(op2),
+                    idx: SlotId::new(op3),
+                },
+                133 => Self::IndexAssign {
+                    src: SlotId::new(op1),
+                    base: SlotId::new(op2),
+                    idx: SlotId::new(op3),
+                },
                 134..=139 => Self::Cmp(
                     CmpKind::from(opcode - 134),
                     SlotId::new(op1),

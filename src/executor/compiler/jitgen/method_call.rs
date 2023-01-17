@@ -20,21 +20,23 @@ impl Codegen {
         has_splat: bool,
     ) {
         let MethodInfo {
-            recv,
             args,
             len,
+            recv,
             func_data,
+            ..
         } = method_info;
         self.write_back_slot(ctx, recv);
         if let Some(func_data) = func_data {
-            let cached = InlineCached::new(pc + 1, func_data);
-            if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
+            if let Some(inline_id) = fnstore.inline.get(&func_data.meta.func_id()) {
                 self.gen_inlinable(ctx, &method_info, inline_id, ret, pc);
                 return;
             }
         }
         self.write_back_range(ctx, args, len);
         ctx.dealloc_xmm(ret);
+        // We must write back and unlink all local vars since they may be accessed by eval.
+        self.gen_write_back_locals(ctx);
         self.gen_call(
             fnstore,
             ctx,
@@ -47,7 +49,7 @@ impl Codegen {
         );
     }
 
-    fn gen_inlinable(
+    pub(super) fn gen_inlinable(
         &mut self,
         ctx: &mut BBContext,
         method_info: &MethodInfo,
@@ -124,13 +126,14 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo { args, len, .. } = method_info;
+        let MethodInfo {
+            args, len, recv, ..
+        } = method_info;
+        self.write_back_slot(ctx, recv);
         self.write_back_range(ctx, args, len + 1);
-        // We must write back and unlink all local vars since they may be accessed from block.
-        let wb = ctx.get_locals_write_back();
-        self.gen_write_back(wb);
-        ctx.dealloc_locals();
         ctx.dealloc_xmm(ret);
+        // We must write back and unlink all local vars since they may be accessed from block.
+        self.gen_write_back_locals(ctx);
         method_info.args = args + 1;
         self.gen_call(
             fnstore,

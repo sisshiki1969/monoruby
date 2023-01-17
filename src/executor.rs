@@ -642,13 +642,13 @@ impl BcPc {
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
             }
-            TraceIr::Array(ret, src, len) => {
-                format!("{:?} = array[{:?}; {}]", ret, src, len)
+            TraceIr::Array { ret, args, len } => {
+                format!("{:?} = array[{:?}; {}]", ret, args, len)
             }
             TraceIr::Hash { ret, args, len } => {
                 format!("{:?} = hash[{:?}; {}]", ret, args, len)
             }
-            TraceIr::Index(ret, base, idx) => {
+            TraceIr::Index { ret, base, idx } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", ret, base, idx);
                 format!(
                     "{:36} [{}][{}]",
@@ -657,7 +657,7 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::IndexAssign(src, base, idx) => {
+            TraceIr::IndexAssign { src, base, idx } => {
                 format!("{:?}:.[{:?}:] = {:?}", base, idx, src,)
             }
             TraceIr::LoadConst(reg, id) => {
@@ -712,11 +712,11 @@ impl BcPc {
                     reg
                 )
             }
-            TraceIr::LoadGvar { ret, name } => {
+            TraceIr::LoadGvar { dst: ret, name } => {
                 format!("{:?} = ${}", ret, IdentId::get_name(name),)
             }
-            TraceIr::StoreGvar { val, name } => {
-                format!("${} = {:?}", IdentId::get_name(name), val)
+            TraceIr::StoreGvar { src, name } => {
+                format!("${} = {:?}", IdentId::get_name(name), src)
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::Neg(dst, src) => {
@@ -810,18 +810,12 @@ impl BcPc {
                 name,
                 _class,
                 has_splat,
+                info,
                 ..
             } => {
-                let args_pc = *self + 1;
-                let (recv, args, len) = match args_pc.get_ir() {
-                    TraceIr::MethodArgs(method_info) => {
-                        let MethodInfo {
-                            recv, args, len, ..
-                        } = method_info;
-                        (recv, args, len)
-                    }
-                    _ => unreachable!(),
-                };
+                let MethodInfo {
+                    recv, args, len, ..
+                } = info;
                 let name = IdentId::get_name(name);
                 let op1 = if len == 0 {
                     format!("{} = {:?}.call {}()", ret.ret_str(), recv, name,)
@@ -838,30 +832,41 @@ impl BcPc {
                 };
                 format!("{:36} [{}]", op1, _class.get_name(globals))
             }
-            TraceIr::Yield { ret, args, len } => {
-                if len == 0 {
-                    format!("{} = yield", ret.ret_str())
+            TraceIr::InlineCall {
+                ret,
+                method,
+                _class,
+                info,
+                ..
+            } => {
+                let MethodInfo {
+                    recv, args, len, ..
+                } = info;
+                let op1 = if len == 0 {
+                    format!("{} = {:?}.call {:?}()", ret.ret_str(), recv, method,)
                 } else {
-                    format!("{} = yield({:?}; {})", ret.ret_str(), args, len)
-                }
+                    format!(
+                        "{} = {:?}.call {:?}({:?}; {})",
+                        ret.ret_str(),
+                        recv,
+                        method,
+                        args,
+                        len,
+                    )
+                };
+                format!("{:36} [{}]", op1, _class.get_name(globals))
             }
             TraceIr::MethodCallBlock {
                 ret,
                 name,
                 _class,
                 has_splat,
+                info,
                 ..
             } => {
-                let args_pc = *self + 1;
-                let (recv, args, len) = match args_pc.get_ir() {
-                    TraceIr::MethodArgs(method_info) => {
-                        let MethodInfo {
-                            recv, args, len, ..
-                        } = method_info;
-                        (recv, args, len)
-                    }
-                    _ => unreachable!(),
-                };
+                let MethodInfo {
+                    recv, args, len, ..
+                } = info;
                 let name = IdentId::get_name(name);
                 let op1 = if len == 0 {
                     format!("{} = {:?}.call {}(&{:?})", ret.ret_str(), recv, name, args)
@@ -878,6 +883,13 @@ impl BcPc {
                     )
                 };
                 format!("{:36} [{}]", op1, _class.get_name(globals))
+            }
+            TraceIr::Yield { ret, args, len } => {
+                if len == 0 {
+                    format!("{} = yield", ret.ret_str())
+                } else {
+                    format!("{} = yield({:?}; {})", ret.ret_str(), args, len)
+                }
             }
             TraceIr::MethodArgs(..) => return None,
             TraceIr::MethodDef(name, func_id) => {

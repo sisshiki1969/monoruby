@@ -875,8 +875,8 @@ impl Codegen {
         }
     }
 
-    fn write_back_range(&mut self, ctx: &mut BBContext, arg: SlotId, len: u16) {
-        for reg in arg.0..arg.0 + len {
+    fn write_back_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
+        for reg in args.0..args.0 + len {
             self.write_back_slot(ctx, SlotId::new(reg))
         }
     }
@@ -960,11 +960,11 @@ impl Codegen {
                         self.store_rax(dst);
                     }
                 }
-                TraceIr::Array(ret, src, len) => {
-                    self.write_back_range(&mut ctx, src, len);
+                TraceIr::Array { ret, args, len } => {
+                    self.write_back_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
-                        lea  rdi, [r14 - (conv(src))];
+                        lea  rdi, [r14 - (conv(args))];
                         movq rsi, (len);
                         movq rax, (gen_array);
                         call rax;
@@ -972,7 +972,7 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 TraceIr::Hash { ret, args, len } => {
-                    self.write_back_range(&mut ctx, args, len);
+                    self.write_back_range(&mut ctx, args, len * 2);
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
                         lea  rdi, [r14 - (conv(args))];
@@ -1002,13 +1002,13 @@ impl Codegen {
                     self.handle_error(pc);
                     self.store_rax(ret);
                 }
-                TraceIr::Index(ret, base, idx) => {
+                TraceIr::Index { ret, base, idx } => {
                     self.write_back_slot(&mut ctx, base);
                     self.write_back_slot(&mut ctx, idx);
                     ctx.dealloc_xmm(ret);
                     self.jit_get_index(ret, base, idx, pc, &ctx);
                 }
-                TraceIr::IndexAssign(src, base, idx) => {
+                TraceIr::IndexAssign { src, base, idx } => {
                     self.write_back_slot(&mut ctx, base);
                     self.write_back_slot(&mut ctx, idx);
                     self.write_back_slot(&mut ctx, src);
@@ -1047,7 +1047,7 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, src);
                     self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
-                TraceIr::LoadGvar { ret, name } => {
+                TraceIr::LoadGvar { dst: ret, name } => {
                     ctx.dealloc_xmm(ret);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1060,7 +1060,7 @@ impl Codegen {
                     self.store_rax(ret);
                     self.xmm_restore(&xmm_using);
                 }
-                TraceIr::StoreGvar { val, name } => {
+                TraceIr::StoreGvar { src: val, name } => {
                     self.write_back_slot(&mut ctx, val);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1381,6 +1381,16 @@ impl Codegen {
                         fnstore, &mut ctx, info, ret, name, pc, has_splat,
                     );
                 }
+                TraceIr::InlineCall {
+                    ret,
+                    method,
+                    //has_splat,
+                    info,
+                    ..
+                } => {
+                    self.write_back_slot(&mut ctx, info.recv);
+                    self.gen_inlinable(&mut ctx, &info, &method, ret, pc);
+                }
                 TraceIr::Yield { ret, args, len } => {
                     ctx.dealloc_xmm(ret);
                     self.write_back_range(&mut ctx, args, len);
@@ -1602,6 +1612,12 @@ impl Codegen {
         for reg in v {
             self.store_rax(reg);
         }
+    }
+
+    fn gen_write_back_locals(&mut self, ctx: &mut BBContext) {
+        let wb = ctx.get_locals_write_back();
+        self.gen_write_back(wb);
+        ctx.dealloc_locals();
     }
 
     ///
