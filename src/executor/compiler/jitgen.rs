@@ -1365,47 +1365,27 @@ impl Codegen {
                     ret,
                     name,
                     has_splat,
+                    info,
                     ..
                 } => {
-                    if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
-                        if method_info.callee_codeptr.is_none() {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
-                        }
-                        self.gen_method_call(
-                            fnstore,
-                            &mut ctx,
-                            method_info,
-                            ret,
-                            name,
-                            pc,
-                            has_splat,
-                        );
-                    } else {
-                        unreachable!()
+                    if info.callee_codeptr.is_none() {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
                     }
+                    self.gen_method_call(fnstore, &mut ctx, info, ret, name, pc, has_splat);
                 }
                 TraceIr::MethodCallBlock {
                     ret,
                     name,
                     has_splat,
+                    info,
                     ..
                 } => {
-                    if let TraceIr::MethodArgs(method_info) = (pc + 1).get_ir() {
-                        if method_info.callee_codeptr.is_none() {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
-                        }
-                        self.gen_method_call_with_block(
-                            fnstore,
-                            &mut ctx,
-                            method_info,
-                            ret,
-                            name,
-                            pc,
-                            has_splat,
-                        );
-                    } else {
-                        unreachable!()
+                    if info.callee_codeptr.is_none() {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
                     }
+                    self.gen_method_call_with_block(
+                        fnstore, &mut ctx, info, ret, name, pc, has_splat,
+                    );
                 }
                 TraceIr::Yield { ret, args, len } => {
                     ctx.dealloc_xmm(ret);

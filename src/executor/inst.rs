@@ -395,6 +395,7 @@ pub(super) enum TraceIr {
         _class: ClassId,
         has_splat: bool,
         _version: u32,
+        info: MethodInfo,
     },
     MethodCallBlock {
         ret: SlotId,
@@ -402,6 +403,7 @@ pub(super) enum TraceIr {
         _class: ClassId,
         has_splat: bool,
         _version: u32,
+        info: MethodInfo,
     },
     Yield {
         ret: SlotId,
@@ -548,22 +550,32 @@ impl TraceIr {
                 27 => Self::Splat(SlotId::new(op1)),
                 30..=31 => {
                     let (_class, _version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1) {
+                        Self::MethodArgs(info) => info,
+                        _ => unreachable!(),
+                    };
                     Self::MethodCall {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         _class,
                         has_splat: if opcode == 30 { true } else { false },
                         _version,
+                        info,
                     }
                 }
                 32..=33 => {
                     let (_class, _version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1) {
+                        Self::MethodArgs(info) => info,
+                        _ => unreachable!(),
+                    };
                     Self::MethodCallBlock {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         _class,
                         has_splat: if opcode == 32 { true } else { false },
                         _version,
+                        info,
                     }
                 }
                 _ => unreachable!("{:016x}", op),
