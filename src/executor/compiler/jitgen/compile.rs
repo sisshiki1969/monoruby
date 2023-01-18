@@ -84,11 +84,11 @@ impl Codegen {
 
     pub(super) fn jit_get_index(
         &mut self,
+        ctx: &BBContext,
         ret: SlotId,
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
-        ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
@@ -128,11 +128,11 @@ impl Codegen {
 
     pub(super) fn jit_index_assign(
         &mut self,
+        ctx: &BBContext,
         src: SlotId,
         base: SlotId,
         idx: SlotId,
         pc: BcPc,
-        ctx: &BBContext,
     ) {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {

@@ -135,7 +135,7 @@ impl LoopAnalysis {
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
             self.pc = BcPc::from(pc);
             let idx = bb_pos + ofs;
-            match self.pc.get_ir() {
+            match self.pc.get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
@@ -275,41 +275,16 @@ impl LoopAnalysis {
                 }
                 TraceIr::MethodCall { ret, info, .. } => {
                     let MethodInfo {
-                        recv,
-                        args,
-                        len,
-                        func_data,
+                        recv, args, len, ..
                     } = info;
-                    if let Some(func_data) = func_data {
-                        let cached = InlineCached::new(self.pc + 1, func_data);
-                        if let Some(inline_id) = fnstore.inline.get(&cached.func_id()) {
-                            match inline_id {
-                                InlineMethod::IntegerTof => {
-                                    reg_info.use_non_float(recv);
-                                    reg_info.def_as(ret, true);
-                                }
-                                InlineMethod::MathSqrt => {
-                                    reg_info.use_non_float(recv);
-                                    reg_info.use_as(args, true, FLOAT_CLASS);
-                                    reg_info.def_as(ret, true);
-                                }
-                                InlineMethod::MathCos => {
-                                    reg_info.use_non_float(recv);
-                                    reg_info.use_as(args, true, FLOAT_CLASS);
-                                    reg_info.def_as(ret, true);
-                                }
-                                InlineMethod::MathSin => {
-                                    reg_info.use_non_float(recv);
-                                    reg_info.use_as(args, true, FLOAT_CLASS);
-                                    reg_info.def_as(ret, true);
-                                }
-                            }
-                        } else {
-                            reg_info.call_method(func, recv, args, len, ret);
-                        }
-                    } else {
-                        reg_info.call_method(func, recv, args, len, ret);
+                    reg_info.use_non_float(recv);
+                    for i in 0..len {
+                        reg_info.use_non_float(args + i);
                     }
+                    for i in 1..1 + func.local_num() as u16 {
+                        reg_info.unlink(SlotId(i));
+                    }
+                    reg_info.def_as(ret, false);
                 }
                 TraceIr::MethodCallBlock { ret, info, .. } => {
                     let MethodInfo {
@@ -428,17 +403,6 @@ impl RegInfo {
                 }
             })
             .collect()
-    }
-
-    fn call_method(&mut self, func: &ISeqInfo, recv: SlotId, args: SlotId, len: u16, ret: SlotId) {
-        self.use_non_float(recv);
-        for i in 0..len {
-            self.use_non_float(args + i);
-        }
-        for i in 1..1 + func.local_num() as u16 {
-            self.unlink(SlotId(i));
-        }
-        self.def_as(ret, false);
     }
 }
 

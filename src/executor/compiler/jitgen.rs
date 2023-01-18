@@ -299,25 +299,12 @@ impl BBContext {
 struct InlineCached {
     class_id: ClassId,
     version: u32,
-    codeptr: CodePtr,
-    meta: Meta,
-    pc: BcPc,
 }
 
 impl InlineCached {
-    fn new(pc: BcPc, func_data: &FuncData) -> Self {
+    fn new(pc: BcPc) -> Self {
         let (class_id, version) = (pc - 1).class_version();
-        InlineCached {
-            class_id,
-            version,
-            codeptr: func_data.codeptr.unwrap(),
-            meta: func_data.meta,
-            pc: func_data.pc,
-        }
-    }
-
-    fn func_id(&self) -> FuncId {
-        self.meta.func_id()
+        InlineCached { class_id, version }
     }
 }
 
@@ -463,10 +450,10 @@ extern "C" fn log_deoptimize(
     let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
-    if let TraceIr::LoopEnd = pc.get_ir() {
+    if let TraceIr::LoopEnd = pc.get_ir(&globals.func) {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
-    } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
+    } else if let TraceIr::ClassDef { .. } = pc.get_ir(&globals.func) {
         eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
@@ -526,7 +513,7 @@ impl Codegen {
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
             let pc = func.get_pc(0);
-            self.prologue(pc);
+            self.prologue(pc, fnstore);
             let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
             monoasm!(self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
@@ -888,7 +875,10 @@ impl Codegen {
         cc: &mut JitContext,
         position: Option<BcPc>,
     ) -> bool {
-        let is_loop = matches!(func.get_pc(cc.bb_pos).get_ir(), TraceIr::LoopStart(_));
+        let is_loop = matches!(
+            func.get_pc(cc.bb_pos).get_ir(fnstore),
+            TraceIr::LoopStart(_)
+        );
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
         let mut ctx = if is_loop {
             self.gen_merging_branches_loop(func, fnstore, cc, cc.bb_pos)
@@ -900,7 +890,7 @@ impl Codegen {
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
-            match pc.get_ir() {
+            match pc.get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::LoopStart(_) => {
@@ -1006,13 +996,13 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, base);
                     self.write_back_slot(&mut ctx, idx);
                     ctx.dealloc_xmm(ret);
-                    self.jit_get_index(ret, base, idx, pc, &ctx);
+                    self.jit_get_index(&ctx, ret, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
                     self.write_back_slot(&mut ctx, base);
                     self.write_back_slot(&mut ctx, idx);
                     self.write_back_slot(&mut ctx, src);
-                    self.jit_index_assign(src, base, idx, pc, &ctx);
+                    self.jit_index_assign(&ctx, src, base, idx, pc);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
@@ -1382,11 +1372,7 @@ impl Codegen {
                     );
                 }
                 TraceIr::InlineCall {
-                    ret,
-                    method,
-                    //has_splat,
-                    info,
-                    ..
+                    ret, method, info, ..
                 } => {
                     self.write_back_slot(&mut ctx, info.recv);
                     self.gen_inlinable(&mut ctx, &info, &method, ret, pc);
@@ -1454,7 +1440,7 @@ impl Codegen {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let pc = pc - 1;
                     if pc.is_float_binop() {
-                        let kind = match pc.get_ir() {
+                        let kind = match pc.get_ir(fnstore) {
                             TraceIr::Cmp(kind, _ret, lhs, rhs, true) => {
                                 let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                                 monoasm! { self.jit,
@@ -1481,7 +1467,7 @@ impl Codegen {
                     //    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     } else {
                         let generic = self.jit.label();
-                        let kind = match pc.get_ir() {
+                        let kind = match pc.get_ir(fnstore) {
                             TraceIr::Cmp(kind, ret, lhs, rhs, true) => {
                                 self.write_back_slot(&mut ctx, lhs);
                                 self.write_back_slot(&mut ctx, rhs);
@@ -1680,14 +1666,14 @@ impl Codegen {
         );
     }
 
-    fn prologue(&mut self, pc: BcPc) {
+    fn prologue(&mut self, pc: BcPc, fnstore: &FnStore) {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
             // save len in rdx.
             movq rdx, rdi;
         );
-        match pc.get_ir() {
+        match pc.get_ir(fnstore) {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,

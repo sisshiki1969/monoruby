@@ -570,8 +570,8 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    fn get_ir(&self) -> TraceIr {
-        TraceIr::from_bc(*self)
+    fn get_ir(&self, fnstore: &FnStore) -> TraceIr {
+        TraceIr::from_bc(*self, fnstore)
     }
 }
 
@@ -585,7 +585,7 @@ impl BcPc {
                 ""
             }
         }
-        let s = match self.get_ir() {
+        let s = match self.get_ir(&globals.func) {
             TraceIr::InitMethod {
                 reg_num,
                 arg_num,
@@ -843,10 +843,10 @@ impl BcPc {
                     recv, args, len, ..
                 } = info;
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.call {:?}()", ret.ret_str(), recv, method,)
+                    format!("{} = {:?}.inline {:?}()", ret.ret_str(), recv, method,)
                 } else {
                     format!(
-                        "{} = {:?}.call {:?}({:?}; {})",
+                        "{} = {:?}.inline {:?}({:?}; {})",
                         ret.ret_str(),
                         recv,
                         method,

@@ -493,7 +493,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl TraceIr {
-    pub(crate) fn from_bc(pc: BcPc) -> Self {
+    pub(crate) fn from_bc(pc: BcPc, fnstore: &FnStore) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0x80 == 0 {
@@ -557,22 +557,37 @@ impl TraceIr {
                 27 => Self::Splat(SlotId::new(op1)),
                 30..=31 => {
                     let (_class, _version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
+                    let info = match Self::from_bc(pc + 1, fnstore) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
+                    let has_splat = opcode == 30;
+
+                    if let Some(func_data) = info.func_data {
+                        if !has_splat {
+                            if let Some(inline_id) = fnstore.inline.get(&func_data.meta.func_id()) {
+                                return Self::InlineCall {
+                                    ret: SlotId::new(op1),
+                                    method: *inline_id,
+                                    _class,
+                                    _version,
+                                    info,
+                                };
+                            }
+                        }
+                    }
                     Self::MethodCall {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         _class,
-                        has_splat: opcode == 30,
+                        has_splat,
                         _version,
                         info,
                     }
                 }
                 32..=33 => {
                     let (_class, _version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
+                    let info = match Self::from_bc(pc + 1, fnstore) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
@@ -736,6 +751,34 @@ impl TraceIr {
                 },
                 _ => unreachable!("{:016x}", op),
             }
+        }
+    }
+
+    pub(crate) fn is_branch(pc: BcPc) -> Option<i32> {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        if opcode & 0x80 == 0 {
+            let (_, op2) = dec_wl(op);
+            match opcode {
+                3 => Some(op2 as i32),       // Br
+                4 => Some(op2 as i32),       // CondBr
+                5 => Some(op2 as i32),       // CondBr
+                12..=13 => Some(op2 as i32), // CondBr
+                20 => Some(op2 as i32),      // CheckLocal
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_terminal(pc: BcPc) -> bool {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        if opcode & 0x80 == 0 {
+            opcode == 3 // Br
+        } else {
+            opcode == 148 // Ret
         }
     }
 }

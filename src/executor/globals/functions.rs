@@ -877,13 +877,8 @@ impl ISeqInfo {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            match pc.get_ir() {
-                TraceIr::Br(disp)
-                | TraceIr::CondBr(_, disp, _, _)
-                | TraceIr::CheckLocal(_, disp) => {
-                    info[((idx + 1) as i32 + disp) as usize].push(idx);
-                }
-                _ => {}
+            if let Some(disp) = TraceIr::is_branch(pc) {
+                info[((idx + 1) as i32 + disp) as usize].push(idx);
             }
         }
         assert_eq!(0, info[self.bytecode_len()].len());
@@ -902,12 +897,9 @@ impl ISeqInfo {
             .collect();
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
-            match pc.get_ir() {
-                TraceIr::Br(_) | TraceIr::Ret(_) => {}
-                _ => {
-                    if let Some(ref mut elem) = bb_info[idx + 1] {
-                        elem.1.push(idx);
-                    }
+            if !TraceIr::is_terminal(pc) {
+                if let Some(ref mut elem) = bb_info[idx + 1] {
+                    elem.1.push(idx);
                 }
             }
         }

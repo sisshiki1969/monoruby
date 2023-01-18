@@ -20,19 +20,9 @@ impl Codegen {
         has_splat: bool,
     ) {
         let MethodInfo {
-            args,
-            len,
-            recv,
-            func_data,
-            ..
+            args, len, recv, ..
         } = method_info;
         self.write_back_slot(ctx, recv);
-        if let Some(func_data) = func_data {
-            if let Some(inline_id) = fnstore.inline.get(&func_data.meta.func_id()) {
-                self.gen_inlinable(ctx, &method_info, inline_id, ret, pc);
-                return;
-            }
-        }
         self.write_back_range(ctx, args, len);
         ctx.dealloc_xmm(ret);
         // We must write back and unlink all local vars since they may be accessed by eval.
@@ -160,8 +150,8 @@ impl Codegen {
         let MethodInfo {
             func_data, recv, ..
         } = method_info;
-        if let Some(func_data) = func_data {
-            let cached = InlineCached::new(pc, func_data);
+        if func_data.is_some() {
+            let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_class != cached.class_id {
                 self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
             } else {
@@ -186,18 +176,24 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
     ) {
+        let MethodInfo {
+            recv,
+            len,
+            func_data,
+            ..
+        } = method_info;
         let deopt = self.gen_side_deopt(pc - 1, ctx);
-        self.load_rdi(method_info.recv);
+        self.load_rdi(recv);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
-        if !method_info.recv.is_zero() {
+        if !recv.is_zero() {
             self.guard_class(cached.class_id, deopt);
         }
         self.guard_version(cached.version, deopt);
-        let func_id = cached.meta.func_id();
+        let func_id = func_data.unwrap().meta.func_id();
         match fnstore[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
-                assert_eq!(0, method_info.len);
+                assert_eq!(0, len);
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -210,14 +206,14 @@ impl Codegen {
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
-                assert_eq!(1, method_info.len);
+                assert_eq!(1, len);
                 self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, method_info, ret, block, cached, pc, has_splat);
+                self.method_call_cached(ctx, method_info, ret, block, pc, has_splat);
             }
         };
     }
@@ -528,10 +524,10 @@ impl Codegen {
         method_info: MethodInfo,
         ret: SlotId,
         block: Option<SlotId>,
-        cached: InlineCached,
         pc: BcPc,
         has_splat: bool,
     ) {
+        let func_data = method_info.func_data.unwrap();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.execute_gc();
@@ -541,12 +537,12 @@ impl Codegen {
         //   rdi: args len
         monoasm!(self.jit,
             // set meta.
-            movq rax, (cached.meta.get());
+            movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
             // set pc.
-            movq r13, (cached.pc.get_u64());
+            movq r13, (func_data.pc.get_u64());
         );
-        self.call_codeptr(cached.codeptr);
+        self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
         self.handle_error(pc);
         if !ret.is_zero() {
