@@ -27,20 +27,20 @@ macro_rules! cmp_ops {
           }
 
           fn [<vm_ $op ri>](&mut self) -> CodePtr {
-            let label = self.jit.get_current_address();
-            let generic = self.jit.label();
-            self.vm_get_ri_r15();
-            self.guard_rdi_fixnum(generic);
-            self.vm_save_binary_integer();
+              let label = self.jit.get_current_address();
+              let generic = self.jit.label();
+              self.vm_get_ri_r15();
+              self.guard_rdi_fixnum(generic);
+              self.vm_save_binary_integer();
 
-            self.[<integer_cmp_ $op>]();
-            self.vm_store_r15();
-            self.fetch_and_dispatch();
+              self.[<integer_cmp_ $op>]();
+              self.vm_store_r15();
+              self.fetch_and_dispatch();
 
-            self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
-            self.fetch_and_dispatch();
+              self.vm_generic_binop(generic, [<cmp_ $op _values>] as _);
+              self.fetch_and_dispatch();
 
-            label
+              label
           }
       }
   };
@@ -145,6 +145,7 @@ impl Codegen {
         self.dispatch[131] = self.vm_array();
         self.dispatch[132] = self.vm_index();
         self.dispatch[133] = self.vm_index_assign();
+
         self.dispatch[134] = self.vm_eqrr();
         self.dispatch[135] = self.vm_nerr();
         self.dispatch[136] = self.vm_ltrr();
@@ -159,22 +160,17 @@ impl Codegen {
         self.dispatch[146] = self.vm_gtri();
         self.dispatch[147] = self.vm_geri();
 
-        self.dispatch[148] = ret;
-        self.dispatch[149] = mov;
-
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
         self.dispatch[152] = self.vm_yield();
-        self.dispatch[153] = self.vm_range(false);
-        self.dispatch[154] = self.vm_range(true);
-        self.dispatch[155] = self.vm_concat();
 
-        self.dispatch[156] = self.vm_eqrr();
-        self.dispatch[157] = self.vm_nerr();
-        self.dispatch[158] = self.vm_ltrr();
-        self.dispatch[159] = self.vm_lerr();
-        self.dispatch[160] = self.vm_gtrr();
-        self.dispatch[161] = self.vm_gerr();
+        self.dispatch[154] = self.vm_eqrr();
+        self.dispatch[155] = self.vm_nerr();
+        self.dispatch[156] = self.vm_ltrr();
+        self.dispatch[157] = self.vm_lerr();
+        self.dispatch[158] = self.vm_gtrr();
+        self.dispatch[159] = self.vm_gerr();
+
         self.dispatch[162] = self.vm_eqri();
         self.dispatch[163] = self.vm_neri();
         self.dispatch[164] = self.vm_ltri();
@@ -187,6 +183,11 @@ impl Codegen {
         self.dispatch[172] = self.vm_init_block();
         self.dispatch[173] = self.vm_alias_method();
         self.dispatch[174] = self.vm_hash();
+        self.dispatch[175] = ret;
+        self.dispatch[176] = mov;
+        self.dispatch[177] = self.vm_range(false);
+        self.dispatch[178] = self.vm_range(true);
+        self.dispatch[179] = self.vm_concat();
 
         self.dispatch[180] = add_ir;
         self.dispatch[181] = sub_ir;

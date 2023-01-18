@@ -108,11 +108,6 @@ impl IrContext {
                     let op2 = info.get_index(src);
                     Bc::from(enc_www(131, op1.0, op2.0, *len))
                 }
-                BcIr::Hash { ret, args, len } => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(args);
-                    Bc::from(enc_www(174, op1.0, op2.0, *len))
-                }
                 BcIr::Index(ret, base, idx) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(base);
@@ -136,17 +131,6 @@ impl IrContext {
                     let op2 = *outer as u16;
                     let op3 = info.get_index(src);
                     Bc::from(enc_www(151, op1.0, op2, op3.0))
-                }
-                BcIr::Range {
-                    ret,
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    let op1 = info.get_index(ret);
-                    let op2 = info.get_index(start);
-                    let op3 = info.get_index(end);
-                    Bc::from(enc_www(153 + u16::from(*exclude_end), op1.0, op2.0, op3.0))
                 }
                 BcIr::Neg(dst, src) => {
                     let op1 = info.get_index(dst);
@@ -178,7 +162,7 @@ impl IrContext {
                     let op2 = info.get_index(lhs);
                     let op3 = info.get_index(rhs);
                     let op = if *optimizable {
-                        enc_www(156 + *kind as u16, op1.0, op2.0, op3.0)
+                        enc_www(154 + *kind as u16, op1.0, op2.0, op3.0)
                     } else {
                         enc_www(134 + *kind as u16, op1.0, op2.0, op3.0)
                     };
@@ -194,15 +178,7 @@ impl IrContext {
                     };
                     Bc::from_with_class2(op)
                 }
-                BcIr::Ret(reg) => {
-                    let op1 = info.get_index(reg);
-                    Bc::from(enc_w(148, op1.0))
-                }
-                BcIr::Mov(dst, src) => {
-                    let op1 = info.get_index(dst);
-                    let op2 = info.get_index(src);
-                    Bc::from(enc_ww(149, op1.0, op2.0))
-                }
+
                 BcIr::InitMethod(info) => {
                     let FnInitInfo {
                         reg_num,
@@ -219,6 +195,11 @@ impl IrContext {
                         *block_pos as u16,
                     )
                 }
+                BcIr::ExpandArray(src, dst, len) => {
+                    let op1 = info.get_index(src);
+                    let op2 = info.get_index(dst);
+                    Bc::from(enc_www(171, op1.0, op2.0, *len))
+                }
                 BcIr::InitBlock(info) => {
                     let FnInitInfo {
                         reg_num,
@@ -234,6 +215,41 @@ impl IrContext {
                         *arg_num as u16,
                         *block_pos as u16,
                     )
+                }
+                BcIr::AliasMethod { new, old } => {
+                    let op1 = info.get_index(new);
+                    let op2 = info.get_index(old);
+                    Bc::from(enc_www(173, 0, op1.0, op2.0))
+                }
+                BcIr::Hash { ret, args, len } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(args);
+                    Bc::from(enc_www(174, op1.0, op2.0, *len))
+                }
+                BcIr::Ret(reg) => {
+                    let op1 = info.get_index(reg);
+                    Bc::from(enc_w(175, op1.0))
+                }
+                BcIr::Mov(dst, src) => {
+                    let op1 = info.get_index(dst);
+                    let op2 = info.get_index(src);
+                    Bc::from(enc_ww(176, op1.0, op2.0))
+                }
+                BcIr::Range {
+                    ret,
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(start);
+                    let op3 = info.get_index(end);
+                    Bc::from(enc_www(177 + u16::from(*exclude_end), op1.0, op2.0, op3.0))
+                }
+                BcIr::ConcatStr(ret, arg, len) => {
+                    let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
+                    let op2 = info.get_index(&BcReg::from(*arg));
+                    Bc::from(enc_www(179, op1.0, op2.0, *len as u16))
                 }
                 BcIr::Yield { ret, args, len } => {
                     let op1 = match ret {
@@ -266,21 +282,6 @@ impl IrContext {
                         Some(ret) => info.get_index(ret),
                     };
                     Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), *name, *func_id)
-                }
-                BcIr::ConcatStr(ret, arg, len) => {
-                    let op1 = ret.map_or(SlotId::self_(), |ret| info.get_index(&ret));
-                    let op2 = info.get_index(&BcReg::from(*arg));
-                    Bc::from(enc_www(155, op1.0, op2.0, *len as u16))
-                }
-                BcIr::ExpandArray(src, dst, len) => {
-                    let op1 = info.get_index(src);
-                    let op2 = info.get_index(dst);
-                    Bc::from(enc_www(171, op1.0, op2.0, *len))
-                }
-                BcIr::AliasMethod { new, old } => {
-                    let op1 = info.get_index(new);
-                    let op2 = info.get_index(old);
-                    Bc::from(enc_www(173, 0, op1.0, op2.0))
                 }
             };
             ops.push(op);

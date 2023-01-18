@@ -627,22 +627,20 @@ impl TraceIr {
                     base: SlotId::new(op2),
                     idx: SlotId::new(op3),
                 },
-                134..=139 => Self::Cmp(
+                134..=141 => Self::Cmp(
                     CmpKind::from(opcode - 134),
                     SlotId::new(op1),
                     SlotId::new(op2),
                     SlotId::new(op3),
                     false,
                 ),
-                142..=147 => Self::Cmpri(
+                142..=149 => Self::Cmpri(
                     CmpKind::from(opcode - 142),
                     SlotId::new(op1),
                     SlotId::new(op2),
                     op3 as i16,
                     false,
                 ),
-                148 => Self::Ret(SlotId::new(op1)),
-                149 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
                 150 => Self::LoadDynVar(
                     SlotId::new(op1),
                     DynVar {
@@ -662,25 +660,14 @@ impl TraceIr {
                     args: SlotId::new(op2),
                     len: op3,
                 },
-                153..=154 => Self::Range {
-                    ret: SlotId::new(op1),
-                    start: SlotId::new(op2),
-                    end: SlotId::new(op3),
-                    exclude_end: match opcode - 153 {
-                        0 => false,
-                        1 => true,
-                        _ => unreachable!(),
-                    },
-                },
-                155 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
-                156..=161 => Self::Cmp(
-                    CmpKind::from(opcode - 156),
+                154..=161 => Self::Cmp(
+                    CmpKind::from(opcode - 154),
                     SlotId(op1),
                     SlotId(op2),
                     SlotId(op3),
                     true,
                 ),
-                162..=167 => Self::Cmpri(
+                162..=169 => Self::Cmpri(
                     CmpKind::from(opcode - 162),
                     SlotId::new(op1),
                     SlotId::new(op2),
@@ -695,6 +682,7 @@ impl TraceIr {
                     block_pos: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
                 },
+                171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 172 => Self::InitBlock {
                     reg_num: op1 as usize,
                     arg_num: pc.u16(1) as usize,
@@ -703,7 +691,6 @@ impl TraceIr {
                     block_pos: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
                 },
-                171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 173 => Self::AliasMethod {
                     new: SlotId::new(op2),
                     old: SlotId::new(op3),
@@ -713,6 +700,19 @@ impl TraceIr {
                     args: SlotId::new(op2),
                     len: op3,
                 },
+                175 => Self::Ret(SlotId::new(op1)),
+                176 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
+                177..=178 => Self::Range {
+                    ret: SlotId::new(op1),
+                    start: SlotId::new(op2),
+                    end: SlotId::new(op3),
+                    exclude_end: match opcode - 177 {
+                        0 => false,
+                        1 => true,
+                        _ => unreachable!(),
+                    },
+                },
+                179 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
                 180..=199 => Self::BinOpIr {
                     kind: BinOpK::from(opcode - 180),
                     ret: SlotId::new(op1),
@@ -778,7 +778,7 @@ impl TraceIr {
         if opcode & 0x80 == 0 {
             opcode == 3 // Br
         } else {
-            opcode == 148 // Ret
+            opcode == 175 // Ret
         }
     }
 }
