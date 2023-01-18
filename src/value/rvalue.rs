@@ -252,15 +252,10 @@ impl RValue {
     pub(super) fn deep_copy(&self) -> Self {
         RValue {
             flags: self.flags,
-            var_table: match &self.var_table {
-                Some(box table) => Some(Box::new(
-                    table
-                        .iter()
-                        .map(|v| v.map(|v| Value::deep_copy(v)))
-                        .collect(),
-                )),
-                None => None,
-            },
+            var_table: self
+                .var_table
+                .as_ref()
+                .map(|table| Box::new(table.iter().map(|v| v.map(|v| v.deep_copy())).collect())),
             kind: match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS => ObjKind::class(self.as_class()),
@@ -272,16 +267,13 @@ impl RValue {
                 ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                 ObjKind::ARRAY => ObjKind::array(ArrayInner::new(
-                    self.as_array()
-                        .iter()
-                        .map(|v| Value::deep_copy(*v))
-                        .collect(),
+                    self.as_array().iter().map(|v| v.deep_copy()).collect(),
                 )),
                 ObjKind::RANGE => {
                     let lhs = self.as_range();
                     ObjKind::range(
-                        Value::deep_copy(lhs.start),
-                        Value::deep_copy(lhs.end),
+                        lhs.start.deep_copy(),
+                        lhs.end.deep_copy(),
                         lhs.exclude_end != 0,
                     )
                 }
@@ -289,7 +281,7 @@ impl RValue {
                     let mut map = IndexMap::default();
                     let hash = self.as_hash();
                     for (k, v) in hash.iter() {
-                        map.insert(HashKey(Value::deep_copy(k)), Value::deep_copy(v));
+                        map.insert(HashKey(k.deep_copy()), v.deep_copy());
                     }
                     ObjKind::hash(map)
                 }
@@ -644,7 +636,7 @@ impl ObjKind {
 #[repr(transparent)]
 struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Hash)]
 #[repr(C)]
 pub struct Range {
     pub start: Value,
@@ -652,13 +644,13 @@ pub struct Range {
     pub exclude_end: u32,
 }
 
-impl std::hash::Hash for Range {
+/*impl std::hash::Hash for Range {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.start.hash(state);
         self.end.hash(state);
         self.exclude_end.hash(state);
     }
-}
+}*/
 
 impl Range {
     pub(crate) fn eql(&self, other: &Self) -> bool {
@@ -720,7 +712,7 @@ impl ObjKind {
             range: ManuallyDrop::new(Range {
                 start,
                 end,
-                exclude_end: if exclude_end { 1 } else { 0 },
+                exclude_end: u32::from(exclude_end),
             }),
         }
     }
@@ -825,7 +817,7 @@ impl ArrayInner {
                 self[idx_positive as usize] = src;
             }
         };
-        return Some(src);
+        Some(src)
     }
 
     pub fn get_index(&self, idx: i64) -> Option<Value> {

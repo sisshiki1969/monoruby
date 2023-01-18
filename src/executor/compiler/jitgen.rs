@@ -952,7 +952,7 @@ impl Codegen {
                             self.xmm_save(&xmm_using);
                             monoasm!(self.jit,
                               movq rdi, (val.get());
-                              movq rax, (Value::deep_copy);
+                              movq rax, (Value::value_deep_copy);
                               call rax;
                             );
                             self.xmm_restore(&xmm_using);
@@ -1394,7 +1394,7 @@ impl Codegen {
                 TraceIr::Yield { ret, args, len } => {
                     ctx.dealloc_xmm(ret);
                     self.write_back_range(&mut ctx, args, len);
-                    self.gen_yield(&mut ctx, args, len, ret, pc);
+                    self.gen_yield(&ctx, args, len, ret, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef(name, func) => {
@@ -1541,7 +1541,7 @@ impl Codegen {
         let recompile = self.jit.label();
         let dec = self.jit.label();
         let counter = self.jit.const_i32(5);
-        let deopt = self.gen_side_deopt(pc, &ctx);
+        let deopt = self.gen_side_deopt(pc, ctx);
         monoasm!(self.jit,
             cmpl [rip + counter], 0;
             jlt deopt;
@@ -1789,13 +1789,12 @@ impl Codegen {
                         addq rsp, 1024;
                         jmp  fill_temp;
                     };
+                } else if is_block {
+                    monoasm! { self.jit, jmp  fill_temp; }
                 } else {
-                    if is_block {
-                        monoasm! { self.jit, jmp  fill_temp; }
-                    } else {
-                        monoasm! { self.jit, jmp  err_label; }
-                    }
+                    monoasm! { self.jit, jmp  err_label; }
                 }
+
                 monoasm! { self.jit,
                 fill_req:
                 }
@@ -1846,24 +1845,20 @@ impl Codegen {
                 fill_temp:
                 }
             }
-        } else {
-            if has_rest_param {
-                monoasm! { self.jit,
-                    lea  rdi, [r14 - (LBP_ARG0)];
-                    movl rsi, rdx;
-                    subq rsp, 1024;
-                    movq rax, (make_rest_array);
-                    call rax;
-                    addq rsp, 1024;
-                    //jmp  fill_temp;
-                };
-            } else {
-                if !is_block {
-                    monoasm! { self.jit,
-                        cmpl rdx, (0);
-                        jne  err_label;
-                    }
-                }
+        } else if has_rest_param {
+            monoasm! { self.jit,
+                lea  rdi, [r14 - (LBP_ARG0)];
+                movl rsi, rdx;
+                subq rsp, 1024;
+                movq rax, (make_rest_array);
+                call rax;
+                addq rsp, 1024;
+                //jmp  fill_temp;
+            };
+        } else if !is_block {
+            monoasm! { self.jit,
+                cmpl rdx, (0);
+                jne  err_label;
             }
         }
 

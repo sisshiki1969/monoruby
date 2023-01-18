@@ -146,12 +146,7 @@ impl IrContext {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(start);
                     let op3 = info.get_index(end);
-                    Bc::from(enc_www(
-                        153 + if *exclude_end { 1 } else { 0 },
-                        op1.0,
-                        op2.0,
-                        op3.0,
-                    ))
+                    Bc::from(enc_www(153 + u16::from(*exclude_end), op1.0, op2.0, op3.0))
                 }
                 BcIr::Neg(dst, src) => {
                     let op1 = info.get_index(dst);

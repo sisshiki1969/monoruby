@@ -59,7 +59,7 @@ fn main() {
     let (code, path) = match args.file {
         Some(file_name) => {
             let path = std::path::PathBuf::from(&file_name);
-            let mut file = File::open(file_name.clone()).unwrap();
+            let mut file = File::open(file_name).unwrap();
             let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
             (code, path)

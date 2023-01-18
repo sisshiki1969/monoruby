@@ -246,7 +246,7 @@ extern "C" fn rand(
     let i = match len {
         0 => 0i64,
         1 => arg[0].coerce_to_fixnum(globals)?,
-        __ => unreachable!(),
+        _ => unreachable!(),
     };
     if !i.is_zero() {
         Some(Value::new_integer(

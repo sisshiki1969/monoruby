@@ -113,7 +113,6 @@ impl Codegen {
                 );
             }
         }
-        return;
     }
 
     pub(super) fn gen_method_call_with_block(

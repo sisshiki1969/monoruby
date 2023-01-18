@@ -49,7 +49,9 @@ impl<'a> GC<RValue> for Root<'a> {
                     let v = lfp.register(r);
                     v.mark(alloc);
                 }
-                lfp.block().map(|v| v.mark(alloc));
+                if let Some(v) = lfp.block() {
+                    v.mark(alloc)
+                };
 
                 cfp = cfp.prev();
                 if cfp.is_null() {
@@ -158,9 +160,8 @@ impl Globals {
 
         let mut lib: Vec<String> = Value::from_ast2(&nodes)
             .as_array()
-            .to_vec()
-            .into_iter()
-            .map(|v| v.as_string().to_string())
+            .iter()
+            .map(|v| v.as_string())
             .collect();
         self.lib_directories.append(&mut lib);
         let path = std::path::Path::new("startup/startup.rb");
@@ -612,7 +613,7 @@ impl Globals {
                         RV::Integer(i) => {
                             let i = i as u64;
                             let func_id = u32::try_from(i >> 16).unwrap();
-                            let idx = i as u64 as u16;
+                            let idx = i as u16;
                             format!("BlockArgProxy {{ {:?}, {} }}", FuncId(func_id), idx)
                         }
                         _ => unimplemented!(),

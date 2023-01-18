@@ -788,7 +788,7 @@ impl Codegen {
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rdi, [r13 - 8];
-            movq rax, (Value::deep_copy);
+            movq rax, (Value::value_deep_copy);
             call rax;
         };
         self.vm_store_r15();

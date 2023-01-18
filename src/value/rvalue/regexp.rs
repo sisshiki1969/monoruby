@@ -130,7 +130,7 @@ impl RegexpInfo {
             let re = Self::from_escaped(globals, &s)?;
             replace_(vm, globals, &re, given, block_handler)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, block_handler)
+            replace_(vm, globals, re, given, block_handler)
         } else {
             globals.err_argument("1st arg must be RegExp or String.");
             None
@@ -178,7 +178,7 @@ impl RegexpInfo {
                     Ok(None) => break,
                     Ok(Some(captures)) => {
                         let m = captures.get(0).unwrap();
-                        i = m.end() + if m.start() == m.end() { 1 } else { 0 };
+                        i = m.end() + usize::from(m.start() == m.end());
                         vm.get_captures(&captures, given);
                         (m.start(), m.end(), m.as_str())
                     }
@@ -197,14 +197,14 @@ impl RegexpInfo {
             for (start, end, replace) in range.iter().rev() {
                 res.replace_range(start..end, replace);
             }
-            Some((res, range.len() != 0))
+            Some((res, !range.is_empty()))
         }
 
         if let Some(s) = re_val.is_string() {
             let re = Self::from_escaped(globals, &s)?;
             replace_(vm, globals, &re, given, block_handler)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, &re, given, block_handler)
+            replace_(vm, globals, re, given, block_handler)
         } else {
             globals.err_argument("1st arg must be RegExp or String.");
             None
@@ -385,12 +385,11 @@ impl RegexpInfo {
             res.replace_range(start..end, replace);
         }
 
-        match last_captures {
-            Some(c) => vm.get_captures(&c, given),
-            None => {}
+        if let Some(c) = last_captures {
+            vm.get_captures(&c, given)
         }
 
-        Some((res, range.len() != 0))
+        Some((res, !range.is_empty()))
     }
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
@@ -417,10 +416,9 @@ impl RegexpInfo {
                         match ch {
                             '0'..='9' => {
                                 let i = ch as usize - '0' as usize;
-                                match captures.get(i) {
-                                    Some(m) => rep += m.as_str(),
-                                    None => {}
-                                };
+                                if let Some(m) = captures.get(i) {
+                                    rep += m.as_str()
+                                }
                             }
                             _ => rep.push(ch),
                         };

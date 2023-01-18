@@ -565,7 +565,7 @@ impl TraceIr {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         _class,
-                        has_splat: if opcode == 30 { true } else { false },
+                        has_splat: opcode == 30,
                         _version,
                         info,
                     }
@@ -580,7 +580,7 @@ impl TraceIr {
                         ret: SlotId::new(op1),
                         name: IdentId::from(op2),
                         _class,
-                        has_splat: if opcode == 32 { true } else { false },
+                        has_splat: opcode == 32,
                         _version,
                         info,
                     }

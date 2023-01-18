@@ -14,7 +14,7 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 
@@ -30,14 +30,14 @@ impl std::default::Default for Value {
     }
 }
 
-impl std::hash::Hash for Value {
+/*impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self.try_rvalue() {
             None => self.0.hash(state),
             Some(rval) => rval.hash(state),
         }
     }
-}
+} */
 
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
@@ -134,12 +134,16 @@ impl Value {
         val.class_id()
     }
 
-    pub(crate) extern "C" fn deep_copy(val: Value) -> Self {
-        if let Some(rv) = val.try_rvalue() {
+    pub(crate) fn deep_copy(&self) -> Self {
+        if let Some(rv) = self.try_rvalue() {
             rv.deep_copy().pack()
         } else {
-            val
+            *self
         }
+    }
+
+    pub(crate) extern "C" fn value_deep_copy(val: Value) -> Self {
+        val.deep_copy()
     }
 
     pub(crate) fn get(&self) -> u64 {
@@ -500,15 +504,13 @@ impl Value {
     }
 
     pub(crate) fn expect_string(&self, globals: &mut Globals) -> Option<String> {
-        match self.unpack() {
-            RV::String(s) => {
-                let s = String::from_utf8_lossy(s).into_owned();
-                return Some(s);
-            }
-            _ => {}
+        if let RV::String(s) = self.unpack() {
+            let s = String::from_utf8_lossy(s).into_owned();
+            Some(s)
+        } else {
+            globals.err_no_implicit_conversion(*self, STRING_CLASS);
+            None
         }
-        globals.err_no_implicit_conversion(*self, STRING_CLASS);
-        None
     }
 
     pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Option<RegexpInfo> {
@@ -620,7 +622,7 @@ impl Value {
             NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, true) => {
-                let v = v.iter().map(|node| Self::from_ast2(node)).collect();
+                let v = v.iter().map(Self::from_ast2).collect();
                 Value::new_array_from_vec(v)
             }
             NodeKind::Range {
