@@ -1461,10 +1461,6 @@ impl Codegen {
                         let branch_dest = self.jit.label();
                         cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                         self.gen_cmp_float_opt(kind, branch_dest, brkind);
-                    //} else if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                    //    self.recompile_and_deopt(&mut ctx, position, pc);
-                    //    let branch_dest = self.jit.label();
-                    //    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     } else {
                         let generic = self.jit.label();
                         let kind = match pc.get_ir(fnstore) {

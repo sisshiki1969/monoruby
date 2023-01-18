@@ -104,6 +104,21 @@ impl Codegen {
     );
     cmp_main!(eq, ne, lt, le, gt, ge);
 
+    fn cmp_teq(&mut self, generic: DestLabel, xmm_using: Vec<Xmm>) {
+        let exit = self.jit.label();
+        self.integer_cmp_eq();
+        self.jit.bind_label(exit);
+        self.jit.select_page(1);
+        self.jit.bind_label(generic);
+        self.xmm_save(&xmm_using);
+        self.call_binop(cmp_teq_values as _);
+        self.xmm_restore(&xmm_using);
+        monoasm!(self.jit,
+            jmp  exit;
+        );
+        self.jit.select_page(0);
+    }
+
     pub(super) fn gen_binop_integer(
         &mut self,
         pc: BcPc,
@@ -493,7 +508,7 @@ impl Codegen {
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
         match kind {
-            CmpKind::Eq => monoasm! { self.jit, seteq rax; },
+            CmpKind::Eq | CmpKind::TEq => monoasm! { self.jit, seteq rax; },
             CmpKind::Ne => monoasm! { self.jit, setne rax; },
             CmpKind::Ge => monoasm! { self.jit, setae rax; },
             CmpKind::Gt => monoasm! { self.jit, seta rax; },
@@ -536,6 +551,7 @@ impl Codegen {
             CmpKind::Gt => self.cmp_gt(generic, xmm_using),
             CmpKind::Le => self.cmp_le(generic, xmm_using),
             CmpKind::Lt => self.cmp_lt(generic, xmm_using),
+            CmpKind::TEq => self.cmp_teq(generic, xmm_using),
             _ => unimplemented!(),
         }
         self.handle_error(pc);
@@ -550,6 +566,7 @@ impl Codegen {
             CmpKind::Gt => self.integer_cmp_gt(),
             CmpKind::Le => self.integer_cmp_le(),
             CmpKind::Lt => self.integer_cmp_lt(),
+            CmpKind::TEq => self.integer_cmp_eq(),
             _ => unimplemented!(),
         }
         self.handle_error(pc);
@@ -571,6 +588,7 @@ impl Codegen {
             CmpKind::Gt => self.cmp_opt_int_gt(branch_dest, generic, brkind, xmm_using),
             CmpKind::Le => self.cmp_opt_int_le(branch_dest, generic, brkind, xmm_using),
             CmpKind::Lt => self.cmp_opt_int_lt(branch_dest, generic, brkind, xmm_using),
+            CmpKind::TEq => self.cmp_opt_int_eq(branch_dest, generic, brkind, xmm_using),
             _ => unimplemented!(),
         }
     }
@@ -588,6 +606,7 @@ impl Codegen {
             CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, brkind),
             CmpKind::Le => self.cmp_opt_float_le(branch_dest, brkind),
             CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, brkind),
+            CmpKind::TEq => self.cmp_opt_float_eq(branch_dest, brkind),
             _ => unimplemented!(),
         }
     }

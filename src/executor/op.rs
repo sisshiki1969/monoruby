@@ -390,6 +390,30 @@ macro_rules! eq_values {
 
 eq_values!((eq, IdentId::_EQ), (ne, IdentId::_NEQ));
 
+pub(super) extern "C" fn cmp_teq_values(
+    interp: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Integer(lhs), RV::Integer(rhs)) => lhs.eq(&rhs),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(&rhs),
+        (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.eq(&BigInt::from(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(&rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
+        (RV::Float(lhs), RV::Integer(rhs)) => lhs.eq(&(rhs as f64)),
+        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
+        _ => {
+            return interp.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs]);
+        }
+    };
+    Some(Value::bool(b))
+}
+
 pub(super) extern "C" fn neg_value(
     interp: &mut Executor,
     globals: &mut Globals,

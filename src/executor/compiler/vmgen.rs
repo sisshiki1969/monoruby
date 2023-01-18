@@ -51,6 +51,42 @@ macro_rules! cmp_ops {
 }
 
 impl Codegen {
+    cmp_ops!(eq, ne, gt, ge, lt, le);
+
+    fn vm_teqrr(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
+        self.guard_rdi_rsi_fixnum(generic);
+        self.vm_save_binary_integer();
+
+        self.integer_cmp_eq();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+
+        self.vm_generic_binop(generic, cmp_teq_values as _);
+        self.fetch_and_dispatch();
+
+        label
+    }
+
+    fn vm_teqri(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.vm_get_ri_r15();
+        self.guard_rdi_fixnum(generic);
+        self.vm_save_binary_integer();
+
+        self.integer_cmp_eq();
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+
+        self.vm_generic_binop(generic, cmp_teq_values as _);
+        self.fetch_and_dispatch();
+
+        label
+    }
+
     ///
     /// Generate interpreter.
     ///
@@ -152,6 +188,7 @@ impl Codegen {
         self.dispatch[137] = self.vm_lerr();
         self.dispatch[138] = self.vm_gtrr();
         self.dispatch[139] = self.vm_gerr();
+        self.dispatch[140] = self.vm_teqrr();
 
         self.dispatch[142] = self.vm_eqri();
         self.dispatch[143] = self.vm_neri();
@@ -159,6 +196,7 @@ impl Codegen {
         self.dispatch[145] = self.vm_leri();
         self.dispatch[146] = self.vm_gtri();
         self.dispatch[147] = self.vm_geri();
+        self.dispatch[148] = self.vm_teqri();
 
         self.dispatch[150] = self.vm_load_dvar();
         self.dispatch[151] = self.vm_store_dvar();
@@ -170,6 +208,7 @@ impl Codegen {
         self.dispatch[157] = self.vm_lerr();
         self.dispatch[158] = self.vm_gtrr();
         self.dispatch[159] = self.vm_gerr();
+        self.dispatch[160] = self.vm_teqrr();
 
         self.dispatch[162] = self.vm_eqri();
         self.dispatch[163] = self.vm_neri();
@@ -177,6 +216,7 @@ impl Codegen {
         self.dispatch[165] = self.vm_leri();
         self.dispatch[166] = self.vm_gtri();
         self.dispatch[167] = self.vm_geri();
+        self.dispatch[168] = self.vm_teqri();
 
         self.dispatch[170] = self.vm_init_method();
         self.dispatch[171] = self.vm_expand_array();
@@ -1081,8 +1121,6 @@ impl Codegen {
 
         (shl_label, shr_label)
     }
-
-    cmp_ops!(eq, ne, gt, ge, lt, le);
 
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
