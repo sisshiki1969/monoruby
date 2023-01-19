@@ -432,10 +432,28 @@ impl StackSlotInfo {
 type UsingXmm = Vec<Xmm>;
 
 #[derive(PartialEq)]
-enum BinOpMode {
+enum OpMode {
     RR(SlotId, SlotId),
     RI(SlotId, i16),
     IR(i16, SlotId),
+}
+
+impl OpMode {
+    fn is_float_op(&self, pc: BcPc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_float_binop(),
+            Self::RI(..) => pc.is_float1(),
+            Self::IR(..) => pc.is_float2(),
+        }
+    }
+
+    fn is_integer_op(&self, pc: BcPc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_integer_binop(),
+            Self::RI(..) => pc.is_integer1(),
+            Self::IR(..) => pc.is_integer2(),
+        }
+    }
 }
 
 #[cfg(feature = "log-jit")]
@@ -1137,7 +1155,7 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, lhs);
                     self.write_back_slot(&mut ctx, rhs);
                     ctx.dealloc_xmm(ret);
-                    self.gen_binop_integer(pc, kind, ret, BinOpMode::RR(lhs, rhs), &ctx);
+                    self.gen_binop_integer(pc, kind, ret, OpMode::RR(lhs, rhs), &ctx);
                 }
                 TraceIr::FloatBinOp {
                     kind,
@@ -1176,7 +1194,7 @@ impl Codegen {
                     if pc.is_integer1() {
                         self.write_back_slot(&mut ctx, lhs);
                         ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(pc, kind, ret, BinOpMode::RI(lhs, rhs), &ctx);
+                        self.gen_binop_integer(pc, kind, ret, OpMode::RI(lhs, rhs), &ctx);
                     } else if pc.is_float1() {
                         let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
                         let fret = ctx.xmm_write(ret);
@@ -1204,7 +1222,7 @@ impl Codegen {
                     if pc.is_integer2() {
                         self.write_back_slot(&mut ctx, rhs);
                         ctx.dealloc_xmm(ret);
-                        self.gen_binop_integer(pc, kind, ret, BinOpMode::IR(lhs, rhs), &ctx);
+                        self.gen_binop_integer(pc, kind, ret, OpMode::IR(lhs, rhs), &ctx);
                     } else if pc.is_float2() {
                         let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
                         let fret = ctx.xmm_write(ret);
@@ -1252,7 +1270,11 @@ impl Codegen {
                         self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
                     }
                 }
-                TraceIr::Cmp(_, _, _, _, true) => {}
+                TraceIr::Cmp(kind, ret, lhs, rhs, true) => {
+                    let mode = OpMode::RR(lhs, rhs);
+                    let index = cc.bb_pos + ofs + 1;
+                    self.gen_cmp_opt(&mut ctx, cc, fnstore, mode, kind, ret, pc, index);
+                }
                 TraceIr::Cmpri(kind, ret, lhs, rhs, false) => {
                     if pc.is_float1() {
                         let rhs_label = self.jit.const_f64(rhs as f64);
@@ -1281,7 +1303,11 @@ impl Codegen {
                         self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
                     }
                 }
-                TraceIr::Cmpri(_, _, _, _, true) => {}
+                TraceIr::Cmpri(kind, ret, lhs, rhs, true) => {
+                    let mode = OpMode::RI(lhs, rhs);
+                    let index = cc.bb_pos + ofs + 1;
+                    self.gen_cmp_opt(&mut ctx, cc, fnstore, mode, kind, ret, pc, index);
+                }
                 TraceIr::Mov(dst, src) => {
                     self.copy_slot(&mut ctx, src, dst);
                 }
@@ -1436,59 +1462,7 @@ impl Codegen {
                         BrKind::BrIfNot => monoasm!(self.jit, jeq branch_dest;),
                     }
                 }
-                TraceIr::CondBr(_, disp, true, brkind) => {
-                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
-                    let pc = pc - 1;
-                    if pc.is_float_binop() {
-                        let kind = match pc.get_ir(fnstore) {
-                            TraceIr::Cmp(kind, _ret, lhs, rhs, true) => {
-                                let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
-                                monoasm! { self.jit,
-                                    ucomisd xmm(flhs.enc()), xmm(frhs.enc());
-                                };
-                                kind
-                            }
-                            TraceIr::Cmpri(kind, _ret, lhs, rhs, true) => {
-                                let rhs_label = self.jit.const_f64(rhs as f64);
-                                let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
-                                monoasm! { self.jit,
-                                    ucomisd xmm(flhs.enc()), [rip + rhs_label];
-                                };
-                                kind
-                            }
-                            _ => unreachable!(),
-                        };
-                        let branch_dest = self.jit.label();
-                        cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
-                        self.gen_cmp_float_opt(kind, branch_dest, brkind);
-                    } else {
-                        let generic = self.jit.label();
-                        let kind = match pc.get_ir(fnstore) {
-                            TraceIr::Cmp(kind, ret, lhs, rhs, true) => {
-                                self.write_back_slot(&mut ctx, lhs);
-                                self.write_back_slot(&mut ctx, rhs);
-                                ctx.dealloc_xmm(ret);
-                                self.gen_cmp_prep(lhs, rhs, generic);
-                                kind
-                            }
-                            TraceIr::Cmpri(kind, ret, lhs, rhs, true) => {
-                                self.write_back_slot(&mut ctx, lhs);
-                                ctx.dealloc_xmm(ret);
-                                self.gen_cmpri_prep(lhs, rhs, generic);
-                                kind
-                            }
-                            _ => unreachable!(),
-                        };
-
-                        let xmm_using = ctx.get_xmm_using();
-                        monoasm! { self.jit,
-                            cmpq rdi, rsi;
-                        };
-                        let branch_dest = self.jit.label();
-                        cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
-                        self.gen_cmp_int_opt(kind, branch_dest, generic, brkind, xmm_using);
-                    }
-                }
+                TraceIr::CondBr(_, _, true, _) => {}
                 TraceIr::CheckLocal(local, disp) => {
                     let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
                     let branch_dest = self.jit.label();
@@ -1562,11 +1536,29 @@ impl Codegen {
 impl Codegen {
     fn handle_error(&mut self, pc: BcPc) {
         let jit_return = self.vm_return;
-        monoasm!(self.jit,
-            movq r13, ((pc + 1).get_u64());
-            testq rax, rax; // Option<Value>
-            jeq  jit_return;
-        );
+        if self.jit.get_page() == 0 {
+            let error = self.jit.label();
+            monoasm!(self.jit,
+                testq rax, rax; // Option<Value>
+                jeq  error;
+            );
+            self.jit.select_page(1);
+            monoasm!(self.jit,
+            error:
+                movq r13, ((pc + 1).get_u64());
+                jmp  jit_return;
+            );
+            self.jit.select_page(0);
+        } else {
+            let cont = self.jit.label();
+            monoasm!(self.jit,
+                testq rax, rax; // Option<Value>
+                jne  cont;
+                movq r13, ((pc + 1).get_u64());
+                jmp  jit_return;
+            cont:
+            );
+        }
     }
 
     ///

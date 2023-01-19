@@ -480,10 +480,11 @@ impl Value {
         self.rvalue().as_class()
     }
 
-    pub(crate) fn expect_class(&self, name: IdentId, globals: &mut Globals) -> Option<ClassId> {
+    pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {
         match self.is_class() {
             Some(class) => Some(class),
             None => {
+                let name = globals.val_tos(*self);
                 globals.err_is_not_class(name);
                 None
             }

@@ -156,11 +156,9 @@ pub(super) extern "C" fn define_class(
     let parent = interp.get_class_context();
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            let class = val.expect_class(name, globals)?;
+            let class = val.expect_class(globals)?;
             if let Some(superclass) = superclass {
-                let super_name = globals.val_tos(superclass);
-                let super_name = IdentId::get_ident_id(&super_name);
-                let super_class = superclass.expect_class(super_name, globals)?;
+                let super_class = superclass.expect_class(globals)?;
                 if Some(super_class) != class.super_class(globals) {
                     globals.err_superclass_mismatch(name);
                     return None;
@@ -170,11 +168,7 @@ pub(super) extern "C" fn define_class(
         }
         None => {
             let superclass = match superclass {
-                Some(superclass) => {
-                    let name = globals.val_tos(superclass);
-                    let name = IdentId::get_ident_id_from_string(name);
-                    superclass.expect_class(name, globals)?
-                }
+                Some(superclass) => superclass.expect_class(globals)?,
                 None => OBJECT_CLASS,
             };
             globals.define_class_by_ident_id(name, Some(superclass), parent)

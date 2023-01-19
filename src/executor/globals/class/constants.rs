@@ -47,7 +47,7 @@ impl Globals {
             for constant in prefix {
                 parent = self
                     .get_constant_checked(parent, constant)?
-                    .expect_class(name, self)?;
+                    .expect_class(self)?;
             }
             self.get_constant_checked(parent, name)
         } else if prefix.is_empty() {
@@ -61,11 +61,11 @@ impl Globals {
                 Some(v) => v,
                 None => self.get_constant_checked(OBJECT_CLASS, parent)?,
             }
-            .expect_class(name, self)?;
+            .expect_class(self)?;
             for constant in prefix {
                 parent = self
                     .get_constant_checked(parent, constant)?
-                    .expect_class(name, self)?;
+                    .expect_class(self)?;
             }
             self.get_constant_checked(parent, name)
         }

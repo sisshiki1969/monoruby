@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
@@ -227,6 +228,22 @@ extern "C" fn class(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(self_val.get_real_class_id(globals).get_obj(globals))
+}
+
+/// ### Object#instance_of?
+/// - instance_of?(klass) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
+extern "C" fn instance_of(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let b = self_val.get_real_class_id(globals) == arg[0].expect_class(globals)?;
+    Some(Value::bool(b))
 }
 
 /// ### Kernel.#rand
@@ -443,5 +460,25 @@ mod test {
         run_test_error(r#"Integer([4])"#);
         run_test2(r#"Integer(-2435766756886769978978435)"#);
         run_test2(r#"Integer(2435.4556787)"#);
+    }
+
+    #[test]
+    fn object_instance_of() {
+        run_test2(r#"5.instance_of?(Integer)"#);
+        run_test2(r#"5.instance_of?(Float)"#);
+        run_test2(r#":ruby.instance_of?(Symbol)"#);
+        run_test2(r#":ruby.instance_of?(Object)"#);
+        run_test2(
+            r#"
+        class C < Object
+        end
+        class S < C
+        end
+
+        obj = S.new
+        [obj.instance_of?(S), obj.instance_of?(C)]
+        "#,
+        );
+        run_test_error(r#"5.instance_of?(7)"#);
     }
 }

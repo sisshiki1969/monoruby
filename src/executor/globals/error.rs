@@ -49,11 +49,8 @@ impl Globals {
     ///
     /// Set TypeError with message "*name* is not a class".
     ///
-    pub(crate) fn err_is_not_class(&mut self, name: IdentId) {
-        self.set_error(MonorubyErr::typeerr(format!(
-            "{} is not a class",
-            IdentId::get_name(name)
-        )));
+    pub(crate) fn err_is_not_class(&mut self, name: String) {
+        self.set_error(MonorubyErr::typeerr(format!("{name} is not a class",)));
     }
 
     ///
