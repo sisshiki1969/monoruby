@@ -193,6 +193,31 @@ impl BlockHandler {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum OpMode {
+    RR(SlotId, SlotId),
+    RI(SlotId, i16),
+    IR(i16, SlotId),
+}
+
+impl OpMode {
+    fn is_float_op(&self, pc: BcPc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_float_binop(),
+            Self::RI(..) => pc.is_float1(),
+            Self::IR(..) => pc.is_float2(),
+        }
+    }
+
+    fn is_integer_op(&self, pc: BcPc) -> bool {
+        match self {
+            Self::RR(..) => pc.is_integer_binop(),
+            Self::RI(..) => pc.is_integer1(),
+            Self::IR(..) => pc.is_integer2(),
+        }
+    }
+}
+
 ///
 /// Bytecode interpreter.
 ///
@@ -726,20 +751,17 @@ impl BcPc {
             TraceIr::BinOp {
                 kind,
                 ret,
-                lhs,
-                rhs,
+                mode: OpMode::RR(lhs, rhs),
             }
             | TraceIr::IntegerBinOp {
                 kind,
                 ret,
-                lhs,
-                rhs,
+                mode: OpMode::RR(lhs, rhs),
             }
             | TraceIr::FloatBinOp {
                 kind,
                 ret,
-                lhs,
-                rhs,
+                mode: OpMode::RR(lhs, rhs),
             } => {
                 let op1 = format!("{:?} = {:?} {} {:?}", ret, lhs, kind, rhs);
                 format!(
@@ -749,11 +771,20 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::BinOpRi {
+            TraceIr::BinOp {
                 kind,
                 ret,
-                lhs,
-                rhs,
+                mode: OpMode::RI(lhs, rhs),
+            }
+            | TraceIr::IntegerBinOp {
+                kind,
+                ret,
+                mode: OpMode::RI(lhs, rhs),
+            }
+            | TraceIr::FloatBinOp {
+                kind,
+                ret,
+                mode: OpMode::RI(lhs, rhs),
             } => {
                 let op1 = format!("{:?} = {:?} {} {}: i16", ret, lhs, kind, rhs,);
                 format!(
@@ -763,11 +794,20 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::BinOpIr {
+            TraceIr::BinOp {
                 kind,
                 ret,
-                lhs,
-                rhs,
+                mode: OpMode::IR(lhs, rhs),
+            }
+            | TraceIr::IntegerBinOp {
+                kind,
+                ret,
+                mode: OpMode::IR(lhs, rhs),
+            }
+            | TraceIr::FloatBinOp {
+                kind,
+                ret,
+                mode: OpMode::IR(lhs, rhs),
             } => {
                 let op1 = format!("{:?} = {}: i16 {} {:?}", ret, lhs, kind, rhs,);
                 format!(
@@ -935,7 +975,7 @@ impl BcPc {
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
-struct SlotId(u16);
+pub(crate) struct SlotId(u16);
 
 impl SlotId {
     fn new(reg: u16) -> Self {

@@ -699,7 +699,7 @@ impl Codegen {
         self.guard_rsi_fixnum(deopt);
     }
 
-    fn writeback_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
+    pub(super) fn writeback_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
                 self.write_back_slot(ctx, *lhs);
@@ -722,7 +722,7 @@ impl Codegen {
         }
     }
 
-    fn load_binary_args_with_mode(&mut self, mode: &OpMode) {
+    pub(super) fn load_binary_args_with_mode(&mut self, mode: &OpMode) {
         match *mode {
             OpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
             OpMode::RI(lhs, rhs) => {

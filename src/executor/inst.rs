@@ -325,34 +325,17 @@ pub(super) enum TraceIr {
     BinOp {
         kind: BinOpK,
         ret: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
+        mode: OpMode,
     },
     IntegerBinOp {
         kind: BinOpK,
         ret: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
+        mode: OpMode,
     },
     FloatBinOp {
         kind: BinOpK,
         ret: SlotId,
-        lhs: SlotId,
-        rhs: SlotId,
-    },
-    /// binop with small integer(kind, %ret, %lhs, rhs)
-    BinOpRi {
-        kind: BinOpK,
-        ret: SlotId,
-        lhs: SlotId,
-        rhs: i16,
-    },
-    /// binop with small integer(kind, %ret, lhs, %rhs)
-    BinOpIr {
-        kind: BinOpK,
-        ret: SlotId,
-        lhs: i16,
-        rhs: SlotId,
+        mode: OpMode,
     },
     /// cmp(%ret, %lhs, %rhs, optimizable)
     Cmp(CmpKind, SlotId, SlotId, SlotId, bool),
@@ -713,42 +696,42 @@ impl TraceIr {
                     },
                 },
                 179 => Self::ConcatStr(SlotId::new(op1), SlotId::new(op2), op3),
-                180..=199 => Self::BinOpIr {
-                    kind: BinOpK::from(opcode - 180),
-                    ret: SlotId::new(op1),
-                    lhs: op2 as i16,
-                    rhs: SlotId::new(op3),
-                },
-                200..=219 => {
-                    if pc.is_integer_binop() {
-                        Self::IntegerBinOp {
-                            kind: BinOpK::from(opcode - 200),
-                            ret: SlotId::new(op1),
-                            lhs: SlotId::new(op2),
-                            rhs: SlotId::new(op3),
-                        }
-                    } else if pc.is_float_binop() {
-                        Self::FloatBinOp {
-                            kind: BinOpK::from(opcode - 200),
-                            ret: SlotId::new(op1),
-                            lhs: SlotId::new(op2),
-                            rhs: SlotId::new(op3),
-                        }
+                180..=199 => {
+                    let kind = BinOpK::from(opcode - 180);
+                    let ret = SlotId::new(op1);
+                    let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
+                    if pc.is_integer2() {
+                        Self::IntegerBinOp { kind, ret, mode }
+                    } else if pc.is_float2() {
+                        Self::FloatBinOp { kind, ret, mode }
                     } else {
-                        Self::BinOp {
-                            kind: BinOpK::from(opcode - 200),
-                            ret: SlotId::new(op1),
-                            lhs: SlotId::new(op2),
-                            rhs: SlotId::new(op3),
-                        }
+                        Self::BinOp { kind, ret, mode }
                     }
                 }
-                220..=239 => Self::BinOpRi {
-                    kind: BinOpK::from(opcode - 220),
-                    ret: SlotId::new(op1),
-                    lhs: SlotId::new(op2),
-                    rhs: op3 as i16,
-                },
+                200..=219 => {
+                    let kind = BinOpK::from(opcode - 200);
+                    let ret = SlotId::new(op1);
+                    let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
+                    if pc.is_integer_binop() {
+                        Self::IntegerBinOp { kind, ret, mode }
+                    } else if pc.is_float_binop() {
+                        Self::FloatBinOp { kind, ret, mode }
+                    } else {
+                        Self::BinOp { kind, ret, mode }
+                    }
+                }
+                220..=239 => {
+                    let kind = BinOpK::from(opcode - 220);
+                    let ret = SlotId::new(op1);
+                    let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
+                    if pc.is_integer1() {
+                        Self::IntegerBinOp { kind, ret, mode }
+                    } else if pc.is_float1() {
+                        Self::FloatBinOp { kind, ret, mode }
+                    } else {
+                        Self::BinOp { kind, ret, mode }
+                    }
+                }
                 _ => unreachable!("{:016x}", op),
             }
         }

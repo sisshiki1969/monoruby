@@ -216,26 +216,60 @@ impl LoopAnalysis {
                     reg_info.use_as(src, is_float, pc.classid1());
                     reg_info.def_as(dst, is_float);
                 }
-                TraceIr::FloatBinOp { ret, lhs, rhs, .. } => {
-                    reg_info.use_as(lhs, true, pc.classid1());
-                    reg_info.use_as(rhs, true, pc.classid2());
+                TraceIr::FloatBinOp { ret, mode, .. } => {
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            reg_info.use_as(lhs, true, pc.classid1());
+                            reg_info.use_as(rhs, true, pc.classid2());
+                        }
+                        OpMode::IR(_, rhs) => {
+                            reg_info.use_as(rhs, true, pc.classid2());
+                        }
+                        OpMode::RI(lhs, _) => {
+                            reg_info.use_as(lhs, true, pc.classid2());
+                        }
+                    }
                     reg_info.def_as(ret, true);
                 }
-                TraceIr::IntegerBinOp { ret, lhs, rhs, .. }
-                | TraceIr::BinOp { ret, lhs, rhs, .. } => {
+                TraceIr::IntegerBinOp {
+                    ret,
+                    mode: OpMode::RR(lhs, rhs),
+                    ..
+                }
+                | TraceIr::BinOp {
+                    ret,
+                    mode: OpMode::RR(lhs, rhs),
+                    ..
+                } => {
                     reg_info.use_as(lhs, false, pc.classid1());
                     reg_info.use_as(rhs, false, pc.classid2());
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::BinOpRi { ret, lhs, .. } => {
-                    let is_float = pc.is_float1();
-                    reg_info.use_as(lhs, is_float, pc.classid1());
-                    reg_info.def_as(ret, is_float);
+                TraceIr::IntegerBinOp {
+                    ret,
+                    mode: OpMode::RI(lhs, _),
+                    ..
                 }
-                TraceIr::BinOpIr { ret, rhs, .. } => {
-                    let is_float = pc.is_float2();
-                    reg_info.use_as(rhs, is_float, pc.classid2());
-                    reg_info.def_as(ret, is_float);
+                | TraceIr::BinOp {
+                    ret,
+                    mode: OpMode::RI(lhs, _),
+                    ..
+                } => {
+                    reg_info.use_as(lhs, false, pc.classid1());
+                    reg_info.def_as(ret, false);
+                }
+                TraceIr::IntegerBinOp {
+                    ret,
+                    mode: OpMode::IR(_, rhs),
+                    ..
+                }
+                | TraceIr::BinOp {
+                    ret,
+                    mode: OpMode::IR(_, rhs),
+                    ..
+                } => {
+                    reg_info.use_as(rhs, false, pc.classid2());
+                    reg_info.def_as(ret, false);
                 }
                 TraceIr::Cmp(_kind, dst, lhs, rhs, _opt) => {
                     let is_float = pc.is_float_binop();
