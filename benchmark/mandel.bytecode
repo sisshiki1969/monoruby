@@ -1,7 +1,7 @@
-    Finished release [optimized] target(s) in 0.09s
+    Finished release [optimized] target(s) in 0.08s
      Running `target/release/monoruby benchmark/so_mandelbrot.rb`
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x561e3043c3d0) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -9,20 +9,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x558834900300) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x561e3043c380) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x558834900490) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x561e3043c510) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x561e3043ab00) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -47,7 +47,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x561e3043c3d0) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -55,20 +55,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x558834900300) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x561e3043c380) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x558834900490) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x561e3043c510) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x561e3043ab00) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -93,7 +93,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x558834920320) meta:kind:VM mode:method FuncId(81) regs:21
+FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x561e30441350) meta:kind:VM mode:method FuncId(81) regs:21
 +:00000 init_method reg:21 arg:0 pos:0 req:0 block:0 stack_offset:14
  :00001 %1 = 600: i32
  :00002 %15 = literal["P4\n"]
@@ -114,12 +114,12 @@ FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x558834920320) meta:kind:VM mode:me
  :00018 %15 = %5 .. %16
 +:00019 loop_start counter=0 jit-addr=0000000000000000
  :00020 _%17 = %5 > %16                      [<INVALID>][<INVALID>]
- :00021 condbr _%17 =>:00101
+ :00021 condbr _%17 =>:00100
  :00022 %6 = 0: i32
  :00023 %17 = %4
 +:00024 loop_start counter=0 jit-addr=0000000000000000
  :00025 _%18 = %6 > %17                      [<INVALID>][<INVALID>]
- :00026 condbr _%18 =>:00098
+ :00026 condbr _%18 =>:00097
  :00027 %7 = literal[0.0]
  :00028 %8 = literal[0.0]
  :00029 %18 = literal[2.0]
@@ -161,35 +161,34 @@ FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x558834920320) meta:kind:VM mode:me
 +:00065 %12 = %12 + 1: i16                   [<INVALID>][<INVALID>]
  :00066 br =>:00042
 +:00067 loop_end
- :00068 %18 = 1: i32
- :00069 %18 = %2 << %18                      [<INVALID>][<INVALID>]
- :00070 condnotbr %11 =>:00073
- :00071 %19 = 0: i32
- :00072 br =>:00074
-+:00073 %19 = 1: i32
-+:00074 %2 = %18 | %19                       [<INVALID>][<INVALID>]
- :00075 %3 = %3 + 1: i16                     [<INVALID>][<INVALID>]
- :00076 _%18 = %3 == 8: i16                  [<INVALID>][<INVALID>]
- :00077 condnotbr _%18 =>:00085
- :00078 %18 = %2.call chr()                  [<INVALID>]
- :00080 _ = %0.call print(%18; 1)            [<INVALID>]
- :00082 %2 = 0: i32
- :00083 %3 = 0: i32
- :00084 br =>:00096
-+:00085 _%18 = %6 == %4                      [<INVALID>][<INVALID>]
- :00086 condnotbr _%18 =>:00096
- :00087 %18 = 8: i16 - %3                    [<INVALID>][<INVALID>]
- :00088 %2 = %2 << %18                       [<INVALID>][<INVALID>]
- :00089 %18 = %2.call chr()                  [<INVALID>]
- :00091 _ = %0.call print(%18; 1)            [<INVALID>]
- :00093 %2 = 0: i32
- :00094 %3 = 0: i32
- :00095 br =>:00096
-+:00096 %6 = %6 + 1: i16                     [<INVALID>][<INVALID>]
- :00097 br =>:00024
-+:00098 loop_end
- :00099 %5 = %5 + 1: i16                     [<INVALID>][<INVALID>]
- :00100 br =>:00019
-+:00101 loop_end
- :00102 ret %15
+ :00068 %18 = %2 << 1: i16                   [<INVALID>][<INVALID>]
+ :00069 condnotbr %11 =>:00072
+ :00070 %19 = 0: i32
+ :00071 br =>:00073
++:00072 %19 = 1: i32
++:00073 %2 = %18 | %19                       [<INVALID>][<INVALID>]
+ :00074 %3 = %3 + 1: i16                     [<INVALID>][<INVALID>]
+ :00075 _%18 = %3 == 8: i16                  [<INVALID>][<INVALID>]
+ :00076 condnotbr _%18 =>:00084
+ :00077 %18 = %2.call chr()                  [<INVALID>]
+ :00079 _ = %0.call print(%18; 1)            [<INVALID>]
+ :00081 %2 = 0: i32
+ :00082 %3 = 0: i32
+ :00083 br =>:00095
++:00084 _%18 = %6 == %4                      [<INVALID>][<INVALID>]
+ :00085 condnotbr _%18 =>:00095
+ :00086 %18 = 8: i16 - %3                    [<INVALID>][<INVALID>]
+ :00087 %2 = %2 << %18                       [<INVALID>][<INVALID>]
+ :00088 %18 = %2.call chr()                  [<INVALID>]
+ :00090 _ = %0.call print(%18; 1)            [<INVALID>]
+ :00092 %2 = 0: i32
+ :00093 %3 = 0: i32
+ :00094 br =>:00095
++:00095 %6 = %6 + 1: i16                     [<INVALID>][<INVALID>]
+ :00096 br =>:00024
++:00097 loop_end
+ :00098 %5 = %5 + 1: i16                     [<INVALID>][<INVALID>]
+ :00099 br =>:00019
++:00100 loop_end
+ :00101 ret %15
 ------------------------------------

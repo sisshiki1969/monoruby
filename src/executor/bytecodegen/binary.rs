@@ -95,15 +95,19 @@ macro_rules! gen_ri_ops {
 }
 
 impl IrContext {
-    gen_ri_ops!((add, Add), (sub, Sub), (mul, Mul), (div, Div), (exp, Exp));
-    gen_ops!(
-        (rem, Rem),
+    gen_ri_ops!(
+        (add, Add),
+        (sub, Sub),
+        (mul, Mul),
+        (div, Div),
         (bitor, BitOr),
         (bitand, BitAnd),
         (bitxor, BitXor),
         (shr, Shr),
-        (shl, Shl)
+        (shl, Shl),
+        (exp, Exp)
     );
+    gen_ops!((rem, Rem));
 
     fn gen_land(
         &mut self,

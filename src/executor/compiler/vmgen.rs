@@ -143,11 +143,15 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
-        let (shl, shr) = self.vm_shift();
         let (add_rr, add_ri, add_ir) = self.vm_binops_opt(Self::int_add, add_values as _);
         let (sub_rr, sub_ri, sub_ir) = self.vm_binops_opt(Self::int_sub, sub_values as _);
+        let (or_rr, or_ri, or_ir) = self.vm_binops_opt(Self::int_or, bitor_values as _);
+        let (and_rr, and_ri, and_ir) = self.vm_binops_opt(Self::int_and, bitand_values as _);
+        let (xor_rr, xor_ri, xor_ir) = self.vm_binops_opt(Self::int_xor, bitxor_values as _);
         let (div_rr, div_ri, div_ir) = self.vm_binops(div_values as _);
         let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
+        let (shl_rr, shl_ri, shl_ir) = self.vm_binops(shl_values as _);
+        let (shr_rr, shr_ri, shr_ir) = self.vm_binops(shr_values as _);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
         self.dispatch[2] = self.vm_method_def();
@@ -233,17 +237,22 @@ impl Codegen {
         self.dispatch[181] = sub_ir;
         self.dispatch[182] = mul_ir;
         self.dispatch[183] = div_ir;
+        self.dispatch[184] = or_ir;
+        self.dispatch[185] = and_ir;
+        self.dispatch[186] = xor_ir;
+        self.dispatch[187] = shr_ir;
+        self.dispatch[188] = shl_ir;
         self.dispatch[190] = pow_ir;
 
         self.dispatch[200] = add_rr;
         self.dispatch[201] = sub_rr;
         self.dispatch[202] = mul_rr;
         self.dispatch[203] = div_rr;
-        self.dispatch[204] = self.vm_bitorrr();
-        self.dispatch[205] = self.vm_bitandrr();
-        self.dispatch[206] = self.vm_bitxorrr();
-        self.dispatch[207] = shr;
-        self.dispatch[208] = shl;
+        self.dispatch[204] = or_rr;
+        self.dispatch[205] = and_rr;
+        self.dispatch[206] = xor_rr;
+        self.dispatch[207] = shr_rr;
+        self.dispatch[208] = shl_rr;
         self.dispatch[209] = self.vm_remrr();
         self.dispatch[210] = pow_rr;
 
@@ -251,6 +260,11 @@ impl Codegen {
         self.dispatch[221] = sub_ri;
         self.dispatch[222] = mul_ri;
         self.dispatch[223] = div_ri;
+        self.dispatch[224] = or_ri;
+        self.dispatch[225] = and_ri;
+        self.dispatch[226] = xor_ri;
+        self.dispatch[227] = shr_ri;
+        self.dispatch[228] = shl_ri;
         self.dispatch[230] = pow_ri;
 
         // method invoker.
@@ -969,7 +983,7 @@ impl Codegen {
     fn int_add(&mut self, generic: DestLabel) {
         monoasm! { self.jit,
             movq rax, rdi;
-            subq rax, 1;
+            subb rax, 1;
             addq rax, rsi;
             jo generic;
         };
@@ -980,7 +994,29 @@ impl Codegen {
             movq rax, rdi;
             subq rax, rsi;
             jo generic;
-            addq rax, 1;
+            addb rax, 1;
+        };
+    }
+
+    fn int_or(&mut self, _generic: DestLabel) {
+        monoasm! { self.jit,
+            movq rax, rdi;
+            orq rax, rsi;
+        };
+    }
+
+    fn int_and(&mut self, _generic: DestLabel) {
+        monoasm! { self.jit,
+            movq rax, rdi;
+            andq rax, rsi;
+        };
+    }
+
+    fn int_xor(&mut self, _generic: DestLabel) {
+        monoasm! { self.jit,
+            movq rax, rdi;
+            xorq rax, rsi;
+            orb rax, 1;
         };
     }
 
@@ -1050,76 +1086,6 @@ impl Codegen {
 
         self.fetch_and_dispatch();
         ptr_rr
-    }
-
-    fn vm_bitorrr(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        let exit = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.guard_rdi_rsi_fixnum(generic);
-        self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            orq rdi, rsi;
-            movq [r15], rdi;
-        exit:
-        };
-        self.fetch_and_dispatch();
-
-        self.vm_generic_binop(generic, bitor_values as _);
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_bitandrr(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.guard_rdi_rsi_fixnum(generic);
-        self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            andq rdi, rsi;
-            movq [r15], rdi;
-        };
-        self.fetch_and_dispatch();
-
-        self.vm_generic_binop(generic, bitand_values as _);
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_bitxorrr(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.guard_rdi_rsi_fixnum(generic);
-        self.vm_save_binary_integer();
-        monoasm! { self.jit,
-            xorq rdi, rsi;
-            addq rdi, 1;
-            movq [r15], rdi;
-        };
-        self.fetch_and_dispatch();
-
-        self.vm_generic_binop(generic, bitxor_values as _);
-        self.fetch_and_dispatch();
-        label
-    }
-
-    fn vm_shift(&mut self) -> (CodePtr, CodePtr) {
-        let shl_label = self.jit.get_current_address();
-        let generic_shl = self.jit.label();
-        let generic_shr = self.jit.label();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_generic_binop(generic_shl, shl_values as _);
-        self.fetch_and_dispatch();
-
-        let shr_label = self.jit.get_current_address();
-        self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
-        self.vm_generic_binop(generic_shr, shr_values as _);
-        self.fetch_and_dispatch();
-
-        (shl_label, shr_label)
     }
 
     fn vm_method_def(&mut self) -> CodePtr {

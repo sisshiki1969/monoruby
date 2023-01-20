@@ -1,8 +1,7 @@
-   Compiling monoruby v0.1.0 (/home/monochrome/monoruby)
-    Finished release [optimized] target(s) in 7.31s
+    Finished release [optimized] target(s) in 0.08s
      Running `target/release/monoruby benchmark/app_fib.rb`
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x5592e38f5290) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x56067c9c93b0) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -10,20 +9,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x5592e38f5290) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x5592e38f5240) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x56067c9c9360) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x5592e38f35b0) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x56067c9c7890) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5592e38f38f0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x56067c9c7ae0) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -48,7 +47,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5592e38f38f0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x5592e38f5290) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x56067c9c93b0) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -56,20 +55,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x5592e38f5290) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x5592e38f5240) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x56067c9c9360) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x5592e38f35b0) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x56067c9c7890) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5592e38f38f0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x56067c9c7ae0) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -94,7 +93,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5592e38f38f0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x5592e38ec3c0) meta:kind:VM mode:method FuncId(81) regs:2
+FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x56067c9bd9d0) meta:kind:VM mode:method FuncId(81) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 method_def "fib": FuncId(82)
  :00002 %1 = 34: i32
@@ -102,7 +101,7 @@ FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x5592e38ec3c0) meta:kind:VM mode:me
  :00005 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(82) name:fib pos_num:1 bc:BcPcBase(0x5592e38e6370) meta:kind:VM mode:method FuncId(82) regs:4
+FuncId(82) name:fib pos_num:1 bc:BcPcBase(0x56067c9b8240) meta:kind:VM mode:method FuncId(82) regs:4
 +:00000 init_method reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
  :00001 _%2 = %1 < 3: i16                    [<INVALID>][<INVALID>]
  :00002 condnotbr _%2 =>:00005
