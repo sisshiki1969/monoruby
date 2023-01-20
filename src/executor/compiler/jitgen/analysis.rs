@@ -271,15 +271,18 @@ impl LoopAnalysis {
                     reg_info.use_as(rhs, false, pc.classid2());
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::Cmp(_kind, dst, lhs, rhs, _opt) => {
-                    let is_float = pc.is_float_binop();
-                    reg_info.use_as(lhs, is_float, pc.classid1());
-                    reg_info.use_as(rhs, is_float, pc.classid2());
-                    reg_info.def_as(dst, false);
-                }
-                TraceIr::Cmpri(_kind, dst, lhs, _rhs, _opt) => {
-                    let is_float = pc.is_float1();
-                    reg_info.use_as(lhs, is_float, pc.classid1());
+                TraceIr::Cmp(_, dst, mode, _) => {
+                    let is_float = mode.is_float_op(pc);
+                    match mode {
+                        OpMode::RR(lhs, rhs) => {
+                            reg_info.use_as(lhs, is_float, pc.classid1());
+                            reg_info.use_as(rhs, is_float, pc.classid2());
+                        }
+                        OpMode::RI(lhs, _) => {
+                            reg_info.use_as(lhs, is_float, pc.classid1());
+                        }
+                        _ => unreachable!(),
+                    }
                     reg_info.def_as(dst, false);
                 }
                 TraceIr::Mov(dst, src) => {

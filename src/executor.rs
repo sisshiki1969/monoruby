@@ -201,7 +201,7 @@ pub(crate) enum OpMode {
 }
 
 impl OpMode {
-    fn is_float_op(&self, pc: BcPc) -> bool {
+    fn is_float_op(&self, pc: &Bc) -> bool {
         match self {
             Self::RR(..) => pc.is_float_binop(),
             Self::RI(..) => pc.is_float1(),
@@ -209,7 +209,7 @@ impl OpMode {
         }
     }
 
-    fn is_integer_op(&self, pc: BcPc) -> bool {
+    fn is_integer_op(&self, pc: &Bc) -> bool {
         match self {
             Self::RR(..) => pc.is_integer_binop(),
             Self::RI(..) => pc.is_integer1(),
@@ -817,24 +817,21 @@ impl BcPc {
                     self.classid2().get_name(globals)
                 )
             }
-            TraceIr::Cmp(kind, dst, lhs, rhs, opt) => {
-                let op1 = format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,);
-                format!(
-                    "{:36} [{}][{}]",
-                    op1,
-                    self.classid1().get_name(globals),
-                    self.classid2().get_name(globals)
-                )
-            }
-            TraceIr::Cmpri(kind, dst, lhs, rhs, opt) => {
-                let op1 = format!(
-                    "{}{:?} = {:?} {:?} {}: i16",
-                    optstr(opt),
-                    dst,
-                    lhs,
-                    kind,
-                    rhs,
-                );
+            TraceIr::Cmp(kind, dst, mode, opt) => {
+                let op1 = match mode {
+                    OpMode::RR(lhs, rhs) => {
+                        format!("{}{:?} = {:?} {:?} {:?}", optstr(opt), dst, lhs, kind, rhs,)
+                    }
+                    OpMode::RI(lhs, rhs) => format!(
+                        "{}{:?} = {:?} {:?} {}: i16",
+                        optstr(opt),
+                        dst,
+                        lhs,
+                        kind,
+                        rhs,
+                    ),
+                    _ => unreachable!(),
+                };
                 format!(
                     "{:36} [{}][{}]",
                     op1,

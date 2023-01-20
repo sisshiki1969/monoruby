@@ -1134,7 +1134,7 @@ impl Codegen {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
                             let fret = ctx.xmm_write(ret);
-                            self.gen_binop_float(kind, &ctx, fret, flhs, frhs);
+                            self.gen_binop_float_rr(kind, &ctx, fret, flhs, frhs);
                         }
                         OpMode::RI(lhs, rhs) => {
                             let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
@@ -1159,70 +1159,53 @@ impl Codegen {
                     self.load_binary_args_with_mode(&mode);
                     self.gen_generic_binop(&ctx, pc, kind, ret);
                 }
-                TraceIr::Cmp(kind, ret, lhs, rhs, false) => {
-                    if pc.is_float_binop() {
-                        let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
-                        ctx.dealloc_xmm(ret);
-                        monoasm! { self.jit,
-                            xorq rax, rax;
-                            ucomisd xmm(flhs.enc()), xmm(frhs.enc());
-                        };
+                TraceIr::Cmp(kind, ret, mode, false) => {
+                    if mode.is_float_op(&*pc) {
+                        match mode {
+                            OpMode::RR(lhs, rhs) => {
+                                let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
+                                ctx.dealloc_xmm(ret);
+                                monoasm! { self.jit,
+                                    xorq rax, rax;
+                                    ucomisd xmm(flhs.enc()), xmm(frhs.enc());
+                                };
+                            }
+                            OpMode::RI(lhs, rhs) => {
+                                let rhs_label = self.jit.const_f64(rhs as f64);
+                                let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
+                                ctx.dealloc_xmm(ret);
+                                monoasm! { self.jit,
+                                    xorq rax, rax;
+                                    ucomisd xmm(flhs.enc()), [rip + rhs_label];
+                                };
+                            }
+                            _ => unreachable!(),
+                        }
                         self.setflag_float(kind);
                         self.store_rax(ret);
-                    } else if pc.is_integer_binop() {
-                        let deopt = self.gen_side_deopt(pc, &ctx);
-                        self.write_back_slot(&mut ctx, lhs);
-                        self.write_back_slot(&mut ctx, rhs);
+                    } else if mode.is_integer_op(&*pc) {
+                        self.writeback_binary(&mut ctx, &mode);
                         ctx.dealloc_xmm(ret);
-                        self.gen_cmp_prep(lhs, rhs, deopt);
-                        self.gen_integer_cmp_kind(kind, ret, pc);
+                        let deopt = self.gen_side_deopt(pc, &ctx);
+                        self.load_binary_args_with_mode(&mode);
+                        self.guard_binary_fixnum_with_mode(deopt, mode);
+                        self.integer_cmp(kind);
+                        self.handle_error(pc);
+                        self.store_rax(ret);
                     } else {
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
-                        let generic = self.jit.label();
-                        self.write_back_slot(&mut ctx, lhs);
-                        self.write_back_slot(&mut ctx, rhs);
+                        self.writeback_binary(&mut ctx, &mode);
                         ctx.dealloc_xmm(ret);
-                        self.gen_cmp_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
-                    }
-                }
-                TraceIr::Cmpri(kind, ret, lhs, rhs, false) => {
-                    if pc.is_float1() {
-                        let rhs_label = self.jit.const_f64(rhs as f64);
-                        let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
-                        ctx.dealloc_xmm(ret);
-                        monoasm! { self.jit,
-                            xorq rax, rax;
-                            ucomisd xmm(flhs.enc()), [rip + rhs_label];
-                        };
-                        self.setflag_float(kind);
+                        self.load_binary_args_with_mode(&mode);
+                        self.generic_cmp(kind, &ctx);
+                        self.handle_error(pc);
                         self.store_rax(ret);
-                    } else if pc.is_integer1() {
-                        let deopt = self.gen_side_deopt(pc, &ctx);
-                        self.write_back_slot(&mut ctx, lhs);
-                        ctx.dealloc_xmm(ret);
-                        self.gen_cmpri_prep(lhs, rhs, deopt);
-                        self.gen_integer_cmp_kind(kind, ret, pc);
-                    } else {
-                        if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
-                        }
-                        let generic = self.jit.label();
-                        self.write_back_slot(&mut ctx, lhs);
-                        ctx.dealloc_xmm(ret);
-                        self.gen_cmpri_prep(lhs, rhs, generic);
-                        self.gen_cmp_kind(kind, generic, ret, &ctx, pc);
                     }
                 }
-                TraceIr::Cmp(kind, ret, lhs, rhs, true) => {
-                    let mode = OpMode::RR(lhs, rhs);
-                    let index = cc.bb_pos + ofs + 1;
-                    self.gen_cmp_opt(&mut ctx, cc, fnstore, mode, kind, ret, pc, index);
-                }
-                TraceIr::Cmpri(kind, ret, lhs, rhs, true) => {
-                    let mode = OpMode::RI(lhs, rhs);
+
+                TraceIr::Cmp(kind, ret, mode, true) => {
                     let index = cc.bb_pos + ofs + 1;
                     self.gen_cmp_opt(&mut ctx, cc, fnstore, mode, kind, ret, pc, index);
                 }

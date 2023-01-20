@@ -1,5 +1,6 @@
 use monoasm::*;
 use monoasm_macro::monoasm;
+use paste::paste;
 
 mod jitgen;
 mod runtime;
@@ -31,6 +32,58 @@ type BlockInvoker = extern "C" fn(
 
 type MethodInvoker2 =
     extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
+
+macro_rules! cmp_main {
+    ($op:ident) => {
+        paste! {
+            fn [<integer_cmp_ $op>](&mut self) {
+                monoasm! { self.jit,
+                    xorq rax, rax;
+                    cmpq rdi, rsi;
+                    [<set $op>] rax;
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                };
+            }
+        }
+    };
+    ($op1:ident, $($op2:ident),+) => {
+        cmp_main!($op1);
+        cmp_main!($($op2),+);
+    };
+}
+
+macro_rules! cmp_opt_main {
+    (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
+        paste! {
+            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
+                        [<j $sop>] branch_dest;
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
+                        [<j $rev_sop>] branch_dest;
+                    },
+                }
+            }
+
+            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
+                match brkind {
+                    BrKind::BrIf => monoasm! { self.jit,
+                        [<j $op>] branch_dest;
+                    },
+                    BrKind::BrIfNot => monoasm! { self.jit,
+                        [<j $rev_op>] branch_dest;
+                    },
+                }
+            }
+        }
+    };
+    (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
+        cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
+        cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
+    };
+}
 
 ///
 /// Bytecode compiler
@@ -79,6 +132,16 @@ pub struct Codegen {
 }
 
 impl Codegen {
+    cmp_main!(eq, ne, lt, le, gt, ge);
+    cmp_opt_main!(
+        (eq, ne, eq, ne),
+        (ne, eq, ne, eq),
+        (a, be, gt, le),
+        (b, ae, lt, ge),
+        (ae, b, ge, lt),
+        (be, a, le, gt)
+    );
+
     pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(0);

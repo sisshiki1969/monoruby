@@ -1,119 +1,7 @@
 use super::*;
 use ruruby_parse::CmpKind;
 
-macro_rules! cmp_main {
-    ($op:ident) => {
-        paste! {
-            fn [<cmp_ $op>](&mut self, generic:DestLabel, xmm_using: Vec<Xmm>) {
-                let exit = self.jit.label();
-                self.[<integer_cmp_ $op>]();
-                self.jit.bind_label(exit);
-                self.jit.select_page(1);
-                self.jit.bind_label(generic);
-                self.xmm_save(&xmm_using);
-                self.call_binop([<cmp_ $op _values>] as _);
-                self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
-                    jmp  exit;
-                );
-                self.jit.select_page(0);
-            }
-
-            pub(in crate::executor::compiler) fn [<integer_cmp_ $op>](&mut self) {
-                monoasm! { self.jit,
-                    xorq rax, rax;
-                    cmpq rdi, rsi;
-                    [<set $op>] rax;
-                    shlq rax, 3;
-                    orq rax, (FALSE_VALUE);
-                };
-            }
-        }
-    };
-    ($op1:ident, $($op2:ident),+) => {
-        cmp_main!($op1);
-        cmp_main!($($op2),+);
-    };
-}
-
-macro_rules! cmp_opt_main {
-    (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
-        paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
-                        [<j $sop>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { self.jit,
-                        [<j $rev_sop>] branch_dest;
-                    },
-                }
-            }
-
-            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
-                match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
-                        [<j $op>] branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { self.jit,
-                        [<j $rev_op>] branch_dest;
-                    },
-                }
-            }
-
-            fn [<cmp_generic_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind, xmm_using: Vec<Xmm>, pc:BcPc) {
-                self.xmm_save(&xmm_using);
-                self.call_binop([<cmp_ $sop _values>] as _);
-                self.xmm_restore(&xmm_using);
-                self.handle_error(pc);
-                monoasm!(self.jit,
-                    orq  rax, 0x10;
-                    cmpq rax, (FALSE_VALUE);
-                    // if true, Z=0(not set).
-                );
-                match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
-                        jnz branch_dest;
-                    },
-                    BrKind::BrIfNot => monoasm! { self.jit,
-                        jz  branch_dest;
-                    },
-                }
-            }
-        }
-    };
-    (($op1:ident, $rev_op1:ident, $sop1:ident, $rev_sop1:ident), $(($op2:ident, $rev_op2:ident, $sop2:ident, $rev_sop2:ident)),+) => {
-        cmp_opt_main!(($op1, $rev_op1, $sop1, $rev_sop1));
-        cmp_opt_main!($(($op2, $rev_op2, $sop2, $rev_sop2)),+);
-    };
-}
-
 impl Codegen {
-    cmp_opt_main!(
-        (eq, ne, eq, ne),
-        (ne, eq, ne, eq),
-        (a, be, gt, le),
-        (b, ae, lt, ge),
-        (ae, b, ge, lt),
-        (be, a, le, gt)
-    );
-    cmp_main!(eq, ne, lt, le, gt, ge);
-
-    fn cmp_teq(&mut self, generic: DestLabel, xmm_using: Vec<Xmm>) {
-        let exit = self.jit.label();
-        self.integer_cmp_eq();
-        self.jit.bind_label(exit);
-        self.jit.select_page(1);
-        self.jit.bind_label(generic);
-        self.xmm_save(&xmm_using);
-        self.call_binop(cmp_teq_values as _);
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp  exit;
-        );
-        self.jit.select_page(0);
-    }
-
     pub(super) fn gen_binop_integer(
         &mut self,
         pc: BcPc,
@@ -251,7 +139,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_binop_float(
+    pub(super) fn gen_binop_float_rr(
         &mut self,
         kind: BinOpK,
         ctx: &BBContext,
@@ -532,7 +420,7 @@ impl Codegen {
             TraceIr::CondBr(_, disp, true, brkind) => {
                 let dest_idx = (index as i32 + disp + 1) as usize;
                 let branch_dest = self.jit.label();
-                if mode.is_float_op(pc) {
+                if mode.is_float_op(&*pc) {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.xmm_read_binary(ctx, lhs, rhs, pc);
@@ -551,21 +439,20 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     }
-                    self.gen_cmp_float_opt(kind, branch_dest, brkind);
+                    self.cmp_opt_float(kind, branch_dest, brkind);
                 } else {
                     self.writeback_binary(ctx, &mode);
                     ctx.dealloc_xmm(ret);
                     self.load_binary_args_with_mode(&mode);
-                    if mode.is_integer_op(pc) {
+                    if mode.is_integer_op(&*pc) {
                         let deopt = self.gen_side_deopt(pc, ctx);
                         self.guard_binary_fixnum_with_mode(deopt, mode);
                         monoasm! { self.jit,
                             cmpq rdi, rsi;
                         };
-                        self.gen_cmp_int_opt(kind, branch_dest, brkind);
+                        self.cmp_opt_int(kind, branch_dest, brkind);
                     } else {
-                        let xmm_using = ctx.get_xmm_using();
-                        self.gen_cmp_generic(kind, branch_dest, brkind, xmm_using, pc);
+                        self.cmp_opt_generic(ctx, kind, branch_dest, brkind, pc);
                     }
                 }
                 cc.new_branch(index, dest_idx, ctx.clone(), branch_dest);
@@ -574,43 +461,23 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_cmp_prep(&mut self, lhs: SlotId, rhs: SlotId, deopt: DestLabel) {
-        self.load_binary_args(lhs, rhs);
-        self.guard_rdi_rsi_fixnum(deopt);
-    }
-
-    pub(super) fn gen_cmpri_prep(&mut self, lhs: SlotId, rhs: i16, deopt: DestLabel) {
-        self.load_rdi(lhs);
-        monoasm!(self.jit,
-            movq rsi, (Value::new_integer(rhs as i64).get());
-        );
-        self.guard_rdi_fixnum(deopt);
-    }
-
-    pub(super) fn gen_cmp_kind(
-        &mut self,
-        kind: CmpKind,
-        generic: DestLabel,
-        ret: SlotId,
-        ctx: &BBContext,
-        pc: BcPc,
-    ) {
+    pub(super) fn generic_cmp(&mut self, kind: CmpKind, ctx: &BBContext) {
         let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
         match kind {
-            CmpKind::Eq => self.cmp_eq(generic, xmm_using),
-            CmpKind::Ne => self.cmp_ne(generic, xmm_using),
-            CmpKind::Ge => self.cmp_ge(generic, xmm_using),
-            CmpKind::Gt => self.cmp_gt(generic, xmm_using),
-            CmpKind::Le => self.cmp_le(generic, xmm_using),
-            CmpKind::Lt => self.cmp_lt(generic, xmm_using),
-            CmpKind::TEq => self.cmp_teq(generic, xmm_using),
+            CmpKind::Eq => self.call_binop(cmp_eq_values as _),
+            CmpKind::Ne => self.call_binop(cmp_ne_values as _),
+            CmpKind::Ge => self.call_binop(cmp_ge_values as _),
+            CmpKind::Gt => self.call_binop(cmp_gt_values as _),
+            CmpKind::Le => self.call_binop(cmp_le_values as _),
+            CmpKind::Lt => self.call_binop(cmp_lt_values as _),
+            CmpKind::TEq => self.call_binop(cmp_teq_values as _),
             _ => unimplemented!(),
         }
-        self.handle_error(pc);
-        self.store_rax(ret);
+        self.xmm_restore(&xmm_using);
     }
 
-    pub(super) fn gen_integer_cmp_kind(&mut self, kind: CmpKind, ret: SlotId, pc: BcPc) {
+    pub(super) fn integer_cmp(&mut self, kind: CmpKind) {
         match kind {
             CmpKind::Eq => self.integer_cmp_eq(),
             CmpKind::Ne => self.integer_cmp_ne(),
@@ -621,36 +488,34 @@ impl Codegen {
             CmpKind::TEq => self.integer_cmp_eq(),
             _ => unimplemented!(),
         }
-        self.handle_error(pc);
-        self.store_rax(ret);
     }
 
-    pub(super) fn gen_cmp_generic(
+    pub(super) fn cmp_opt_generic(
         &mut self,
+        ctx: &BBContext,
         kind: CmpKind,
         branch_dest: DestLabel,
         brkind: BrKind,
-        xmm_using: Vec<Xmm>,
         pc: BcPc,
     ) {
-        match kind {
-            CmpKind::Eq => self.cmp_generic_eq(branch_dest, brkind, xmm_using, pc),
-            CmpKind::Ne => self.cmp_generic_ne(branch_dest, brkind, xmm_using, pc),
-            CmpKind::Ge => self.cmp_generic_ge(branch_dest, brkind, xmm_using, pc),
-            CmpKind::Gt => self.cmp_generic_gt(branch_dest, brkind, xmm_using, pc),
-            CmpKind::Le => self.cmp_generic_le(branch_dest, brkind, xmm_using, pc),
-            CmpKind::Lt => self.cmp_generic_lt(branch_dest, brkind, xmm_using, pc),
-            CmpKind::TEq => self.cmp_generic_eq(branch_dest, brkind, xmm_using, pc),
-            _ => unimplemented!(),
+        self.generic_cmp(kind, ctx);
+        self.handle_error(pc);
+        monoasm!(self.jit,
+            orq  rax, 0x10;
+            cmpq rax, (FALSE_VALUE);
+            // if true, Z=0(not set).
+        );
+        match brkind {
+            BrKind::BrIf => monoasm! { self.jit,
+                jnz branch_dest;
+            },
+            BrKind::BrIfNot => monoasm! { self.jit,
+                jz  branch_dest;
+            },
         }
     }
 
-    pub(super) fn gen_cmp_int_opt(
-        &mut self,
-        kind: CmpKind,
-        branch_dest: DestLabel,
-        brkind: BrKind,
-    ) {
+    pub(super) fn cmp_opt_int(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match kind {
             CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, brkind),
             CmpKind::Ne => self.cmp_opt_int_ne(branch_dest, brkind),
@@ -663,12 +528,7 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_cmp_float_opt(
-        &mut self,
-        kind: CmpKind,
-        branch_dest: DestLabel,
-        brkind: BrKind,
-    ) {
+    pub(super) fn cmp_opt_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match kind {
             CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, brkind),
             CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, brkind),
@@ -714,7 +574,7 @@ impl Codegen {
         }
     }
 
-    fn guard_binary_fixnum_with_mode(&mut self, generic: DestLabel, mode: OpMode) {
+    pub(super) fn guard_binary_fixnum_with_mode(&mut self, generic: DestLabel, mode: OpMode) {
         match mode {
             OpMode::RR(..) => self.guard_rdi_rsi_fixnum(generic),
             OpMode::RI(..) => self.guard_rdi_fixnum(generic),

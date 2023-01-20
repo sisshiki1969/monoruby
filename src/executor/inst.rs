@@ -338,9 +338,7 @@ pub(super) enum TraceIr {
         mode: OpMode,
     },
     /// cmp(%ret, %lhs, %rhs, optimizable)
-    Cmp(CmpKind, SlotId, SlotId, SlotId, bool),
-    /// cmpri(%ret, %lhs, rhs: i16, optimizable)
-    Cmpri(CmpKind, SlotId, SlotId, i16, bool),
+    Cmp(CmpKind, SlotId, OpMode, bool),
     /// return(%ret)
     Ret(SlotId),
     /// move(%dst, %src)
@@ -613,15 +611,13 @@ impl TraceIr {
                 134..=141 => Self::Cmp(
                     CmpKind::from(opcode - 134),
                     SlotId::new(op1),
-                    SlotId::new(op2),
-                    SlotId::new(op3),
+                    OpMode::RR(SlotId::new(op2), SlotId::new(op3)),
                     false,
                 ),
-                142..=149 => Self::Cmpri(
+                142..=149 => Self::Cmp(
                     CmpKind::from(opcode - 142),
                     SlotId::new(op1),
-                    SlotId::new(op2),
-                    op3 as i16,
+                    OpMode::RI(SlotId::new(op2), op3 as i16),
                     false,
                 ),
                 150 => Self::LoadDynVar(
@@ -646,15 +642,13 @@ impl TraceIr {
                 154..=161 => Self::Cmp(
                     CmpKind::from(opcode - 154),
                     SlotId(op1),
-                    SlotId(op2),
-                    SlotId(op3),
+                    OpMode::RR(SlotId(op2), SlotId(op3)),
                     true,
                 ),
-                162..=169 => Self::Cmpri(
+                162..=169 => Self::Cmp(
                     CmpKind::from(opcode - 162),
                     SlotId::new(op1),
-                    SlotId::new(op2),
-                    op3 as i16,
+                    OpMode::RI(SlotId::new(op2), op3 as i16),
                     true,
                 ),
                 170 => Self::InitMethod {
