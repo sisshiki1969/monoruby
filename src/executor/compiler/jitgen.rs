@@ -1187,8 +1187,7 @@ impl Codegen {
                         self.writeback_binary(&mut ctx, &mode);
                         ctx.dealloc_xmm(ret);
                         let deopt = self.gen_side_deopt(pc, &ctx);
-                        self.load_binary_args_with_mode(&mode);
-                        self.guard_binary_fixnum_with_mode(deopt, mode);
+                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
                         self.handle_error(pc);
                         self.store_rax(ret);
