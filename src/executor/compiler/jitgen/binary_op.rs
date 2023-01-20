@@ -430,10 +430,27 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     if mode.is_integer_op(&*pc) {
                         let deopt = self.gen_side_deopt(pc, ctx);
-                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
-                        monoasm! { self.jit,
-                            cmpq rdi, rsi;
-                        };
+                        match mode {
+                            OpMode::RR(lhs, rhs) => {
+                                self.load_guard_binary_fixnum(lhs, rhs, deopt);
+                                monoasm!(self.jit,
+                                    cmpq rdi, rsi;
+                                );
+                            }
+                            OpMode::RI(lhs, rhs) => {
+                                self.load_guard_rdi_fixnum(lhs, deopt);
+                                monoasm!(self.jit,
+                                    cmpq rdi, (Value::int32(rhs as i32).get());
+                                );
+                            }
+                            OpMode::IR(lhs, rhs) => {
+                                self.load_guard_rsi_fixnum(rhs, deopt);
+                                monoasm!(self.jit,
+                                    movq rdi, (Value::int32(lhs as i32).get());
+                                    cmpq rdi, rsi;
+                                );
+                            }
+                        }
                         self.cmp_opt_int(kind, branch_dest, brkind);
                     } else {
                         self.load_binary_args_with_mode(&mode);

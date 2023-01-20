@@ -458,6 +458,19 @@ impl IrContext {
         Ok(())
     }
 
+    fn handle_val(&mut self, info: &mut ISeqInfo, src: BcReg, use_mode: UseMode) {
+        match use_mode {
+            UseMode::Ret => {
+                self.gen_ret(info, Some(src));
+            }
+            UseMode::NotUse => {}
+            UseMode::Use => {
+                let res = info.push().into();
+                self.gen_mov(res, src);
+            }
+        }
+    }
+
     ///
     /// Evaluate *lhs* as a lvalue.
     ///
@@ -745,10 +758,8 @@ impl IrContext {
                 // Assign rvalue to lvalue.
                 self.gen_assign(src, lhs_kind, lhs_loc);
                 info.temp = temp;
-                let res = info.push().into();
-                if use_mode.use_val() {
-                    self.gen_mov(res, src);
-                }
+                self.handle_val(info, src, use_mode);
+                return Ok(());
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(ctx, info, op, lhs, rhs, None, loc)?;
@@ -766,10 +777,8 @@ impl IrContext {
                     let src = self.gen_expr_reg(ctx, info, rhs)?;
                     self.gen_assign(src, lhs, loc);
                     info.temp = temp;
-                    let res = info.push().into();
-                    if use_mode.use_val() {
-                        self.gen_mov(res, src);
-                    }
+                    self.handle_val(info, src, use_mode);
+                    return Ok(());
                 } else {
                     return self.gen_mul_assign(ctx, info, mlhs, mrhs, use_mode);
                 }

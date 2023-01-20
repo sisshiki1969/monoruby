@@ -369,16 +369,24 @@ impl Codegen {
     /// - caller save registers
     fn execute_gc(&mut self) {
         let alloc_flag = self.alloc_flag;
+        let gc = self.jit.label();
         let exit = self.jit.label();
+        assert_eq!(0, self.jit.get_page());
         monoasm! { self.jit,
             cmpl [rip + alloc_flag], 0;
-            jeq  exit;
+            jne  gc;
+        exit:
+        };
+        self.jit.select_page(1);
+        monoasm! { self.jit,
+        gc:
             movq rdi, r12;
             movq rsi, [rbx];
             movq rax, (execute_gc);
             call rax;
-        exit:
+            jmp exit;
         };
+        self.jit.select_page(0);
     }
 
     /// Push control frame and set outer.

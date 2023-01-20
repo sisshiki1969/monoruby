@@ -1,7 +1,7 @@
     Finished release [optimized] target(s) in 0.09s
      Running `target/release/monoruby benchmark/app_aobench.rb`
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x55ca4cbc9370) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x556bbd7b8290) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -9,20 +9,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x55ca4cbc9370) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x55ca4cbc9320) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x556bbd7b8240) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x55ca4cbc7850) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x556bbd7b65b0) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x55ca4cbc7aa0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x556bbd7b68f0) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -47,7 +47,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x55ca4cbc7aa0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x55ca4cbc9370) meta:kind:VM mode:method FuncId(77) regs:2
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x556bbd7b8290) meta:kind:VM mode:method FuncId(77) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 _ = class_def "Math" < _: FuncId(78)
  :00002 _ = class_def "RbConfig" < _: FuncId(79)
@@ -55,20 +55,20 @@ FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x55ca4cbc9370) meta:kind:VM mode:me
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x55ca4cbc9320) meta:kind:VM mode:class_def FuncId(78) regs:2
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x556bbd7b8240) meta:kind:VM mode:class_def FuncId(78) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = literal[3.141592653589793]
  :00002 const[PI] = %1
  :00003 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x55ca4cbc7850) meta:kind:VM mode:class_def FuncId(79) regs:2
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x556bbd7b65b0) meta:kind:VM mode:class_def FuncId(79) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = nil
  :00002 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x55ca4cbc7aa0) meta:kind:VM mode:class_def FuncId(80) regs:2
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x556bbd7b68f0) meta:kind:VM mode:class_def FuncId(80) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 %1 = 0: i32
  :00002 const[CLOCK_REALTIME] = %1
@@ -93,7 +93,7 @@ FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x55ca4cbc7aa0) meta:kind:VM mode:
  :00021 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x55ca4cc371a0) meta:kind:VM mode:method FuncId(81) regs:5
+FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x556bbd7aee30) meta:kind:VM mode:method FuncId(81) regs:5
 +:00000 init_method reg:5 arg:0 pos:0 req:0 block:0 stack_offset:6
  :00001 %1 = 256: i32
  :00002 const[IMAGE_WIDTH] = %1
@@ -129,7 +129,7 @@ FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x55ca4cc371a0) meta:kind:VM mode:me
  :00037 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(82) name:Vec pos_num:0 bc:BcPcBase(0x55ca4cbb5910) meta:kind:VM mode:class_def FuncId(82) regs:4
+FuncId(82) name:Vec pos_num:0 bc:BcPcBase(0x556bbd7a4910) meta:kind:VM mode:class_def FuncId(82) regs:4
 +:00000 init_method reg:4 arg:0 pos:0 req:0 block:0 stack_offset:5
  :00001 method_def "initialize": FuncId(90)
  :00002 %1 = :x
@@ -146,7 +146,7 @@ FuncId(82) name:Vec pos_num:0 bc:BcPcBase(0x55ca4cbb5910) meta:kind:VM mode:clas
  :00014 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(83) name:Sphere pos_num:0 bc:BcPcBase(0x55ca4cbea3e0) meta:kind:VM mode:class_def FuncId(83) regs:3
+FuncId(83) name:Sphere pos_num:0 bc:BcPcBase(0x556bbd7db2d0) meta:kind:VM mode:class_def FuncId(83) regs:3
 +:00000 init_method reg:3 arg:0 pos:0 req:0 block:0 stack_offset:5
  :00001 method_def "initialize": FuncId(97)
  :00002 %1 = :center
@@ -157,7 +157,7 @@ FuncId(83) name:Sphere pos_num:0 bc:BcPcBase(0x55ca4cbea3e0) meta:kind:VM mode:c
  :00008 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(84) name:Plane pos_num:0 bc:BcPcBase(0x55ca4cbbb390) meta:kind:VM mode:class_def FuncId(84) regs:2
+FuncId(84) name:Plane pos_num:0 bc:BcPcBase(0x556bbd7af260) meta:kind:VM mode:class_def FuncId(84) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 method_def "initialize": FuncId(99)
  :00002 method_def "intersect": FuncId(100)
@@ -165,7 +165,7 @@ FuncId(84) name:Plane pos_num:0 bc:BcPcBase(0x55ca4cbbb390) meta:kind:VM mode:cl
  :00004 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(85) name:Ray pos_num:0 bc:BcPcBase(0x55ca4cbbb260) meta:kind:VM mode:class_def FuncId(85) regs:3
+FuncId(85) name:Ray pos_num:0 bc:BcPcBase(0x556bbd7aa260) meta:kind:VM mode:class_def FuncId(85) regs:3
 +:00000 init_method reg:3 arg:0 pos:0 req:0 block:0 stack_offset:5
  :00001 method_def "initialize": FuncId(101)
  :00002 %1 = :org
@@ -174,7 +174,7 @@ FuncId(85) name:Ray pos_num:0 bc:BcPcBase(0x55ca4cbbb260) meta:kind:VM mode:clas
  :00006 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(86) name:Isect pos_num:0 bc:BcPcBase(0x55ca4cbfcee0) meta:kind:VM mode:class_def FuncId(86) regs:5
+FuncId(86) name:Isect pos_num:0 bc:BcPcBase(0x556bbd7ebe90) meta:kind:VM mode:class_def FuncId(86) regs:5
 +:00000 init_method reg:5 arg:0 pos:0 req:0 block:0 stack_offset:6
  :00001 method_def "initialize": FuncId(102)
  :00002 %1 = :t
@@ -185,7 +185,7 @@ FuncId(86) name:Isect pos_num:0 bc:BcPcBase(0x55ca4cbfcee0) meta:kind:VM mode:cl
  :00008 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(87) name:clamp pos_num:1 bc:BcPcBase(0x55ca4cbb6360) meta:kind:VM mode:method FuncId(87) regs:4
+FuncId(87) name:clamp pos_num:1 bc:BcPcBase(0x556bbd7a5360) meta:kind:VM mode:method FuncId(87) regs:4
 +:00000 init_method reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
  :00001 %3 = literal[255.5]
  :00002 %2 = %1 * %3                         [<INVALID>][<INVALID>]
@@ -203,7 +203,7 @@ FuncId(87) name:clamp pos_num:1 bc:BcPcBase(0x55ca4cbb6360) meta:kind:VM mode:me
  :00015 ret %3
 ------------------------------------
 ------------------------------------
-FuncId(88) name:otherBasis pos_num:2 bc:BcPcBase(0x55ca4cc048d0) meta:kind:VM mode:method FuncId(88) regs:8
+FuncId(88) name:otherBasis pos_num:2 bc:BcPcBase(0x556bbd7f3880) meta:kind:VM mode:method FuncId(88) regs:8
 +:00000 init_method reg:8 arg:2 pos:2 req:2 block:0 stack_offset:7
  :00001 %3 = 2: i32
  :00002 %4 = const[Vec]                      [<INVALID>]
@@ -286,11 +286,10 @@ FuncId(88) name:otherBasis pos_num:2 bc:BcPcBase(0x55ca4cc048d0) meta:kind:VM mo
  :00097 %4 = %1.[%4]                         [<INVALID>][<INVALID>]
  :00098 %4 = %4.call vnormalize()            [<INVALID>]
  :00100 %1:.[%3:] = %4
- :00101 %3 = %4
- :00102 ret %3
+ :00101 ret %4
 ------------------------------------
 ------------------------------------
-FuncId(89) name:Scene pos_num:0 bc:BcPcBase(0x55ca4cbb80c0) meta:kind:VM mode:class_def FuncId(89) regs:2
+FuncId(89) name:Scene pos_num:0 bc:BcPcBase(0x556bbd7a70c0) meta:kind:VM mode:class_def FuncId(89) regs:2
 +:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
  :00001 method_def "initialize": FuncId(103)
  :00002 method_def "ambient_occlusion": FuncId(104)
@@ -299,16 +298,15 @@ FuncId(89) name:Scene pos_num:0 bc:BcPcBase(0x55ca4cbb80c0) meta:kind:VM mode:cl
  :00005 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(90) name:initialize pos_num:3 bc:BcPcBase(0x55ca4cbb98a0) meta:kind:VM mode:method FuncId(90) regs:5
-+:00000 init_method reg:5 arg:3 pos:3 req:3 block:0 stack_offset:6
+FuncId(90) name:initialize pos_num:3 bc:BcPcBase(0x556bbd7af200) meta:kind:VM mode:method FuncId(90) regs:4
++:00000 init_method reg:4 arg:3 pos:3 req:3 block:0 stack_offset:5
  :00001 @x: <INVALID>[IvarId(0)] = %1
  :00002 @y: <INVALID>[IvarId(0)] = %2
  :00003 @z: <INVALID>[IvarId(0)] = %3
- :00004 %4 = %3
- :00005 ret %4
+ :00004 ret %3
 ------------------------------------
 ------------------------------------
-FuncId(91) name:vadd pos_num:1 bc:BcPcBase(0x55ca4cbb8260) meta:kind:VM mode:method FuncId(91) regs:7
+FuncId(91) name:vadd pos_num:1 bc:BcPcBase(0x556bbd7a7260) meta:kind:VM mode:method FuncId(91) regs:7
 +:00000 init_method reg:7 arg:1 pos:1 req:1 block:0 stack_offset:7
  :00001 %2 = const[Vec]                      [<INVALID>]
  :00002 %3 = @x: <INVALID>[IvarId(0)]
@@ -324,7 +322,7 @@ FuncId(91) name:vadd pos_num:1 bc:BcPcBase(0x55ca4cbb8260) meta:kind:VM mode:met
  :00016 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(92) name:vsub pos_num:1 bc:BcPcBase(0x55ca4cbc89a0) meta:kind:VM mode:method FuncId(92) regs:7
+FuncId(92) name:vsub pos_num:1 bc:BcPcBase(0x556bbd7fb4d0) meta:kind:VM mode:method FuncId(92) regs:7
 +:00000 init_method reg:7 arg:1 pos:1 req:1 block:0 stack_offset:7
  :00001 %2 = const[Vec]                      [<INVALID>]
  :00002 %3 = @x: <INVALID>[IvarId(0)]
@@ -340,7 +338,7 @@ FuncId(92) name:vsub pos_num:1 bc:BcPcBase(0x55ca4cbc89a0) meta:kind:VM mode:met
  :00016 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(93) name:vcross pos_num:1 bc:BcPcBase(0x55ca4cbb6470) meta:kind:VM mode:method FuncId(93) regs:8
+FuncId(93) name:vcross pos_num:1 bc:BcPcBase(0x556bbd7a5470) meta:kind:VM mode:method FuncId(93) regs:8
 +:00000 init_method reg:8 arg:1 pos:1 req:1 block:0 stack_offset:7
  :00001 %2 = const[Vec]                      [<INVALID>]
  :00002 %3 = @y: <INVALID>[IvarId(0)]
@@ -368,7 +366,7 @@ FuncId(93) name:vcross pos_num:1 bc:BcPcBase(0x55ca4cbb6470) meta:kind:VM mode:m
  :00031 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(94) name:vdot pos_num:1 bc:BcPcBase(0x55ca4cbe90c0) meta:kind:VM mode:method FuncId(94) regs:5
+FuncId(94) name:vdot pos_num:1 bc:BcPcBase(0x556bbd7e2a50) meta:kind:VM mode:method FuncId(94) regs:5
 +:00000 init_method reg:5 arg:1 pos:1 req:1 block:0 stack_offset:6
  :00001 %2 = @x: <INVALID>[IvarId(0)]
  :00002 %3 = %1.call x()                     [<INVALID>]
@@ -384,7 +382,7 @@ FuncId(94) name:vdot pos_num:1 bc:BcPcBase(0x55ca4cbe90c0) meta:kind:VM mode:met
  :00015 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(95) name:vlength pos_num:0 bc:BcPcBase(0x55ca4cbc9820) meta:kind:VM mode:method FuncId(95) regs:5
+FuncId(95) name:vlength pos_num:0 bc:BcPcBase(0x556bbd7b0330) meta:kind:VM mode:method FuncId(95) regs:5
 +:00000 init_method reg:5 arg:0 pos:0 req:0 block:0 stack_offset:6
  :00001 %1 = const[Math]                     [<INVALID>]
  :00002 %2 = @x: <INVALID>[IvarId(0)]
@@ -402,7 +400,7 @@ FuncId(95) name:vlength pos_num:0 bc:BcPcBase(0x55ca4cbc9820) meta:kind:VM mode:
  :00015 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(96) name:vnormalize pos_num:0 bc:BcPcBase(0x55ca4cbe7330) meta:kind:VM mode:method FuncId(96) regs:7
+FuncId(96) name:vnormalize pos_num:0 bc:BcPcBase(0x556bbd7d62e0) meta:kind:VM mode:method FuncId(96) regs:7
 +:00000 init_method reg:7 arg:0 pos:0 req:0 block:0 stack_offset:7
  :00001 %3 = %0.call vlength()               [<INVALID>]
  :00003 %1 = %3
@@ -427,15 +425,14 @@ FuncId(96) name:vnormalize pos_num:0 bc:BcPcBase(0x55ca4cbe7330) meta:kind:VM mo
 +:00029 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(97) name:initialize pos_num:2 bc:BcPcBase(0x55ca4cbbb330) meta:kind:VM mode:method FuncId(97) regs:4
-+:00000 init_method reg:4 arg:2 pos:2 req:2 block:0 stack_offset:5
+FuncId(97) name:initialize pos_num:2 bc:BcPcBase(0x556bbd7b8330) meta:kind:VM mode:method FuncId(97) regs:3
++:00000 init_method reg:3 arg:2 pos:2 req:2 block:0 stack_offset:5
  :00001 @center: <INVALID>[IvarId(0)] = %1
  :00002 @radius: <INVALID>[IvarId(0)] = %2
- :00003 %3 = %2
- :00004 ret %3
+ :00003 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(98) name:intersect pos_num:2 bc:BcPcBase(0x55ca4cbef5a0) meta:kind:VM mode:method FuncId(98) regs:14
+FuncId(98) name:intersect pos_num:2 bc:BcPcBase(0x556bbd7de550) meta:kind:VM mode:method FuncId(98) regs:14
 +:00000 init_method reg:14 arg:2 pos:2 req:2 block:0 stack_offset:10
  :00001 %9 = %1.call org()                   [<INVALID>]
  :00003 %10 = @center: <INVALID>[IvarId(0)]
@@ -500,15 +497,14 @@ FuncId(98) name:intersect pos_num:2 bc:BcPcBase(0x55ca4cbef5a0) meta:kind:VM mod
  :00088 ret %9
 ------------------------------------
 ------------------------------------
-FuncId(99) name:initialize pos_num:2 bc:BcPcBase(0x55ca4cbc7c10) meta:kind:VM mode:method FuncId(99) regs:4
-+:00000 init_method reg:4 arg:2 pos:2 req:2 block:0 stack_offset:5
+FuncId(99) name:initialize pos_num:2 bc:BcPcBase(0x556bbd7db370) meta:kind:VM mode:method FuncId(99) regs:3
++:00000 init_method reg:3 arg:2 pos:2 req:2 block:0 stack_offset:5
  :00001 @p: <INVALID>[IvarId(0)] = %1
  :00002 @n: <INVALID>[IvarId(0)] = %2
- :00003 %3 = %2
- :00004 ret %3
+ :00003 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(100) name:intersect pos_num:2 bc:BcPcBase(0x55ca4cbf6140) meta:kind:VM mode:method FuncId(100) regs:12
+FuncId(100) name:intersect pos_num:2 bc:BcPcBase(0x556bbd7e50f0) meta:kind:VM mode:method FuncId(100) regs:12
 +:00000 init_method reg:12 arg:2 pos:2 req:2 block:0 stack_offset:9
  :00001 %7 = @p: <INVALID>[IvarId(0)]
  :00002 %8 = @n: <INVALID>[IvarId(0)]
@@ -573,15 +569,14 @@ FuncId(100) name:intersect pos_num:2 bc:BcPcBase(0x55ca4cbf6140) meta:kind:VM mo
  :00084 ret %7
 ------------------------------------
 ------------------------------------
-FuncId(101) name:initialize pos_num:2 bc:BcPcBase(0x55ca4cbd38f0) meta:kind:VM mode:method FuncId(101) regs:4
-+:00000 init_method reg:4 arg:2 pos:2 req:2 block:0 stack_offset:5
+FuncId(101) name:initialize pos_num:2 bc:BcPcBase(0x556bbd7d9c50) meta:kind:VM mode:method FuncId(101) regs:3
++:00000 init_method reg:3 arg:2 pos:2 req:2 block:0 stack_offset:5
  :00001 @org: <INVALID>[IvarId(0)] = %1
  :00002 @dir: <INVALID>[IvarId(0)] = %2
- :00003 %3 = %2
- :00004 ret %3
+ :00003 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(102) name:initialize pos_num:0 bc:BcPcBase(0x55ca4cc11740) meta:kind:VM mode:method FuncId(102) regs:5
+FuncId(102) name:initialize pos_num:0 bc:BcPcBase(0x556bbd7b4710) meta:kind:VM mode:method FuncId(102) regs:5
 +:00000 init_method reg:5 arg:0 pos:0 req:0 block:0 stack_offset:6
  :00001 %1 = literal[10000000.0]
  :00002 @t: <INVALID>[IvarId(0)] = %1
@@ -602,7 +597,7 @@ FuncId(102) name:initialize pos_num:0 bc:BcPcBase(0x55ca4cc11740) meta:kind:VM m
  :00019 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(103) name:initialize pos_num:0 bc:BcPcBase(0x55ca4cbc71b0) meta:kind:VM mode:method FuncId(103) regs:8
+FuncId(103) name:initialize pos_num:0 bc:BcPcBase(0x556bbd7b5f10) meta:kind:VM mode:method FuncId(103) regs:8
 +:00000 init_method reg:8 arg:0 pos:0 req:0 block:0 stack_offset:7
  :00001 %1 = const[Array]                    [<INVALID>]
  :00002 %1 = %1.call new()                   [<INVALID>]
@@ -656,7 +651,7 @@ FuncId(103) name:initialize pos_num:0 bc:BcPcBase(0x55ca4cbc71b0) meta:kind:VM m
  :00060 ret %1
 ------------------------------------
 ------------------------------------
-FuncId(104) name:ambient_occlusion pos_num:1 bc:BcPcBase(0x55ca4cc0ebd0) meta:kind:VM mode:method FuncId(104) regs:13
+FuncId(104) name:ambient_occlusion pos_num:1 bc:BcPcBase(0x556bbd7fdb80) meta:kind:VM mode:method FuncId(104) regs:13
 +:00000 init_method reg:13 arg:1 pos:1 req:1 block:0 stack_offset:10
  :00001 %8 = const[Array]                    [<INVALID>]
  :00002 %2 = %8.call new()                   [<INVALID>]
@@ -705,7 +700,7 @@ FuncId(104) name:ambient_occlusion pos_num:1 bc:BcPcBase(0x55ca4cc0ebd0) meta:ki
  :00067 ret %8
 ------------------------------------
 ------------------------------------
-FuncId(105) name:render pos_num:3 bc:BcPcBase(0x55ca4cbfbff0) meta:kind:VM mode:method FuncId(105) regs:6
+FuncId(105) name:render pos_num:3 bc:BcPcBase(0x556bbd7d5350) meta:kind:VM mode:method FuncId(105) regs:6
 +:00000 init_method reg:6 arg:3 pos:3 req:3 block:0 stack_offset:6
  :00001 %4 = %3.call to_f()                  [<INVALID>]
  :00003 %5 = literal[7012353]
@@ -714,7 +709,7 @@ FuncId(105) name:render pos_num:3 bc:BcPcBase(0x55ca4cbfbff0) meta:kind:VM mode:
  :00007 ret %5
 ------------------------------------
 ------------------------------------
-FuncId(106) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc25620) meta:kind:VM mode:method FuncId(106) regs:4
+FuncId(106) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd8008b0) meta:kind:VM mode:method FuncId(106) regs:4
 +:00000 init_block reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
  :00001 %2 = dynvar(1, %3)
  :00002 %3 = literal[7077889]
@@ -722,7 +717,7 @@ FuncId(106) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc25620) meta:kind:VM 
  :00005 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(107) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cbb5480) meta:kind:VM mode:method FuncId(107) regs:4
+FuncId(107) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd7a4480) meta:kind:VM mode:method FuncId(107) regs:4
 +:00000 init_block reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
  :00001 %2 = dynvar(1, %1)
  :00002 %3 = literal[7143425]
@@ -731,7 +726,7 @@ FuncId(107) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cbb5480) meta:kind:VM 
  :00006 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(108) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cbc8090) meta:kind:VM mode:method FuncId(108) regs:17
+FuncId(108) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd7b6ee0) meta:kind:VM mode:method FuncId(108) regs:17
 +:00000 init_block reg:17 arg:1 pos:1 req:1 block:0 stack_offset:12
  :00001 %13 = %0.call rand()                 [<INVALID>]
  :00003 %2 = %13
@@ -854,7 +849,7 @@ FuncId(108) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cbc8090) meta:kind:VM 
  :00143 ret %13
 ------------------------------------
 ------------------------------------
-FuncId(109) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc05850) meta:kind:VM mode:method FuncId(109) regs:10
+FuncId(109) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd7f4800) meta:kind:VM mode:method FuncId(109) regs:10
 +:00000 init_block reg:10 arg:1 pos:1 req:1 block:0 stack_offset:8
  :00001 %6 = const[Vec]                      [<INVALID>]
  :00002 %7 = literal[0.0]
@@ -894,7 +889,7 @@ FuncId(109) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc05850) meta:kind:VM 
  :00050 ret %6
 ------------------------------------
 ------------------------------------
-FuncId(110) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc26510) meta:kind:VM mode:method FuncId(110) regs:4
+FuncId(110) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd8154c0) meta:kind:VM mode:method FuncId(110) regs:4
 +:00000 init_block reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
  :00001 %2 = dynvar(3, %3)
  :00002 %3 = literal[7274497]
@@ -902,7 +897,7 @@ FuncId(110) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc26510) meta:kind:VM 
  :00005 ret %2
 ------------------------------------
 ------------------------------------
-FuncId(111) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc04f50) meta:kind:VM mode:method FuncId(111) regs:19
+FuncId(111) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x556bbd7f3ef0) meta:kind:VM mode:method FuncId(111) regs:19
 +:00000 init_block reg:19 arg:1 pos:1 req:1 block:0 stack_offset:13
  :00001 %14 = dynvar(4, %1)
  :00002 %2 = %14.call to_f()                 [<INVALID>]
@@ -973,7 +968,7 @@ FuncId(111) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc04f50) meta:kind:VM 
  :00081 %16 = %12
  :00082 _ = %14.call intersect(%15; 2)       [<INVALID>]
  :00084 %14 = %12.call hit()                 [<INVALID>]
- :00086 condnotbr %14 =>:00119
+ :00086 condnotbr %14 =>:00118
  :00087 %14 = %12
  :00088 %13 = %0.call ambient_occlusion(%14; 1) [<INVALID>]
  :00090 %14 = dynvar(2, %2)
@@ -994,8 +989,7 @@ FuncId(111) name:<ANONYMOUS> pos_num:1 bc:BcPcBase(0x55ca4cc04f50) meta:kind:VM 
  :00112 %16 = %13.call z()                   [<INVALID>]
  :00114 %15 = %15 + %16                      [<INVALID>][<INVALID>]
  :00115 _ = %14.call z=(%15; 1)              [<INVALID>]
- :00117 %14 = %15
- :00118 ret %14
-+:00119 %14 = nil
- :00120 ret %14
+ :00117 ret %15
++:00118 %14 = nil
+ :00119 ret %14
 ------------------------------------

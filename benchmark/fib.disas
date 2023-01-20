@@ -1,272 +1,259 @@
-    Finished release [optimized] target(s) in 0.10s
+   Compiling monoruby v0.1.0 (/home/monochrome/monoruby)
+    Finished release [optimized] target(s) in 7.50s
      Running `target/release/monoruby benchmark/app_fib.rb`
-==> start whole compile: fib FuncId(82) self_class:Object start:[00000] bytecode:0x561d92a595b0
-<== finished compile. elapsed:21.5µs
-offset:Pos(18736) code: 614 bytes  data: 4 bytes
+==> start whole compile: fib FuncId(82) self_class:Object start:[00000] bytecode:0x55fc55908370
+<== finished compile. elapsed:20.4µs
+offset:Pos(18672) code: 590 bytes  data: 4 bytes
   00000: push   rbp
   00001: mov    rbp,rsp
   00004: mov    rdx,rdi
   00007: sub    rsp,0x50
   0000b: cmp    edx,0x1
-  0000e: jne    0x3b7c4
+  0000e: jne    0x3b860
   00014: mov    QWORD PTR [r14-0x40],0x4
   0001c: mov    QWORD PTR [r14-0x48],0x4
   00024: mov    rdi,QWORD PTR [r14-0x30]
   00028: test   rdi,0x7
-  0002f: jne    0x3b7d3
+  0002f: jne    0x3b86f
   00035: cmp    DWORD PTR [rdi+0x4],0x1
-  00039: jne    0x3b7d3
+  00039: jne    0x3b86f
 :00000 init_method reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
 :00001 _%2 = %1 < 3: i16                    [Integer][Integer]
   0003f: mov    rdi,QWORD PTR [r14-0x38]
-  00043: mov    rsi,0x7
-  0004a: test   rdi,0x1
-  00051: je     0x3b7e2
-  00057: cmp    rdi,rsi
-  0005a: jge    0x6e
+  00043: test   rdi,0x1
+  0004a: je     0x3b87e
+  00050: cmp    rdi,0x7
+  00054: jge    0x68
 :00002 condnotbr _%2 =>:00005
 :00003 %2 = 1: i32
-  00060: mov    QWORD PTR [r14-0x40],0x3
+  0005a: mov    QWORD PTR [r14-0x40],0x3
 :00004 ret %2
-  00068: mov    rax,QWORD PTR [r14-0x40]
-  0006c: leave  
-  0006d: ret    
+  00062: mov    rax,QWORD PTR [r14-0x40]
+  00066: leave  
+  00067: ret    
 :00005 %2 = %1 - 1: i16                     [Integer][Integer]
-  0006e: mov    rdi,QWORD PTR [r14-0x38]
-  00072: test   rdi,0x1
-  00079: je     0x3b7f1
-  0007f: sub    rdi,0x2
-  00083: jo     0x3b7f1
-  00089: mov    QWORD PTR [r14-0x40],rdi
+  00068: mov    rdi,QWORD PTR [r14-0x38]
+  0006c: test   rdi,0x1
+  00073: je     0x3b88d
+  00079: sub    rdi,0x2
+  0007d: jo     0x3b88d
+  00083: mov    QWORD PTR [r14-0x40],rdi
 :00006 %2 = %0.call fib(%2; 1)              [Object]
-  0008d: mov    rdi,QWORD PTR [r14-0x30]
-  00091: cmp    DWORD PTR [rip+0xfffffffffffffd5b],0x1        # 0xfffffdf3
-  00098: jne    0x3b800
-  0009e: cmp    DWORD PTR [rip+0xfffffffffffffd52],0x0        # 0xfffffdf7
-  000a5: je     0xbd
-  000ab: mov    rdi,r12
-  000ae: mov    rsi,QWORD PTR [rbx]
-  000b1: movabs rax,0x561d9219ca90
-  000bb: call   rax
-  000bd: mov    QWORD PTR [rsp-0x28],0x0
-  000c6: mov    rax,QWORD PTR [r14-0x30]
-  000ca: mov    QWORD PTR [rsp-0x40],rax
-  000cf: mov    rdi,0x1
-  000d6: mov    rax,QWORD PTR [r14-0x40]
-  000da: mov    QWORD PTR [rsp-0x48],rax
-  000df: mov    QWORD PTR [rsp-0x38],0x0
-  000e8: movabs rax,0x1000400000052
-  000f2: mov    QWORD PTR [rsp-0x30],rax
-  000f7: movabs r13,0x561d92a595b0
-  00101: mov    rsi,QWORD PTR [rbx]
-  00104: mov    QWORD PTR [rsp-0x18],rsi
-  00109: lea    rsi,[rsp-0x18]
-  0010e: mov    QWORD PTR [rbx],rsi
-  00111: lea    r14,[rsp-0x10]
-  00116: mov    QWORD PTR [rsp-0x20],r14
-  0011b: call   0xffffffac
-  00120: lea    r14,[rbp-0x8]
-  00124: mov    QWORD PTR [rbx],r14
-  00127: mov    r14,QWORD PTR [rbp-0x10]
-  0012b: test   rax,rax
-  0012e: je     0x3b80f
-  00134: mov    QWORD PTR [r14-0x40],rax
+  00087: mov    rdi,QWORD PTR [r14-0x30]
+  0008b: cmp    DWORD PTR [rip+0xfffffffffffffd59],0x1        # 0xfffffdeb
+  00092: jne    0x3b89c
+  00098: cmp    DWORD PTR [rip+0xfffffffffffffd50],0x0        # 0xfffffdef
+  0009f: jne    0x3b8ab
+  000a5: mov    QWORD PTR [rsp-0x28],0x0
+  000ae: mov    rax,QWORD PTR [r14-0x30]
+  000b2: mov    QWORD PTR [rsp-0x40],rax
+  000b7: mov    rdi,0x1
+  000be: mov    rax,QWORD PTR [r14-0x40]
+  000c2: mov    QWORD PTR [rsp-0x48],rax
+  000c7: mov    QWORD PTR [rsp-0x38],0x0
+  000d0: movabs rax,0x1000400000052
+  000da: mov    QWORD PTR [rsp-0x30],rax
+  000df: movabs r13,0x55fc55908370
+  000e9: mov    rsi,QWORD PTR [rbx]
+  000ec: mov    QWORD PTR [rsp-0x18],rsi
+  000f1: lea    rsi,[rsp-0x18]
+  000f6: mov    QWORD PTR [rbx],rsi
+  000f9: lea    r14,[rsp-0x10]
+  000fe: mov    QWORD PTR [rsp-0x20],r14
+  00103: call   0xffffffac
+  00108: lea    r14,[rbp-0x8]
+  0010c: mov    QWORD PTR [rbx],r14
+  0010f: mov    r14,QWORD PTR [rbp-0x10]
+  00113: test   rax,rax
+  00116: je     0x3b8c2
+  0011c: mov    QWORD PTR [r14-0x40],rax
 :00007 
 :00008 %3 = %1 - 2: i16                     [<INVALID>][<INVALID>]
-  00138: cmp    DWORD PTR [rip+0x127],0x0        # 0x266
-  0013f: jl     0x3b81e
-  00145: je     0x3b82d
-  0014b: sub    DWORD PTR [rip+0x114],0x1        # 0x266
-  00152: xor    rdi,rdi
-  00155: jmp    0x3b81e
-  0015a: mov    rdi,QWORD PTR [r14-0x38]
-  0015e: mov    rsi,0x5
-  00165: mov    rdx,rdi
-  00168: mov    rcx,rsi
-  0016b: mov    rdi,rbx
-  0016e: mov    rsi,r12
-  00171: movabs rax,0x561d92149380
-  0017b: call   rax
-  0017d: test   rax,rax
-  00180: je     0x3b849
-  00186: mov    QWORD PTR [r14-0x48],rax
+  00120: cmp    DWORD PTR [rip+0x127],0x0        # 0x24e
+  00127: jl     0x3b8d1
+  0012d: je     0x3b8e0
+  00133: sub    DWORD PTR [rip+0x114],0x1        # 0x24e
+  0013a: xor    rdi,rdi
+  0013d: jmp    0x3b8d1
+  00142: mov    rdi,QWORD PTR [r14-0x38]
+  00146: mov    rsi,0x5
+  0014d: mov    rdx,rdi
+  00150: mov    rcx,rsi
+  00153: mov    rdi,rbx
+  00156: mov    rsi,r12
+  00159: movabs rax,0x55fc5421c750
+  00163: call   rax
+  00165: test   rax,rax
+  00168: je     0x3b8fc
+  0016e: mov    QWORD PTR [r14-0x48],rax
 :00009 %3 = %0.call fib(%3; 1)              [<INVALID>]
-  0018a: mov    r15d,0x1
-  00190: movabs r13,0x561d92a59650
-  0019a: cmp    QWORD PTR [r13+0x8],0x0
-  0019f: je     0x3b858
-  001a5: cmp    r15d,DWORD PTR [r13-0x8]
-  001a9: jne    0x3b858
-  001af: mov    eax,DWORD PTR [rip+0xfffffffffffffc3e]        # 0xfffffdf3
-  001b5: cmp    DWORD PTR [r13-0x4],eax
-  001b9: jne    0x3b858
-  001bf: mov    QWORD PTR [rsp-0x28],0x0
-  001c8: mov    rax,QWORD PTR [r14-0x30]
-  001cc: mov    QWORD PTR [rsp-0x40],rax
-  001d1: mov    rdi,0x1
-  001d8: mov    rax,QWORD PTR [r14-0x48]
-  001dc: mov    QWORD PTR [rsp-0x48],rax
-  001e1: mov    QWORD PTR [rsp-0x38],0x0
-  001ea: mov    r13,QWORD PTR [r13+0x8]
-  001ee: mov    rax,QWORD PTR [r13+0x8]
-  001f2: mov    QWORD PTR [rsp-0x30],rax
-  001f7: mov    rax,QWORD PTR [r13+0x0]
-  001fb: mov    r13,QWORD PTR [r13+0x10]
-  001ff: mov    rsi,QWORD PTR [rbx]
-  00202: mov    QWORD PTR [rsp-0x18],rsi
-  00207: lea    rsi,[rsp-0x18]
-  0020c: mov    QWORD PTR [rbx],rsi
-  0020f: lea    r14,[rsp-0x10]
-  00214: mov    QWORD PTR [rsp-0x20],r14
-  00219: call   rax
-  0021b: lea    r14,[rbp-0x8]
-  0021f: mov    QWORD PTR [rbx],r14
-  00222: mov    r14,QWORD PTR [rbp-0x10]
-  00226: test   rax,rax
-  00229: je     0x3b899
-  0022f: mov    QWORD PTR [r14-0x48],rax
+  00172: mov    r15d,0x1
+  00178: movabs r13,0x55fc55908410
+  00182: cmp    QWORD PTR [r13+0x8],0x0
+  00187: je     0x3b90b
+  0018d: cmp    r15d,DWORD PTR [r13-0x8]
+  00191: jne    0x3b90b
+  00197: mov    eax,DWORD PTR [rip+0xfffffffffffffc4e]        # 0xfffffdeb
+  0019d: cmp    DWORD PTR [r13-0x4],eax
+  001a1: jne    0x3b90b
+  001a7: mov    QWORD PTR [rsp-0x28],0x0
+  001b0: mov    rax,QWORD PTR [r14-0x30]
+  001b4: mov    QWORD PTR [rsp-0x40],rax
+  001b9: mov    rdi,0x1
+  001c0: mov    rax,QWORD PTR [r14-0x48]
+  001c4: mov    QWORD PTR [rsp-0x48],rax
+  001c9: mov    QWORD PTR [rsp-0x38],0x0
+  001d2: mov    r13,QWORD PTR [r13+0x8]
+  001d6: mov    rax,QWORD PTR [r13+0x8]
+  001da: mov    QWORD PTR [rsp-0x30],rax
+  001df: mov    rax,QWORD PTR [r13+0x0]
+  001e3: mov    r13,QWORD PTR [r13+0x10]
+  001e7: mov    rsi,QWORD PTR [rbx]
+  001ea: mov    QWORD PTR [rsp-0x18],rsi
+  001ef: lea    rsi,[rsp-0x18]
+  001f4: mov    QWORD PTR [rbx],rsi
+  001f7: lea    r14,[rsp-0x10]
+  001fc: mov    QWORD PTR [rsp-0x20],r14
+  00201: call   rax
+  00203: lea    r14,[rbp-0x8]
+  00207: mov    QWORD PTR [rbx],r14
+  0020a: mov    r14,QWORD PTR [rbp-0x10]
+  0020e: test   rax,rax
+  00211: je     0x3b94c
+  00217: mov    QWORD PTR [r14-0x48],rax
 :00010 
 :00011 %2 = %2 + %3                         [<INVALID>][<INVALID>]
-  00233: mov    rdi,QWORD PTR [r14-0x40]
-  00237: mov    rsi,QWORD PTR [r14-0x48]
-  0023b: mov    rdx,rdi
-  0023e: mov    rcx,rsi
-  00241: mov    rdi,rbx
-  00244: mov    rsi,r12
-  00247: movabs rax,0x561d92148460
-  00251: call   rax
-  00253: test   rax,rax
-  00256: je     0x3b8a8
-  0025c: mov    QWORD PTR [r14-0x40],rax
+  0021b: mov    rdi,QWORD PTR [r14-0x40]
+  0021f: mov    rsi,QWORD PTR [r14-0x48]
+  00223: mov    rdx,rdi
+  00226: mov    rcx,rsi
+  00229: mov    rdi,rbx
+  0022c: mov    rsi,r12
+  0022f: movabs rax,0x55fc5421b7b0
+  00239: call   rax
+  0023b: test   rax,rax
+  0023e: je     0x3b95b
+  00244: mov    QWORD PTR [r14-0x40],rax
 :00012 ret %2
-  00260: mov    rax,QWORD PTR [r14-0x40]
-  00264: leave  
-  00265: ret    
-==> start whole compile: fib FuncId(82) self_class:Object start:[00000] bytecode:0x561d92a595b0
-<== finished compile. elapsed:15.7µs
-offset:Pos(19354) code: 571 bytes  data: 0 bytes
+  00248: mov    rax,QWORD PTR [r14-0x40]
+  0024c: leave  
+  0024d: ret    
+==> start whole compile: fib FuncId(82) self_class:Object start:[00000] bytecode:0x55fc55908370
+<== finished compile. elapsed:14.9µs
+offset:Pos(19266) code: 529 bytes  data: 0 bytes
   00000: push   rbp
   00001: mov    rbp,rsp
   00004: mov    rdx,rdi
   00007: sub    rsp,0x50
   0000b: cmp    edx,0x1
-  0000e: jne    0x3b64d
+  0000e: jne    0x3b718
   00014: mov    QWORD PTR [r14-0x40],0x4
   0001c: mov    QWORD PTR [r14-0x48],0x4
   00024: mov    rdi,QWORD PTR [r14-0x30]
   00028: test   rdi,0x7
-  0002f: jne    0x3b65c
+  0002f: jne    0x3b727
   00035: cmp    DWORD PTR [rdi+0x4],0x1
-  00039: jne    0x3b65c
+  00039: jne    0x3b727
 :00000 init_method reg:4 arg:1 pos:1 req:1 block:0 stack_offset:5
 :00001 _%2 = %1 < 3: i16                    [Integer][Integer]
   0003f: mov    rdi,QWORD PTR [r14-0x38]
-  00043: mov    rsi,0x7
-  0004a: test   rdi,0x1
-  00051: je     0x3b66b
-  00057: cmp    rdi,rsi
-  0005a: jge    0x6e
+  00043: test   rdi,0x1
+  0004a: je     0x3b736
+  00050: cmp    rdi,0x7
+  00054: jge    0x68
 :00002 condnotbr _%2 =>:00005
 :00003 %2 = 1: i32
-  00060: mov    QWORD PTR [r14-0x40],0x3
+  0005a: mov    QWORD PTR [r14-0x40],0x3
 :00004 ret %2
-  00068: mov    rax,QWORD PTR [r14-0x40]
-  0006c: leave  
-  0006d: ret    
+  00062: mov    rax,QWORD PTR [r14-0x40]
+  00066: leave  
+  00067: ret    
 :00005 %2 = %1 - 1: i16                     [Integer][Integer]
-  0006e: mov    rdi,QWORD PTR [r14-0x38]
-  00072: test   rdi,0x1
-  00079: je     0x3b67a
-  0007f: sub    rdi,0x2
-  00083: jo     0x3b67a
-  00089: mov    QWORD PTR [r14-0x40],rdi
+  00068: mov    rdi,QWORD PTR [r14-0x38]
+  0006c: test   rdi,0x1
+  00073: je     0x3b745
+  00079: sub    rdi,0x2
+  0007d: jo     0x3b745
+  00083: mov    QWORD PTR [r14-0x40],rdi
 :00006 %2 = %0.call fib(%2; 1)              [Object]
-  0008d: mov    rdi,QWORD PTR [r14-0x30]
-  00091: cmp    DWORD PTR [rip+0xfffffffffffffaf1],0x1        # 0xfffffb89
-  00098: jne    0x3b689
-  0009e: cmp    DWORD PTR [rip+0xfffffffffffffae8],0x0        # 0xfffffb8d
-  000a5: je     0xbd
-  000ab: mov    rdi,r12
-  000ae: mov    rsi,QWORD PTR [rbx]
-  000b1: movabs rax,0x561d9219ca90
-  000bb: call   rax
-  000bd: mov    QWORD PTR [rsp-0x28],0x0
-  000c6: mov    rax,QWORD PTR [r14-0x30]
-  000ca: mov    QWORD PTR [rsp-0x40],rax
-  000cf: mov    rdi,0x1
-  000d6: mov    rax,QWORD PTR [r14-0x40]
-  000da: mov    QWORD PTR [rsp-0x48],rax
-  000df: mov    QWORD PTR [rsp-0x38],0x0
-  000e8: movabs rax,0x1000400000052
-  000f2: mov    QWORD PTR [rsp-0x30],rax
-  000f7: movabs r13,0x561d92a595b0
-  00101: mov    rsi,QWORD PTR [rbx]
-  00104: mov    QWORD PTR [rsp-0x18],rsi
-  00109: lea    rsi,[rsp-0x18]
-  0010e: mov    QWORD PTR [rbx],rsi
-  00111: lea    r14,[rsp-0x10]
-  00116: mov    QWORD PTR [rsp-0x20],r14
-  0011b: call   0xfffffd42
-  00120: lea    r14,[rbp-0x8]
-  00124: mov    QWORD PTR [rbx],r14
-  00127: mov    r14,QWORD PTR [rbp-0x10]
-  0012b: test   rax,rax
-  0012e: je     0x3b698
-  00134: mov    QWORD PTR [r14-0x40],rax
+  00087: mov    rdi,QWORD PTR [r14-0x30]
+  0008b: cmp    DWORD PTR [rip+0xfffffffffffffb07],0x1        # 0xfffffb99
+  00092: jne    0x3b754
+  00098: cmp    DWORD PTR [rip+0xfffffffffffffafe],0x0        # 0xfffffb9d
+  0009f: jne    0x3b763
+  000a5: mov    QWORD PTR [rsp-0x28],0x0
+  000ae: mov    rax,QWORD PTR [r14-0x30]
+  000b2: mov    QWORD PTR [rsp-0x40],rax
+  000b7: mov    rdi,0x1
+  000be: mov    rax,QWORD PTR [r14-0x40]
+  000c2: mov    QWORD PTR [rsp-0x48],rax
+  000c7: mov    QWORD PTR [rsp-0x38],0x0
+  000d0: movabs rax,0x1000400000052
+  000da: mov    QWORD PTR [rsp-0x30],rax
+  000df: movabs r13,0x55fc55908370
+  000e9: mov    rsi,QWORD PTR [rbx]
+  000ec: mov    QWORD PTR [rsp-0x18],rsi
+  000f1: lea    rsi,[rsp-0x18]
+  000f6: mov    QWORD PTR [rbx],rsi
+  000f9: lea    r14,[rsp-0x10]
+  000fe: mov    QWORD PTR [rsp-0x20],r14
+  00103: call   0xfffffd5a
+  00108: lea    r14,[rbp-0x8]
+  0010c: mov    QWORD PTR [rbx],r14
+  0010f: mov    r14,QWORD PTR [rbp-0x10]
+  00113: test   rax,rax
+  00116: je     0x3b77a
+  0011c: mov    QWORD PTR [r14-0x40],rax
 :00007 
 :00008 %3 = %1 - 2: i16                     [Integer][Integer]
-  00138: mov    rdi,QWORD PTR [r14-0x38]
-  0013c: test   rdi,0x1
-  00143: je     0x3b6a7
-  00149: sub    rdi,0x4
-  0014d: jo     0x3b6a7
-  00153: mov    QWORD PTR [r14-0x48],rdi
+  00120: mov    rdi,QWORD PTR [r14-0x38]
+  00124: test   rdi,0x1
+  0012b: je     0x3b789
+  00131: sub    rdi,0x4
+  00135: jo     0x3b789
+  0013b: mov    QWORD PTR [r14-0x48],rdi
 :00009 %3 = %0.call fib(%3; 1)              [Object]
-  00157: mov    rdi,QWORD PTR [r14-0x30]
-  0015b: cmp    DWORD PTR [rip+0xfffffffffffffa27],0x1        # 0xfffffb89
-  00162: jne    0x3b6b6
-  00168: cmp    DWORD PTR [rip+0xfffffffffffffa1e],0x0        # 0xfffffb8d
-  0016f: je     0x187
-  00175: mov    rdi,r12
-  00178: mov    rsi,QWORD PTR [rbx]
-  0017b: movabs rax,0x561d9219ca90
-  00185: call   rax
-  00187: mov    QWORD PTR [rsp-0x28],0x0
-  00190: mov    rax,QWORD PTR [r14-0x30]
-  00194: mov    QWORD PTR [rsp-0x40],rax
-  00199: mov    rdi,0x1
-  001a0: mov    rax,QWORD PTR [r14-0x48]
-  001a4: mov    QWORD PTR [rsp-0x48],rax
-  001a9: mov    QWORD PTR [rsp-0x38],0x0
-  001b2: movabs rax,0x1000400000052
-  001bc: mov    QWORD PTR [rsp-0x30],rax
-  001c1: movabs r13,0x561d92a595b0
-  001cb: mov    rsi,QWORD PTR [rbx]
-  001ce: mov    QWORD PTR [rsp-0x18],rsi
-  001d3: lea    rsi,[rsp-0x18]
-  001d8: mov    QWORD PTR [rbx],rsi
-  001db: lea    r14,[rsp-0x10]
-  001e0: mov    QWORD PTR [rsp-0x20],r14
-  001e5: call   0xfffffd42
-  001ea: lea    r14,[rbp-0x8]
-  001ee: mov    QWORD PTR [rbx],r14
-  001f1: mov    r14,QWORD PTR [rbp-0x10]
-  001f5: test   rax,rax
-  001f8: je     0x3b6c5
-  001fe: mov    QWORD PTR [r14-0x48],rax
+  0013f: mov    rdi,QWORD PTR [r14-0x30]
+  00143: cmp    DWORD PTR [rip+0xfffffffffffffa4f],0x1        # 0xfffffb99
+  0014a: jne    0x3b798
+  00150: cmp    DWORD PTR [rip+0xfffffffffffffa46],0x0        # 0xfffffb9d
+  00157: jne    0x3b7a7
+  0015d: mov    QWORD PTR [rsp-0x28],0x0
+  00166: mov    rax,QWORD PTR [r14-0x30]
+  0016a: mov    QWORD PTR [rsp-0x40],rax
+  0016f: mov    rdi,0x1
+  00176: mov    rax,QWORD PTR [r14-0x48]
+  0017a: mov    QWORD PTR [rsp-0x48],rax
+  0017f: mov    QWORD PTR [rsp-0x38],0x0
+  00188: movabs rax,0x1000400000052
+  00192: mov    QWORD PTR [rsp-0x30],rax
+  00197: movabs r13,0x55fc55908370
+  001a1: mov    rsi,QWORD PTR [rbx]
+  001a4: mov    QWORD PTR [rsp-0x18],rsi
+  001a9: lea    rsi,[rsp-0x18]
+  001ae: mov    QWORD PTR [rbx],rsi
+  001b1: lea    r14,[rsp-0x10]
+  001b6: mov    QWORD PTR [rsp-0x20],r14
+  001bb: call   0xfffffd5a
+  001c0: lea    r14,[rbp-0x8]
+  001c4: mov    QWORD PTR [rbx],r14
+  001c7: mov    r14,QWORD PTR [rbp-0x10]
+  001cb: test   rax,rax
+  001ce: je     0x3b7be
+  001d4: mov    QWORD PTR [r14-0x48],rax
 :00010 
 :00011 %2 = %2 + %3                         [Integer][Integer]
-  00202: mov    rdi,QWORD PTR [r14-0x40]
-  00206: mov    rsi,QWORD PTR [r14-0x48]
-  0020a: test   rdi,0x1
-  00211: je     0x3b6d4
-  00217: test   rsi,0x1
-  0021e: je     0x3b6d4
-  00224: sub    rdi,0x1
-  00228: add    rdi,rsi
-  0022b: jo     0x3b6d4
-  00231: mov    QWORD PTR [r14-0x40],rdi
+  001d8: mov    rdi,QWORD PTR [r14-0x40]
+  001dc: mov    rsi,QWORD PTR [r14-0x48]
+  001e0: test   rdi,0x1
+  001e7: je     0x3b7cd
+  001ed: test   rsi,0x1
+  001f4: je     0x3b7cd
+  001fa: sub    rdi,0x1
+  001fe: add    rdi,rsi
+  00201: jo     0x3b7cd
+  00207: mov    QWORD PTR [r14-0x40],rdi
 :00012 ret %2
-  00235: mov    rax,QWORD PTR [r14-0x40]
-  00239: leave  
-  0023a: ret    
+  0020b: mov    rax,QWORD PTR [r14-0x40]
+  0020f: leave  
+  00210: ret    

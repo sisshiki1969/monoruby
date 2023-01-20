@@ -1,0 +1,195 @@
+    Finished release [optimized] target(s) in 0.09s
+     Running `target/release/monoruby benchmark/so_mandelbrot.rb`
+------------------------------------
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:method FuncId(77) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 _ = class_def "Math" < _: FuncId(78)
+ :00002 _ = class_def "RbConfig" < _: FuncId(79)
+ :00003 %1 = class_def "Process" < _: FuncId(80)
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x558834900300) meta:kind:VM mode:class_def FuncId(78) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = literal[3.141592653589793]
+ :00002 const[PI] = %1
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x558834900490) meta:kind:VM mode:class_def FuncId(79) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:class_def FuncId(80) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = 0: i32
+ :00002 const[CLOCK_REALTIME] = %1
+ :00003 %1 = 1: i32
+ :00004 const[CLOCK_MONOTONIC] = %1
+ :00005 %1 = 2: i32
+ :00006 const[CLOCK_PROCESS_CPUTIME_ID] = %1
+ :00007 %1 = 3: i32
+ :00008 const[CLOCK_THREAD_CPUTIME_ID] = %1
+ :00009 %1 = 4: i32
+ :00010 const[CLOCK_MONOTONIC_RAW] = %1
+ :00011 %1 = 5: i32
+ :00012 const[CLOCK_REALTIME_COARSE] = %1
+ :00013 %1 = 6: i32
+ :00014 const[CLOCK_MONOTONIC_COARSE] = %1
+ :00015 %1 = 7: i32
+ :00016 const[CLOCK_BOOTTIME] = %1
+ :00017 %1 = 8: i32
+ :00018 const[CLOCK_REALTIME_ALARM] = %1
+ :00019 %1 = 9: i32
+ :00020 const[CLOCK_BOOTTIME_ALARM] = %1
+ :00021 ret %1
+------------------------------------
+------------------------------------
+FuncId(77) name:/main pos_num:0 bc:BcPcBase(0x558834900350) meta:kind:VM mode:method FuncId(77) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 _ = class_def "Math" < _: FuncId(78)
+ :00002 _ = class_def "RbConfig" < _: FuncId(79)
+ :00003 %1 = class_def "Process" < _: FuncId(80)
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(78) name:Math pos_num:0 bc:BcPcBase(0x558834900300) meta:kind:VM mode:class_def FuncId(78) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = literal[3.141592653589793]
+ :00002 const[PI] = %1
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(79) name:RbConfig pos_num:0 bc:BcPcBase(0x558834900490) meta:kind:VM mode:class_def FuncId(79) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(80) name:Process pos_num:0 bc:BcPcBase(0x5588348fe9b0) meta:kind:VM mode:class_def FuncId(80) regs:2
++:00000 init_method reg:2 arg:0 pos:0 req:0 block:0 stack_offset:4
+ :00001 %1 = 0: i32
+ :00002 const[CLOCK_REALTIME] = %1
+ :00003 %1 = 1: i32
+ :00004 const[CLOCK_MONOTONIC] = %1
+ :00005 %1 = 2: i32
+ :00006 const[CLOCK_PROCESS_CPUTIME_ID] = %1
+ :00007 %1 = 3: i32
+ :00008 const[CLOCK_THREAD_CPUTIME_ID] = %1
+ :00009 %1 = 4: i32
+ :00010 const[CLOCK_MONOTONIC_RAW] = %1
+ :00011 %1 = 5: i32
+ :00012 const[CLOCK_REALTIME_COARSE] = %1
+ :00013 %1 = 6: i32
+ :00014 const[CLOCK_MONOTONIC_COARSE] = %1
+ :00015 %1 = 7: i32
+ :00016 const[CLOCK_BOOTTIME] = %1
+ :00017 %1 = 8: i32
+ :00018 const[CLOCK_REALTIME_ALARM] = %1
+ :00019 %1 = 9: i32
+ :00020 const[CLOCK_BOOTTIME_ALARM] = %1
+ :00021 ret %1
+------------------------------------
+------------------------------------
+FuncId(81) name:/main pos_num:0 bc:BcPcBase(0x558834920320) meta:kind:VM mode:method FuncId(81) regs:21
++:00000 init_method reg:21 arg:0 pos:0 req:0 block:0 stack_offset:14
+ :00001 %1 = 600: i32
+ :00002 %15 = literal["P4\n"]
+ :00003 %16 = %1
+ :00004 %17 = literal["\ "]
+ :00005 %18 = %1
+ :00006 %15 = concat(%15; 4)
+ :00007 _ = %0.call puts(%15; 1)             [<INVALID>]
+ :00009 %15 = 49: i32
+ :00010 const[ITER] = %15
+ :00011 %15 = literal[4.0]
+ :00012 const[LIMIT_SQUARED] = %15
+ :00013 %2 = 0: i32
+ :00014 %3 = 0: i32
+ :00015 %4 = %1 - 1: i16                     [<INVALID>][<INVALID>]
+ :00016 %5 = 0: i32
+ :00017 %16 = %4
+ :00018 %15 = %5 .. %16
++:00019 loop_start counter=0 jit-addr=0000000000000000
+ :00020 _%17 = %5 > %16                      [<INVALID>][<INVALID>]
+ :00021 condbr _%17 =>:00101
+ :00022 %6 = 0: i32
+ :00023 %17 = %4
++:00024 loop_start counter=0 jit-addr=0000000000000000
+ :00025 _%18 = %6 > %17                      [<INVALID>][<INVALID>]
+ :00026 condbr _%18 =>:00098
+ :00027 %7 = literal[0.0]
+ :00028 %8 = literal[0.0]
+ :00029 %18 = literal[2.0]
+ :00030 %18 = %18 * %6                       [<INVALID>][<INVALID>]
+ :00031 %18 = %18 / %1                       [<INVALID>][<INVALID>]
+ :00032 %19 = literal[1.5]
+ :00033 %9 = %18 - %19                       [<INVALID>][<INVALID>]
+ :00034 %18 = literal[2.0]
+ :00035 %18 = %18 * %5                       [<INVALID>][<INVALID>]
+ :00036 %18 = %18 / %1                       [<INVALID>][<INVALID>]
+ :00037 %19 = literal[1.0]
+ :00038 %10 = %18 - %19                      [<INVALID>][<INVALID>]
+ :00039 %11 = literal[false]
+ :00040 %12 = 0: i32
+ :00041 %18 = const[ITER]                    [<INVALID>]
++:00042 loop_start counter=0 jit-addr=0000000000000000
+ :00043 _%19 = %12 > %18                     [<INVALID>][<INVALID>]
+ :00044 condbr _%19 =>:00067
+ :00045 %19 = %7 * %7                        [<INVALID>][<INVALID>]
+ :00046 %20 = %8 * %8                        [<INVALID>][<INVALID>]
+ :00047 %19 = %19 - %20                      [<INVALID>][<INVALID>]
+ :00048 %13 = %19 + %9                       [<INVALID>][<INVALID>]
+ :00049 %19 = 2: i16 * %7                    [<INVALID>][<INVALID>]
+ :00050 %19 = %19 * %8                       [<INVALID>][<INVALID>]
+ :00051 %14 = %19 + %10                      [<INVALID>][<INVALID>]
+ :00052 %19 = %13
+ :00053 %20 = %14
+ :00054 %7 = %19
+ :00055 %8 = %20
+ :00056 %19 = %7 * %7                        [<INVALID>][<INVALID>]
+ :00057 %20 = %8 * %8                        [<INVALID>][<INVALID>]
+ :00058 %19 = %19 + %20                      [<INVALID>][<INVALID>]
+ :00059 %20 = const[LIMIT_SQUARED]           [<INVALID>]
+ :00060 _%19 = %19 > %20                     [<INVALID>][<INVALID>]
+ :00061 condnotbr _%19 =>:00065
+ :00062 %11 = literal[true]
+ :00063 br =>:00067
+ :00064 br =>:00065
++:00065 %12 = %12 + 1: i16                   [<INVALID>][<INVALID>]
+ :00066 br =>:00042
++:00067 loop_end
+ :00068 %18 = 1: i32
+ :00069 %18 = %2 << %18                      [<INVALID>][<INVALID>]
+ :00070 condnotbr %11 =>:00073
+ :00071 %19 = 0: i32
+ :00072 br =>:00074
++:00073 %19 = 1: i32
++:00074 %2 = %18 | %19                       [<INVALID>][<INVALID>]
+ :00075 %3 = %3 + 1: i16                     [<INVALID>][<INVALID>]
+ :00076 _%18 = %3 == 8: i16                  [<INVALID>][<INVALID>]
+ :00077 condnotbr _%18 =>:00085
+ :00078 %18 = %2.call chr()                  [<INVALID>]
+ :00080 _ = %0.call print(%18; 1)            [<INVALID>]
+ :00082 %2 = 0: i32
+ :00083 %3 = 0: i32
+ :00084 br =>:00096
++:00085 _%18 = %6 == %4                      [<INVALID>][<INVALID>]
+ :00086 condnotbr _%18 =>:00096
+ :00087 %18 = 8: i16 - %3                    [<INVALID>][<INVALID>]
+ :00088 %2 = %2 << %18                       [<INVALID>][<INVALID>]
+ :00089 %18 = %2.call chr()                  [<INVALID>]
+ :00091 _ = %0.call print(%18; 1)            [<INVALID>]
+ :00093 %2 = 0: i32
+ :00094 %3 = 0: i32
+ :00095 br =>:00096
++:00096 %6 = %6 + 1: i16                     [<INVALID>][<INVALID>]
+ :00097 br =>:00024
++:00098 loop_end
+ :00099 %5 = %5 + 1: i16                     [<INVALID>][<INVALID>]
+ :00100 br =>:00019
++:00101 loop_end
+ :00102 ret %15
+------------------------------------
