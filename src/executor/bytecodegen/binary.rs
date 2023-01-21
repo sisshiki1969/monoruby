@@ -49,7 +49,7 @@ macro_rules! gen_ops {
               loc: Loc,
           ) -> Result<BcReg> {
               let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-              self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
+              self.push(BcIr::BinOp(BinOpK::$inst, dst, BinopMode::RR(lhs, rhs)), loc);
               Ok(dst)
           }
       }
@@ -72,19 +72,18 @@ macro_rules! gen_ri_ops {
               rhs: Node,
               loc: Loc,
           ) -> Result<BcReg> {
-              if let Some(i) = is_smi(&rhs) {
+              let (dst, mode) = if let Some(i) = is_smi(&rhs) {
                   let (dst, lhs) = self.gen_singular(ctx, info, dst, lhs)?;
-                  self.push(BcIr::BinOpRi(BinOpK::$inst, dst, lhs, i), loc);
-                  Ok(dst)
+                  (dst, BinopMode::RI(lhs, i))
               } else if let Some(i) = is_smi(&lhs) {
                   let (dst, rhs) = self.gen_singular(ctx, info, dst, rhs)?;
-                  self.push(BcIr::BinOpIr(BinOpK::$inst, dst, i, rhs), loc);
-                  Ok(dst)
+                  (dst, BinopMode::IR(i, rhs))
               } else {
                   let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-                  self.push(BcIr::BinOp(BinOpK::$inst, dst, lhs, rhs), loc);
-                  Ok(dst)
-              }
+                  (dst, BinopMode::RR(lhs, rhs))
+              };
+              self.push(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
+              Ok(dst)
           }
       }
   };

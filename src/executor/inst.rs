@@ -1,6 +1,13 @@
 use super::*;
 use ruruby_parse::CmpKind;
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum BinopMode {
+    RR(BcReg, BcReg),
+    RI(BcReg, i16),
+    IR(i16, BcReg),
+}
+
 ///
 /// bytecode Ir.
 ///
@@ -51,15 +58,12 @@ pub(super) enum BcIr {
         /// source register of the current frame.
         src: BcReg,
     },
-    LoadIvar(BcReg, IdentId),                // ret, id  - %ret = @id
-    StoreIvar(BcReg, IdentId),               // src, id  - @id = %src
-    Neg(BcReg, BcReg),                       // ret, src
-    BinOp(BinOpK, BcReg, BcReg, BcReg),      // kind, ret, lhs, rhs
-    BinOpRi(BinOpK, BcReg, BcReg, i16),      // kind, ret, lhs, rhs
-    BinOpIr(BinOpK, BcReg, i16, BcReg),      // kind, ret, lhs, rhs
-    Cmp(CmpKind, BcReg, BcReg, BcReg, bool), // kind, dst, lhs, rhs, optimizable
-    Cmpri(CmpKind, BcReg, BcReg, i16, bool), // kind, dst, lhs, rhs, optimizable
-    Mov(BcReg, BcReg),                       // dst, offset
+    LoadIvar(BcReg, IdentId),             // ret, id  - %ret = @id
+    StoreIvar(BcReg, IdentId),            // src, id  - @id = %src
+    Neg(BcReg, BcReg),                    // ret, src
+    BinOp(BinOpK, BcReg, BinopMode),      // kind, ret, (lhs, rhs)
+    Cmp(CmpKind, BcReg, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
+    Mov(BcReg, BcReg),                    // dst, offset
     CheckLocal(BcReg, usize),
     Br(usize),
     CondBr(BcReg, usize, bool, BrKind),

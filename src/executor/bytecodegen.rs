@@ -1523,15 +1523,15 @@ impl IrContext {
         optimizable: bool,
         loc: Loc,
     ) -> Result<BcReg> {
-        if let Some(i) = is_smi(&rhs) {
+        let (dst, mode) = if let Some(i) = is_smi(&rhs) {
             let (dst, lhs) = self.gen_singular(ctx, info, dst, lhs)?;
-            self.push(BcIr::Cmpri(kind, dst, lhs, i, optimizable), loc);
-            Ok(dst)
+            (dst, BinopMode::RI(lhs, i))
         } else {
             let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-            self.push(BcIr::Cmp(kind, dst, lhs, rhs, optimizable), loc);
-            Ok(dst)
-        }
+            (dst, BinopMode::RR(lhs, rhs))
+        };
+        self.push(BcIr::Cmp(kind, dst, mode, optimizable), loc);
+        Ok(dst)
     }
 
     ///
@@ -1655,8 +1655,7 @@ impl IrContext {
                         CmpKind::Gt
                     },
                     dst,
-                    counter.into(),
-                    end,
+                    BinopMode::RR(counter.into(), end),
                     true,
                 ),
                 loc,
@@ -1667,7 +1666,11 @@ impl IrContext {
             self.gen_expr(ctx, info, *body.body, UseMode::NotUse)?;
 
             self.push(
-                BcIr::BinOpRi(BinOpK::Add, counter.into(), counter.into(), 1),
+                BcIr::BinOp(
+                    BinOpK::Add,
+                    counter.into(),
+                    BinopMode::RI(counter.into(), 1),
+                ),
                 loc,
             );
             self.gen_br(loop_entry);

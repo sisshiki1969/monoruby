@@ -564,7 +564,7 @@ impl Globals {
                             panic!("{}", &x[0..i].trim());
                         }
                     },
-                    x[28..].to_string(),
+                    x[i + 24..].to_string(),
                 )
             })
             .collect();
