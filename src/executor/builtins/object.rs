@@ -8,19 +8,14 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
-    globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
-    globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(
         OBJECT_CLASS,
         "instance_variable_defined?",
@@ -39,6 +34,13 @@ pub(super) fn init(globals: &mut Globals) {
         instance_variable_get,
         1,
     );
+    globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
 
 /// ### Object.new
@@ -61,6 +63,22 @@ _: Option<Value>,
     };
     Some(obj)
 }*/
+
+/// ### Kernel#puts
+/// - puts(*arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
+extern "C" fn is_a(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let class = arg[0].expect_class(globals)?;
+    Some(Value::bool(self_val.is_kinf_of(globals, class)))
+}
 
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
@@ -480,5 +498,29 @@ mod test {
         "#,
         );
         run_test_error(r#"5.instance_of?(7)"#);
+    }
+
+    #[test]
+    fn object_isa() {
+        run_test("4.is_a? Integer");
+        run_test("4.5.is_a? Integer");
+        run_test("'Ruby'.is_a? Integer");
+        run_test("4.5.is_a? Float");
+        run_test("'Ruby'.is_a? Float");
+        run_test(
+            r#"
+        class C
+        end
+        C.new.is_a? C"#,
+        );
+        run_test(
+            r#"
+        class S
+        end
+        class C < S
+        end
+        c = C.new
+        [c.is_a?(S), c.is_a?(C)]"#,
+        );
     }
 }

@@ -3,6 +3,9 @@
 cargo run --release --features emit-asm -- benchmark/app_fib.rb 2> benchmark/fib.disas
 cargo run --release --features emit-bc -- benchmark/app_fib.rb 2> benchmark/fib.bytecode
 
+cargo run --release --features emit-asm -- benchmark/tarai.rb 2> benchmark/tarai.disas
+cargo run --release --features emit-bc -- benchmark/tarai.rb 2> benchmark/tarai.bytecode
+
 cargo run --release --features emit-asm -- benchmark/app_aobench.rb 2> benchmark/aobench.disas > /dev/null
 cargo run --release --features emit-bc -- benchmark/app_aobench.rb 2> benchmark/aobench.bytecode > /dev/null
 

@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_func(CLASS_CLASS, "===", teq, 1);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
     globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
@@ -70,6 +71,22 @@ extern "C" fn allocate(
     let class_id = self_val.as_class();
     let obj = Value::new_object(class_id);
     Some(obj)
+}
+
+/// ### Module#===
+/// - self === obj -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
+extern "C" fn teq(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let class = self_val.as_class();
+    Some(Value::bool(arg[0].is_kinf_of(globals, class)))
 }
 
 /// ### Class#to_s
@@ -229,6 +246,29 @@ mod test {
           end
         end
         A::B.new.f"#,
+        );
+    }
+
+    #[test]
+    fn test_teq() {
+        run_test("Integer === 4");
+        run_test("Integer === 4.5");
+        run_test("Integer === 'Ruby'");
+        run_test("Float === 4.5");
+        run_test("Float === 'Ruby'");
+        run_test(
+            r#"
+        class C
+        end
+        C === C.new"#,
+        );
+        run_test(
+            r#"
+        class S
+        end
+        class C < S
+        end
+        S === C.new"#,
         );
     }
 

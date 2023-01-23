@@ -118,6 +118,17 @@ impl Value {
         globals.get_real_class_id(self).get_name(globals)
     }
 
+    pub(crate) fn is_kinf_of(self, globals: &Globals, class: ClassId) -> bool {
+        let mut obj_class = Some(self.get_real_class_id(globals));
+        while let Some(obj_class_inner) = obj_class {
+            if obj_class_inner == class {
+                return true;
+            }
+            obj_class = obj_class_inner.super_class(globals);
+        }
+        false
+    }
+
     pub fn to_s(self, globals: &Globals) -> String {
         globals.val_tos(self)
     }
