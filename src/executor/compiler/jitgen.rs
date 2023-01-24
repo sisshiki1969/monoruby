@@ -93,10 +93,6 @@ impl JitContext {
         self.backedge_map
             .insert(bb_pos, (dest_label, merge_info, unused));
     }
-
-    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, MergeInfo, Vec<SlotId>) {
-        self.backedge_map.remove_entry(&bb_pos).unwrap().1
-    }
 }
 
 #[derive(Debug)]
@@ -550,10 +546,7 @@ impl Codegen {
             };
         }
 
-        let keys: Vec<_> = cc.branch_map.keys().cloned().collect();
-        for pos in keys.into_iter() {
-            self.gen_backedge_branch(&mut cc, func, pos);
-        }
+        self.gen_backedge_branches(&mut cc, func);
 
         self.jit.finalize();
 

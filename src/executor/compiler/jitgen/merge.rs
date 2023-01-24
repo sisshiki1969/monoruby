@@ -1,15 +1,12 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn gen_backedge_branch(
-        &mut self,
-        cc: &mut JitContext,
-        func: &ISeqInfo,
-        bb_pos: usize,
-    ) {
-        if let Some(entries) = cc.branch_map.remove(&bb_pos) {
-            let (target_label, merge_info, unused) = cc.get_backedge(bb_pos);
+    pub(super) fn gen_backedge_branches(&mut self, cc: &mut JitContext, func: &ISeqInfo) {
+        let branch_map = std::mem::take(&mut cc.branch_map);
+        for (bb_pos, entries) in branch_map.into_iter() {
+            let (target_label, merge_info, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
             let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
+            let pc = func.get_pc(bb_pos);
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
@@ -19,7 +16,6 @@ impl Codegen {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
-                let pc = func.get_pc(bb_pos);
                 self.gen_write_back_for_target(bbctx, &target_ctx, dest_label, target_label, pc);
             }
         }
