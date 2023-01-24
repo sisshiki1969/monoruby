@@ -31,7 +31,7 @@ struct JitContext {
     /// true for a loop, false for a method.
     is_loop: bool,
     branch_map: HashMap<usize, Vec<BranchEntry>>,
-    backedge_map: HashMap<usize, (DestLabel, StackSlotInfo, Vec<SlotId>)>,
+    backedge_map: HashMap<usize, (DestLabel, MergeInfo, Vec<SlotId>)>,
     start_codepos: usize,
     /// *self* for this loop/method.
     self_value: Value,
@@ -81,16 +81,20 @@ impl JitContext {
 
     fn new_backedge(
         &mut self,
+        bbctx: &BBContext,
         bb_pos: usize,
         dest_label: DestLabel,
-        slot_info: StackSlotInfo,
         unused: Vec<SlotId>,
     ) {
+        let merge_info = MergeInfo {
+            stack_slot: bbctx.stack_slot.clone(),
+            local_num: bbctx.local_num,
+        };
         self.backedge_map
-            .insert(bb_pos, (dest_label, slot_info, unused));
+            .insert(bb_pos, (dest_label, merge_info, unused));
     }
 
-    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, StackSlotInfo, Vec<SlotId>) {
+    fn get_backedge(&mut self, bb_pos: usize) -> (DestLabel, MergeInfo, Vec<SlotId>) {
         self.backedge_map.remove_entry(&bb_pos).unwrap().1
     }
 }
@@ -117,8 +121,7 @@ struct BBContext {
     stack_slot: StackSlotInfo,
     /// Information for xmm registers.
     xmm: XmmInfo,
-    self_class: ClassId,
-    self_kind: Option<u8>,
+    self_value: Value,
     local_num: usize,
     recompile_flag: bool,
 }
@@ -129,16 +132,17 @@ impl BBContext {
         Self {
             stack_slot: StackSlotInfo(vec![LinkMode::None; reg_num]),
             xmm,
-            self_class: self_value.class_id(),
-            self_kind: self_value.kind(),
+            self_value,
             local_num,
             recompile_flag: false,
         }
     }
 
-    fn from(slot_info: &StackSlotInfo, local_num: usize, self_value: Value) -> Self {
-        let mut ctx = Self::new(slot_info.0.len(), local_num, self_value);
-        for (i, mode) in slot_info.0.iter().enumerate() {
+    fn from_merge_info(merge_info: &MergeInfo, self_value: Value) -> Self {
+        let stack_slot = &merge_info.stack_slot;
+        let local_num = merge_info.local_num;
+        let mut ctx = Self::new(stack_slot.0.len(), local_num, self_value);
+        for (i, mode) in stack_slot.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
                 LinkMode::None => {}
@@ -399,22 +403,39 @@ impl std::ops::IndexMut<SlotId> for StackSlotInfo {
     }
 }
 
-impl StackSlotInfo {
-    fn merge(&mut self, other: &StackSlotInfo) {
-        self.0.iter_mut().zip(other.0.iter()).for_each(|(l, r)| {
-            *l = match (&l, r) {
-                (LinkMode::XmmR(l), LinkMode::XmmR(_) | LinkMode::XmmRW(_))
-                | (LinkMode::XmmRW(l), LinkMode::XmmR(_)) => LinkMode::XmmR(*l),
-                (LinkMode::XmmRW(l), LinkMode::XmmRW(_)) => LinkMode::XmmRW(*l),
-                _ => LinkMode::None,
-            };
-        });
+#[derive(Debug, Clone, PartialEq)]
+struct MergeInfo {
+    stack_slot: StackSlotInfo,
+    local_num: usize,
+}
+
+impl MergeInfo {
+    fn from(bbctx: &BBContext) -> Self {
+        Self {
+            stack_slot: bbctx.stack_slot.clone(),
+            local_num: bbctx.local_num,
+        }
+    }
+
+    fn merge(&mut self, other: &BBContext) {
+        self.stack_slot
+            .0
+            .iter_mut()
+            .zip(other.stack_slot.0.iter())
+            .for_each(|(l, r)| {
+                *l = match (&l, r) {
+                    (LinkMode::XmmR(l), LinkMode::XmmR(_) | LinkMode::XmmRW(_))
+                    | (LinkMode::XmmRW(l), LinkMode::XmmR(_)) => LinkMode::XmmR(*l),
+                    (LinkMode::XmmRW(l), LinkMode::XmmRW(_)) => LinkMode::XmmRW(*l),
+                    _ => LinkMode::None,
+                };
+            });
     }
 
     fn merge_entries(entries: &[BranchEntry]) -> Self {
-        let mut target = entries[0].bbctx.stack_slot.clone();
+        let mut merge_info = MergeInfo::from(&entries[0].bbctx);
         #[cfg(feature = "emit-tir")]
-        eprintln!("  <-{}: {:?}", entries[0].src_idx, target);
+        eprintln!("  <-{}: {:?}", entries[0].src_idx, merge_info);
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
@@ -423,9 +444,9 @@ impl StackSlotInfo {
         {
             #[cfg(feature = "emit-tir")]
             eprintln!("  <-{_src_idx}: {:?}", bbctx.stack_slot);
-            target.merge(&bbctx.stack_slot);
+            merge_info.merge(bbctx);
         }
-        target
+        merge_info
     }
 }
 

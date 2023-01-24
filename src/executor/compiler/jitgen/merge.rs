@@ -8,8 +8,8 @@ impl Codegen {
         bb_pos: usize,
     ) {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
-            let (target_label, target_slot_info, unused) = cc.get_backedge(bb_pos);
-            let target_ctx = BBContext::from(&target_slot_info, func.local_num(), cc.self_value);
+            let (target_label, merge_info, unused) = cc.get_backedge(bb_pos);
+            let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
@@ -45,7 +45,7 @@ impl Codegen {
                 eprintln!("  not used: {:?}", unused);
             }
 
-            let target_slot_info = StackSlotInfo::merge_entries(&entries);
+            let target_slot_info = MergeInfo::merge_entries(&entries).stack_slot;
             let mut ctx = BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, class) in use_set {
                 match target_slot_info[reg] {
@@ -75,7 +75,7 @@ impl Codegen {
                 self.gen_write_back_for_target(bbctx, &ctx, dest_label, cur_label, pc + 1);
             }
 
-            cc.new_backedge(cc.bb_pos, cur_label, ctx.stack_slot.clone(), unused);
+            cc.new_backedge(&ctx, cc.bb_pos, cur_label, unused);
             #[cfg(feature = "emit-tir")]
             eprintln!("merge_end");
             ctx
@@ -104,12 +104,12 @@ impl Codegen {
             #[cfg(feature = "emit-tir")]
             eprintln!("gen_merge bb: {bb_pos}");
 
-            let target_slot_info = StackSlotInfo::merge_entries(&entries);
+            let merge_info = MergeInfo::merge_entries(&entries);
             #[cfg(feature = "emit-tir")]
-            eprintln!("  target: {:?}", target_slot_info);
+            eprintln!("  target: {:?}", merge_info);
 
             let cur_label = cc.labels[&bb_pos];
-            let target_ctx = BBContext::from(&target_slot_info, func.local_num(), cc.self_value);
+            let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
             for BranchEntry {
                 src_idx: _src_idx,
                 bbctx,
