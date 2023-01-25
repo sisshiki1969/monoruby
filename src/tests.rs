@@ -1054,6 +1054,50 @@ mod test {
     }
 
     #[test]
+    fn test_case() {
+        run_test(
+            r#"
+        foo = false
+        bar = true
+        quu = false
+        
+        case
+        when foo then 'foo is true'
+        when bar then 'bar is true'
+        when quu then 'quu is true'
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        foo = false
+        bar = true
+        quu = false
+        
+        case
+        when foo then 'foo is true'
+        when bar then 'bar is true'
+        when quu then 'quu is true'
+        end
+        100
+        "#,
+        );
+        run_test(
+            r#"
+        foo = false
+        bar = true
+        quu = false
+        
+        x = case
+        when foo then 'foo is true'
+        when bar then 'bar is true'
+        when quu then 'quu is true'
+        end
+        "#,
+        )
+    }
+
+    #[test]
     fn test_const() {
         run_test(
             r#"

@@ -1,9 +1,11 @@
-def fib(x)
-  if x<3
-      1
-  else
-      fib(x-1)+fib(x-2)
-  end
+foo = false
+bar = true
+quu = false
+
+x= case
+when foo then 'foo is true'
+when bar then 'bar is true'
+when quu then 'quu is true'
 end
 
-puts fib(40)
+

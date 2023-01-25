@@ -3,7 +3,7 @@ use crate::value::rvalue::regexp::RegexpInfo;
 use super::*;
 use num::BigInt;
 use paste::paste;
-use ruruby_parse::{ArgList, BinOp, BlockInfo, CmpKind, Loc, Node, NodeKind, UnOp};
+use ruruby_parse::{ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, UnOp};
 
 mod binary;
 mod encode;
@@ -181,8 +181,8 @@ impl IrContext {
         self.labels[label] = Some(pos);
     }
 
-    fn gen_ret(&mut self, info: &mut ISeqInfo, local: Option<BcReg>) {
-        let ret = match local {
+    fn gen_ret(&mut self, info: &mut ISeqInfo, src: Option<BcReg>) {
+        let ret = match src {
             Some(ret) => ret,
             None => info.pop().into(),
         };
@@ -196,9 +196,9 @@ impl IrContext {
         }
     }
 
-    fn gen_temp_mov(&mut self, info: &mut ISeqInfo, rhs: BcReg) {
-        let lhs = info.push();
-        self.gen_mov(lhs.into(), rhs);
+    fn gen_temp_mov(&mut self, info: &mut ISeqInfo, src: BcReg) {
+        let dst = info.push();
+        self.gen_mov(dst.into(), src);
     }
 
     fn gen_br(&mut self, cond_pos: usize) {
@@ -458,19 +458,6 @@ impl IrContext {
         Ok(())
     }
 
-    fn handle_val(&mut self, info: &mut ISeqInfo, src: BcReg, use_mode: UseMode) {
-        match use_mode {
-            UseMode::Ret => {
-                self.gen_ret(info, Some(src));
-            }
-            UseMode::NotUse => {}
-            UseMode::Use => {
-                let res = info.push().into();
-                self.gen_mov(res, src);
-            }
-        }
-    }
-
     ///
     /// Evaluate *lhs* as a lvalue.
     ///
@@ -567,13 +554,13 @@ impl IrContext {
         };
     }
 
-    fn handle_mode(&mut self, info: &mut ISeqInfo, use_mode: UseMode, local: BcLocal) {
+    fn handle_mode(&mut self, info: &mut ISeqInfo, use_mode: UseMode, src: BcReg) {
         match use_mode {
             UseMode::Ret => {
-                self.gen_ret(info, Some(local.into()));
+                self.gen_ret(info, Some(src));
             }
             UseMode::Use => {
-                self.gen_temp_mov(info, local.into());
+                self.gen_temp_mov(info, src);
             }
             UseMode::NotUse => {}
         }
@@ -746,7 +733,7 @@ impl IrContext {
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = info.is_refer_local(&lhs) {
                     self.gen_binop(ctx, info, op, lhs, rhs, Some(local.into()), loc)?;
-                    self.handle_mode(info, use_mode, local);
+                    self.handle_mode(info, use_mode, local.into());
                     return Ok(());
                 }
                 let lhs_loc = lhs.loc;
@@ -758,7 +745,7 @@ impl IrContext {
                 // Assign rvalue to lvalue.
                 self.gen_assign(src, lhs_kind, lhs_loc);
                 info.temp = temp;
-                self.handle_val(info, src, use_mode);
+                self.handle_mode(info, use_mode, src);
                 return Ok(());
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
@@ -769,7 +756,7 @@ impl IrContext {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(local) = info.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, local.into(), rhs)?;
-                        self.handle_mode(info, use_mode, local);
+                        self.handle_mode(info, use_mode, local.into());
                         return Ok(());
                     }
                     let temp = info.temp;
@@ -777,7 +764,7 @@ impl IrContext {
                     let src = self.gen_expr_reg(ctx, info, rhs)?;
                     self.gen_assign(src, lhs, loc);
                     info.temp = temp;
-                    self.handle_val(info, src, use_mode);
+                    self.handle_mode(info, use_mode, src);
                     return Ok(());
                 } else {
                     return self.gen_mul_assign(ctx, info, mlhs, mrhs, use_mode);
@@ -785,7 +772,7 @@ impl IrContext {
             }
             NodeKind::LocalVar(ident) => {
                 let local = info.refer_local(&ident);
-                self.handle_mode(info, use_mode, local);
+                self.handle_mode(info, use_mode, local.into());
                 return Ok(());
             }
             NodeKind::DynamicLocalVar(outer, ident) => {
@@ -903,6 +890,33 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::Case {
+                cond,
+                when_,
+                box else_,
+            } => {
+                if let Some(box _cond) = cond {
+                    unimplemented!()
+                } else {
+                    let exit_pos = self.new_label();
+                    let temp = dbg!(info.temp);
+                    for branch in when_ {
+                        info.temp = temp;
+                        let CaseBranch { box body, mut when } = branch;
+                        let succ_pos = self.new_label();
+                        self.gen_opt_condbr(ctx, info, false, when.remove(0), succ_pos)?;
+                        self.gen_expr(ctx, info, body, use_mode)?;
+                        if !use_mode.is_ret() {
+                            self.gen_br(exit_pos);
+                        }
+                        self.apply_label(succ_pos);
+                    }
+                    info.temp = temp;
+                    self.gen_expr(ctx, info, else_, use_mode)?;
+                    self.apply_label(exit_pos);
+                    return Ok(());
+                }
+            }
             NodeKind::Break(box val) => {
                 let (_kind, break_pos, ret_reg) = match self.loops.last() {
                     Some(data) => data.clone(),
@@ -965,20 +979,21 @@ impl IrContext {
                 info: block_info,
                 is_module: _,
             } => {
-                if let Some(base) = base {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("base in class def. {:?}", base.kind),
-                        loc,
-                        info.sourceinfo.clone(),
-                    ));
-                };
-                let ret = if use_mode.use_val() {
+                let dst = if use_mode.use_val() {
                     Some(info.push().into())
                 } else {
                     None
                 };
-                let superclass = superclass.map(|c| *c);
-                self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
+                self.gen_class_def(
+                    ctx,
+                    info,
+                    name,
+                    base,
+                    superclass,
+                    *block_info.body,
+                    dst,
+                    loc,
+                )?;
                 if use_mode.is_ret() {
                     self.gen_ret(info, None);
                 }
@@ -1172,16 +1187,17 @@ impl IrContext {
                 info: block_info,
                 is_module: _,
             } => {
-                if let Some(base) = base {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("base in class def. {:?}", base.kind),
-                        loc,
-                        info.sourceinfo.clone(),
-                    ));
-                };
-                let ret = Some(dst);
-                let superclass = superclass.map(|c| *c);
-                self.gen_class_def(ctx, info, name, superclass, *block_info.body, ret, loc)?;
+                let dst = Some(dst);
+                self.gen_class_def(
+                    ctx,
+                    info,
+                    name,
+                    base,
+                    superclass,
+                    *block_info.body,
+                    dst,
+                    loc,
+                )?;
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
@@ -1242,22 +1258,30 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         name: String,
-        superclass: Option<Node>,
+        base: Option<Box<Node>>,
+        superclass: Option<Box<Node>>,
         body: Node,
-        ret: Option<BcReg>,
+        dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
+        if let Some(base) = base {
+            return Err(MonorubyErr::unsupported_feature(
+                &format!("base in class def. {:?}", base.kind),
+                loc,
+                info.sourceinfo.clone(),
+            ));
+        };
         let func_id = ctx
             .functions
             .add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
         let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
-            Some(superclass) => Some(self.gen_temp_expr(ctx, info, superclass)?),
+            Some(superclass) => Some(self.gen_temp_expr(ctx, info, *superclass)?),
             None => None,
         };
         self.push(
             BcIr::ClassDef {
-                ret,
+                ret: dst,
                 superclass,
                 name,
                 func_id,
