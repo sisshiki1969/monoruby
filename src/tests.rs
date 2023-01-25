@@ -1094,6 +1094,21 @@ mod test {
         when quu then 'quu is true'
         end
         "#,
+        );
+        run_test(
+            r#"
+        c = 5
+        case
+        when c == 3, c == 6, c == 9
+          '10より小さな3の倍数'
+        when c % 10 == 0
+          '10の倍数'
+        when c % 5 == 0
+          '5の倍数'
+        else
+          'それ以外'
+        end
+        "#,
         )
     }
 

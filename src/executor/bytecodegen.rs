@@ -902,14 +902,19 @@ impl IrContext {
                     let temp = dbg!(info.temp);
                     for branch in when_ {
                         info.temp = temp;
-                        let CaseBranch { box body, when } = branch;
+                        let CaseBranch { box body, mut when } = branch;
                         let succ_pos = self.new_label();
-                        let then_pos = self.new_label();
-                        for when in when {
-                            self.gen_opt_condbr(ctx, info, true, when, then_pos)?;
+                        if when.len() == 1 {
+                            let when = when.remove(0);
+                            self.gen_opt_condbr(ctx, info, false, when, succ_pos)?;
+                        } else {
+                            let then_pos = self.new_label();
+                            for when in when {
+                                self.gen_opt_condbr(ctx, info, true, when, then_pos)?;
+                            }
+                            self.gen_br(succ_pos);
+                            self.apply_label(then_pos);
                         }
-                        self.gen_br(succ_pos);
-                        self.apply_label(then_pos);
                         self.gen_expr(ctx, info, body, use_mode)?;
                         if !use_mode.is_ret() {
                             self.gen_br(exit_pos);
