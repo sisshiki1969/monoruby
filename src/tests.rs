@@ -1054,7 +1054,7 @@ mod test {
     }
 
     #[test]
-    fn test_case() {
+    fn test_case0() {
         run_test(
             r#"
         foo = false
@@ -1110,6 +1110,28 @@ mod test {
         end
         "#,
         )
+    }
+
+    #[test]
+    fn test_case1() {
+        run_test(
+            r#"
+        case :symbol
+        when Integer then 'integer'
+        when Float then 'float'
+        when Symbol then 'symbol'
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        x = case :symbol
+        when Integer then 'integer'
+        when Float then 'float'
+        when Symbol then 'symbol'
+        end
+        "#,
+        );
     }
 
     #[test]

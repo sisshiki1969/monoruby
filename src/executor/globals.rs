@@ -27,42 +27,19 @@ pub enum InlineMethod {
     MathSin,
 }
 
-struct Root<'a> {
+struct Root<'a, 'b> {
     globals: &'a Globals,
-    current_cfp: CFP,
+    executor: &'b Executor,
 }
 
-impl<'a> GC<RValue> for Root<'a> {
+impl<'a, 'b> GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
-        self.globals.class.mark(alloc);
-        self.globals.func.mark(alloc);
-        self.globals
-            .global_vars
-            .values()
-            .for_each(|v| v.mark(alloc));
-        let mut cfp = self.current_cfp;
-        unsafe {
-            loop {
-                let lfp = cfp.lfp();
-                let meta = lfp.meta();
-                for r in 0..meta.reg_num() as usize {
-                    let v = lfp.register(r);
-                    v.mark(alloc);
-                }
-                if let Some(v) = lfp.block() {
-                    v.mark(alloc)
-                };
-
-                cfp = cfp.prev();
-                if cfp.is_null() {
-                    break;
-                }
-            }
-        }
+        self.globals.mark(alloc);
+        self.executor.mark(alloc);
     }
 }
 
-impl<'a> GCRoot<RValue> for Root<'a> {
+impl<'a, 'b> GCRoot<RValue> for Root<'a, 'b> {
     fn startup_flag(&self) -> bool {
         true
     }
@@ -102,16 +79,19 @@ pub struct Globals {
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
+impl GC<RValue> for Globals {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.class.mark(alloc);
+        self.func.mark(alloc);
+        self.global_vars.values().for_each(|v| v.mark(alloc));
+    }
+}
+
 ///
 /// Execute garbage collection.
 ///
-pub(in crate::executor) extern "C" fn execute_gc(globals: &Globals, current_cfp: CFP) {
-    ALLOC.with(|alloc| {
-        alloc.borrow_mut().check_gc(&Root {
-            globals,
-            current_cfp,
-        })
-    });
+pub(in crate::executor) extern "C" fn execute_gc(globals: &Globals, executor: &Executor) {
+    ALLOC.with(|alloc| alloc.borrow_mut().check_gc(&Root { globals, executor }));
 }
 
 impl Globals {

@@ -227,9 +227,44 @@ pub struct Executor {
     cfp: CFP,     // [rbx]
     lfp_top: LFP, // [rbx + 8]
     lexical_class: Vec<ClassId>,
-    sp_last_match: Option<String>,   // $&        : Regexp.last_match(0)
-    sp_post_match: Option<String>,   // $'        : Regexp.post_match
-    sp_matches: Vec<Option<String>>, // $1 ... $n : Regexp.last_match(n)
+    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
+    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
+}
+
+impl GC<RValue> for Executor {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.sp_matches.iter().for_each(|v| {
+            if let Some(v) = v {
+                v.mark(alloc)
+            }
+        });
+        if let Some(v) = self.sp_last_match {
+            v.mark(alloc)
+        };
+        if let Some(v) = self.sp_post_match {
+            v.mark(alloc)
+        };
+        let mut cfp = self.cfp;
+        unsafe {
+            loop {
+                let lfp = cfp.lfp();
+                let meta = lfp.meta();
+                for r in 0..meta.reg_num() as usize {
+                    let v = lfp.register(r);
+                    v.mark(alloc);
+                }
+                if let Some(v) = lfp.block() {
+                    v.mark(alloc)
+                };
+
+                cfp = cfp.prev();
+                if cfp.is_null() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl Executor {
@@ -434,23 +469,20 @@ impl Executor {
 impl Executor {
     /*pub(crate) fn get_special_var(&self, id: u32) -> Value {
         if id == 0 {
-            self.sp_last_match
-                .as_ref()
-                .map(|s| Value::new_string_from_str(s))
-                .unwrap_or_default()
+            // $&
+            self.sp_last_match.unwrap_or_default()
         } else if id == 1 {
-            self.sp_post_match
-                .as_ref()
-                .map(|s| Value::new_string_from_str(s))
-                .unwrap_or_default()
+            // $'
+            self.sp_post_match.unwrap_or_default()
         } else if id >= 100 {
+            // $0, $1, ..
             self.get_special_matches(id as usize - 100)
         } else {
             unreachable!()
         }
-    }
+    }*/
 
-    pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
+    /*pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
         unreachable!()
     }*/
 
@@ -463,8 +495,8 @@ impl Executor {
         //let id2 = IdentId::get_id("$'");
         match captures.get(0) {
             Some(m) => {
-                self.sp_last_match = Some(given[m.start()..m.end()].to_string());
-                self.sp_post_match = Some(given[m.end()..].to_string());
+                self.sp_last_match = Some(Value::new_string_from_str(&given[m.start()..m.end()]));
+                self.sp_post_match = Some(Value::new_string_from_str(&given[m.end()..]));
             }
             None => {
                 self.sp_last_match = None;
@@ -473,24 +505,30 @@ impl Executor {
         };
 
         self.sp_matches.clear();
-        for i in 1..captures.len() {
+        for i in 0..captures.len() {
             self.sp_matches.push(
                 captures
                     .get(i)
-                    .map(|m| given[m.start()..m.end()].to_string()),
+                    .map(|m| Value::new_string_from_str(&given[m.start()..m.end()])),
             );
         }
     }
 
-    /*pub(crate) fn get_special_matches(&self, nth: usize) -> Value {
-        match self.sp_matches.get(nth - 1) {
+    pub(crate) fn get_special_matches(&self, nth: usize) -> Value {
+        match self.sp_matches.get(nth) {
             None => Value::nil(),
-            Some(s) => s
-                .as_ref()
-                .map(|s| Value::new_string_from_str(s))
-                .unwrap_or_default(),
+            Some(s) => s.unwrap_or_default(),
         }
-    }*/
+    }
+
+    pub(crate) fn get_last_match(&self) -> Value {
+        Value::new_array_from_vec(
+            self.sp_matches
+                .iter()
+                .map(|v| v.unwrap_or_default())
+                .collect(),
+        )
+    }
 }
 
 ///

@@ -216,6 +216,7 @@ impl RegexpInfo {
         globals: &mut Globals,
         re: &Regex,
         given: &'a str,
+        block: Option<BlockHandler>,
         pos: usize,
     ) -> Option<Value> {
         let pos = match given.char_indices().nth(pos) {
@@ -226,39 +227,18 @@ impl RegexpInfo {
             Ok(None) => Some(Value::nil()),
             Ok(Some(captures)) => {
                 vm.get_captures(&captures, given);
-                let mut v = vec![];
-                for i in 0..captures.len() {
-                    v.push(Value::new_string_from_str(
-                        captures.get(i).unwrap().as_str(),
-                    ));
+                if let Some(block_handler) = block {
+                    let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
+                    vm.invoke_block(globals, block_handler, &[matched])
+                } else {
+                    let mut v = vec![];
+                    for i in 0..captures.len() {
+                        v.push(Value::new_string_from_str(
+                            captures.get(i).unwrap().as_str(),
+                        ));
+                    }
+                    Some(Value::new_array_from_vec(v))
                 }
-                Some(Value::new_array_from_vec(v))
-            }
-            Err(err) => {
-                globals.err_internal(format!("Capture failed. {:?}", err));
-                None
-            }
-        }
-    }
-
-    pub(crate) fn match_one_block<'a>(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        re: &Regex,
-        given: &'a str,
-        block_handler: BlockHandler,
-        pos: usize,
-    ) -> Option<Value> {
-        let pos = match given.char_indices().nth(pos) {
-            Some((pos, _)) => pos,
-            None => return Some(Value::nil()),
-        };
-        match re.captures_from_pos(given, pos) {
-            Ok(None) => Some(Value::nil()),
-            Ok(Some(captures)) => {
-                vm.get_captures(&captures, given);
-                let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
-                vm.invoke_block(globals, block_handler, &[matched])
             }
             Err(err) => {
                 globals.err_internal(format!("Capture failed. {:?}", err));

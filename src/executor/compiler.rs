@@ -381,7 +381,7 @@ impl Codegen {
         monoasm! { self.jit,
         gc:
             movq rdi, r12;
-            movq rsi, [rbx];
+            movq rsi, rbx;
             movq rax, (execute_gc);
             call rax;
             jmp exit;

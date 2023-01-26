@@ -122,7 +122,7 @@ impl IrContext {
             Some(reg) => reg,
         };
         self.gen_store_expr(ctx, info, dst, lhs)?;
-        self.gen_condnotbr(dst, exit_pos, false);
+        self.gen_condbr(dst, exit_pos, false, false);
         self.gen_store_expr(ctx, info, dst, rhs)?;
         self.apply_label(exit_pos);
         Ok(dst)
@@ -142,7 +142,7 @@ impl IrContext {
             Some(reg) => reg,
         };
         self.gen_store_expr(ctx, info, dst, lhs)?;
-        self.gen_condbr(dst, exit_pos, false);
+        self.gen_condbr(dst, exit_pos, true, false);
         self.gen_store_expr(ctx, info, dst, rhs)?;
         self.apply_label(exit_pos);
         Ok(dst)

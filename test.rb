@@ -1,11 +1,6 @@
-foo = false
-bar = true
-quu = false
-
-case
-when foo then 'foo is true'
-when bar then 'bar is true'
-when quu then 'quu is true'
+a = case :symbol
+when Integer then 'integer'
+when Float then 'float'
+when Symbol then 'symbol'
 end
-
-
+100

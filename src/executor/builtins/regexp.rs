@@ -9,7 +9,7 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_singleton_func(REGEXP_CLASS, "escape", regexp_escape, 1);
     globals.define_builtin_singleton_func(REGEXP_CLASS, "quote", regexp_escape, 1);
-    // globals.define_builtin_singleton_func(REGEXP_CLASS, "last_match", regexp_last_match, 1);
+    globals.define_builtin_singleton_func(REGEXP_CLASS, "last_match", regexp_last_match, -1);
     // globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
 }
 
@@ -54,23 +54,33 @@ extern "C" fn regexp_escape(
     Some(val)
 }
 
-/*
-/// (not supported) Regexp.last_match -> MatchData
-/// Regexp.last_match(nth) -> String | nil
-/// https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html
-fn regexp_last_match(vm: &mut VM, _: Value, args: &Args2) -> VMResult {
-    args.check_args_num(1)?;
-    let nth = vm[0].coerce_to_fixnum("1st arg")?;
-    if nth == 0 {
-        return Ok(vm.get_special_var(0));
+/// ### Regexp.last_match
+/// - last_match -> MatchData (not supported)
+/// - last_match(nth) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
+extern "C" fn regexp_last_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _self_val: Value,
+    arg: Arg,
+    len: usize,
+    _block: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    if len == 0 {
+        Some(vm.get_last_match())
+    } else {
+        let nth = arg[0].coerce_to_fixnum(globals)?;
+        if nth >= 0 {
+            Some(vm.get_special_matches(nth as usize))
+        } else {
+            None
+        }
     }
-    if nth < 0 {
-        return Err(RubyError::argument("1st arg must not be sub zero."));
-    };
-    let str = vm.get_special_matches(nth as usize);
-    Ok(str)
 }
 
+/*
 // Instance methods
 fn regexp_match(vm: &mut VM, self_val: Value, args: &Args2) -> VMResult {
     args.check_args_num(1)?;
@@ -88,7 +98,21 @@ fn regexp_match(vm: &mut VM, self_val: Value, args: &Args2) -> VMResult {
 #[cfg(test)]
 mod test {
     use crate::tests::*;
-
+    #[test]
+    fn regexp_last_match() {
+        run_test(
+            r#"
+        "ab".match(/(.)(.)/) 
+        [Regexp.last_match[0], Regexp.last_match[1], Regexp.last_match[2], Regexp.last_match[3]]
+        "#,
+        );
+        run_test(
+            r#"
+        "ab".match(/(.)(.)/) 
+        [Regexp.last_match(0), Regexp.last_match(1), Regexp.last_match(2), Regexp.last_match(3)]
+        "#,
+        );
+    }
     /*     #[test]
         fn last_match() {
             let program = r#"

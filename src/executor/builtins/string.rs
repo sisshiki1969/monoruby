@@ -449,10 +449,7 @@ extern "C" fn string_match(
     let given = self_val.expect_string(globals)?;
     let re = arg[0].expect_regexp_or_string(globals)?;
 
-    match block {
-        None => RegexpInfo::match_one(vm, globals, &re, &given, pos),
-        Some(block) => RegexpInfo::match_one_block(vm, globals, &re, &given, block, pos),
-    }
+    RegexpInfo::match_one(vm, globals, &re, &given, block, pos)
 }
 
 /// ### String#to_s

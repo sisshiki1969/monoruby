@@ -201,20 +201,22 @@ impl IrContext {
         self.gen_mov(dst.into(), src);
     }
 
-    fn gen_br(&mut self, cond_pos: usize) {
-        self.push(BcIr::Br(cond_pos), Loc::default());
+    fn gen_br(&mut self, jmp_pos: usize) {
+        self.push(BcIr::Br(jmp_pos), Loc::default());
     }
 
-    fn gen_condbr(&mut self, cond: BcReg, then_pos: usize, optimizable: bool) {
+    fn gen_condbr(&mut self, cond: BcReg, jmp_pos: usize, jmp_if_true: bool, optimizable: bool) {
         self.push(
-            BcIr::CondBr(cond, then_pos, optimizable, BrKind::BrIf),
-            Loc::default(),
-        );
-    }
-
-    fn gen_condnotbr(&mut self, cond: BcReg, else_pos: usize, optimizable: bool) {
-        self.push(
-            BcIr::CondBr(cond, else_pos, optimizable, BrKind::BrIfNot),
+            BcIr::CondBr(
+                cond,
+                jmp_pos,
+                optimizable,
+                if jmp_if_true {
+                    BrKind::BrIf
+                } else {
+                    BrKind::BrIfNot
+                },
+            ),
             Loc::default(),
         );
     }
@@ -355,11 +357,7 @@ impl IrContext {
             let cond = info.next_reg().into();
             self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
             info.pop();
-            if jmp_if_true {
-                self.gen_condbr(cond, else_pos, true);
-            } else {
-                self.gen_condnotbr(cond, else_pos, true);
-            }
+            self.gen_condbr(cond, else_pos, jmp_if_true, true);
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_lor_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
@@ -374,12 +372,27 @@ impl IrContext {
             }
         } else {
             let cond = self.gen_temp_expr(ctx, info, cond)?;
-            if jmp_if_true {
-                self.gen_condbr(cond, else_pos, false);
-            } else {
-                self.gen_condnotbr(cond, else_pos, false);
-            }
+            self.gen_condbr(cond, else_pos, jmp_if_true, false);
         }
+        Ok(())
+    }
+
+    fn gen_teq_condbr(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        lhs: Node,
+        rhs: BcReg,
+        cont_pos: usize,
+        jmp_if_true: bool,
+    ) -> Result<()> {
+        let loc = lhs.loc;
+        let lhs = self.gen_temp_expr(ctx, info, lhs)?;
+        self.push(
+            BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
+            loc,
+        );
+        self.gen_condbr(lhs, cont_pos, jmp_if_true, true);
         Ok(())
     }
 
@@ -895,11 +908,48 @@ impl IrContext {
                 when_,
                 box else_,
             } => {
-                if let Some(box _cond) = cond {
-                    unimplemented!()
+                let exit_pos = self.new_label();
+                if let Some(box cond) = cond {
+                    let ret = info.push().into();
+                    let rhs = info.next_reg().into();
+                    self.gen_expr(ctx, info, cond, UseMode::Use)?;
+                    for branch in when_ {
+                        let CaseBranch { box body, mut when } = branch;
+                        let succ_pos = self.new_label();
+                        if when.len() == 1 {
+                            let when = when.remove(0);
+                            self.gen_teq_condbr(ctx, info, when, rhs, succ_pos, false)?;
+                        } else {
+                            let then_pos = self.new_label();
+                            for when in when {
+                                self.gen_teq_condbr(ctx, info, when, rhs, then_pos, true)?;
+                            }
+                            self.gen_br(succ_pos);
+                            self.apply_label(then_pos);
+                        }
+                        self.gen_store_expr(ctx, info, ret, body)?;
+
+                        if use_mode.is_ret() {
+                            self.push(BcIr::Ret(ret), Loc::default());
+                        } else {
+                            self.gen_br(exit_pos);
+                        }
+
+                        self.apply_label(succ_pos);
+                    }
+                    info.pop();
+                    self.gen_store_expr(ctx, info, ret, else_)?;
+                    match use_mode {
+                        UseMode::Ret => {
+                            self.gen_ret(info, None);
+                        }
+                        UseMode::NotUse => {
+                            info.pop();
+                        }
+                        UseMode::Use => {}
+                    }
                 } else {
-                    let exit_pos = self.new_label();
-                    let temp = dbg!(info.temp);
+                    let temp = info.temp;
                     for branch in when_ {
                         info.temp = temp;
                         let CaseBranch { box body, mut when } = branch;
@@ -923,9 +973,9 @@ impl IrContext {
                     }
                     info.temp = temp;
                     self.gen_expr(ctx, info, else_, use_mode)?;
-                    self.apply_label(exit_pos);
-                    return Ok(());
                 }
+                self.apply_label(exit_pos);
+                return Ok(());
             }
             NodeKind::Break(box val) => {
                 let (_kind, break_pos, ret_reg) = match self.loops.last() {
@@ -1694,7 +1744,7 @@ impl IrContext {
                 ),
                 loc,
             );
-            self.gen_condbr(dst, loop_exit, true);
+            self.gen_condbr(dst, loop_exit, true, true);
             info.pop(); // pop *dst*
 
             self.gen_expr(ctx, info, *body.body, UseMode::NotUse)?;
