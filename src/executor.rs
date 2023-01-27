@@ -514,14 +514,22 @@ impl Executor {
         }
     }
 
-    pub(crate) fn get_special_matches(&self, nth: usize) -> Value {
-        match self.sp_matches.get(nth) {
-            None => Value::nil(),
-            Some(s) => s.unwrap_or_default(),
+    pub(crate) fn get_special_matches(&self, mut nth: i64) -> Value {
+        if nth < 0 {
+            nth = self.sp_matches.len() as i64 + nth
+        }
+        if nth >= 0 {
+            self.sp_matches
+                .get(nth as usize)
+                .cloned()
+                .unwrap_or_default()
+                .unwrap_or_default()
+        } else {
+            Value::nil()
         }
     }
 
-    pub(crate) fn get_last_match(&self) -> Value {
+    pub(crate) fn get_last_matchdata(&self) -> Value {
         Value::new_array_from_vec(
             self.sp_matches
                 .iter()

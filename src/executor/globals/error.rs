@@ -310,18 +310,6 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn unsupported_operator(
-        op: BinOp,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-    ) -> MonorubyErr {
-        MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!("unsupported operator {:?}", op)),
-            loc,
-            sourceinfo,
-        )
-    }
-
     pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),

@@ -1,5 +1,5 @@
 use crate::*;
-use fancy_regex::{Captures, Regex};
+use fancy_regex::{Captures, Match, Regex};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
@@ -247,7 +247,6 @@ impl RegexpInfo {
         }
     }
 
-    /*
     /// Find the leftmost-first match for `given`.
     /// Returns `Match`s.
     pub(crate) fn find_one<'a>(
@@ -269,7 +268,7 @@ impl RegexpInfo {
         }
     }
 
-    pub(crate) fn find_all(
+    /*pub(crate) fn find_all(
         vm: &mut Executor,
         globals: &mut Globals,
         re: &Regex,

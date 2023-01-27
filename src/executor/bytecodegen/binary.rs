@@ -26,12 +26,8 @@ impl IrContext {
             BinOp::Shl => self.gen_shl(ctx, info, dst, lhs, rhs, loc),
             BinOp::LAnd => self.gen_land(ctx, info, dst, lhs, rhs),
             BinOp::LOr => self.gen_lor(ctx, info, dst, lhs, rhs),
+            BinOp::Match => self.gen_match(ctx, info, dst, lhs, rhs),
             BinOp::Cmp(kind) => self.gen_cmp(ctx, info, dst, kind, lhs, rhs, false, loc),
-            _ => Err(MonorubyErr::unsupported_operator(
-                op,
-                loc,
-                info.sourceinfo.clone(),
-            )),
         }
     }
 }
@@ -146,5 +142,39 @@ impl IrContext {
         self.gen_store_expr(ctx, info, dst, rhs)?;
         self.apply_label(exit_pos);
         Ok(dst)
+    }
+
+    fn gen_match(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        dst: Option<BcReg>,
+        lhs: Node,
+        rhs: Node,
+    ) -> Result<BcReg> {
+        let loc = lhs.loc().merge(rhs.loc());
+        let ret = if let Some(ret) = dst {
+            ret
+        } else {
+            info.next_reg().into()
+        };
+        self.gen_method_call(
+            ctx,
+            info,
+            "=~".to_string(),
+            Some(lhs),
+            ArgList {
+                args: vec![rhs],
+                kw_args: vec![],
+                hash_splat: vec![],
+                block: None,
+                delegate: false,
+                splat: false,
+            },
+            dst,
+            UseMode::Use,
+            loc,
+        )?;
+        Ok(ret)
     }
 }
