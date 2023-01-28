@@ -681,7 +681,7 @@ impl Codegen {
             // rdi <- *src
             negq r15;
             movq rdi, [r14 + r15 * 8 - (LBP_SELF)];
-            movq rax, (expand_array);
+            movq rax, (runtime::expand_array);
             call rax;
         };
         self.fetch_and_dispatch();
@@ -710,7 +710,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, [r14 - (LBP_SELF)];
             movq r8, [r14 - (LBP_META)];
-            movq rax, (alias_method);
+            movq rax, (runtime::alias_method);
             call rax;
         };
         self.vm_handle_error();
@@ -733,7 +733,7 @@ impl Codegen {
             // rdi <- *mut Value
             negq r15;
             lea rdi, [r14 + r15 * 8 - (LBP_SELF)];
-            movq rax, (make_splat);
+            movq rax, (runtime::make_splat);
             call rax;
         };
         self.fetch_and_dispatch();
@@ -759,7 +759,7 @@ impl Codegen {
             movq rdx, rsi;
             movq rsi, rdi;
             movq rdi, r12;
-            movq rax, (concatenate_string);
+            movq rax, (runtime::concatenate_string);
             call rax;
         };
         self.vm_store_r15_if_nonzero(exit);
@@ -859,7 +859,7 @@ impl Codegen {
         monoasm! { self.jit,
             // src: *const Value
             movzxw rsi, rsi;  // len: usize
-            movq rax, (gen_array);
+            movq rax, (runtime::gen_array);
             call rax;
         };
         self.vm_store_r15();
@@ -874,7 +874,7 @@ impl Codegen {
         monoasm! { self.jit,
             // src: *const Value
             movzxw rsi, rsi;  // len: usize
-            movq rax, (gen_hash);
+            movq rax, (runtime::gen_hash);
             call rax;
         };
         self.vm_store_r15();
@@ -890,7 +890,7 @@ impl Codegen {
         monoasm! { self.jit,
             movq rdx, r12;
             movl rcx, (if exclude_end {1} else {0});
-            movq rax, (gen_range);
+            movq rax, (runtime::gen_range);
             call rax;
         };
         self.vm_handle_error();
@@ -915,7 +915,7 @@ impl Codegen {
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             lea  r8, [r13 - 8]; // &mut ClassId
-            movq rax, (get_index);
+            movq rax, (runtime::get_index);
             call rax;
         };
         self.vm_handle_error();
@@ -936,7 +936,7 @@ impl Codegen {
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             lea  r9, [r13 + 8];
-            movq rax, (set_index);
+            movq rax, (runtime::set_index);
             call rax;
         };
         self.vm_handle_error();
@@ -1097,7 +1097,7 @@ impl Codegen {
             movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (define_method);
+            movq rax, (runtime::define_method);
             call rax;
             addl [rip + class_version], 1;
         };
@@ -1120,7 +1120,7 @@ impl Codegen {
             movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (define_class);
+            movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
             pushq r13;
             pushq r15;
@@ -1130,7 +1130,7 @@ impl Codegen {
             movl rsi, [r13 - 4];  // rdx <- func_id
             //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
-            movq rax, (get_func_data);
+            movq rax, (runtime::get_func_data);
             call rax; // rax <- &FuncData
             //
             //       +-------------+
@@ -1177,7 +1177,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq rax, (pop_class_context);
+            movq rax, (runtime::pop_class_context);
             call rax;
         );
         self.fetch_and_dispatch();

@@ -192,7 +192,7 @@ extern "C" fn dump(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     unsafe {
-        super::op::_dump_stacktrace(vm, globals);
+        crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
     }
     Some(Value::nil())
 }

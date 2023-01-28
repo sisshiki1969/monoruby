@@ -963,7 +963,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         lea  rdi, [r14 - (conv(args))];
                         movq rsi, (len);
-                        movq rax, (gen_array);
+                        movq rax, (runtime::gen_array);
                         call rax;
                     );
                     self.store_rax(ret);
@@ -974,7 +974,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         lea  rdi, [r14 - (conv(args))];
                         movq rsi, (len);
-                        movq rax, (gen_hash);
+                        movq rax, (runtime::gen_hash);
                         call rax;
                     );
                     self.store_rax(ret);
@@ -992,7 +992,7 @@ impl Codegen {
                     monoasm! { self.jit,
                         movq rdx, r12; // &mut Globals
                         movl rcx, (if exclude_end {1} else {0});
-                        movq rax, (gen_range);
+                        movq rax, (runtime::gen_range);
                         call rax;
                     };
                     self.xmm_restore(&xmm_using);
@@ -1051,7 +1051,7 @@ impl Codegen {
                     monoasm! { self.jit,
                         movq rdi, r12;
                         movl rsi, (name.get());
-                        movq rax, (get_global_var);
+                        movq rax, (runtime::get_global_var);
                         call rax;
                     };
                     self.store_rax(ret);
@@ -1065,7 +1065,7 @@ impl Codegen {
                         movq rdi, r12;
                         movl rsi, (name.get());
                         movq rdx, [r14 - (conv(val))];
-                        movq rax, (set_global_var);
+                        movq rax, (runtime::set_global_var);
                         call rax;
                     };
                     self.xmm_restore(&xmm_using);
@@ -1077,7 +1077,7 @@ impl Codegen {
                     monoasm! { self.jit,
                         movq rdi, rbx;
                         movl rsi, (id);
-                        movq rax, (Executor::get_special_var);
+                        movq rax, (runtime::get_special_var);
                         call rax;
                     };
                     self.store_rax(ret);
@@ -1247,7 +1247,7 @@ impl Codegen {
                         movq rdi, r12;
                         lea rsi, [r14 - (conv(arg))];
                         movq rdx, (len);
-                        movq rax, (concatenate_string);
+                        movq rax, (runtime::concatenate_string);
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
@@ -1266,7 +1266,7 @@ impl Codegen {
                     monoasm!(self.jit,
                         lea rsi, [r14 - (conv(dst))];
                         movq rdx, (len);
-                        movq rax, (expand_array);
+                        movq rax, (runtime::expand_array);
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
@@ -1278,7 +1278,7 @@ impl Codegen {
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
                         lea  rdi, [r14 - (conv(src))];
-                        movq rax, (make_splat);
+                        movq rax, (runtime::make_splat);
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
@@ -1292,7 +1292,7 @@ impl Codegen {
                         movq rdi, r12;
                         movq rsi, [r14 - (LBP_SELF)];
                         movq r8, [r14 - (LBP_META)];
-                        movq rax, (alias_method);
+                        movq rax, (runtime::alias_method);
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
@@ -1345,7 +1345,7 @@ impl Codegen {
                         movq rsi, r12; // &Globals
                         movq rdx, (u32::from(name)); // IdentId
                         movq rcx, (u32::from(func)); // FuncId
-                        movq rax, (define_method);
+                        movq rax, (runtime::define_method);
                         call rax;
                         addl [rip + class_version], 1;
                     );

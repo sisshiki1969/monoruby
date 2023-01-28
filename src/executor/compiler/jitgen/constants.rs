@@ -11,7 +11,7 @@ impl Codegen {
           movq rdi, rbx;  // &mut Interp
           movq rsi, r12;  // &mut Globals
           addq [rip + const_version], 1;
-          movq rax, (set_constant);
+          movq rax, (runtime::set_constant);
           call rax;
         );
         self.xmm_restore(&xmm_using);
@@ -102,7 +102,7 @@ impl Codegen {
             movq rdx, (id.0);  // name: ConstSiteId
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (get_constant);
+            movq rax, (runtime::get_constant);
             call rax;
         );
         self.xmm_restore(&xmm_using);

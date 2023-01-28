@@ -137,7 +137,7 @@ impl Codegen {
             movq rsi, [rsp + 8];  // rsi: IdentId
             movzxw rdx, [r13];  // rdx: len
             movq rcx, [rsp]; // rcx: receiver:Value
-            movq rax, (find_method);
+            movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
@@ -182,7 +182,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, [r14 - (LBP_BLOCK)];
             movq rdx, rbx;
-            movq rax, (get_block_data);
+            movq rax, (runtime::get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len

@@ -224,12 +224,12 @@ impl OpMode {
 #[derive(Default)]
 #[repr(C)]
 pub struct Executor {
-    cfp: CFP,     // [rbx]
-    lfp_top: LFP, // [rbx + 8]
-    lexical_class: Vec<ClassId>,
-    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
-    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
-    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
+    cfp: CFP,                            // [rbx]
+    lfp_top: LFP,                        // [rbx + 8]
+    lexical_class: Vec<(ClassId, bool)>, // (class_id, module_function)
+    sp_last_match: Option<Value>,        // $&        : Regexp.last_match(0)
+    sp_post_match: Option<Value>,        // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>,      // $1 ... $n : Regexp.last_match(n)
 }
 
 impl GC<RValue> for Executor {
@@ -340,18 +340,21 @@ impl Executor {
     }
 
     fn push_class_context(&mut self, class_id: ClassId) {
-        self.lexical_class.push(class_id);
+        self.lexical_class.push((class_id, false));
     }
 
     fn pop_class_context(&mut self) -> Option<ClassId> {
-        self.lexical_class.pop()
+        self.lexical_class.pop().map(|x| x.0)
     }
 
-    fn get_class_context(&self) -> ClassId {
-        self.lexical_class.last().cloned().unwrap_or(OBJECT_CLASS)
+    fn get_class_context(&self) -> (ClassId, bool) {
+        self.lexical_class
+            .last()
+            .cloned()
+            .unwrap_or((OBJECT_CLASS, false))
     }
 
-    fn class_context_stack(&self) -> &[ClassId] {
+    fn class_context_stack(&self) -> &[(ClassId, bool)] {
         &self.lexical_class
     }
 }
@@ -366,7 +369,7 @@ impl Executor {
     }
 
     fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
-        let parent = self.get_class_context();
+        let parent = self.get_class_context().0;
         if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
             eprintln!(
                 "warning: already initialized constant {}",
@@ -467,28 +470,6 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
-    ///
-    /// Get special variable.
-    ///
-    /// id: 0 -> $&
-    /// id: 1 -> $'
-    /// id: 100 + n -> $<n> (n >= 1)
-    ///
-    pub(crate) extern "C" fn get_special_var(executor: &Executor, id: u32) -> Value {
-        if id == 0 {
-            // $&
-            executor.sp_last_match.unwrap_or_default()
-        } else if id == 1 {
-            // $'
-            executor.sp_post_match.unwrap_or_default()
-        } else if id >= 100 {
-            // $1, $2, ..
-            executor.get_special_matches(id as i64 - 100)
-        } else {
-            unreachable!()
-        }
-    }
-
     /*pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
         unreachable!()
     }*/

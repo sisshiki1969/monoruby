@@ -433,61 +433,6 @@ pub(super) extern "C" fn neg_value(
     Some(v)
 }
 
-pub extern "C" fn concatenate_string(globals: &Globals, arg: *mut Value, len: usize) -> Value {
-    let mut res = String::new();
-    for i in 0..len {
-        let v = unsafe { *arg.sub(i) };
-        res += &v.to_s(globals);
-    }
-    Value::new_string(res)
-}
-
-pub extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize {
-    match src.is_array() {
-        Some(ary) => {
-            if len <= ary.len() {
-                for i in 0..len {
-                    unsafe { *dst.sub(i) = ary[i] }
-                }
-                len
-            } else {
-                for i in 0..ary.len() {
-                    unsafe { *dst.sub(i) = ary[i] }
-                }
-                for i in ary.len()..len {
-                    unsafe { *dst.sub(i) = Value::nil() }
-                }
-                ary.len()
-            }
-        }
-        None => {
-            unsafe { *dst = src };
-            1
-        }
-    }
-}
-
-pub extern "C" fn make_splat(src: *mut Value) {
-    unsafe { *src = Value::new_splat(*src) };
-}
-
-pub(in crate::executor) extern "C" fn alias_method(
-    globals: &mut Globals,
-    self_val: Value,
-    new: Value,
-    old: Value,
-    meta: Meta,
-) -> Option<Value> {
-    let new = new.as_symbol();
-    let old = old.as_symbol();
-    match meta.mode() {
-        0 => globals.alias_method(self_val, new, old)?,
-        1 => globals.alias_method_for_class(self_val.as_class(), new, old)?,
-        _ => unreachable!(),
-    };
-    Some(Value::nil())
-}
-
 pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
     let ary = src.as_splat();
     let len = ary.len();
@@ -525,7 +470,7 @@ pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize
 }
 
 pub extern "C" fn vm_get_constant(
-    interp: &mut Executor,
+    executor: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
@@ -535,71 +480,9 @@ pub extern "C" fn vm_get_constant(
     if *cached_version == const_version {
         return *val;
     };
-    let res = interp.find_constant(globals, site_id);
+    let res = executor.find_constant(globals, site_id);
     if res.is_some() {
         globals.func[site_id].cache = (const_version, res)
     }
     res
-}
-
-///
-/// Get Constant.
-///
-/// rax: Option<Value>
-///
-pub extern "C" fn get_constant(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    site_id: ConstSiteId,
-) -> Option<Value> {
-    interp.find_constant(globals, site_id)
-}
-
-pub extern "C" fn set_constant(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    name: IdentId,
-    val: Value,
-) {
-    interp.set_constant(globals, name, val)
-}
-
-///
-/// Get Global variable.
-///
-/// rax: Value
-///
-pub extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
-    globals.get_gvar(name)
-}
-
-pub extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
-    globals.set_gvar(name, val);
-}
-
-pub extern "C" fn define_method(
-    interp: &mut Executor,
-    globals: &mut Globals,
-    name: IdentId,
-    func: FuncId,
-) {
-    let parent = interp.get_class_context();
-    globals.add_method(parent, name, func);
-}
-
-pub unsafe extern "C" fn _dump_stacktrace(interp: &mut Executor, globals: &mut Globals) {
-    let mut cfp = interp.cfp;
-    eprintln!("-----begin stacktrace");
-    for i in 0..16 {
-        eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
-        let ret_addr = cfp.return_addr();
-        eprintln!("ret adr: {:?} ", ret_addr);
-        let prev_cfp = cfp.prev();
-        globals.dump_frame_info(cfp.lfp());
-        if prev_cfp.is_null() {
-            break;
-        }
-        cfp = prev_cfp;
-    }
-    eprintln!("-----end stacktrace");
 }

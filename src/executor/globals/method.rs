@@ -1,7 +1,5 @@
 use super::*;
 
-impl Globals {}
-
 impl Globals {
     pub(crate) fn define_builtin_func(
         &mut self,

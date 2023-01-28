@@ -42,7 +42,7 @@ impl Codegen {
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             addq [rip + const_version], 1;
-            movq rax, (set_constant);
+            movq rax, (runtime::set_constant);
             call rax;
         };
         self.fetch_and_dispatch();
@@ -107,7 +107,7 @@ impl Codegen {
         monoasm! { self.jit,
             movl rsi, rdi; // name: IdentId
             movq rdi, r12; // &mut Globals
-            movq rax, (get_global_var);
+            movq rax, (runtime::get_global_var);
             call rax;
         };
         self.vm_store_r15();
@@ -129,7 +129,7 @@ impl Codegen {
             movl rsi, rdi;  // name: IdentId
             movq rdi, r12;  // &mut Globals
             movq rdx, [r15];  // base: Value
-            movq rax, (set_global_var);
+            movq rax, (runtime::set_global_var);
             call rax;
         };
         self.fetch_and_dispatch();
@@ -149,7 +149,7 @@ impl Codegen {
         monoasm! { self.jit,
             movl rsi, rdi;  // id
             movq rdi, rbx;  // &Executor
-            movq rax, (Executor::get_special_var);
+            movq rax, (runtime::get_special_var);
             call rax;
         };
         self.vm_store_r15();
