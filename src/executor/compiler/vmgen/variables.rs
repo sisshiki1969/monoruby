@@ -136,6 +136,27 @@ impl Codegen {
         label
     }
 
+    /// Load special variable
+    ///
+    /// ~~~text
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|dst|   id  ||               |
+    /// +---+---+---+---++---+---+---+---+
+    /// ~~~
+    pub(super) fn vm_load_svar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movl rsi, rdi;  // id
+            movq rdi, rbx;  // &Executor
+            movq rax, (Executor::get_special_var);
+            call rax;
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
     /// Load dynamic local variable
     ///
     /// ~~~text

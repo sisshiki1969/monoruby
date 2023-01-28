@@ -176,6 +176,7 @@ impl Codegen {
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[27] = self.vm_splat();
+        self.dispatch[28] = self.vm_load_svar();
         self.dispatch[30] = self.vm_method_call(false, true);
         self.dispatch[31] = self.vm_method_call(false, false);
         self.dispatch[32] = self.vm_method_call(true, true);

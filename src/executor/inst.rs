@@ -41,6 +41,10 @@ pub(super) enum BcIr {
         val: BcReg,
         name: IdentId,
     },
+    LoadSvar {
+        ret: BcReg,
+        id: u32,
+    },
     BlockArgProxy(BcReg),
     LoadDynVar {
         /// return register of the current frame.
@@ -321,6 +325,10 @@ pub(super) enum TraceIr {
         src: SlotId,
         name: IdentId,
     },
+    LoadSvar {
+        dst: SlotId,
+        id: u32,
+    },
     /// nil(%reg)
     Nil(SlotId),
     /// negate(%ret, %src)
@@ -540,6 +548,10 @@ impl TraceIr {
                     name: IdentId::from(op2),
                 },
                 27 => Self::Splat(SlotId::new(op1)),
+                28 => Self::LoadSvar {
+                    dst: SlotId::new(op1),
+                    id: op2,
+                },
                 30..=31 => {
                     let (_class, _version) = pc.class_version();
                     let info = match Self::from_bc(pc + 1, fnstore) {

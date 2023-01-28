@@ -1070,6 +1070,19 @@ impl Codegen {
                     };
                     self.xmm_restore(&xmm_using);
                 }
+                TraceIr::LoadSvar { dst: ret, id } => {
+                    ctx.dealloc_xmm(ret);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm! { self.jit,
+                        movq rdi, rbx;
+                        movl rsi, (id);
+                        movq rax, (Executor::get_special_var);
+                        call rax;
+                    };
+                    self.store_rax(ret);
+                    self.xmm_restore(&xmm_using);
+                }
                 TraceIr::LoadDynVar(ret, src) => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,

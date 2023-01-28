@@ -81,6 +81,10 @@ impl IrContext {
                     let op1 = info.get_index(src);
                     Bc::from(enc_wl(27, op1.0, 0))
                 }
+                BcIr::LoadSvar { ret, id } => {
+                    let op1 = info.get_index(ret);
+                    Bc::from(enc_wl(28, op1.0, *id))
+                }
                 BcIr::MethodCall(ret, name, has_splat) => {
                     let op1 = match ret {
                         None => SlotId::new(0),

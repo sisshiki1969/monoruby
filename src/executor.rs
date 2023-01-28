@@ -467,20 +467,27 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
-    /*pub(crate) fn get_special_var(&self, id: u32) -> Value {
+    ///
+    /// Get special variable.
+    ///
+    /// id: 0 -> $&
+    /// id: 1 -> $'
+    /// id: 100 + n -> $<n> (n >= 1)
+    ///
+    pub(crate) extern "C" fn get_special_var(executor: &Executor, id: u32) -> Value {
         if id == 0 {
             // $&
-            self.sp_last_match.unwrap_or_default()
+            executor.sp_last_match.unwrap_or_default()
         } else if id == 1 {
             // $'
-            self.sp_post_match.unwrap_or_default()
+            executor.sp_post_match.unwrap_or_default()
         } else if id >= 100 {
-            // $0, $1, ..
-            self.get_special_matches(id as usize - 100)
+            // $1, $2, ..
+            executor.get_special_matches(id as i64 - 100)
         } else {
             unreachable!()
         }
-    }*/
+    }
 
     /*pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
         unreachable!()
@@ -788,6 +795,20 @@ impl BcPc {
             }
             TraceIr::StoreGvar { src, name } => {
                 format!("${} = {:?}", IdentId::get_name(name), src)
+            }
+            TraceIr::LoadSvar { dst: ret, id } => {
+                // 0 => $&
+                // 1 => $'
+                // 100 + n => $n
+                format!(
+                    "{:?} = ${}",
+                    ret,
+                    match id {
+                        0 => "&".to_string(),
+                        1 => "'".to_string(),
+                        n => (n - 100).to_string(),
+                    }
+                )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
             TraceIr::Neg(dst, src) => {
