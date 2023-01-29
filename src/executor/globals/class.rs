@@ -83,11 +83,11 @@ impl ClassId {
         if self.0 == 0 {
             return "<INVALID>".to_string();
         }
-        let module = self.get_obj(globals);
+        let class = self.get_obj(globals).as_val();
         match globals.class[self].name {
             Some(id) => IdentId::get_name(id),
             None => match globals.class[self].is_singleton {
-                None => format!("#<Class:{:016x}>", module.as_val().get()),
+                None => format!("#<Class:{:016x}>", class.get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
             },
         }
@@ -95,7 +95,7 @@ impl ClassId {
 }
 
 impl Globals {
-    pub(crate) fn get_class_obj(&self, class_id: ClassId) -> Module {
+    fn get_class_obj(&self, class_id: ClassId) -> Module {
         self.class[class_id].object.unwrap()
     }
 

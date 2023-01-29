@@ -133,7 +133,11 @@ impl GC<RValue> for RValue {
         }
         match self.kind() {
             ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-            ObjKind::CLASS | ObjKind::MODULE => {}
+            ObjKind::CLASS | ObjKind::MODULE => {
+                if let Some(class) = self.as_class().superclass_value() {
+                    class.mark(alloc)
+                }
+            }
             ObjKind::OBJECT => {
                 self.as_object().iter().for_each(|v| {
                     v.map(|v| {

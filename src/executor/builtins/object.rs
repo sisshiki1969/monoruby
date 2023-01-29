@@ -245,13 +245,7 @@ extern "C" fn class(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(
-        self_val
-            .get_real_class(globals)
-            .class_id()
-            .get_obj(globals)
-            .as_val(),
-    )
+    Some(self_val.get_real_class(globals).as_val())
 }
 
 /// ### Object#instance_of?

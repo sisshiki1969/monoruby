@@ -287,7 +287,6 @@ pub(super) extern "C" fn define_class(
             globals.define_class_by_ident_id(name, Some(superclass), parent)
         }
     };
-    //globals.get_singleton_id(self_val.as_class());
     executor.push_class_context(self_val.as_class().class_id());
     Some(self_val)
 }

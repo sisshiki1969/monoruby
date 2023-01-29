@@ -107,7 +107,7 @@ impl Value {
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         if let Some(class) = self.is_class() {
             let singleton = globals.get_metaclass(class);
-            globals.get_class_obj(singleton).as_val()
+            singleton.get_obj(globals).as_val()
         } else {
             unreachable!()
         }
