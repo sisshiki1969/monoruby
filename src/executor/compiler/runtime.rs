@@ -268,10 +268,10 @@ pub(super) extern "C" fn define_class(
     let parent = executor.get_class_context().0;
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            let class = val.expect_class(globals)?;
+            val.expect_class(globals)?;
             if let Some(superclass) = superclass {
-                let super_class = superclass.expect_class(globals)?;
-                if Some(super_class) != class.super_class(globals) {
+                let superclass_id = superclass.expect_class(globals)?;
+                if Some(superclass_id) != val.as_class().superclass().map(|v| v.class_id()) {
                     globals.err_superclass_mismatch(name);
                     return None;
                 }
@@ -283,11 +283,12 @@ pub(super) extern "C" fn define_class(
                 Some(superclass) => superclass.expect_class(globals)?,
                 None => OBJECT_CLASS,
             };
+            let superclass = superclass.get_obj(globals);
             globals.define_class_by_ident_id(name, Some(superclass), parent)
         }
     };
     //globals.get_singleton_id(self_val.as_class());
-    executor.push_class_context(self_val.as_class());
+    executor.push_class_context(self_val.as_class().class_id());
     Some(self_val)
 }
 
@@ -320,7 +321,7 @@ pub(super) extern "C" fn alias_method(
     let old = old.as_symbol();
     match meta.mode() {
         0 => globals.alias_method(self_val, new, old)?,
-        1 => globals.alias_method_for_class(self_val.as_class(), new, old)?,
+        1 => globals.alias_method_for_class(self_val.as_class().class_id(), new, old)?,
         _ => unreachable!(),
     };
     Some(Value::nil())

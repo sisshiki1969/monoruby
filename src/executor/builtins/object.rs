@@ -245,7 +245,13 @@ extern "C" fn class(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.get_real_class_id(globals).get_obj(globals))
+    Some(
+        self_val
+            .get_real_class(globals)
+            .class_id()
+            .get_obj(globals)
+            .as_val(),
+    )
 }
 
 /// ### Object#instance_of?
@@ -260,7 +266,7 @@ extern "C" fn instance_of(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let b = self_val.get_real_class_id(globals) == arg[0].expect_class(globals)?;
+    let b = self_val.get_real_class(globals).class_id() == arg[0].expect_class(globals)?;
     Some(Value::bool(b))
 }
 

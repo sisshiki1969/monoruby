@@ -107,27 +107,27 @@ impl Value {
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         if let Some(class) = self.is_class() {
             let singleton = globals.get_metaclass(class);
-            globals.get_class_obj(singleton)
+            globals.get_class_obj(singleton).as_val()
         } else {
             unreachable!()
         }
     }
 
-    pub(crate) fn get_real_class_id(self, globals: &Globals) -> ClassId {
-        globals.get_real_class_id(self)
+    pub(crate) fn get_real_class(self, globals: &Globals) -> Module {
+        globals.get_real_class(self)
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        globals.get_real_class_id(self).get_name(globals)
+        globals.get_real_class(self).class_id().get_name(globals)
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
-        let mut obj_class = Some(self.get_real_class_id(globals));
+        let mut obj_class = Some(self.get_real_class(globals));
         while let Some(obj_class_inner) = obj_class {
-            if obj_class_inner == class {
+            if obj_class_inner.class_id() == class {
                 return true;
             }
-            obj_class = obj_class_inner.super_class(globals);
+            obj_class = obj_class_inner.superclass();
         }
         false
     }
@@ -222,8 +222,8 @@ impl Value {
         }
     }
 
-    pub(crate) fn new_empty_class(id: ClassId) -> Self {
-        RValue::new_class(id).pack()
+    pub(crate) fn new_empty_class(id: ClassId, superclass: Option<Module>) -> Self {
+        RValue::new_class(id, superclass).pack()
     }
 
     pub(crate) fn new_object(class_id: ClassId) -> Self {
@@ -484,14 +484,14 @@ impl Value {
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
-            ObjKind::CLASS => Some(rv.as_class()),
+            ObjKind::CLASS => Some(rv.as_class().class_id()),
             _ => None,
         }
     }
 
-    pub(crate) fn as_class(&self) -> ClassId {
+    pub(crate) fn as_class(&self) -> &ModuleInner {
         assert_eq!(ObjKind::CLASS, self.rvalue().kind());
-        self.rvalue().as_class()
+        &self.rvalue().as_class()
     }
 
     pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {

@@ -34,7 +34,7 @@ extern "C" fn new(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class();
+    let class = self_val.as_class().class_id();
     let map = IndexMap::default();
     let obj = Value::new_hash_with_class(map, class);
     Some(obj)

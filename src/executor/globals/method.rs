@@ -124,7 +124,7 @@ impl Globals {
         let func = match self.find_method_for_class(class_id, old_name) {
             Some(func) => func,
             None => {
-                self.err_method_not_found(old_name, class_id.get_obj(self));
+                self.err_method_not_found(old_name, class_id.get_obj(self).as_val());
                 return None;
             }
         };

@@ -29,7 +29,7 @@ extern "C" fn new(
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class();
+    let class = self_val.as_class().class_id();
     let obj = Value::new_array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Some(obj)

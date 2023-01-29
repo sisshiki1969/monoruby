@@ -4,9 +4,10 @@ use smallvec::SmallVec;
 use std::mem::ManuallyDrop;
 
 pub use self::hash::*;
-use self::regexp::RegexpInfo;
+pub use self::{module::*, regexp::RegexpInfo};
 
 mod hash;
+mod module;
 pub mod regexp;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
@@ -258,7 +259,10 @@ impl RValue {
                 .map(|table| Box::new(table.iter().map(|v| v.map(|v| v.deep_copy())).collect())),
             kind: match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::CLASS => ObjKind::class(self.as_class()),
+                ObjKind::CLASS => {
+                    let class = self.as_class();
+                    ObjKind::class(class.class_id(), class.superclass())
+                }
                 ObjKind::OBJECT => ObjKind::object(),
                 ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
                 ObjKind::FLOAT => ObjKind {
@@ -322,10 +326,10 @@ impl RValue {
     ///
     /// Create new class object with *class_id*.
     ///
-    pub(super) fn new_class(id: ClassId) -> Self {
+    pub(super) fn new_class(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
             flags: RVFlag::new(CLASS_CLASS, ObjKind::CLASS),
-            kind: ObjKind::class(id),
+            kind: ObjKind::class(id, superclass),
             var_table: None,
         }
     }
@@ -485,8 +489,8 @@ impl RValue {
         unsafe { &mut self.kind.object }
     }
 
-    pub(crate) fn as_class(&self) -> ClassId {
-        unsafe { self.kind.class }
+    pub(crate) fn as_class(&self) -> &ModuleInner {
+        unsafe { &self.kind.class }
     }
 
     fn as_float(&self) -> f64 {
@@ -601,7 +605,7 @@ impl RVFlag {
 #[repr(C)]
 pub union ObjKind {
     invalid: (),
-    class: ClassId,
+    class: ManuallyDrop<ModuleInner>,
     object: [Option<Value>; OBJECT_INLINE_IVAR],
     bignum: ManuallyDrop<BigInt>,
     float: f64,
@@ -669,8 +673,10 @@ impl ObjKind {
         Self { invalid: () }
     }
 
-    fn class(class: ClassId) -> Self {
-        Self { class }
+    fn class(class: ClassId, superclass: Option<Module>) -> Self {
+        Self {
+            class: ManuallyDrop::new(ModuleInner::new(class, superclass)),
+        }
     }
 
     fn object() -> Self {

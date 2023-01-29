@@ -43,18 +43,14 @@ extern "C" fn new(
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 extern "C" fn superclass(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     self_val: Value,
     _arg: Arg,
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class();
-    let res = match class_id.super_class(globals) {
-        None => Value::nil(),
-        Some(super_id) => super_id.get_obj(globals),
-    };
-    Some(res)
+    let class = self_val.as_class();
+    Some(class.superclass_value().unwrap_or_default())
 }
 
 /// ### Class#allocate
@@ -69,7 +65,7 @@ extern "C" fn allocate(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     let obj = Value::new_object(class_id);
     Some(obj)
 }
@@ -90,7 +86,7 @@ extern "C" fn eq(
         Some(class) => class,
         None => return Some(Value::bool(false)),
     };
-    let lhs = self_val.as_class();
+    let lhs = self_val.as_class().class_id();
     Some(Value::bool(lhs == rhs))
 }
 
@@ -106,7 +102,7 @@ extern "C" fn teq(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class();
+    let class = self_val.as_class().class_id();
     Some(Value::bool(arg[0].is_kind_of(globals, class)))
 }
 
@@ -122,7 +118,7 @@ extern "C" fn tos(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_name = self_val.as_class().get_name(globals);
+    let class_name = self_val.as_class().class_id().get_name(globals);
     let res = Value::new_string(class_name);
     Some(res)
 }
@@ -139,7 +135,7 @@ extern "C" fn constants(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     let v = globals
         .get_constant_names(class_id)
         .into_iter()
@@ -164,7 +160,7 @@ extern "C" fn instance_methods(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     let v = globals
         .get_method_names(class_id)
         .into_iter()
@@ -186,7 +182,7 @@ extern "C" fn attr_reader(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name);
@@ -208,7 +204,7 @@ extern "C" fn attr_writer(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name);
@@ -230,7 +226,7 @@ extern "C" fn attr_accessor(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut res = vec![];
-    let class_id = self_val.as_class();
+    let class_id = self_val.as_class().class_id();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name);

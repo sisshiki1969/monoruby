@@ -26,93 +26,108 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
         globals
             .define_builtin_class("Object", OBJECT_CLASS, None, OBJECT_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         CLASS_CLASS,
         globals
             .define_builtin_class_under_obj("Class", CLASS_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         NIL_CLASS,
         globals
             .define_builtin_class_under_obj("NilClass", NIL_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         TRUE_CLASS,
         globals
             .define_builtin_class_under_obj("TrueClass", TRUE_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         FALSE_CLASS,
         globals
             .define_builtin_class_under_obj("FalseClass", FALSE_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         INTEGER_CLASS,
         globals
             .define_builtin_class_under_obj("Integer", INTEGER_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         FLOAT_CLASS,
         globals
             .define_builtin_class_under_obj("Float", FLOAT_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         STRING_CLASS,
         globals
             .define_builtin_class_under_obj("String", STRING_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         SYMBOL_CLASS,
         globals
             .define_builtin_class_under_obj("Symbol", SYMBOL_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         TIME_CLASS,
         globals
             .define_builtin_class_under_obj("Time", TIME_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         ARRAY_CLASS,
         globals
             .define_builtin_class_under_obj("Array", ARRAY_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         RANGE_CLASS,
         globals
             .define_builtin_class_under_obj("Range", RANGE_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         PROC_CLASS,
         globals
             .define_builtin_class_under_obj("Proc", PROC_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         HASH_CLASS,
         globals
             .define_builtin_class_under_obj("Hash", HASH_CLASS)
             .as_class()
+            .class_id()
     );
     assert_eq!(
         REGEXP_CLASS,
         globals
             .define_builtin_class_under_obj("Regexp", REGEXP_CLASS)
             .as_class()
+            .class_id()
     );
-    let math_class = globals.define_class_under_obj("Math").as_class();
-    let file_class = globals.define_class_under_obj("File").as_class();
+    let math_class = globals.define_class_under_obj("Math").as_class().class_id();
+    let file_class = globals.define_class_under_obj("File").as_class().class_id();
 
     object::init(globals);
     integer::init(globals);
