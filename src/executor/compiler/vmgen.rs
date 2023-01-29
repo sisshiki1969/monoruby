@@ -171,6 +171,7 @@ impl Codegen {
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
         self.dispatch[18] = self.vm_class_def();
+        self.dispatch[19] = self.vm_class_def();
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[25] = self.vm_load_gvar();

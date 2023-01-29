@@ -24,14 +24,16 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     assert_eq!(
         OBJECT_CLASS,
         globals
-            .define_builtin_class("Object", OBJECT_CLASS, None, OBJECT_CLASS)
+            .define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS)
             .as_class()
             .class_id()
     );
+    let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS);
+    assert_eq!(MODULE_CLASS, module.as_class().class_id());
     assert_eq!(
         CLASS_CLASS,
         globals
-            .define_builtin_class_under_obj("Class", CLASS_CLASS)
+            .define_builtin_class_by_str("Class", CLASS_CLASS, Module::new(module), OBJECT_CLASS)
             .as_class()
             .class_id()
     );

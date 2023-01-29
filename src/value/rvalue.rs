@@ -133,9 +133,13 @@ impl GC<RValue> for RValue {
         }
         match self.kind() {
             ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-            ObjKind::CLASS | ObjKind::MODULE => {
-                if let Some(class) = self.as_class().superclass_value() {
+            ObjKind::CLASS => {
+                let module = self.as_class();
+                if let Some(class) = module.superclass_value() {
                     class.mark(alloc)
+                }
+                if let Some(val) = module.is_singleton() {
+                    val.mark(alloc)
                 }
             }
             ObjKind::OBJECT => {
@@ -265,7 +269,7 @@ impl RValue {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS => {
                     let class = self.as_class();
-                    ObjKind::class(class.class_id(), class.superclass())
+                    ObjKind::class(class.class_id(), class.superclass(), class.class_type())
                 }
                 ObjKind::OBJECT => ObjKind::object(),
                 ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
@@ -330,10 +334,25 @@ impl RValue {
     ///
     /// Create new class object with *class_id*.
     ///
-    pub(super) fn new_class(id: ClassId, superclass: Option<Module>) -> Self {
+    pub(super) fn new_class(
+        id: ClassId,
+        superclass: Option<Module>,
+        class_type: ModuleType,
+    ) -> Self {
         RValue {
             flags: RVFlag::new(CLASS_CLASS, ObjKind::CLASS),
-            kind: ObjKind::class(id, superclass),
+            kind: ObjKind::class(id, superclass, class_type),
+            var_table: None,
+        }
+    }
+
+    ///
+    /// Create new module object with *class_id*.
+    ///
+    pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
+        RValue {
+            flags: RVFlag::new(MODULE_CLASS, ObjKind::CLASS),
+            kind: ObjKind::class(id, superclass, ModuleType::Module),
             var_table: None,
         }
     }
@@ -626,7 +645,7 @@ pub union ObjKind {
 impl ObjKind {
     pub const INVALID: u8 = 0;
     pub const CLASS: u8 = 1;
-    pub const MODULE: u8 = 2;
+    //pub const MODULE: u8 = 2;
     pub const OBJECT: u8 = 3;
     pub const BIGNUM: u8 = 4;
     pub const FLOAT: u8 = 5;
@@ -677,9 +696,9 @@ impl ObjKind {
         Self { invalid: () }
     }
 
-    fn class(class: ClassId, superclass: Option<Module>) -> Self {
+    fn class(class: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
         Self {
-            class: ManuallyDrop::new(ModuleInner::new(class, superclass)),
+            class: ManuallyDrop::new(ModuleInner::new(class, superclass, class_type)),
         }
     }
 

@@ -89,6 +89,11 @@ pub(super) enum BcIr {
         name: IdentId,
         func_id: FuncId,
     },
+    ModuleDef {
+        ret: Option<BcReg>,
+        name: IdentId,
+        func_id: FuncId,
+    },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     Splat(BcReg),
@@ -421,6 +426,11 @@ pub(super) enum TraceIr {
         name: IdentId,
         func_id: FuncId,
     },
+    ModuleDef {
+        ret: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+    },
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
@@ -534,6 +544,11 @@ impl TraceIr {
                 18 => Self::ClassDef {
                     ret: SlotId::new(op1),
                     superclass: SlotId::new(op2 as u16),
+                    name: IdentId::from((pc.op2.0) as u32),
+                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                },
+                19 => Self::ModuleDef {
+                    ret: SlotId::new(op1),
                     name: IdentId::from((pc.op2.0) as u32),
                     func_id: FuncId((pc.op2.0 >> 32) as u32),
                 },

@@ -36,7 +36,7 @@ impl Globals {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id);
+        let class_id = self.get_metaclass(class_id).class_id();
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id);
@@ -51,7 +51,7 @@ impl Globals {
         arity: i32,
         inline_id: InlineMethod,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id);
+        let class_id = self.get_metaclass(class_id).class_id();
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id);

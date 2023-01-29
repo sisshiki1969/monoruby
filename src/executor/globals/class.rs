@@ -19,6 +19,7 @@ pub const RANGE_CLASS: ClassId = ClassId::new(12);
 pub const PROC_CLASS: ClassId = ClassId::new(13);
 pub const HASH_CLASS: ClassId = ClassId::new(14);
 pub const REGEXP_CLASS: ClassId = ClassId::new(15);
+pub const MODULE_CLASS: ClassId = ClassId::new(16);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -61,6 +62,7 @@ impl std::fmt::Debug for ClassId {
             13 => write!(f, "PROC"),
             14 => write!(f, "HASH"),
             15 => write!(f, "REGEXP"),
+            16 => write!(f, "MODULE"),
             n => write!(f, "ClassId({})", n),
         }
     }
@@ -83,11 +85,11 @@ impl ClassId {
         if self.0 == 0 {
             return "<INVALID>".to_string();
         }
-        let class = self.get_obj(globals).as_val();
+        let class = self.get_obj(globals);
         match globals.class[self].name {
             Some(id) => IdentId::get_name(id),
-            None => match globals.class[self].is_singleton {
-                None => format!("#<Class:{:016x}>", class.get()),
+            None => match class.is_singleton() {
+                None => format!("#<Class:{:016x}>", class.as_val().get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
             },
         }
@@ -101,7 +103,7 @@ impl Globals {
 
     pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Value {
         let object_class = OBJECT_CLASS.get_obj(self);
-        self.define_class(name, Some(object_class), OBJECT_CLASS)
+        self.define_class_by_str(name, Some(object_class), OBJECT_CLASS)
     }
 
     pub(in crate::executor) fn define_builtin_class_under_obj(
@@ -110,20 +112,20 @@ impl Globals {
         class_id: ClassId,
     ) -> Value {
         let object_class = OBJECT_CLASS.get_obj(self);
-        self.define_builtin_class(name, class_id, Some(object_class), OBJECT_CLASS)
+        self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
     }
 
-    pub(crate) fn define_class(
+    pub(crate) fn define_class_by_str(
         &mut self,
         name: &str,
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Value {
         let name_id = IdentId::get_ident_id(name);
-        self.define_class_by_ident_id(name_id, superclass, parent)
+        self.define_class(name_id, superclass, parent)
     }
 
-    pub(in crate::executor) fn define_builtin_class(
+    pub(in crate::executor) fn define_builtin_class_by_str(
         &mut self,
         name: &str,
         class_id: ClassId,
@@ -131,22 +133,22 @@ impl Globals {
         parent: ClassId,
     ) -> Value {
         let name_id = IdentId::get_ident_id(name);
-        self.define_builtin_class_by_ident_id(name_id, class_id, superclass, parent)
+        self.define_builtin_class(name_id, class_id, superclass, parent)
     }
 
-    pub(crate) fn define_class_by_ident_id(
+    pub(crate) fn define_class(
         &mut self,
         name_id: IdentId,
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Value {
         let class_id = self.class.add_class();
-        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent);
+        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, false);
         self.get_metaclass(class_id);
         obj
     }
 
-    fn define_builtin_class_by_ident_id(
+    fn define_builtin_class(
         &mut self,
         name_id: IdentId,
         class_id: ClassId,
@@ -154,7 +156,7 @@ impl Globals {
         parent: ClassId,
     ) -> Value {
         self.class.def_builtin_class(class_id);
-        self.generate_class_obj(name_id, class_id, superclass.into(), parent)
+        self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
     }
 
     fn generate_class_obj(
@@ -163,8 +165,15 @@ impl Globals {
         class_id: ClassId,
         superclass: Option<Module>,
         parent: ClassId,
+        is_module: bool,
     ) -> Value {
-        let class_obj = Value::new_empty_class(class_id, superclass);
+        let class_obj = if is_module {
+            assert!(superclass.is_none());
+            let object = OBJECT_CLASS.get_obj(self);
+            Value::new_empty_module(class_id, Some(object))
+        } else {
+            Value::new_empty_class(class_id, superclass)
+        };
         self.class[class_id].object = Some(Module::new(class_obj));
         self.class[class_id].name = Some(name_id);
         self.set_constant(parent, name_id, class_obj);
@@ -175,15 +184,11 @@ impl Globals {
         &mut self,
         super_class: impl Into<Option<Module>>,
         base: Value,
-    ) -> (Value, ClassId) {
-        let id = self.class.add_singleton_class(base);
-        let class_obj = Value::new_empty_class(id, super_class.into());
+    ) -> Module {
+        let id = self.class.add_class();
+        let class_obj = Value::new_empty_singleton_class(id, super_class.into(), base);
         self.class[id].object = Some(Module::new(class_obj));
-        (class_obj, id)
-    }
-
-    pub(crate) fn get_real_class(&self, val: Value) -> Module {
-        self.class.get_real_class(val)
+        Module::new(class_obj)
     }
 
     ///
@@ -191,29 +196,33 @@ impl Globals {
     ///
     /// If not exists, create a new metaclass.
     ///
-    pub(crate) fn get_metaclass(&mut self, original: ClassId) -> ClassId {
-        let mut original_obj = self.get_class_obj(original).as_val();
-        let class = original_obj.class();
-        if !self.class[original].is_singleton() && self.class[class].is_singleton() {
+    pub(crate) fn get_metaclass(&mut self, original: ClassId) -> Module {
+        let original_obj = self.get_class_obj(original);
+        let class = original_obj.as_val().get_class_obj(self);
+        if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
             return class;
         }
-        let super_singleton = match original_obj.as_class().superclass() {
+        let super_singleton = match original_obj.superclass() {
             Some(id) => self.get_metaclass(id.class_id()),
-            None => CLASS_CLASS,
+            None => CLASS_CLASS.get_obj(self),
         };
-        let (mut singleton_obj, singleton) =
-            self.new_singleton_class(Some(super_singleton.get_obj(self)), original_obj);
-        original_obj.change_class(singleton);
-        let class_class = if class == original {
-            singleton
+        let mut original_obj = original_obj.as_val();
+        let singleton = self.new_singleton_class(Some(super_singleton), original_obj);
+        original_obj.change_class(singleton.class_id());
+        let class_class = if class.class_id() == original {
+            singleton.class_id()
         } else {
-            self.get_class_obj(class).class_id()
+            self.get_class_obj(class.class_id()).class_id()
         };
+        let mut singleton_obj = singleton.as_val();
         singleton_obj.change_class(class_class);
         #[cfg(debug_assertions)]
         {
-            assert_eq!(original_obj.class(), singleton);
-            assert!(self.class[singleton].is_singleton());
+            assert_eq!(singleton.class_id(), original_obj.class());
+            assert_eq!(
+                Some(original_obj),
+                Module::new(singleton_obj).is_singleton()
+            );
         }
         singleton
     }
@@ -326,8 +335,6 @@ pub(super) struct ClassInfo {
     name: Option<IdentId>,
     /// corresponding class object.
     object: Option<Module>,
-    /// is singleton class?
-    is_singleton: Option<Value>,
     /// method table.
     methods: HashMap<IdentId, FuncId>,
     /// constants table.
@@ -341,9 +348,6 @@ impl GC<RValue> for ClassInfo {
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
-        if let Some(v) = self.is_singleton {
-            v.mark(alloc);
-        }
         self.constants.values().for_each(|v| v.mark(alloc));
     }
 }
@@ -353,30 +357,10 @@ impl ClassInfo {
         Self {
             name: None,
             object: None,
-            is_singleton: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
             ivar_names: HashMap::default(),
         }
-    }
-
-    fn new_singleton(base: Value) -> Self {
-        Self {
-            name: None,
-            object: None,
-            is_singleton: Some(base),
-            methods: HashMap::default(),
-            constants: HashMap::default(),
-            ivar_names: HashMap::default(),
-        }
-    }
-
-    fn is_singleton(&self) -> bool {
-        self.is_singleton.is_some()
-    }
-
-    fn is_real_class(&self) -> bool {
-        self.is_singleton.is_none()
     }
 }
 
@@ -420,19 +404,5 @@ impl ClassStore {
 
     fn def_builtin_class(&mut self, class: ClassId) {
         self[class] = ClassInfo::new();
-    }
-
-    fn add_singleton_class(&mut self, base: Value) -> ClassId {
-        let id = self.classes.len();
-        self.classes.push(ClassInfo::new_singleton(base));
-        ClassId(id as u32)
-    }
-
-    fn get_real_class(&self, val: Value) -> Module {
-        let mut class = self[val.class()].object.unwrap();
-        while !self[class.class_id()].is_real_class() {
-            class = class.superclass().unwrap();
-        }
-        class
     }
 }

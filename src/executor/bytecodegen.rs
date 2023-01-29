@@ -1055,7 +1055,7 @@ impl IrContext {
                 name,
                 superclass,
                 info: block_info,
-                is_module: _,
+                is_module,
             } => {
                 let dst = if use_mode.use_val() {
                     Some(info.push().into())
@@ -1070,6 +1070,7 @@ impl IrContext {
                     superclass,
                     *block_info.body,
                     dst,
+                    is_module,
                     loc,
                 )?;
                 if use_mode.is_ret() {
@@ -1263,7 +1264,7 @@ impl IrContext {
                 name,
                 superclass,
                 info: block_info,
-                is_module: _,
+                is_module,
             } => {
                 let dst = Some(dst);
                 self.gen_class_def(
@@ -1274,6 +1275,7 @@ impl IrContext {
                     superclass,
                     *block_info.body,
                     dst,
+                    is_module,
                     loc,
                 )?;
             }
@@ -1340,6 +1342,7 @@ impl IrContext {
         superclass: Option<Box<Node>>,
         body: Node,
         dst: Option<BcReg>,
+        is_module: bool,
         loc: Loc,
     ) -> Result<()> {
         if let Some(base) = base {
@@ -1358,11 +1361,19 @@ impl IrContext {
             None => None,
         };
         self.push(
-            BcIr::ClassDef {
-                ret: dst,
-                superclass,
-                name,
-                func_id,
+            if is_module {
+                BcIr::ModuleDef {
+                    ret: dst,
+                    name,
+                    func_id,
+                }
+            } else {
+                BcIr::ClassDef {
+                    ret: dst,
+                    superclass,
+                    name,
+                    func_id,
+                }
             },
             loc,
         );

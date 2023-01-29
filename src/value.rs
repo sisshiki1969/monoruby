@@ -107,18 +107,25 @@ impl Value {
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
         if let Some(class) = self.is_class() {
             let singleton = globals.get_metaclass(class);
-            singleton.get_obj(globals).as_val()
+            singleton.as_val()
         } else {
             unreachable!()
         }
     }
 
+    ///
+    /// Get class object of *self.
+    ///
+    pub(crate) fn get_class_obj(self, globals: &Globals) -> Module {
+        self.class().get_obj(globals)
+    }
+
     pub(crate) fn get_real_class(self, globals: &Globals) -> Module {
-        globals.get_real_class(self)
+        self.get_class_obj(globals).get_real_class()
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        globals.get_real_class(self).class_id().get_name(globals)
+        self.get_real_class(globals).class_id().get_name(globals)
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
@@ -223,7 +230,19 @@ impl Value {
     }
 
     pub(crate) fn new_empty_class(id: ClassId, superclass: Option<Module>) -> Self {
-        RValue::new_class(id, superclass).pack()
+        RValue::new_class(id, superclass, ModuleType::RealClass).pack()
+    }
+
+    pub(crate) fn new_empty_singleton_class(
+        id: ClassId,
+        superclass: Option<Module>,
+        attach_obj: Value,
+    ) -> Self {
+        RValue::new_class(id, superclass, ModuleType::Singleton(attach_obj)).pack()
+    }
+
+    pub(crate) fn new_empty_module(id: ClassId, superclass: Option<Module>) -> Self {
+        RValue::new_module(id, superclass).pack()
     }
 
     pub(crate) fn new_object(class_id: ClassId) -> Self {
@@ -489,9 +508,9 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_class(&self) -> &ModuleInner {
+    pub(crate) fn as_class(&self) -> Module {
         assert_eq!(ObjKind::CLASS, self.rvalue().kind());
-        &self.rvalue().as_class()
+        Module::new(*self)
     }
 
     pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {

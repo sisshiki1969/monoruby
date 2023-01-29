@@ -284,7 +284,7 @@ pub(super) extern "C" fn define_class(
                 None => OBJECT_CLASS,
             };
             let superclass = superclass.get_obj(globals);
-            globals.define_class_by_ident_id(name, Some(superclass), parent)
+            globals.define_class(name, Some(superclass), parent)
         }
     };
     executor.push_class_context(self_val.as_class().class_id());
@@ -304,7 +304,7 @@ pub(super) extern "C" fn define_method(
     let (parent, module_function) = executor.get_class_context();
     globals.add_method(parent, name, func);
     if module_function {
-        let singleton = globals.get_metaclass(parent);
+        let singleton = globals.get_metaclass(parent).class_id();
         globals.add_method(singleton, name, func);
     }
 }

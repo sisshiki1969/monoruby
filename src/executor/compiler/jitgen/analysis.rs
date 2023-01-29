@@ -188,7 +188,7 @@ impl LoopAnalysis {
                     reg_info.use_non_float(base);
                     reg_info.use_non_float(idx);
                 }
-                TraceIr::ClassDef { ret, .. } => {
+                TraceIr::ClassDef { ret, .. } | TraceIr::ModuleDef { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::LoadConst(dst, _const_id) => {

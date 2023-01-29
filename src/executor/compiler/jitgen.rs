@@ -1359,6 +1359,9 @@ impl Codegen {
                 } => {
                     self.jit_class_def(&ctx, ret, superclass, name, func_id);
                 }
+                TraceIr::ModuleDef { ret, name, func_id } => {
+                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id);
+                }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
                     self.load_rax(lhs);

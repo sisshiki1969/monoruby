@@ -294,6 +294,13 @@ impl IrContext {
                     };
                     Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), *name, *func_id)
                 }
+                BcIr::ModuleDef { ret, name, func_id } => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), *name, *func_id)
+                }
             };
             ops.push(op);
             locs.push(*loc);
