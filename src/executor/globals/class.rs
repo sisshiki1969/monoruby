@@ -148,7 +148,9 @@ impl Globals {
         parent: ClassId,
     ) -> Value {
         let class_id = self.class.add_class(super_class.into());
-        self.generate_class_obj(name_id, class_id, parent)
+        let obj = self.generate_class_obj(name_id, class_id, parent);
+        self.get_metaclass(class_id);
+        obj
     }
 
     fn define_builtin_class_by_ident_id(
@@ -171,7 +173,6 @@ impl Globals {
         let class_obj = Value::new_empty_class(class_id);
         self.class[class_id].object = Some(class_obj);
         self.class[class_id].name = Some(name_id);
-        self.get_singleton_id(class_id);
         self.set_constant(parent, name_id, class_obj);
         class_obj
     }
@@ -191,27 +192,31 @@ impl Globals {
         self.class.get_real_class_id(val)
     }
 
-    pub(crate) fn get_singleton_id(&mut self, original_id: ClassId) -> ClassId {
-        let mut original = self.get_class_obj(original_id);
-        let original_class_id = original.class_id();
-        if self.class[original_class_id].is_singleton() {
-            return original_class_id;
+    pub(crate) fn get_metaclass(&mut self, original: ClassId) -> ClassId {
+        let mut original_obj = self.get_class_obj(original);
+        let class = original_obj.class_id();
+        if !self.class[original].is_singleton() && self.class[class].is_singleton() {
+            return class;
         }
-        let super_singleton_id = match original_id.super_class(self) {
-            Some(id) => self.get_singleton_id(id),
+        let super_singleton = match original.super_class(self) {
+            Some(id) => self.get_metaclass(id),
             None => CLASS_CLASS,
         };
-
-        let (mut singleton, singleton_id) =
-            self.new_singleton_class(Some(super_singleton_id), original);
-        original.change_class(singleton_id);
-        singleton.change_class(original_class_id);
+        let (mut singleton_obj, singleton) =
+            self.new_singleton_class(Some(super_singleton), original_obj);
+        original_obj.change_class(singleton);
+        let class_class = if class == original {
+            singleton
+        } else {
+            self.get_class_obj(class).class_id()
+        };
+        singleton_obj.change_class(class_class);
         #[cfg(debug_assertions)]
         {
-            assert_eq!(original.class_id(), singleton_id);
-            assert!(self.class[singleton_id].is_singleton());
+            assert_eq!(original_obj.class_id(), singleton);
+            assert!(self.class[singleton].is_singleton());
         }
-        singleton_id
+        singleton
     }
 
     ///
@@ -424,10 +429,10 @@ impl ClassStore {
     }
 
     fn get_real_class_id(&self, val: Value) -> ClassId {
-        let mut id = val.class_id();
-        while self[id].is_singleton() {
-            id = self[id].object.unwrap().class_id();
+        let mut class = val.class_id();
+        while self[class].is_singleton() {
+            class = self[class].super_class_id.unwrap();
         }
-        id
+        class
     }
 }

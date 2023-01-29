@@ -8,6 +8,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    globals.define_builtin_func(CLASS_CLASS, "==", eq, 1);
     globals.define_builtin_func(CLASS_CLASS, "===", teq, 1);
     globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
@@ -73,6 +74,26 @@ extern "C" fn allocate(
     Some(obj)
 }
 
+/// ### Module#==
+/// - self == obj -> bool
+///
+/// []
+extern "C" fn eq(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let rhs = match arg[0].is_class() {
+        Some(class) => class,
+        None => return Some(Value::bool(false)),
+    };
+    let lhs = self_val.as_class();
+    Some(Value::bool(lhs == rhs))
+}
+
 /// ### Module#===
 /// - self === obj -> bool
 ///
@@ -86,7 +107,7 @@ extern "C" fn teq(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = self_val.as_class();
-    Some(Value::bool(arg[0].is_kinf_of(globals, class)))
+    Some(Value::bool(arg[0].is_kind_of(globals, class)))
 }
 
 /// ### Class#to_s

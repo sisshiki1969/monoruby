@@ -105,9 +105,12 @@ impl Value {
     }
 
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
-        let original_id = self.as_class();
-        let singleton = globals.get_singleton_id(original_id);
-        globals.get_class_obj(singleton)
+        if let Some(class) = self.is_class() {
+            let singleton = globals.get_metaclass(class);
+            globals.get_class_obj(singleton)
+        } else {
+            unreachable!()
+        }
     }
 
     pub(crate) fn get_real_class_id(self, globals: &Globals) -> ClassId {
@@ -118,7 +121,7 @@ impl Value {
         globals.get_real_class_id(self).get_name(globals)
     }
 
-    pub(crate) fn is_kinf_of(self, globals: &Globals, class: ClassId) -> bool {
+    pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
         let mut obj_class = Some(self.get_real_class_id(globals));
         while let Some(obj_class_inner) = obj_class {
             if obj_class_inner == class {

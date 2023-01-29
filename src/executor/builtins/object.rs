@@ -77,7 +77,7 @@ extern "C" fn is_a(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = arg[0].expect_class(globals)?;
-    Some(Value::bool(self_val.is_kinf_of(globals, class)))
+    Some(Value::bool(self_val.is_kind_of(globals, class)))
 }
 
 /// ### Kernel#puts
