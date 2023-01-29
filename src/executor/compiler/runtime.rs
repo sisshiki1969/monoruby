@@ -120,7 +120,7 @@ pub(super) extern "C" fn get_index(
     index: Value,
     class_slot: &mut ClassIdSlot,
 ) -> Option<Value> {
-    let base_classid = base.class_id();
+    let base_classid = base.class();
     class_slot.base = base_classid;
     match base_classid {
         ARRAY_CLASS => {
@@ -131,7 +131,7 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    class_slot.idx = index.class_id();
+    class_slot.idx = index.class();
     interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 
@@ -147,7 +147,7 @@ pub(super) extern "C" fn set_index(
     src: Value,
     class_slot: &mut ClassIdSlot,
 ) -> Option<Value> {
-    let base_classid = base.class_id();
+    let base_classid = base.class();
     class_slot.base = base_classid;
     match base_classid {
         ARRAY_CLASS => {
@@ -158,7 +158,7 @@ pub(super) extern "C" fn set_index(
         }
         _ => {}
     }
-    class_slot.idx = index.class_id();
+    class_slot.idx = index.class();
     interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 

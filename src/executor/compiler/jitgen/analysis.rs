@@ -153,7 +153,7 @@ impl LoopAnalysis {
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::Literal(dst, val) => {
-                    if val.class_id() == FLOAT_CLASS {
+                    if val.class() == FLOAT_CLASS {
                         reg_info.def_float_const(dst);
                     } else {
                         reg_info.def_as(dst, false);
@@ -193,7 +193,7 @@ impl LoopAnalysis {
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
-                        value.class_id() == FLOAT_CLASS
+                        value.class() == FLOAT_CLASS
                     } else {
                         false
                     };

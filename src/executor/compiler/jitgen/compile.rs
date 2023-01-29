@@ -15,7 +15,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
-        if ctx.self_value.class_id() == cached_class {
+        if ctx.self_value.class() == cached_class {
             if ctx.self_value.kind() == Some(ObjKind::OBJECT)
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {
@@ -55,7 +55,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
-        if ctx.self_value.class_id() == cached_class {
+        if ctx.self_value.class() == cached_class {
             if ctx.self_value.kind() == Some(ObjKind::OBJECT)
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {

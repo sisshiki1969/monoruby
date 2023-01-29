@@ -193,7 +193,7 @@ impl Globals {
     ///
     pub(crate) fn get_metaclass(&mut self, original: ClassId) -> ClassId {
         let mut original_obj = self.get_class_obj(original).as_val();
-        let class = original_obj.class_id();
+        let class = original_obj.class();
         if !self.class[original].is_singleton() && self.class[class].is_singleton() {
             return class;
         }
@@ -212,7 +212,7 @@ impl Globals {
         singleton_obj.change_class(class_class);
         #[cfg(debug_assertions)]
         {
-            assert_eq!(original_obj.class_id(), singleton);
+            assert_eq!(original_obj.class(), singleton);
             assert!(self.class[singleton].is_singleton());
         }
         singleton
@@ -231,7 +231,7 @@ impl Globals {
     /// This fn checks whole superclass chain.
     ///
     pub(crate) fn find_method(&mut self, obj: Value, name: IdentId) -> Option<FuncId> {
-        let class_id = obj.class_id();
+        let class_id = obj.class();
         self.find_method_for_class(class_id, name)
     }
 
@@ -429,7 +429,7 @@ impl ClassStore {
     }
 
     fn get_real_class(&self, val: Value) -> Module {
-        let mut class = self[val.class_id()].object.unwrap();
+        let mut class = self[val.class()].object.unwrap();
         while !self[class.class_id()].is_real_class() {
             class = class.superclass().unwrap();
         }

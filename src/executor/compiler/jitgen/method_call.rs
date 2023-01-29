@@ -152,7 +152,7 @@ impl Codegen {
         } = method_info;
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
-            if recv.is_zero() && ctx.self_value.class_id() != cached.class_id {
+            if recv.is_zero() && ctx.self_value.class() != cached.class_id {
                 self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
             } else {
                 self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc, has_splat);
@@ -246,7 +246,7 @@ impl Codegen {
         if recv.is_zero() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
             monoasm!(self.jit,
-                movl r15, (ctx.self_value.class_id().0);
+                movl r15, (ctx.self_value.class().0);
             );
         } else {
             self.load_rdi(recv);

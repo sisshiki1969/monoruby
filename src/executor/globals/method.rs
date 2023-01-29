@@ -108,7 +108,7 @@ impl Globals {
                 return None;
             }
         };
-        self.add_method(obj.class_id(), new_name, func);
+        self.add_method(obj.class(), new_name, func);
         Some(())
     }
 

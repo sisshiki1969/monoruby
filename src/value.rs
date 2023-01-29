@@ -73,7 +73,7 @@ impl Value {
         Value::from(ptr as u64)
     }
 
-    pub(crate) fn class_id(&self) -> ClassId {
+    pub(crate) fn class(&self) -> ClassId {
         if self.is_fixnum() {
             INTEGER_CLASS
         } else if self.is_flonum() {
@@ -145,7 +145,7 @@ impl Value {
     }
 
     pub(crate) extern "C" fn get_class(val: Value) -> ClassId {
-        val.class_id()
+        val.class()
     }
 
     pub(crate) fn deep_copy(&self) -> Self {

@@ -571,7 +571,7 @@ impl Globals {
                 },
                 func.name(),
                 func.id,
-                self_value.class_id().get_name(self),
+                self_value.class().get_name(self),
                 start_pos,
                 func.bytecode().as_ptr(),
             );

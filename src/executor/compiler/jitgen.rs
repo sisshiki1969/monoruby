@@ -528,7 +528,7 @@ impl Codegen {
             monoasm!(self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
             );
-            self.guard_class(self_value.class_id(), side_exit);
+            self.guard_class(self_value.class(), side_exit);
         }
 
         cc.branch_map.insert(
@@ -1013,7 +1013,7 @@ impl Codegen {
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    if pc.value().map(|v| v.class_id()) == Some(FLOAT_CLASS) {
+                    if pc.value().map(|v| v.class()) == Some(FLOAT_CLASS) {
                         let fdst = ctx.alloc_xmm();
                         ctx.link_r_xmm(dst, fdst);
                         self.load_float_constant(&ctx, dst, fdst, id, pc);
