@@ -357,6 +357,24 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn cant_set_variable(id: usize, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+        // 0 => $&
+        // 1 => $'
+        // 100 + n => $n
+        Self::syntax(
+            format!(
+                "can't set variable ${}.",
+                match id {
+                    0 => "&".to_string(),
+                    1 => "'".to_string(),
+                    n => (n - 100).to_string(),
+                }
+            ),
+            loc,
+            sourceinfo,
+        )
+    }
+
     pub(crate) fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),

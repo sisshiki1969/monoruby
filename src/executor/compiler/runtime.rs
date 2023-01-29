@@ -65,6 +65,48 @@ pub(super) extern "C" fn gen_range(
     globals.generate_range(start, end, exclude_end)
 }
 
+pub(super) extern "C" fn concatenate_string(
+    globals: &Globals,
+    arg: *mut Value,
+    len: usize,
+) -> Value {
+    let mut res = String::new();
+    for i in 0..len {
+        let v = unsafe { *arg.sub(i) };
+        res += &v.to_s(globals);
+    }
+    Value::new_string(res)
+}
+
+pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize {
+    match src.is_array() {
+        Some(ary) => {
+            if len <= ary.len() {
+                for i in 0..len {
+                    unsafe { *dst.sub(i) = ary[i] }
+                }
+                len
+            } else {
+                for i in 0..ary.len() {
+                    unsafe { *dst.sub(i) = ary[i] }
+                }
+                for i in ary.len()..len {
+                    unsafe { *dst.sub(i) = Value::nil() }
+                }
+                ary.len()
+            }
+        }
+        None => {
+            unsafe { *dst = src };
+            1
+        }
+    }
+}
+
+pub(super) extern "C" fn make_splat(src: *mut Value) {
+    unsafe { *src = Value::new_splat(*src) };
+}
+
 #[repr(C)]
 pub(super) struct ClassIdSlot {
     base: ClassId,
@@ -129,6 +171,36 @@ pub(super) extern "C" fn set_array_integer_index(
     base.as_array_mut().set_index(globals, index, src)
 }
 
+///
+/// Get Constant.
+///
+/// rax: Option<Value>
+///
+pub(super) extern "C" fn get_constant(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    site_id: ConstSiteId,
+) -> Option<Value> {
+    executor.find_constant(globals, site_id)
+}
+
+///
+/// Set Constant.
+///
+pub(super) extern "C" fn set_constant(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    val: Value,
+) {
+    executor.set_constant(globals, name, val)
+}
+
+///
+/// Get instance variable.
+///
+/// rax <= the value of instance variable. <Value>
+///
 pub(super) extern "C" fn get_instance_var(
     base: Value,
     name: IdentId,
@@ -137,6 +209,11 @@ pub(super) extern "C" fn get_instance_var(
     globals.get_ivar(base, name).unwrap_or_default()
 }
 
+///
+/// Set instance variable.
+///
+/// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
+///
 pub(super) extern "C" fn set_instance_var(
     globals: &mut Globals,
     base: Value,
@@ -147,13 +224,48 @@ pub(super) extern "C" fn set_instance_var(
     Some(val)
 }
 
+///
+/// Get Global variable.
+///
+/// rax: Value
+///
+pub(super) extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
+    globals.get_gvar(name)
+}
+
+pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
+    globals.set_gvar(name, val);
+}
+
+///
+/// Get special variable.
+///
+/// id: 0 -> $&
+/// id: 1 -> $'
+/// id: 100 + n -> $<n> (n >= 1)
+///
+pub(super) extern "C" fn get_special_var(executor: &Executor, id: u32) -> Value {
+    if id == 0 {
+        // $&
+        executor.sp_last_match.unwrap_or_default()
+    } else if id == 1 {
+        // $'
+        executor.sp_post_match.unwrap_or_default()
+    } else if id >= 100 {
+        // $1, $2, ..
+        executor.get_special_matches(id as i64 - 100)
+    } else {
+        unreachable!()
+    }
+}
+
 pub(super) extern "C" fn define_class(
-    interp: &mut Executor,
+    executor: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     superclass: Option<Value>,
 ) -> Option<Value> {
-    let parent = interp.get_class_context();
+    let parent = executor.get_class_context().0;
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
             let class = val.expect_class(globals)?;
@@ -175,13 +287,46 @@ pub(super) extern "C" fn define_class(
         }
     };
     //globals.get_singleton_id(self_val.as_class());
-    interp.push_class_context(self_val.as_class());
+    executor.push_class_context(self_val.as_class());
     Some(self_val)
 }
 
-pub(super) extern "C" fn pop_class_context(interp: &mut Executor, _globals: &mut Globals) {
-    interp.pop_class_context();
+pub(super) extern "C" fn pop_class_context(executor: &mut Executor, _globals: &mut Globals) {
+    executor.pop_class_context();
 }
+
+pub(super) extern "C" fn define_method(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    func: FuncId,
+) {
+    let (parent, module_function) = executor.get_class_context();
+    globals.add_method(parent, name, func);
+    if module_function {
+        let singleton = globals.get_singleton_id(parent);
+        globals.add_method(singleton, name, func);
+    }
+}
+
+pub(super) extern "C" fn alias_method(
+    globals: &mut Globals,
+    self_val: Value,
+    new: Value,
+    old: Value,
+    meta: Meta,
+) -> Option<Value> {
+    let new = new.as_symbol();
+    let old = old.as_symbol();
+    match meta.mode() {
+        0 => globals.alias_method(self_val, new, old)?,
+        1 => globals.alias_method_for_class(self_val.as_class(), new, old)?,
+        _ => unreachable!(),
+    };
+    Some(Value::nil())
+}
+
+// error handling
 
 pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
     panic!("unimplemented inst. {:016x}", opcode);
@@ -190,10 +335,6 @@ pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, o
 pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
     panic!("panic in jit code.");
 }
-
-/*pub extern "C" fn eprintln(rdi: u64, rsi: u64) {
-  eprintln!("rdi:{:016x} rsi:{:016x}", rdi, rsi);
-}*/
 
 pub(super) extern "C" fn err_divide_by_zero(globals: &mut Globals) {
     globals.err_divide_by_zero();
@@ -225,4 +366,21 @@ pub(super) extern "C" fn get_error_location(
     let sourceinfo = normal_info.sourceinfo.clone();
     let loc = normal_info.sourcemap[pc - bc_base];
     globals.push_error_location(loc, sourceinfo);
+}
+
+pub unsafe extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Globals) {
+    let mut cfp = executor.cfp;
+    eprintln!("-----begin stacktrace");
+    for i in 0..16 {
+        eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
+        let ret_addr = cfp.return_addr();
+        eprintln!("ret adr: {:?} ", ret_addr);
+        let prev_cfp = cfp.prev();
+        globals.dump_frame_info(cfp.lfp());
+        if prev_cfp.is_null() {
+            break;
+        }
+        cfp = prev_cfp;
+    }
+    eprintln!("-----end stacktrace");
 }

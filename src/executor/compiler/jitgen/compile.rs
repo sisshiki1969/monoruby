@@ -31,7 +31,7 @@ impl Codegen {
             monoasm!(self.jit,
                 movq rsi, (id.get());  // id: IdentId
                 movq rdx, r12; // &mut Globals
-                movq rax, (get_instance_var);
+                movq rax, (runtime::get_instance_var);
                 call rax;
             );
             self.xmm_restore(&xmm_using);
@@ -73,7 +73,7 @@ impl Codegen {
                 movq rdx, (id.get());  // id: IdentId
                 movq rcx, [r14 - (conv(src))];   // val: Value
                 movq rdi, r12; //&mut Globals
-                movq rax, (set_instance_var);
+                movq rax, (runtime::set_instance_var);
                 call rax;
             );
             self.xmm_restore(&xmm_using);
@@ -105,7 +105,7 @@ impl Codegen {
             };
             self.xmm_save(&xmm_using);
             monoasm! { self.jit,
-                movq rax, (get_array_integer_index);
+                movq rax, (runtime::get_array_integer_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
@@ -117,7 +117,7 @@ impl Codegen {
                 movq rdx, [r14 - (conv(base))]; // base: Value
                 movq rcx, [r14 - (conv(idx))]; // idx: Value
                 movq r8, (pc.get_u64() + 8);
-                movq rax, (get_index);
+                movq rax, (runtime::get_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
@@ -151,7 +151,7 @@ impl Codegen {
             monoasm! { self.jit,
                 movq rdx, r12;
                 movq rcx, [r14 - (conv(src))];
-                movq rax, (set_array_integer_index);
+                movq rax, (runtime::set_array_integer_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
@@ -164,7 +164,7 @@ impl Codegen {
                 movq rdi, rbx; // &mut Interp
                 movq rsi, r12; // &mut Globals
                 movq r9, (pc.get_u64() + 8);
-                movq rax, (set_index);
+                movq rax, (runtime::set_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
@@ -196,7 +196,7 @@ impl Codegen {
             movl rdx, (name.get());  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (define_class);
+            movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
             testq rax, rax; // rax: Option<Value>
             jeq  jit_return;
@@ -204,7 +204,7 @@ impl Codegen {
             movl rsi, (func_id.0);  // rdx <- func_id
             //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
-            movq rax, (get_func_data);
+            movq rax, (runtime::get_func_data);
             call rax; // rax <- &FuncData
             //
             //       +-------------+
@@ -250,7 +250,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            movq rax, (pop_class_context);
+            movq rax, (runtime::pop_class_context);
             call rax;
         );
         self.xmm_restore(&xmm_using);

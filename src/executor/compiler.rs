@@ -3,12 +3,12 @@ use monoasm_macro::monoasm;
 use paste::paste;
 
 mod jitgen;
-mod runtime;
+pub mod runtime;
 mod vmgen;
 mod wrapper;
 
 use super::*;
-use runtime::*;
+//use runtime::*;
 
 type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
 
@@ -158,11 +158,11 @@ impl Codegen {
         entry_panic:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (op::_dump_stacktrace);
+            movq rax, (runtime::_dump_stacktrace);
             call rax;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (panic);
+            movq rax, (runtime::panic);
             jmp rax;
         vm_return:
             movq r15, rax;
@@ -171,7 +171,7 @@ impl Codegen {
             movq rdx, [r14 - (LBP_META)];
             movq rcx, r13;
             subq rcx, 8;
-            movq rax, (get_error_location);
+            movq rax, (runtime::get_error_location);
             call rax;
             // restore return value
             movq rax, r15;
@@ -180,7 +180,7 @@ impl Codegen {
             ret;
         div_by_zero:
             movq rdi, r12;
-            movq rax, (err_divide_by_zero);
+            movq rax, (runtime::err_divide_by_zero);
             call rax;
             xorq rax, rax;
             leave;
@@ -190,7 +190,7 @@ impl Codegen {
             movl rsi, rdx;  // given
             movzxw rdx, [r13 - 8];  // min
             movzxw rcx, [r13 - 14];  // max
-            movq rax, (err_wrong_number_of_arguments_range);
+            movq rax, (runtime::err_wrong_number_of_arguments_range);
             call rax;
             jmp  vm_return;
         heap_to_f64:
@@ -253,7 +253,7 @@ impl Codegen {
                 movq rdi, rbx;
                 movq rsi, r12;
                 movq rdx, [r13 - 16];
-                movq rax, (super::compiler::unimplemented_inst);
+                movq rax, (runtime::unimplemented_inst);
                 call rax;
                 leave;
                 ret;

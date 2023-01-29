@@ -453,6 +453,11 @@ impl IrContext {
         self.push(BcIr::LoadGvar { ret, name }, loc);
     }
 
+    fn gen_load_svar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, id: u32, loc: Loc) {
+        let ret = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadSvar { ret, id }, loc);
+    }
+
     fn gen_index(
         &mut self,
         ctx: &mut FnStore,
@@ -525,6 +530,16 @@ impl IrContext {
                 LvalueKind::Send { recv, method }
             }
             NodeKind::LocalVar(_) => LvalueKind::Other,
+            NodeKind::SpecialVar(id) => {
+                // 0 => $&
+                // 1 => $'
+                // 100 + n => $n
+                return Err(MonorubyErr::cant_set_variable(
+                    *id,
+                    lhs.loc,
+                    info.sourceinfo.clone(),
+                ));
+            }
             _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
         };
         Ok(lhs)
@@ -808,6 +823,9 @@ impl IrContext {
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
                 self.gen_load_gvar(info, None, name, loc);
+            }
+            NodeKind::SpecialVar(id) => {
+                self.gen_load_svar(info, None, id as u32, loc);
             }
             NodeKind::MethodCall {
                 box receiver,

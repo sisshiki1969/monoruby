@@ -303,7 +303,7 @@ impl Codegen {
             movq rsi, (u32::from(name)); // IdentId
             movq rdx, (len as usize); // args_len: usize
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
-            movq rax, (find_method);
+            movq rax, (runtime::find_method);
             call rax;
             // absolute address was returned to rax.
             testq rax, rax;
@@ -564,7 +564,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, [r14 - (LBP_BLOCK)];
             movq rdx, rbx;
-            movq rax, (get_block_data);
+            movq rax, (runtime::get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
         }

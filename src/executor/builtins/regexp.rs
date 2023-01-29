@@ -117,18 +117,22 @@ mod test {
     }
 
     #[test]
-    fn last_match() {
+    fn last_match1() {
         run_test(
             r#"
           /(.)(.)/ =~ "abcde"
           [Regexp.last_match(0), Regexp.last_match(1), Regexp.last_match(2), Regexp.last_match(3)]
-          #Regexp.last_match      # => #<MatchData:0x4599e58>
-          #assert "cde", $'
+            "#,
+        );
+    }
+
+    #[test]
+    fn last_match2() {
+        run_test(
+            r#"
+          /(.)(.)/ =~ "abcde"
           #assert $', Regexp.post_match
-          #assert $&, Regexp.last_match(0)
-          #assert $1, Regexp.last_match(1)
-          #assert $2, Regexp.last_match(2)
-          #assert $3, Regexp.last_match(3)
+          [$', $&, $1, $2, $3]
             "#,
         );
     }

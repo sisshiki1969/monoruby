@@ -202,7 +202,8 @@ impl LoopAnalysis {
                 TraceIr::BlockArgProxy(dst)
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
-                | TraceIr::LoadGvar { dst, .. } => {
+                | TraceIr::LoadGvar { dst, .. }
+                | TraceIr::LoadSvar { dst, .. } => {
                     reg_info.def_as(dst, false);
                 }
                 TraceIr::StoreConst(src, _)
