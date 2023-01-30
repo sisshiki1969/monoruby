@@ -129,7 +129,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .as_class()
             .class_id()
     );
-    let math_class = globals.define_class_under_obj("Math").as_class().class_id();
+    let math_class = globals.define_module("Math").as_class().class_id();
     let file_class = globals.define_class_under_obj("File").as_class().class_id();
 
     object::init(globals);

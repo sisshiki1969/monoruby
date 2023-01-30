@@ -106,6 +106,12 @@ impl Globals {
         self.define_class_by_str(name, Some(object_class), OBJECT_CLASS)
     }
 
+    pub(crate) fn define_module(&mut self, name: &str) -> Value {
+        let object_class = OBJECT_CLASS.get_obj(self);
+        let name_id = IdentId::get_ident_id(name);
+        self.define_class(name_id, Some(object_class), OBJECT_CLASS, true)
+    }
+
     pub(in crate::executor) fn define_builtin_class_under_obj(
         &mut self,
         name: &str,
