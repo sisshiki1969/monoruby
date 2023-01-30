@@ -170,8 +170,8 @@ impl Codegen {
         self.dispatch[15] = self.vm_loop_end();
         self.dispatch[16] = self.vm_load_ivar();
         self.dispatch[17] = self.vm_store_ivar();
-        self.dispatch[18] = self.vm_class_def();
-        self.dispatch[19] = self.vm_class_def();
+        self.dispatch[18] = self.vm_class_def(false);
+        self.dispatch[19] = self.vm_class_def(true);
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[25] = self.vm_load_gvar();
@@ -1106,10 +1106,19 @@ impl Codegen {
         label
     }
 
-    fn vm_class_def(&mut self) -> CodePtr {
+    fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let vm_return = self.vm_return;
         let super_ = self.jit.label();
+        if is_module {
+            monoasm! { self.jit,
+                movl r8, 1;
+            }
+        } else {
+            monoasm! { self.jit,
+                xorq r8, r8;
+            }
+        }
         monoasm! { self.jit,
             cmpl rdi, 0;
             jeq super_;
@@ -1117,7 +1126,7 @@ impl Codegen {
         self.vm_get_rdi();
         monoasm! { self.jit,
         super_:
-            movq rcx, rdi;
+            movq rcx, rdi; // rcx <- superclass: Option<Value>
             movl rdx, [r13 - 8];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals

@@ -264,12 +264,14 @@ pub(super) extern "C" fn define_class(
     globals: &mut Globals,
     name: IdentId,
     superclass: Option<Value>,
+    is_module: u32,
 ) -> Option<Value> {
     let parent = executor.get_class_context().0;
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
             val.expect_class(globals)?;
             if let Some(superclass) = superclass {
+                assert!(!(is_module == 1));
                 let superclass_id = superclass.expect_class(globals)?;
                 if Some(superclass_id) != val.as_class().superclass().map(|v| v.class_id()) {
                     globals.err_superclass_mismatch(name);
@@ -280,11 +282,14 @@ pub(super) extern "C" fn define_class(
         }
         None => {
             let superclass = match superclass {
-                Some(superclass) => superclass.expect_class(globals)?,
-                None => OBJECT_CLASS,
+                Some(superclass) => {
+                    assert!(!(is_module == 1));
+                    superclass.expect_class(globals)?;
+                    superclass.as_class()
+                }
+                None => OBJECT_CLASS.get_obj(globals),
             };
-            let superclass = superclass.get_obj(globals);
-            globals.define_class(name, Some(superclass), parent)
+            globals.define_class(name, Some(superclass), parent, is_module == 1)
         }
     };
     executor.push_class_context(self_val.as_class().class_id());

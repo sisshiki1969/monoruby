@@ -179,6 +179,7 @@ impl Codegen {
         superclass: SlotId,
         name: IdentId,
         func_id: FuncId,
+        is_module: bool,
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
@@ -190,6 +191,15 @@ impl Codegen {
         } else {
             monoasm! { self.jit,
                 movq rcx, [r14 - (conv(superclass))];  // rcx <- superclass: Option<Value>
+            }
+        }
+        if is_module {
+            monoasm! { self.jit,
+                movl r8, 1; // r8 <- is_module
+            }
+        } else {
+            monoasm! { self.jit,
+                xorq r8, r8;
             }
         }
         monoasm! { self.jit,

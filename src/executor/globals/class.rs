@@ -122,7 +122,7 @@ impl Globals {
         parent: ClassId,
     ) -> Value {
         let name_id = IdentId::get_ident_id(name);
-        self.define_class(name_id, superclass, parent)
+        self.define_class(name_id, superclass, parent, false)
     }
 
     pub(in crate::executor) fn define_builtin_class_by_str(
@@ -141,9 +141,10 @@ impl Globals {
         name_id: IdentId,
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
+        is_module: bool,
     ) -> Value {
         let class_id = self.class.add_class();
-        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, false);
+        let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
         self.get_metaclass(class_id);
         obj
     }
@@ -168,14 +169,13 @@ impl Globals {
         is_module: bool,
     ) -> Value {
         let class_obj = if is_module {
-            assert!(superclass.is_none());
-            let object = OBJECT_CLASS.get_obj(self);
-            Value::new_empty_module(class_id, Some(object))
+            Value::new_empty_module(class_id, superclass)
         } else {
             Value::new_empty_class(class_id, superclass)
         };
-        self.class[class_id].object = Some(Module::new(class_obj));
+        self.class[class_id].object = Some(class_obj.as_class());
         self.class[class_id].name = Some(name_id);
+        eprintln!("{:?}", class_obj.class());
         self.set_constant(parent, name_id, class_obj);
         class_obj
     }
@@ -298,6 +298,8 @@ impl Globals {
     }
 
     fn find_method_main(&mut self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        eprintln!("find_method: {}", IdentId::get_name(name));
+        eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -305,6 +307,7 @@ impl Globals {
         while let Some(super_class) = class_obj.superclass() {
             class_obj = super_class;
             class_id = class_obj.class_id();
+            eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
             if let Some(func_id) = self.get_method(class_id, name) {
                 return Some(func_id);
             }

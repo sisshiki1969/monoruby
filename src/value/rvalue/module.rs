@@ -29,8 +29,10 @@ impl Module {
 
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
+        eprintln!("{:?} {:?}", class.class_id(), class.class_type);
         while !class.is_real_class() {
             class = class.superclass().unwrap();
+            eprintln!("{:?} {:?}", class.class_id(), class.class_type);
         }
         class
     }
@@ -40,7 +42,7 @@ impl Module {
 pub enum ModuleType {
     RealClass,
     Singleton(Value),
-    Module,
+    //IClass,
 }
 
 #[derive(Debug, Clone)]

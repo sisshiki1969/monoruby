@@ -352,7 +352,7 @@ impl RValue {
     pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
             flags: RVFlag::new(MODULE_CLASS, ObjKind::CLASS),
-            kind: ObjKind::class(id, superclass, ModuleType::Module),
+            kind: ObjKind::class(id, superclass, ModuleType::RealClass),
             var_table: None,
         }
     }

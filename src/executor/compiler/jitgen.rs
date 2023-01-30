@@ -1357,10 +1357,10 @@ impl Codegen {
                     name,
                     func_id,
                 } => {
-                    self.jit_class_def(&ctx, ret, superclass, name, func_id);
+                    self.jit_class_def(&ctx, ret, superclass, name, func_id, false);
                 }
                 TraceIr::ModuleDef { ret, name, func_id } => {
-                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id);
+                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id, true);
                 }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);

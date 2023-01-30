@@ -48,15 +48,15 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
 /*extern "C" fn new(
-    vm: &mut Interp,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     len: usize,
-_: Option<Value>,
+    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = self_val.as_class();
-    let obj = Value::new_object(class);
+    let obj = Value::new_object(class.class_id());
     if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
