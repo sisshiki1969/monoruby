@@ -133,7 +133,7 @@ impl GC<RValue> for RValue {
         }
         match self.kind() {
             ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-            ObjKind::CLASS => {
+            ObjKind::CLASS | ObjKind::MODULE => {
                 let module = self.as_class();
                 if let Some(class) = module.superclass_value() {
                     class.mark(alloc)
@@ -267,7 +267,7 @@ impl RValue {
                 .map(|table| Box::new(table.iter().map(|v| v.map(|v| v.deep_copy())).collect())),
             kind: match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-                ObjKind::CLASS => {
+                ObjKind::CLASS | ObjKind::MODULE => {
                     let class = self.as_class();
                     ObjKind::class(class.class_id(), class.superclass(), class.class_type())
                 }
@@ -351,7 +351,7 @@ impl RValue {
     ///
     pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            flags: RVFlag::new(MODULE_CLASS, ObjKind::CLASS),
+            flags: RVFlag::new(MODULE_CLASS, ObjKind::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::RealClass),
             var_table: None,
         }
@@ -645,7 +645,7 @@ pub union ObjKind {
 impl ObjKind {
     pub const INVALID: u8 = 0;
     pub const CLASS: u8 = 1;
-    //pub const MODULE: u8 = 2;
+    pub const MODULE: u8 = 2;
     pub const OBJECT: u8 = 3;
     pub const BIGNUM: u8 = 4;
     pub const FLOAT: u8 = 5;

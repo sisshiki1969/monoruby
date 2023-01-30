@@ -105,12 +105,12 @@ impl Value {
     }
 
     pub(crate) fn get_singleton(self, globals: &mut Globals) -> Value {
-        if let Some(class) = self.is_class() {
-            let singleton = globals.get_metaclass(class);
-            singleton.as_val()
+        if let Some(class) = self.is_class_or_module() {
+            globals.get_metaclass(class)
         } else {
-            unreachable!()
+            globals.get_singleton(self)
         }
+        .as_val()
     }
 
     ///
@@ -120,16 +120,16 @@ impl Value {
         self.class().get_obj(globals)
     }
 
-    pub(crate) fn get_real_class(self, globals: &Globals) -> Module {
+    pub(crate) fn real_class(self, globals: &Globals) -> Module {
         self.get_class_obj(globals).get_real_class()
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        self.get_real_class(globals).class_id().get_name(globals)
+        self.real_class(globals).class_id().get_name(globals)
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
-        let mut obj_class = Some(self.get_real_class(globals));
+        let mut obj_class = Some(self.real_class(globals));
         while let Some(obj_class_inner) = obj_class {
             if obj_class_inner.class_id() == class {
                 return true;
@@ -500,6 +500,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::CLASS | ObjKind::MODULE => Some(rv.as_class().class_id()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
@@ -509,8 +517,22 @@ impl Value {
     }
 
     pub(crate) fn as_class(&self) -> Module {
-        assert_eq!(ObjKind::CLASS, self.rvalue().kind());
+        assert!(matches!(
+            self.rvalue().kind(),
+            ObjKind::CLASS | ObjKind::MODULE,
+        ));
         Module::new(*self)
+    }
+
+    pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Option<ClassId> {
+        match self.is_class_or_module() {
+            Some(class) => Some(class),
+            None => {
+                let name = globals.val_tos(*self);
+                globals.err_is_not_class_nor_module(name);
+                None
+            }
+        }
     }
 
     pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {

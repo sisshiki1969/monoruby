@@ -7,7 +7,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    //globals.define_builtin_singleton_func(OBJECT_CLASS, "new", new, 0);
+    globals.define_builtin_singleton_func(OBJECT_CLASS, "new", object_new, -1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
@@ -47,7 +47,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-/*extern "C" fn new(
+extern "C" fn object_new(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
@@ -62,7 +62,7 @@ pub(super) fn init(globals: &mut Globals) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
-}*/
+}
 
 /// ### Kernel#puts
 /// - puts(*arg) -> nil
@@ -76,7 +76,7 @@ extern "C" fn is_a(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = arg[0].expect_class(globals)?;
+    let class = arg[0].expect_class_or_module(globals)?;
     Some(Value::bool(self_val.is_kind_of(globals, class)))
 }
 
@@ -245,7 +245,7 @@ extern "C" fn class(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.get_real_class(globals).as_val())
+    Some(self_val.real_class(globals).as_val())
 }
 
 /// ### Object#instance_of?
@@ -260,7 +260,7 @@ extern "C" fn instance_of(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let b = self_val.get_real_class(globals).class_id() == arg[0].expect_class(globals)?;
+    let b = self_val.real_class(globals).class_id() == arg[0].expect_class_or_module(globals)?;
     Some(Value::bool(b))
 }
 

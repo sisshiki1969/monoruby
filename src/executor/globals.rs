@@ -346,7 +346,7 @@ impl Globals {
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.kind() {
-                ObjKind::CLASS => rvalue.as_class().class_id().get_name(self),
+                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class().class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_tos(val),
@@ -379,7 +379,7 @@ impl Globals {
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.kind() {
-                ObjKind::CLASS => rvalue.as_class().class_id().get_name(self),
+                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class().class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY | ObjKind::SPLAT => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
@@ -398,7 +398,7 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Option<Value> {
-        if start.get_real_class(self).class_id() != end.get_real_class(self).class_id() {
+        if start.real_class(self).class_id() != end.real_class(self).class_id() {
             self.err_bad_range(start, end);
             return None;
         }

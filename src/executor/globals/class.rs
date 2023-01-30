@@ -149,6 +149,18 @@ impl Globals {
         obj
     }
 
+    // TODO: we must name the unnamed class when the class object is assigned to constant later.
+    pub(crate) fn new_unnamed_class(&mut self, superclass: Option<Module>) -> Value {
+        let class_id = self.class.add_class();
+        let superclass = match superclass {
+            Some(class) => class,
+            None => OBJECT_CLASS.get_obj(self),
+        };
+        let class_obj = Value::new_empty_class(class_id, Some(superclass));
+        self.class[class_id].object = Some(class_obj.as_class());
+        class_obj
+    }
+
     fn define_builtin_class(
         &mut self,
         name_id: IdentId,
@@ -175,7 +187,6 @@ impl Globals {
         };
         self.class[class_id].object = Some(class_obj.as_class());
         self.class[class_id].name = Some(name_id);
-        eprintln!("{:?}", class_obj.class());
         self.set_constant(parent, name_id, class_obj);
         class_obj
     }
@@ -198,31 +209,49 @@ impl Globals {
     ///
     pub(crate) fn get_metaclass(&mut self, original: ClassId) -> Module {
         let original_obj = self.get_class_obj(original);
-        let class = original_obj.as_val().get_class_obj(self);
-        if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
+        if original_obj.as_val().kind() == Some(ObjKind::CLASS) {
+            let class = original_obj.as_val().get_class_obj(self);
+            if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
+                return class;
+            }
+            let super_singleton = match original_obj.superclass() {
+                Some(id) => self.get_metaclass(id.class_id()),
+                None => CLASS_CLASS.get_obj(self),
+            };
+            let mut original_obj = original_obj.as_val();
+            let singleton = self.new_singleton_class(Some(super_singleton), original_obj);
+            original_obj.change_class(singleton.class_id());
+            let class_class = if class.class_id() == original {
+                singleton.class_id()
+            } else {
+                self.get_class_obj(class.class_id()).class_id()
+            };
+            let mut singleton_obj = singleton.as_val();
+            singleton_obj.change_class(class_class);
+            #[cfg(debug_assertions)]
+            {
+                assert_eq!(singleton.class_id(), original_obj.class());
+                assert_eq!(
+                    Some(original_obj),
+                    Module::new(singleton_obj).is_singleton()
+                );
+            }
+            singleton
+        } else {
+            self.get_singleton(original_obj.as_val())
+        }
+    }
+
+    pub(crate) fn get_singleton(&mut self, mut original: Value) -> Module {
+        let class = original.get_class_obj(self);
+        if class.is_singleton().is_some() {
             return class;
         }
-        let super_singleton = match original_obj.superclass() {
-            Some(id) => self.get_metaclass(id.class_id()),
-            None => CLASS_CLASS.get_obj(self),
-        };
-        let mut original_obj = original_obj.as_val();
-        let singleton = self.new_singleton_class(Some(super_singleton), original_obj);
-        original_obj.change_class(singleton.class_id());
-        let class_class = if class.class_id() == original {
-            singleton.class_id()
-        } else {
-            self.get_class_obj(class.class_id()).class_id()
-        };
-        let mut singleton_obj = singleton.as_val();
-        singleton_obj.change_class(class_class);
+        let singleton = self.new_singleton_class(Some(class), original);
+        original.change_class(singleton.class_id());
         #[cfg(debug_assertions)]
         {
-            assert_eq!(singleton.class_id(), original_obj.class());
-            assert_eq!(
-                Some(original_obj),
-                Module::new(singleton_obj).is_singleton()
-            );
+            assert_eq!(singleton.class_id(), original.class());
         }
         singleton
     }
@@ -298,8 +327,8 @@ impl Globals {
     }
 
     fn find_method_main(&mut self, mut class_id: ClassId, name: IdentId) -> Option<FuncId> {
-        eprintln!("find_method: {}", IdentId::get_name(name));
-        eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
+        //eprintln!("find_method: {}", IdentId::get_name(name));
+        //eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
         if let Some(func_id) = self.get_method(class_id, name) {
             return Some(func_id);
         }
@@ -307,7 +336,7 @@ impl Globals {
         while let Some(super_class) = class_obj.superclass() {
             class_obj = super_class;
             class_id = class_obj.class_id();
-            eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
+            //eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
             if let Some(func_id) = self.get_method(class_id, name) {
                 return Some(func_id);
             }

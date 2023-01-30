@@ -7,6 +7,7 @@ mod float;
 mod hash;
 mod integer;
 mod math;
+mod module;
 mod object;
 mod proc;
 mod range;
@@ -134,6 +135,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
     integer::init(globals);
     float::init(globals);
+    module::init(globals);
     class::init(globals);
     string::init(globals);
     array::init(globals);

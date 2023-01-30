@@ -269,7 +269,7 @@ pub(super) extern "C" fn define_class(
     let parent = executor.get_class_context().0;
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
-            val.expect_class(globals)?;
+            val.expect_class_or_module(globals)?;
             if let Some(superclass) = superclass {
                 assert!(!(is_module == 1));
                 let superclass_id = superclass.expect_class(globals)?;

@@ -49,6 +49,15 @@ impl Globals {
     ///
     /// Set TypeError with message "*name* is not a class".
     ///
+    pub(crate) fn err_is_not_class_nor_module(&mut self, name: String) {
+        self.set_error(MonorubyErr::typeerr(format!(
+            "{name} is not a class nor a module",
+        )));
+    }
+
+    ///
+    /// Set TypeError with message "*name* is not a class".
+    ///
     pub(crate) fn err_is_not_class(&mut self, name: String) {
         self.set_error(MonorubyErr::typeerr(format!("{name} is not a class",)));
     }

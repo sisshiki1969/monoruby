@@ -5,17 +5,34 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_singleton_func(CLASS_CLASS, "new", class_new, -1);
     globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
-    globals.define_builtin_func(CLASS_CLASS, "==", eq, 1);
-    globals.define_builtin_func(CLASS_CLASS, "===", teq, 1);
-    globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
-    globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
-    globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
-    globals.define_builtin_func(CLASS_CLASS, "attr_reader", attr_reader, -1);
-    globals.define_builtin_func(CLASS_CLASS, "attr_writer", attr_writer, -1);
-    globals.define_builtin_func(CLASS_CLASS, "attr_accessor", attr_accessor, -1);
+}
+
+/// ### Class.new
+/// - new(superclass = Object) -> Class
+/// - [NOT SUPPORTED] new(superclass = Object) {|klass| ... } -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
+extern "C" fn class_new(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    let superclass = if len == 0 {
+        None
+    } else {
+        arg[0].expect_class(globals)?;
+        Some(arg[0].as_class())
+    };
+    let obj = globals.new_unnamed_class(superclass);
+    Some(obj)
 }
 
 /// ### Class#new
@@ -70,173 +87,6 @@ extern "C" fn allocate(
     Some(obj)
 }
 
-/// ### Module#==
-/// - self == obj -> bool
-///
-/// []
-extern "C" fn eq(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    self_val: Value,
-    arg: Arg,
-    _len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let rhs = match arg[0].is_class() {
-        Some(class) => class,
-        None => return Some(Value::bool(false)),
-    };
-    let lhs = self_val.as_class().class_id();
-    Some(Value::bool(lhs == rhs))
-}
-
-/// ### Module#===
-/// - self === obj -> bool
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
-extern "C" fn teq(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    arg: Arg,
-    _len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let class = self_val.as_class().class_id();
-    Some(Value::bool(arg[0].is_kind_of(globals, class)))
-}
-
-/// ### Class#to_s
-/// - to_s -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
-extern "C" fn tos(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    _arg: Arg,
-    _len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let class_name = self_val.as_class().class_id().get_name(globals);
-    let res = Value::new_string(class_name);
-    Some(res)
-}
-
-/// ### Module#constants
-/// - constants(inherit = true) -> [Symbol]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
-extern "C" fn constants(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    _arg: Arg,
-    _len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let class_id = self_val.as_class().class_id();
-    let v = globals
-        .get_constant_names(class_id)
-        .into_iter()
-        .map(Value::new_symbol)
-        .collect();
-    Some(Value::new_array_from_vec(v))
-}
-
-/// ### Module#instance_methods
-/// - instance_methods(inherited_too = true) -> [Symbol]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/instance_methods.html]
-///
-/// !! Currently, this method returns only the methods that is defined in *self*.
-///
-/// TODO: support inherited_too.
-extern "C" fn instance_methods(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    _arg: Arg,
-    _len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let class_id = self_val.as_class().class_id();
-    let v = globals
-        .get_method_names(class_id)
-        .into_iter()
-        .map(Value::new_symbol)
-        .collect();
-    Some(Value::new_array_from_vec(v))
-}
-
-/// ### Module#attr_reader
-/// - attr_reader(*name) -> [Symbol]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
-extern "C" fn attr_reader(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    arg: Arg,
-    len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let mut res = vec![];
-    let class_id = self_val.as_class().class_id();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name);
-        res.push(Value::new_symbol(method_name));
-    }
-    Some(Value::new_array_from_vec(res))
-}
-
-/// ### Module#attr_writer
-/// - attr_writer(*name) -> [Symbol]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
-extern "C" fn attr_writer(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    arg: Arg,
-    len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let mut res = vec![];
-    let class_id = self_val.as_class().class_id();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_writer(class_id, arg_name);
-        res.push(Value::new_symbol(method_name));
-    }
-    Some(Value::new_array_from_vec(res))
-}
-
-/// ### Module#attr_accessor
-/// - attr_accessor(*name) -> [Symbol]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
-extern "C" fn attr_accessor(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    arg: Arg,
-    len: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    let mut res = vec![];
-    let class_id = self_val.as_class().class_id();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name);
-        res.push(Value::new_symbol(method_name));
-        let method_name = globals.define_attr_writer(class_id, arg_name);
-        res.push(Value::new_symbol(method_name));
-    }
-    Some(Value::new_array_from_vec(res))
-}
-
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -263,101 +113,6 @@ mod test {
           end
         end
         A::B.new.f"#,
-        );
-    }
-
-    #[test]
-    fn test_teq() {
-        run_test("Integer === 4");
-        run_test("Integer === 4.5");
-        run_test("Integer === 'Ruby'");
-        run_test("Float === 4.5");
-        run_test("Float === 'Ruby'");
-        run_test(
-            r#"
-        class C
-        end
-        C === C.new"#,
-        );
-        run_test(
-            r#"
-        class S
-        end
-        class C < S
-        end
-        S === C.new"#,
-        );
-    }
-
-    #[test]
-    fn attr_reader() {
-        run_test(
-            r#"
-        c = class A
-          def f(x,y)
-            @v = x
-            @w = y
-          end
-          attr_reader :v, "w"
-        end
-        a = A.new
-        a.f(7,11)
-        [a.v, a.w, c]
-        "#,
-        );
-    }
-
-    #[test]
-    fn attr_writer() {
-        run_test(
-            r#"
-        c = class A
-          def f(x,y)
-            @v = x
-            @w = y
-          end
-          attr_writer :v, "w"
-          attr_reader :v, "w"
-        end
-        a = A.new
-        a.v = 7
-        a.w = 11
-        [a.v, a.w, c]
-        "#,
-        );
-    }
-
-    #[test]
-    fn attr_accessor() {
-        run_test(
-            r#"
-        c = class A
-          def f(x,y)
-            @v = x
-            @w = y
-          end
-          attr_accessor :v, "w"
-        end
-        a = A.new
-        a.v = 7
-        a.w = 11
-        [a.v, a.w, c]
-        "#,
-        );
-    }
-
-    #[test]
-    fn attr_accessor_assign_op() {
-        run_test(
-            r#"
-        class A
-          attr_accessor :v
-        end
-        a = A.new
-        a.v = 7
-        a.v *= 3
-        a.v
-        "#,
         );
     }
 

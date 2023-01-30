@@ -14,7 +14,7 @@ impl std::ops::Deref for Module {
 impl Module {
     pub fn new(val: Value) -> Self {
         match val.rvalue().kind() {
-            ObjKind::CLASS => Self(val),
+            ObjKind::CLASS | ObjKind::MODULE => Self(val),
             _ => unreachable!(),
         }
     }
@@ -29,10 +29,8 @@ impl Module {
 
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
-        eprintln!("{:?} {:?}", class.class_id(), class.class_type);
         while !class.is_real_class() {
             class = class.superclass().unwrap();
-            eprintln!("{:?} {:?}", class.class_id(), class.class_type);
         }
         class
     }

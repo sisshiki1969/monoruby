@@ -1606,4 +1606,22 @@ mod test {
         "#,
         )
     }
+
+    #[test]
+    fn test_module() {
+        run_test_with_prelude(
+            "[M.class, M.singleton_class.superclass]",
+            r#"
+            module M
+            end
+        "#,
+        );
+        run_test_with_prelude(
+            "[C.new.class == C, C.singleton_class.superclass == Object.singleton_class, D.superclass == C]",
+            r#"
+            C = Class.new
+            D = Class.new(C)
+            "#,
+        );
+    }
 }
