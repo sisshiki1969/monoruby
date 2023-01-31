@@ -149,6 +149,16 @@ impl Globals {
         }
     }
 
+    pub(crate) fn check_min_number_of_arguments(&mut self, given: usize, min: usize) -> Option<()> {
+        if given >= min {
+            return Some(());
+        }
+        self.err_argument(&format!(
+            "wrong number of arguments (given {given}, expeted {min}+)",
+        ));
+        None
+    }
+
     ///
     /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
     ///

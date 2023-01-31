@@ -245,6 +245,10 @@ impl Value {
         RValue::new_module(id, superclass).pack()
     }
 
+    pub(crate) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
+        RValue::new_iclass(id, superclass).pack()
+    }
+
     pub(crate) fn new_object(class_id: ClassId) -> Self {
         RValue::new_object(class_id).pack()
     }
@@ -516,6 +520,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_module(&self) -> Option<ClassId> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::MODULE => Some(rv.as_class().class_id()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_class(&self) -> Module {
         assert!(matches!(
             self.rvalue().kind(),
@@ -537,6 +549,17 @@ impl Value {
 
     pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {
         match self.is_class() {
+            Some(class) => Some(class),
+            None => {
+                let name = globals.val_tos(*self);
+                globals.err_is_not_class(name);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn expect_module(&self, globals: &mut Globals) -> Option<ClassId> {
+        match self.is_module() {
             Some(class) => Some(class),
             None => {
                 let name = globals.val_tos(*self);

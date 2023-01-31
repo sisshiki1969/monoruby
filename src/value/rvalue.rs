@@ -358,6 +358,17 @@ impl RValue {
     }
 
     ///
+    /// Create new iclass object with *class_id*.
+    ///
+    pub(super) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
+        RValue {
+            flags: RVFlag::new(MODULE_CLASS, ObjKind::MODULE),
+            kind: ObjKind::class(id, superclass, ModuleType::IClass),
+            var_table: None,
+        }
+    }
+
+    ///
     /// Create new instance object of class *class_id*.
     ///
     pub(super) fn new_object(class_id: ClassId) -> Self {
@@ -514,6 +525,10 @@ impl RValue {
 
     pub(crate) fn as_class(&self) -> &ModuleInner {
         unsafe { &self.kind.class }
+    }
+
+    pub(crate) fn as_class_mut(&mut self) -> &mut ModuleInner {
+        unsafe { &mut self.kind.class }
     }
 
     fn as_float(&self) -> f64 {

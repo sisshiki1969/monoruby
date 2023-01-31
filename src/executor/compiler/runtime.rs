@@ -278,7 +278,7 @@ pub(super) extern "C" fn define_class(
                     return None;
                 }
             }
-            val
+            val.as_class()
         }
         None => {
             let superclass = match superclass {
@@ -292,8 +292,8 @@ pub(super) extern "C" fn define_class(
             globals.define_class(name, Some(superclass), parent, is_module == 1)
         }
     };
-    executor.push_class_context(self_val.as_class().class_id());
-    Some(self_val)
+    executor.push_class_context(self_val.class_id());
+    Some(self_val.as_val())
 }
 
 pub(super) extern "C" fn pop_class_context(executor: &mut Executor, _globals: &mut Globals) {

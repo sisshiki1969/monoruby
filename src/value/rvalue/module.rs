@@ -11,8 +11,14 @@ impl std::ops::Deref for Module {
     }
 }
 
+impl std::ops::DerefMut for Module {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_ref_val().rvalue_mut().as_class_mut()
+    }
+}
+
 impl Module {
-    pub fn new(val: Value) -> Self {
+    pub(in crate::value) fn new(val: Value) -> Self {
         match val.rvalue().kind() {
             ObjKind::CLASS | ObjKind::MODULE => Self(val),
             _ => unreachable!(),
@@ -27,6 +33,10 @@ impl Module {
         &self.0
     }
 
+    pub fn as_mut_ref_val(&mut self) -> &mut Value {
+        &mut self.0
+    }
+
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
         while !class.is_real_class() {
@@ -34,13 +44,17 @@ impl Module {
         }
         class
     }
+
+    pub fn make_iclass(&self, superclass: Option<Module>) -> Module {
+        Value::new_iclass(self.class_id(), superclass).as_class()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum ModuleType {
     RealClass,
     Singleton(Value),
-    //IClass,
+    IClass,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +85,10 @@ impl ModuleInner {
 
     pub fn superclass_value(&self) -> Option<Value> {
         self.superclass.map(|m| m.as_val())
+    }
+
+    pub fn change_superclass(&mut self, superclass: Option<Module>) {
+        self.superclass = superclass;
     }
 
     pub fn class_type(&self) -> ModuleType {

@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
     globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
     globals.define_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
+    globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
 }
 
 /// ### Module#==
@@ -216,6 +217,27 @@ extern "C" fn module_function(
     }
 }
 
+/// ### Module#include
+/// - include(*mod) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
+extern "C" fn include(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_min_number_of_arguments(len, 1)?;
+    let class = self_val.as_class();
+    for i in 0..len {
+        arg[i].expect_module(globals)?;
+        globals.include_module(class, arg[len - i - 1].as_class());
+    }
+    Some(self_val)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -345,6 +367,46 @@ mod test {
               def a; 1; end
               def b; 2; end
               module_function :a, "b"
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            module M
+              module_function 100
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn include() {
+        run_test_with_prelude(
+            "C.new.f",
+            r#"
+            module M1
+              def f; "M1"; end
+            end
+            module M2
+              def f; "M2"; end
+            end
+            class C
+              include M1, M2 
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            class M; end
+            class C
+              include M 
+            end
+            "#,
+        );
+        run_test_error(
+            r#"
+            class C
+              include
             end
             "#,
         );
