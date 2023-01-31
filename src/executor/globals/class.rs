@@ -270,6 +270,14 @@ impl Globals {
     }
 
     ///
+    /// Add a new singleton method *func* with *name* to the class of *class_id*.
+    ///
+    pub(crate) fn add_singleton_method(&mut self, class_id: ClassId, name: IdentId, func: FuncId) {
+        let singleton = self.get_metaclass(class_id).class_id();
+        self.class[singleton].methods.insert(name, func);
+    }
+
+    ///
     /// Find method *name* for object *obj*.
     ///
     /// This fn checks whole superclass chain.

@@ -306,11 +306,10 @@ pub(super) extern "C" fn define_method(
     name: IdentId,
     func: FuncId,
 ) {
-    let (parent, module_function) = executor.get_class_context();
-    globals.add_method(parent, name, func);
+    let (class_id, module_function) = executor.get_class_context();
+    globals.add_method(class_id, name, func);
     if module_function {
-        let singleton = globals.get_metaclass(parent).class_id();
-        globals.add_method(singleton, name, func);
+        globals.add_singleton_method(class_id, name, func);
     }
 }
 

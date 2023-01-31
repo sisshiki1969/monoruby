@@ -347,6 +347,10 @@ impl Executor {
         self.lexical_class.pop().map(|x| x.0)
     }
 
+    fn set_module_function(&mut self) {
+        self.lexical_class.last_mut().unwrap().1 = true;
+    }
+
     fn get_class_context(&self) -> (ClassId, bool) {
         self.lexical_class
             .last()
@@ -470,10 +474,6 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
-    /*pub(crate) fn set_special_var(&self, _id: u32, _val: Value) -> Result<()> {
-        unreachable!()
-    }*/
-
     /// Save captured strings to special variables.
     /// $n (n:0,1,2,3...) <- The string which matched with nth parenthesis in the last successful match.
     /// $& <- The string which matched successfully at last.

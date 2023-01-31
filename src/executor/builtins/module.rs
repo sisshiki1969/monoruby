@@ -5,14 +5,15 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_func(CLASS_CLASS, "==", eq, 1);
-    globals.define_builtin_func(CLASS_CLASS, "===", teq, 1);
-    globals.define_builtin_func(CLASS_CLASS, "to_s", tos, 0);
-    globals.define_builtin_func(CLASS_CLASS, "constants", constants, 0);
-    globals.define_builtin_func(CLASS_CLASS, "instance_methods", instance_methods, 0);
-    globals.define_builtin_func(CLASS_CLASS, "attr_reader", attr_reader, -1);
-    globals.define_builtin_func(CLASS_CLASS, "attr_writer", attr_writer, -1);
-    globals.define_builtin_func(CLASS_CLASS, "attr_accessor", attr_accessor, -1);
+    globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
+    globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
+    globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
+    globals.define_builtin_func(MODULE_CLASS, "constants", constants, 0);
+    globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods, 0);
+    globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader, -1);
+    globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
+    globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
+    globals.define_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
 }
 
 /// ### Module#==
@@ -182,6 +183,39 @@ extern "C" fn attr_accessor(
     Some(Value::new_array_from_vec(res))
 }
 
+/// ### Module#module_function
+/// - module_function(*name) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
+extern "C" fn module_function(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    if len == 0 {
+        vm.set_module_function();
+        Some(Value::nil())
+    } else {
+        let class_id = self_val.as_class().class_id();
+        for i in 0..len {
+            let name = arg[i].expect_symbol_or_string(globals)?;
+            let func_id = match globals.find_method_for_class(class_id, name) {
+                Some(id) => id,
+                None => {
+                    globals.err_method_not_found(name, self_val);
+                    return None;
+                }
+            };
+            globals.add_singleton_method(class_id, name, func_id);
+        }
+        let res = Value::new_array_from_vec(arg.to_vec(len));
+        Some(res)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -278,6 +312,41 @@ mod test {
         a.v *= 3
         a.v
         "#,
+        );
+    }
+
+    #[test]
+    fn module_function() {
+        run_test_with_prelude(
+            "[M.c]",
+            r#"
+            module M
+              def a; 1; end
+              def b; 2; end
+              module_function
+              def c; 3; end
+            end
+            "#,
+        );
+        run_test_with_prelude(
+            "[M.a, M.b]",
+            r#"
+            module M
+              def a; 1; end
+              def b; 2; end
+              def c; 3; end
+              module_function :a, "b"
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            module M
+              def a; 1; end
+              def b; 2; end
+              module_function :a, "b"
+            end
+            "#,
         );
     }
 }
