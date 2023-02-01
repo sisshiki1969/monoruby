@@ -49,7 +49,7 @@ fn main() {
                     #[cfg(debug_assertions)]
                     eprintln!("=> {:?}", _val)
                 }
-                Err(err) => err.show_error_message_and_loc(&globals),
+                Err(err) => err.show_error_message_and_loc(),
             }
         }
         return;
@@ -76,11 +76,11 @@ fn main() {
         Ok(fid) => {
             match executor.eval(&mut globals, fid) {
                 Ok(_val) => {}
-                Err(err) => err.show_error_message_and_loc(&globals),
+                Err(err) => err.show_error_message_and_loc(),
             };
         }
         Err(err) => {
-            err.show_error_message_and_loc(&globals);
+            err.show_error_message_and_loc();
         }
     };
 }

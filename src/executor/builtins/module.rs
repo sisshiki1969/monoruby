@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
     globals.define_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
     globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
+    globals.define_builtin_func(MODULE_CLASS, "protected", protected, -1);
 }
 
 /// ### Module#==
@@ -236,6 +237,52 @@ extern "C" fn include(
         globals.include_module(class, arg[len - i - 1].as_class());
     }
     Some(self_val)
+}
+
+/// ### Module#protected
+/// - protected(*name) -> self
+/// - protected(names) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
+extern "C" fn protected(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_min_number_of_arguments(len, 1)?;
+    let class_id = self_val.as_class().class_id();
+    if let Some(ary) = arg[0].is_array() {
+        if len == 1 {
+            for v in ary.iter() {
+                let name = v.expect_symbol_or_string(globals)?;
+                let func_id = match globals.find_method_for_class(class_id, name) {
+                    Some(id) => id,
+                    None => {
+                        globals.err_method_not_found(name, self_val);
+                        return None;
+                    }
+                };
+                globals.change_visibility(func_id, Visibility::Protected);
+            }
+            return Some(arg[0]);
+        }
+    }
+    for i in 0..len {
+        let name = arg[i].expect_symbol_or_string(globals)?;
+        let func_id = match globals.find_method_for_class(class_id, name) {
+            Some(id) => id,
+            None => {
+                globals.err_method_not_found(name, self_val);
+                return None;
+            }
+        };
+        globals.change_visibility(func_id, Visibility::Protected);
+    }
+    let res = Value::new_array_from_vec(arg.to_vec(len));
+    Some(res)
 }
 
 #[cfg(test)]

@@ -531,6 +531,10 @@ impl FuncInfo {
         self.arity
     }
 
+    pub(crate) fn change_visibility(&mut self, visi: Visibility) {
+        self.data.meta.change_visibility(visi);
+    }
+
     pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {
             FuncKind::ISeq(info) => info,

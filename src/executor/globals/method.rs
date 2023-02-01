@@ -93,6 +93,14 @@ impl Globals {
     }
 
     ///
+    /// Change visibility of method *func_id*.
+    ///
+    pub(crate) fn change_visibility(&mut self, func_id: FuncId, visi: Visibility) {
+        self.func[func_id].change_visibility(visi);
+        self.class_version_inc();
+    }
+
+    ///
     /// Give alias *new_name* to the method *old_name* for object *obj*.
     ///
     pub(crate) fn alias_method(

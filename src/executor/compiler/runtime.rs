@@ -322,10 +322,10 @@ pub(super) extern "C" fn alias_method(
 ) -> Option<Value> {
     let new = new.as_symbol();
     let old = old.as_symbol();
-    match meta.mode() {
-        0 => globals.alias_method(self_val, new, old)?,
-        1 => globals.alias_method_for_class(self_val.as_class().class_id(), new, old)?,
-        _ => unreachable!(),
+    if meta.is_class_def() {
+        globals.alias_method_for_class(self_val.as_class().class_id(), new, old)?
+    } else {
+        globals.alias_method(self_val, new, old)?
     };
     Some(Value::nil())
 }

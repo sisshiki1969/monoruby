@@ -120,7 +120,7 @@ impl LFP {
     /// Get Meta.
     ///
     unsafe fn meta(&self) -> Meta {
-        Meta::new(*(self.0.sub(LBP_META as usize) as *const u64))
+        Meta::from(*(self.0.sub(LBP_META as usize) as *const u64))
     }
 
     ///
@@ -1184,8 +1184,16 @@ struct Meta {
     reg_num: u16,
     /// interpreter:0 native:2
     kind: u8,
-    /// method:0 class_def:1
+    /// bit 2-1: public:0 private:1 protected:2
+    /// bit 0: method:0 class_def:1
     mode: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Visibility {
+    Public = 0,
+    Private = 1,
+    Protected = 2,
 }
 
 impl std::fmt::Debug for Meta {
@@ -1199,10 +1207,10 @@ impl std::fmt::Debug for Meta {
                 2 => "NATIVE",
                 _ => "INVALID",
             },
-            match self.mode() {
-                0 => "method",
-                1 => "class_def",
-                _ => "INVALID",
+            if self.is_class_def() {
+                "class_def"
+            } else {
+                "method"
             },
             self.func_id(),
             self.reg_num()
@@ -1211,7 +1219,16 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    fn new(meta: u64) -> Self {
+    fn new(func_id: FuncId, reg_num: u16, kind: u8, visi: Visibility, is_class_def: bool) -> Self {
+        Self {
+            func_id,
+            reg_num,
+            kind,
+            mode: (((visi as u8) & 0b11) << 1) + (is_class_def as u8),
+        }
+    }
+
+    fn from(meta: u64) -> Self {
         unsafe { std::mem::transmute(meta) }
     }
 
@@ -1222,34 +1239,19 @@ impl Meta {
     fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self {
-            func_id,
-            reg_num,
-            kind: 0,
-            mode: 0,
-        }
+        Self::new(func_id, reg_num, 0, Visibility::Public, false)
     }
 
     fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = classdef
         let reg_num = reg_num as i16 as u16;
-        Self {
-            func_id,
-            reg_num,
-            kind: 0,
-            mode: 1,
-        }
+        Self::new(func_id, reg_num, 0, Visibility::Public, true)
     }
 
     fn native(func_id: FuncId, reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self {
-            func_id,
-            reg_num,
-            kind: 2,
-            mode: 0,
-        }
+        Self::new(func_id, reg_num, 2, Visibility::Public, false)
     }
 
     fn func_id(&self) -> FuncId {
@@ -1266,8 +1268,22 @@ impl Meta {
     }
 
     /// method:0 class_def:1
-    fn mode(&self) -> u8 {
-        self.mode
+    fn is_class_def(&self) -> bool {
+        (self.mode & 0b1) == 1
+    }
+
+    fn visibility(&self) -> Visibility {
+        match (self.mode & 0b110) >> 1 {
+            0 => Visibility::Public,
+            1 => Visibility::Private,
+            2 => Visibility::Protected,
+            _ => unreachable!(),
+        }
+    }
+
+    fn change_visibility(&mut self, visi: Visibility) {
+        self.mode &= 0b1111_1001;
+        self.mode |= (visi as u8) << 1;
     }
 
     ///
@@ -1350,18 +1366,22 @@ mod test {
         let meta = Meta::vm_method(FuncId(12), 42);
         assert_eq!(FuncId(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
-        assert_eq!(0, meta.mode());
+        assert_eq!(false, meta.is_class_def());
         let mut meta = Meta::vm_method(FuncId(42), -1);
         assert_eq!(FuncId(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
+        assert_eq!(Visibility::Public, meta.visibility());
         meta.set_reg_num(12);
         assert_eq!(FuncId(42), meta.func_id());
         assert_eq!(12, meta.reg_num());
         let mut meta = Meta::vm_classdef(FuncId(12), 42);
-        assert_eq!(1, meta.mode());
+        assert_eq!(true, meta.is_class_def());
+        assert_eq!(Visibility::Public, meta.visibility());
+        meta.change_visibility(Visibility::Protected);
         meta.set_reg_num(12);
         meta.set_jit();
-        assert_eq!(1, meta.mode());
+        assert_eq!(true, meta.is_class_def());
+        assert_eq!(Visibility::Protected, meta.visibility());
         assert_eq!(8, std::mem::size_of::<i64>());
         assert_eq!(8, std::mem::size_of::<Option<CodePtr>>());
         assert_eq!(8, std::mem::size_of::<BcPc>());

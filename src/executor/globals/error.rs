@@ -9,7 +9,12 @@ impl Globals {
     }
 
     pub(crate) fn err_method_not_found(&mut self, name: IdentId, obj: Value) {
-        self.set_error(MonorubyErr::method_not_found(name, obj))
+        self.set_error(MonorubyErr::method_not_found(format!(
+            "undefined method `{}' for {}:{}",
+            IdentId::get_name(name),
+            obj.to_s(self),
+            obj.get_real_class_name(self)
+        )))
     }
 
     pub(crate) fn err_divide_by_zero(&mut self) {
@@ -212,13 +217,12 @@ pub struct MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    //UndefinedLocal(String),
-    MethodNotFound(IdentId, Value),
+    NotMethod(String),
     Arguments(String),
     Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
-    UninitConst(IdentId),
+    UninitConst(String),
     DivideByZero,
     Range(String),
     Type(String),
@@ -259,39 +263,30 @@ impl MonorubyErr {
         }
     }
 
-    pub fn show_error_message_and_all_loc(&self, globals: &Globals) {
-        eprintln!("{}", self.get_error_message(globals));
+    pub fn show_error_message_and_all_loc(&self) {
+        eprintln!("{}", self.get_error_message());
         self.show_all_loc();
     }
 
-    pub fn show_error_message_and_loc(&self, globals: &Globals) {
-        eprintln!("{}", self.get_error_message(globals));
+    pub fn show_error_message_and_loc(&self) {
+        eprintln!("{}", self.get_error_message());
         self.show_loc();
     }
 
-    pub fn get_error_message(&self, globals: &Globals) -> String {
+    pub fn get_error_message(&self) -> String {
         match &self.kind {
             /*MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
             }*/
-            MonorubyErrKind::MethodNotFound(name, obj) => {
-                format!(
-                    "undefined method `{}' for {}:{}",
-                    IdentId::get_name(*name),
-                    obj.to_s(globals),
-                    obj.get_real_class_name(globals)
-                )
-            }
-            MonorubyErrKind::Arguments(name) => name.to_string(),
+            MonorubyErrKind::NotMethod(msg) => msg.to_string(),
+            MonorubyErrKind::Arguments(msg) => msg.to_string(),
             MonorubyErrKind::Syntax(kind) => match kind {
                 ParseErrKind::SyntaxError(msg) => msg.to_string(),
                 ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
             },
             MonorubyErrKind::Syntax2(msg) => msg.to_string(),
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
-            MonorubyErrKind::UninitConst(name) => {
-                format!("uninitialized constant {}", IdentId::get_name(*name))
-            }
+            MonorubyErrKind::UninitConst(msg) => msg.to_string(),
             MonorubyErrKind::DivideByZero => "divided by 0".to_string(),
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
@@ -405,8 +400,8 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
-    pub(crate) fn method_not_found(name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::MethodNotFound(name, obj))
+    pub(crate) fn method_not_found(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::NotMethod(msg))
     }
 
     pub(crate) fn wrong_arguments(expected: usize, given: usize) -> MonorubyErr {
@@ -431,7 +426,10 @@ impl MonorubyErr {
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::UninitConst(name))
+        MonorubyErr::new(MonorubyErrKind::UninitConst(format!(
+            "uninitialized constant {}",
+            IdentId::get_name(name)
+        )))
     }
 
     pub(crate) fn typeerr(msg: String) -> MonorubyErr {

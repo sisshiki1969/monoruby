@@ -151,7 +151,7 @@ impl Globals {
             Some(_) => {}
             None => {
                 let err = self.take_error().unwrap();
-                err.show_error_message_and_all_loc(self);
+                err.show_error_message_and_all_loc();
                 panic!("error occurred in startup.");
             }
         };
