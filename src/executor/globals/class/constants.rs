@@ -34,7 +34,7 @@ impl Globals {
     pub(crate) fn find_constant(
         &mut self,
         id: ConstSiteId,
-        class_context: &[(ClassId, bool)],
+        class_context: &[Cref],
     ) -> Option<Value> {
         let ConstSiteInfo {
             toplevel,
@@ -88,14 +88,10 @@ impl Globals {
         }
     }
 
-    fn search_lexical_stack(
-        &self,
-        name: IdentId,
-        class_context: &[(ClassId, bool)],
-    ) -> Option<Value> {
+    fn search_lexical_stack(&self, name: IdentId, class_context: &[Cref]) -> Option<Value> {
         class_context
             .iter()
             .rev()
-            .find_map(|class| self.get_constant(class.0, name))
+            .find_map(|class| self.get_constant(class.class_id, name))
     }
 }

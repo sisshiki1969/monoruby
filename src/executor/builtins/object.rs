@@ -57,7 +57,7 @@ extern "C" fn object_new(
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_object(class.class_id());
-    if let Some(func_id) = globals.find_method(obj, IdentId::INITIALIZE) {
+    if let Some((func_id, _visi)) = globals.check_method(obj, IdentId::INITIALIZE) {
         globals.check_arg(func_id, len)?;
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
@@ -214,7 +214,7 @@ extern "C" fn respond_to(
         RV::String(b) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
-    Some(Value::bool(globals.find_method(self_val, name).is_some()))
+    Some(Value::bool(globals.check_method(self_val, name).is_some()))
 }
 
 /// ### Object#inspect

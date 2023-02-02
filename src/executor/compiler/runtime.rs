@@ -15,7 +15,9 @@ pub(super) extern "C" fn find_method(
     args_len: usize,
     receiver: Value,
 ) -> Option<std::ptr::NonNull<FuncData>> {
-    let func_id = globals.find_method_checked(receiver, func_name, args_len)?;
+    let func_id = globals
+        .find_method_checked(receiver, func_name, args_len)?
+        .0;
     let func_data = globals.compile_on_demand(func_id);
     Some(std::ptr::NonNull::new(func_data as *const _ as _).unwrap())
 }
@@ -266,7 +268,7 @@ pub(super) extern "C" fn define_class(
     superclass: Option<Value>,
     is_module: u32,
 ) -> Option<Value> {
-    let parent = executor.get_class_context().0;
+    let parent = executor.context_class_id();
     let self_val = match globals.get_constant(parent, name) {
         Some(val) => {
             val.expect_class_or_module(globals)?;
@@ -306,10 +308,14 @@ pub(super) extern "C" fn define_method(
     name: IdentId,
     func: FuncId,
 ) {
-    let (class_id, module_function) = executor.get_class_context();
-    globals.add_method(class_id, name, func);
+    let Cref {
+        class_id,
+        module_function,
+        visibility,
+    } = executor.get_class_context();
+    globals.add_method(class_id, name, func, visibility);
     if module_function {
-        globals.add_singleton_method(class_id, name, func);
+        globals.add_singleton_method(class_id, name, func, visibility);
     }
 }
 

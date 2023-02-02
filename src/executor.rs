@@ -218,18 +218,35 @@ impl OpMode {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Cref {
+    class_id: ClassId,
+    module_function: bool,
+    visibility: Visibility,
+}
+
+impl Cref {
+    fn new(class_id: ClassId, module_function: bool, visibility: Visibility) -> Self {
+        Self {
+            class_id,
+            module_function,
+            visibility,
+        }
+    }
+}
+
 ///
 /// Bytecode interpreter.
 ///
 #[derive(Default)]
 #[repr(C)]
 pub struct Executor {
-    cfp: CFP,                            // [rbx]
-    lfp_top: LFP,                        // [rbx + 8]
-    lexical_class: Vec<(ClassId, bool)>, // (class_id, module_function)
-    sp_last_match: Option<Value>,        // $&        : Regexp.last_match(0)
-    sp_post_match: Option<Value>,        // $'        : Regexp.post_match
-    sp_matches: Vec<Option<Value>>,      // $1 ... $n : Regexp.last_match(n)
+    cfp: CFP,     // [rbx]
+    lfp_top: LFP, // [rbx + 8]
+    lexical_class: Vec<Cref>,
+    sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
+    sp_post_match: Option<Value>,   // $'        : Regexp.post_match
+    sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
 }
 
 impl GC<RValue> for Executor {
@@ -340,25 +357,45 @@ impl Executor {
     }
 
     fn push_class_context(&mut self, class_id: ClassId) {
-        self.lexical_class.push((class_id, false));
+        self.lexical_class
+            .push(Cref::new(class_id, false, Visibility::Public));
     }
 
     fn pop_class_context(&mut self) -> Option<ClassId> {
-        self.lexical_class.pop().map(|x| x.0)
+        self.lexical_class.pop().map(|x| x.class_id)
     }
 
     fn set_module_function(&mut self) {
-        self.lexical_class.last_mut().unwrap().1 = true;
+        self.lexical_class.last_mut().unwrap().module_function = true;
     }
 
-    fn get_class_context(&self) -> (ClassId, bool) {
+    fn get_class_context(&self) -> Cref {
+        self.lexical_class.last().cloned().unwrap_or(Cref::new(
+            OBJECT_CLASS,
+            false,
+            Visibility::Private,
+        ))
+    }
+
+    fn context_class_id(&self) -> ClassId {
         self.lexical_class
             .last()
-            .cloned()
-            .unwrap_or((OBJECT_CLASS, false))
+            .map(|cref| cref.class_id)
+            .unwrap_or(OBJECT_CLASS)
     }
 
-    fn class_context_stack(&self) -> &[(ClassId, bool)] {
+    fn context_visibility(&self) -> Visibility {
+        self.lexical_class
+            .last()
+            .map(|cref| cref.visibility)
+            .unwrap_or(Visibility::Private)
+    }
+
+    fn set_context_visibility(&mut self, visi: Visibility) {
+        self.lexical_class.last_mut().unwrap().visibility = visi;
+    }
+
+    fn class_context_stack(&self) -> &[Cref] {
         &self.lexical_class
     }
 }
@@ -373,7 +410,7 @@ impl Executor {
     }
 
     fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
-        let parent = self.get_class_context().0;
+        let parent = self.context_class_id();
         if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
             eprintln!(
                 "warning: already initialized constant {}",
@@ -395,7 +432,7 @@ impl Executor {
         args: &[Value],
     ) -> Option<Value> {
         let len = args.len();
-        let func_id = globals.find_method_checked(receiver, method, len)?;
+        let func_id = globals.find_method_checked(receiver, method, len)?.0;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
@@ -447,7 +484,7 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
-        if let Some(func_id) = globals.find_method(receiver, method) {
+        if let Some((func_id, _visi)) = globals.check_method(receiver, method) {
             globals.check_arg(func_id, len)?;
             self.invoke_func2(globals, func_id, receiver, args, len)
         } else {
@@ -1219,12 +1256,12 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    fn new(func_id: FuncId, reg_num: u16, kind: u8, visi: Visibility, is_class_def: bool) -> Self {
+    fn new(func_id: FuncId, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
         Self {
             func_id,
             reg_num,
             kind,
-            mode: (((visi as u8) & 0b11) << 1) + (is_class_def as u8),
+            mode: is_class_def as u8,
         }
     }
 
@@ -1239,19 +1276,19 @@ impl Meta {
     fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 0, Visibility::Public, false)
+        Self::new(func_id, reg_num, 0, false)
     }
 
     fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
         // kind = VM, mode = classdef
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 0, Visibility::Public, true)
+        Self::new(func_id, reg_num, 0, true)
     }
 
     fn native(func_id: FuncId, reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 2, Visibility::Public, false)
+        Self::new(func_id, reg_num, 2, false)
     }
 
     fn func_id(&self) -> FuncId {
@@ -1270,20 +1307,6 @@ impl Meta {
     /// method:0 class_def:1
     fn is_class_def(&self) -> bool {
         (self.mode & 0b1) == 1
-    }
-
-    fn visibility(&self) -> Visibility {
-        match (self.mode & 0b110) >> 1 {
-            0 => Visibility::Public,
-            1 => Visibility::Private,
-            2 => Visibility::Protected,
-            _ => unreachable!(),
-        }
-    }
-
-    fn change_visibility(&mut self, visi: Visibility) {
-        self.mode &= 0b1111_1001;
-        self.mode |= (visi as u8) << 1;
     }
 
     ///
@@ -1370,18 +1393,14 @@ mod test {
         let mut meta = Meta::vm_method(FuncId(42), -1);
         assert_eq!(FuncId(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
-        assert_eq!(Visibility::Public, meta.visibility());
         meta.set_reg_num(12);
         assert_eq!(FuncId(42), meta.func_id());
         assert_eq!(12, meta.reg_num());
         let mut meta = Meta::vm_classdef(FuncId(12), 42);
         assert_eq!(true, meta.is_class_def());
-        assert_eq!(Visibility::Public, meta.visibility());
-        meta.change_visibility(Visibility::Protected);
         meta.set_reg_num(12);
         meta.set_jit();
         assert_eq!(true, meta.is_class_def());
-        assert_eq!(Visibility::Protected, meta.visibility());
         assert_eq!(8, std::mem::size_of::<i64>());
         assert_eq!(8, std::mem::size_of::<Option<CodePtr>>());
         assert_eq!(8, std::mem::size_of::<BcPc>());

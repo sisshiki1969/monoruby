@@ -15,7 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
     globals.define_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
     globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
-    globals.define_builtin_func(MODULE_CLASS, "protected", protected, -1);
+    globals.define_builtin_func(MODULE_CLASS, "private", private, -1);
 }
 
 /// ### Module#==
@@ -122,7 +122,7 @@ extern "C" fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 extern "C" fn attr_reader(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -131,9 +131,10 @@ extern "C" fn attr_reader(
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class().class_id();
+    let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name);
+        let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array_from_vec(res))
@@ -144,7 +145,7 @@ extern "C" fn attr_reader(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 extern "C" fn attr_writer(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -153,9 +154,10 @@ extern "C" fn attr_writer(
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class().class_id();
+    let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_writer(class_id, arg_name);
+        let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array_from_vec(res))
@@ -166,7 +168,7 @@ extern "C" fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 extern "C" fn attr_accessor(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -175,11 +177,12 @@ extern "C" fn attr_accessor(
 ) -> Option<Value> {
     let mut res = vec![];
     let class_id = self_val.as_class().class_id();
+    let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
-        let method_name = globals.define_attr_reader(class_id, arg_name);
+        let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         res.push(Value::new_symbol(method_name));
-        let method_name = globals.define_attr_writer(class_id, arg_name);
+        let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         res.push(Value::new_symbol(method_name));
     }
     Some(Value::new_array_from_vec(res))
@@ -202,16 +205,11 @@ extern "C" fn module_function(
         Some(Value::nil())
     } else {
         let class_id = self_val.as_class().class_id();
+        let visi = vm.context_visibility();
         for i in 0..len {
             let name = arg[i].expect_symbol_or_string(globals)?;
-            let func_id = match globals.find_method_for_class(class_id, name) {
-                Some(id) => id,
-                None => {
-                    globals.err_method_not_found(name, self_val);
-                    return None;
-                }
-            };
-            globals.add_singleton_method(class_id, name, func_id);
+            let func_id = globals.find_method_for_class(class_id, name)?.0;
+            globals.add_singleton_method(class_id, name, func_id, visi);
         }
         let res = Value::new_array_from_vec(arg.to_vec(len));
         Some(res)
@@ -239,47 +237,38 @@ extern "C" fn include(
     Some(self_val)
 }
 
-/// ### Module#protected
-/// - protected(*name) -> self
-/// - protected(names) -> self
+/// ### Module#private
+/// - private(*name) -> self
+/// - private(names) -> self
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
-extern "C" fn protected(
-    _vm: &mut Executor,
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
+extern "C" fn private(
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    globals.check_min_number_of_arguments(len, 1)?;
+    if len == 0 {
+        vm.set_context_visibility(Visibility::Private);
+        return Some(Value::nil());
+    }
     let class_id = self_val.as_class().class_id();
     if let Some(ary) = arg[0].is_array() {
         if len == 1 {
             for v in ary.iter() {
                 let name = v.expect_symbol_or_string(globals)?;
-                let func_id = match globals.find_method_for_class(class_id, name) {
-                    Some(id) => id,
-                    None => {
-                        globals.err_method_not_found(name, self_val);
-                        return None;
-                    }
-                };
-                globals.change_visibility(func_id, Visibility::Protected);
+                let func_id = globals.find_method_for_class(class_id, name)?;
+                //globals.change_visibility(func_id, Visibility::Protected);
             }
             return Some(arg[0]);
         }
     }
     for i in 0..len {
         let name = arg[i].expect_symbol_or_string(globals)?;
-        let func_id = match globals.find_method_for_class(class_id, name) {
-            Some(id) => id,
-            None => {
-                globals.err_method_not_found(name, self_val);
-                return None;
-            }
-        };
-        globals.change_visibility(func_id, Visibility::Protected);
+        let func_id = globals.find_method_for_class(class_id, name)?;
+        //globals.change_visibility(func_id, Visibility::Protected);
     }
     let res = Value::new_array_from_vec(arg.to_vec(len));
     Some(res)

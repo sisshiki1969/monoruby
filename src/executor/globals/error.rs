@@ -17,6 +17,14 @@ impl Globals {
         )))
     }
 
+    pub(crate) fn err_method_not_found_for_class(&mut self, name: IdentId, class: ClassId) {
+        self.set_error(MonorubyErr::method_not_found(format!(
+            "undefined method `{}' for {}",
+            IdentId::get_name(name),
+            class.get_name(self)
+        )))
+    }
+
     pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
     }

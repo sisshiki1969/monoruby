@@ -60,7 +60,7 @@ pub struct Globals {
     /// error information.
     error: Option<MonorubyErr>,
     /// global method cache.
-    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<FuncId>)>,
+    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<(FuncId, Visibility)>)>,
     /// regex cache.
     pub regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
