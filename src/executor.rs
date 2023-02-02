@@ -1015,9 +1015,18 @@ impl BcPc {
                 }
             }
             TraceIr::MethodArgs(..) => return None,
-            TraceIr::MethodDef(name, func_id) => {
+            TraceIr::MethodDef { name, func_id } => {
                 let name = IdentId::get_name(name);
                 format!("method_def {:?}: {:?}", name, func_id)
+            }
+            TraceIr::SingletonMethodDef { obj, name, func_id } => {
+                let name = IdentId::get_name(name);
+                format!(
+                    "singleton_method_def {}.{:?}: {:?}",
+                    obj.ret_str(),
+                    name,
+                    func_id
+                )
             }
             TraceIr::ClassDef {
                 ret,

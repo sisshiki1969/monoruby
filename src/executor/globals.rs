@@ -426,7 +426,7 @@ impl Globals {
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                val.class().get_name(self),
+                val.real_class(self).class_id().get_name(self),
                 val.rvalue().id()
             )
         }

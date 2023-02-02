@@ -1336,7 +1336,7 @@ impl Codegen {
                     self.gen_yield(&ctx, args, len, ret, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
-                TraceIr::MethodDef(name, func) => {
+                TraceIr::MethodDef { name, func_id } => {
                     let class_version = self.class_version;
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1344,8 +1344,24 @@ impl Codegen {
                         movq rdi, rbx; // &mut Interp
                         movq rsi, r12; // &Globals
                         movq rdx, (u32::from(name)); // IdentId
-                        movq rcx, (u32::from(func)); // FuncId
+                        movq rcx, (u32::from(func_id)); // FuncId
                         movq rax, (runtime::define_method);
+                        call rax;
+                        addl [rip + class_version], 1;
+                    );
+                    self.xmm_restore(&xmm_using);
+                }
+                TraceIr::SingletonMethodDef { obj, name, func_id } => {
+                    let class_version = self.class_version;
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm!(self.jit,
+                        movq rdi, rbx; // &mut Interp
+                        movq rsi, r12; // &Globals
+                        movq rdx, (u32::from(name)); // IdentId
+                        movq rcx, (u32::from(func_id)); // FuncId
+                        movq r8, [r14 - (conv(obj))];
+                        movq rax, (runtime::singleton_define_method);
                         call rax;
                         addl [rip + class_version], 1;
                     );

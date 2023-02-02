@@ -318,6 +318,17 @@ pub(super) extern "C" fn define_method(
     }
 }
 
+pub(super) extern "C" fn singleton_define_method(
+    _executor: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    func: FuncId,
+    obj: Value,
+) {
+    let class_id = globals.get_singleton(obj).class_id();
+    globals.add_method(class_id, name, func, Visibility::Public);
+}
+
 pub(super) extern "C" fn alias_method(
     globals: &mut Globals,
     self_val: Value,

@@ -82,7 +82,15 @@ pub(super) enum BcIr {
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
     MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
-    MethodDef(IdentId, FuncId),
+    MethodDef {
+        name: IdentId,
+        func_id: FuncId,
+    },
+    SingletonMethodDef {
+        obj: BcReg,
+        name: IdentId,
+        func_id: FuncId,
+    },
     ClassDef {
         ret: Option<BcReg>,
         superclass: Option<BcReg>,
@@ -418,7 +426,16 @@ pub(super) enum TraceIr {
     /// func call 2nd opecode(%recv, %args, len)
     MethodArgs(MethodInfo),
     /// method definition(method_name, func_id)
-    MethodDef(IdentId, FuncId),
+    MethodDef {
+        name: IdentId,
+        func_id: FuncId,
+    },
+    /// method definition(method_name, func_id)
+    SingletonMethodDef {
+        obj: SlotId,
+        name: IdentId,
+        func_id: FuncId,
+    },
     /// class definition(method_name, func_id)
     ClassDef {
         ret: SlotId,
@@ -502,10 +519,15 @@ impl TraceIr {
         if opcode & 0x80 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
-                2 => Self::MethodDef(
-                    IdentId::from((pc.op2.0) as u32),
-                    FuncId((pc.op2.0 >> 32) as u32),
-                ),
+                1 => Self::SingletonMethodDef {
+                    obj: SlotId::new(op1),
+                    name: IdentId::from((pc.op2.0) as u32),
+                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                },
+                2 => Self::MethodDef {
+                    name: IdentId::from((pc.op2.0) as u32),
+                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                },
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIf),
                 5 => Self::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIfNot),

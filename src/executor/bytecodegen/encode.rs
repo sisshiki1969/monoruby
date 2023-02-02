@@ -275,8 +275,12 @@ impl IrContext {
                     let op2 = info.get_index(args);
                     Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
                 }
-                BcIr::MethodDef(name, func_id) => {
+                BcIr::MethodDef { name, func_id } => {
                     Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
+                }
+                BcIr::SingletonMethodDef { obj, name, func_id } => {
+                    let op1 = info.get_index(obj);
+                    Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), *name, *func_id)
                 }
                 BcIr::ClassDef {
                     ret,

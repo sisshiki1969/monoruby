@@ -154,6 +154,7 @@ impl Codegen {
         let (shr_rr, shr_ri, shr_ir) = self.vm_binops(shr_values as _);
         let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
 
+        self.dispatch[1] = self.vm_singleton_method_def();
         self.dispatch[2] = self.vm_method_def();
         self.dispatch[3] = br_inst;
         self.dispatch[4] = self.vm_condbr(branch);
@@ -1099,6 +1100,24 @@ impl Codegen {
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_method);
+            call rax;
+            addl [rip + class_version], 1;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_singleton_method_def(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let class_version = self.class_version;
+        self.vm_get_r15();
+        monoasm! { self.jit,
+            movq r8, r15;
+            movl rdx, [r13 - 8];  // name
+            movl rcx, [r13 - 4];  // func_id
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::singleton_define_method);
             call rax;
             addl [rip + class_version], 1;
         };

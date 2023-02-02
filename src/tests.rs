@@ -1624,4 +1624,31 @@ mod test {
             "#,
         );
     }
+
+    #[test]
+    fn test_singleton_method() {
+        run_test_with_prelude(
+            r#"
+            def C.f; 5; end
+            C.f
+            "#,
+            r#"
+            class C
+            end
+            def C.f; 5; end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            def c.f; 5; end
+            c.f
+            "#,
+            r#"
+            class C
+            end
+            c = C.new
+            def c.f; 5; end
+        "#,
+        );
+    }
 }

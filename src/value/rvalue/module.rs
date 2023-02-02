@@ -37,6 +37,10 @@ impl Module {
         &mut self.0
     }
 
+    pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
+        self.0.change_class(new_class_id);
+    }
+
     pub fn get_real_class(&self) -> Module {
         let mut class = *self;
         while !class.is_real_class() {
@@ -84,7 +88,7 @@ impl ModuleInner {
     }
 
     pub fn superclass_value(&self) -> Option<Value> {
-        self.superclass.map(|m| m.as_val())
+        self.superclass.map(|m| m.0)
     }
 
     pub fn change_superclass(&mut self, superclass: Option<Module>) {

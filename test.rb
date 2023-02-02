@@ -1,6 +1,8 @@
-a = case :symbol
-when Integer then 'integer'
-when Float then 'float'
-when Symbol then 'symbol'
+class C
 end
-100
+c = C.new
+def c.f; 5; end
+
+for __i in 0..7 do
+  puts c.f
+end

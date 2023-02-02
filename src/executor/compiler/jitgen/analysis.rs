@@ -139,7 +139,8 @@ impl LoopAnalysis {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::InitBlock { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
-                TraceIr::MethodDef(..) => {}
+                TraceIr::MethodDef { .. } => {}
+                TraceIr::SingletonMethodDef { .. } => {}
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }

@@ -225,15 +225,14 @@ impl Globals {
                 None => CLASS_CLASS.get_obj(self),
             };
             let mut original_obj = original_obj.as_val();
-            let singleton = self.new_singleton_class(Some(super_singleton), original_obj);
+            let mut singleton = self.new_singleton_class(Some(super_singleton), original_obj);
             original_obj.change_class(singleton.class_id());
             let class_class = if class.class_id() == original {
                 singleton.class_id()
             } else {
                 self.get_class_obj(class.class_id()).class_id()
             };
-            let mut singleton_obj = singleton.as_val();
-            singleton_obj.change_class(class_class);
+            singleton.change_class(class_class);
             #[cfg(debug_assertions)]
             {
                 assert_eq!(singleton.class_id(), original_obj.class());
@@ -246,20 +245,22 @@ impl Globals {
     }
 
     ///
-    /// Get a singleton class of *original*: Value.
+    /// Get a singleton class of *obj*: Value.
     ///
     /// If not exists, create a new singleton class.
     ///
-    pub(crate) fn get_singleton(&mut self, mut original: Value) -> Module {
-        let class = original.get_class_obj(self);
-        if class.is_singleton().is_some() {
-            return class;
+    pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Module {
+        let org_class = obj.get_class_obj(self);
+        if org_class.is_singleton().is_some() {
+            return org_class;
         }
-        let singleton = self.new_singleton_class(Some(class), original);
-        original.change_class(singleton.class_id());
+        let mut singleton = self.new_singleton_class(org_class, obj);
+        obj.change_class(singleton.class_id());
+        let singleton_meta = org_class.get_real_class().as_val().class();
+        singleton.change_class(singleton_meta);
         #[cfg(debug_assertions)]
         {
-            assert_eq!(singleton.class_id(), original.class());
+            assert_eq!(singleton.class_id(), obj.class());
         }
         singleton
     }

@@ -1050,6 +1050,17 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::SingletonMethodDef(box obj, name, block) => {
+                self.gen_expr(ctx, info, obj, UseMode::Use)?;
+                self.gen_singleton_method_def(ctx, info, name.clone(), block, loc)?;
+                if use_mode.use_val() {
+                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
+                }
+                if use_mode.is_ret() {
+                    self.gen_ret(info, None);
+                }
+                return Ok(());
+            }
             NodeKind::ClassDef {
                 base,
                 name,
@@ -1329,7 +1340,24 @@ impl IrContext {
             ctx.functions
                 .add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
-        self.push(BcIr::MethodDef(name, func_id), loc);
+        self.push(BcIr::MethodDef { name, func_id }, loc);
+        Ok(())
+    }
+
+    fn gen_singleton_method_def(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        name: String,
+        block: BlockInfo,
+        loc: Loc,
+    ) -> Result<()> {
+        let func_id =
+            ctx.functions
+                .add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let obj = info.pop().into();
+        let name = IdentId::get_ident_id_from_string(name);
+        self.push(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
         Ok(())
     }
 
