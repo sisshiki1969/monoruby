@@ -5,9 +5,9 @@ use super::*;
 //
 
 ///
-/// Get an absolute address of the given method.
+/// Get *const FuncData of the given method.
 ///
-/// If no method was found, return None (==0u64).
+/// If no method was found or the number of arguments was invalid, return None (==0u64).
 ///
 pub(super) extern "C" fn find_method(
     globals: &mut Globals,
@@ -15,9 +15,8 @@ pub(super) extern "C" fn find_method(
     args_len: usize,
     receiver: Value,
 ) -> Option<std::ptr::NonNull<FuncData>> {
-    let func_id = globals
-        .find_method_checked(receiver, func_name, args_len)?
-        .0;
+    let func_id = globals.find_method(receiver, func_name)?.0;
+    globals.check_arg(func_id, args_len)?;
     let func_data = globals.compile_on_demand(func_id);
     Some(std::ptr::NonNull::new(func_data as *const _ as _).unwrap())
 }

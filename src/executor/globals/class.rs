@@ -297,17 +297,14 @@ impl Globals {
     }
 
     ///
-    /// Find method *name* for object *obj* and check the number of arguments.
+    /// Find method *name* for object *obj*.
     ///
     /// If not found, return MethodNotFound error.
     ///
-    /// If the number of arguments is invalid, return WrongArguments error.
-    ///
-    pub(crate) fn find_method_checked(
+    pub(crate) fn find_method(
         &mut self,
         obj: Value,
         func_name: IdentId,
-        args_len: usize,
     ) -> Option<(FuncId, Visibility)> {
         let entry = match self.check_method(obj, func_name) {
             Some(entry) => entry,
@@ -316,12 +313,13 @@ impl Globals {
                 return None;
             }
         };
-        self.check_arg(entry.0, args_len)?;
         Some(entry)
     }
 
     ///
-    /// Find method *name* for object *obj*. If not found, return MethodNotFound error.
+    /// Find method *name* for object *obj*.
+    ///
+    /// If not found, return MethodNotFound error.
     ///
     pub(crate) fn find_method_for_class(
         &mut self,
@@ -385,7 +383,7 @@ impl Globals {
 
     fn check_method_main(
         &mut self,
-        mut class_id: ClassId,
+        class_id: ClassId,
         name: IdentId,
     ) -> Option<(FuncId, Visibility)> {
         if let Some(entry) = self.get_method(class_id, name) {
@@ -394,9 +392,8 @@ impl Globals {
         let mut class_obj = class_id.get_obj(self);
         while let Some(super_class) = class_obj.superclass() {
             class_obj = super_class;
-            class_id = class_obj.class_id();
             //eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
-            if let Some(entry) = self.get_method(class_id, name) {
+            if let Some(entry) = self.get_method(class_obj.class_id(), name) {
                 return Some(entry);
             }
         }
