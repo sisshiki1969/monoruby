@@ -1093,7 +1093,6 @@ impl Codegen {
 
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let class_version = self.class_version;
         monoasm! { self.jit,
             movl rdx, [r13 - 8];  // name
             movl rcx, [r13 - 4];  // func_id
@@ -1101,7 +1100,6 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_method);
             call rax;
-            addl [rip + class_version], 1;
         };
         self.fetch_and_dispatch();
         label
@@ -1109,7 +1107,6 @@ impl Codegen {
 
     fn vm_singleton_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let class_version = self.class_version;
         self.vm_get_r15();
         monoasm! { self.jit,
             movq r8, r15;
@@ -1119,7 +1116,6 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::singleton_define_method);
             call rax;
-            addl [rip + class_version], 1;
         };
         self.fetch_and_dispatch();
         label

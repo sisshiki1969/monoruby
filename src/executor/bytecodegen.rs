@@ -1336,9 +1336,7 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id =
-            ctx.functions
-                .add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::MethodDef { name, func_id }, loc);
         Ok(())
@@ -1352,9 +1350,7 @@ impl IrContext {
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id =
-            ctx.functions
-                .add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
         let obj = info.pop().into();
         let name = IdentId::get_ident_id_from_string(name);
         self.push(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
@@ -1380,9 +1376,7 @@ impl IrContext {
                 info.sourceinfo.clone(),
             ));
         };
-        let func_id = ctx
-            .functions
-            .add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
+        let func_id = ctx.add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
         let name = IdentId::get_ident_id_from_string(name);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, *superclass)?),
@@ -1525,11 +1519,8 @@ impl IrContext {
             match block.kind {
                 NodeKind::Lambda(block) => {
                     let outer_locals = info.get_locals();
-                    let func_id = ctx.functions.add_block(
-                        (info.id, outer_locals),
-                        block,
-                        info.sourceinfo.clone(),
-                    )?;
+                    let func_id =
+                        ctx.add_block((info.id, outer_locals), block, info.sourceinfo.clone())?;
                     let block_handler = ((func_id.0 as i64) << 16) + 1;
                     self.gen_literal(info, None, Value::new_integer(block_handler));
                 }

@@ -51,7 +51,7 @@ pub(crate) struct OptionalInfo {
 }
 
 #[derive(Clone, PartialEq)]
-pub(crate) struct Funcs(Vec<FuncInfo>);
+pub(super) struct Funcs(Vec<FuncInfo>);
 
 impl std::ops::Index<FuncId> for Funcs {
     type Output = FuncInfo;
@@ -103,7 +103,7 @@ impl Funcs {
         ))
     }
 
-    pub(crate) fn add_block(
+    fn add_block(
         &mut self,
         outer: (FuncId, Vec<HashMap<String, u16>>),
         info: BlockInfo,
@@ -122,7 +122,7 @@ impl Funcs {
         ))
     }
 
-    pub(crate) fn add_classdef(
+    fn add_classdef(
         &mut self,
         name: Option<String>,
         body: Node,
@@ -273,8 +273,8 @@ pub struct ConstSiteId(pub u32);
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct FnStore {
-    pub(crate) functions: Funcs,
-    pub(crate) inline: HashMap<FuncId, InlineMethod>,
+    functions: Funcs,
+    inline: HashMap<FuncId, InlineMethod>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
 }
@@ -331,6 +331,37 @@ impl FnStore {
 }
 
 impl FnStore {
+    pub(crate) fn add_method(
+        &mut self,
+        name: Option<String>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        self.functions.add_method(name, info, sourceinfo)
+    }
+
+    pub(crate) fn add_classdef(
+        &mut self,
+        name: Option<String>,
+        body: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> FuncId {
+        self.functions.add_classdef(name, body, sourceinfo)
+    }
+
+    pub(crate) fn add_block(
+        &mut self,
+        outer: (FuncId, Vec<HashMap<String, u16>>),
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        self.functions.add_block(outer, info, sourceinfo)
+    }
+
+    pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
+        self.inline.get(&func_id)
+    }
+
     pub(super) fn compile_script(
         &mut self,
         ast: Node,
@@ -356,19 +387,6 @@ impl FnStore {
         Ok(main_fid)
     }
 
-    /// Generate bytecode for a function which has *func_id*.
-    fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
-        let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        IrContext::compile_func(&mut info, self)?;
-        //ir.ir_to_bytecode(&mut info, self);
-
-        let regs = info.total_reg_num();
-        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
-        self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
-        self[func_id].data.set_reg_num(regs as i64);
-        Ok(())
-    }
-
     pub(super) fn add_builtin_func(
         &mut self,
         name: String,
@@ -384,6 +402,25 @@ impl FnStore {
 
     pub(super) fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_writer(name, ivar_name)
+    }
+
+    pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
+        self.inline.insert(func_id, inline_id);
+    }
+}
+
+impl FnStore {
+    /// Generate bytecode for a function which has *func_id*.
+    fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
+        let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
+        IrContext::compile_func(&mut info, self)?;
+        //ir.ir_to_bytecode(&mut info, self);
+
+        let regs = info.total_reg_num();
+        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
+        self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
+        self[func_id].data.set_reg_num(regs as i64);
+        Ok(())
     }
 }
 

@@ -599,7 +599,7 @@ impl TraceIr {
 
                     if let Some(func_data) = info.func_data {
                         if !has_splat {
-                            if let Some(inline_id) = fnstore.inline.get(&func_data.meta.func_id()) {
+                            if let Some(inline_id) = fnstore.get_inline(func_data.meta.func_id()) {
                                 return Self::InlineCall {
                                     ret: SlotId::new(op1),
                                     method: *inline_id,

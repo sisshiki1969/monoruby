@@ -319,14 +319,13 @@ impl Globals {
         obj: Value,
         func_name: IdentId,
     ) -> Option<FuncId> {
-        let func_id = match self.check_method_entry(obj, func_name) {
-            Some(entry) => entry.func_id,
+        match self.check_method_entry(obj, func_name) {
+            Some(entry) => Some(entry.func_id),
             None => {
                 self.err_method_not_found(func_name, obj);
-                return None;
+                None
             }
-        };
-        Some(func_id)
+        }
     }
 
     ///
@@ -339,14 +338,13 @@ impl Globals {
         class: ClassId,
         func_name: IdentId,
     ) -> Option<FuncId> {
-        let func_id = match self.check_method_for_class(class, func_name) {
-            Some(entry) => entry.func_id,
+        match self.check_method_for_class(class, func_name) {
+            Some(entry) => Some(entry.func_id),
             None => {
                 self.err_method_not_found_for_class(func_name, class);
-                return None;
+                None
             }
-        };
-        Some(func_id)
+        }
     }
 
     ///
@@ -359,14 +357,13 @@ impl Globals {
         class: ClassId,
         func_name: IdentId,
     ) -> Option<MethodTableEntry> {
-        let entry = match self.check_method_for_class(class, func_name) {
-            Some(entry) => entry,
+        match self.check_method_for_class(class, func_name) {
+            Some(entry) => Some(entry),
             None => {
                 self.err_method_not_found_for_class(func_name, class);
-                return None;
+                None
             }
-        };
-        Some(entry)
+        }
     }
 
     ///
@@ -421,13 +418,13 @@ impl Globals {
                 return entry.clone();
             }
         };
-        let entry = self.check_method_main(class_id, name);
+        let entry = self.check_method_main(class_id, name).cloned();
         self.global_method_cache
             .insert((name, class_id), (class_version, entry.clone()));
         entry
     }
 
-    fn check_method_main(&mut self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
+    fn check_method_main(&mut self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
         if let Some(entry) = self.get_method(class_id, name) {
             return Some(entry);
         }
@@ -447,8 +444,8 @@ impl Globals {
     ///   
     /// If not found, simply return None with no error.
     ///
-    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
-        self.class[class_id].methods.get(&name).cloned()
+    fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
+        self.class[class_id].methods.get(&name)
     }
 
     ///

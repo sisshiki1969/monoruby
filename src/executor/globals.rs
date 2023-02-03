@@ -309,7 +309,7 @@ impl Globals {
         (self.codegen.entry_point)(executor, self, func_data)
     }
 
-    fn class_version_inc(&mut self) {
+    pub(super) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
     }
 

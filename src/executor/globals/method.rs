@@ -25,7 +25,7 @@ impl Globals {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Public);
-        self.func.inline.insert(func_id, inline_id);
+        self.func.add_inline(func_id, inline_id);
         func_id
     }
 
@@ -55,7 +55,7 @@ impl Globals {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Public);
-        self.func.inline.insert(func_id, inline_id);
+        self.func.add_inline(func_id, inline_id);
         func_id
     }
 

@@ -1337,7 +1337,6 @@ impl Codegen {
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {
-                    let class_version = self.class_version;
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
@@ -1347,12 +1346,10 @@ impl Codegen {
                         movq rcx, (u32::from(func_id)); // FuncId
                         movq rax, (runtime::define_method);
                         call rax;
-                        addl [rip + class_version], 1;
                     );
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::SingletonMethodDef { obj, name, func_id } => {
-                    let class_version = self.class_version;
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
@@ -1363,7 +1360,6 @@ impl Codegen {
                         movq r8, [r14 - (conv(obj))];
                         movq rax, (runtime::singleton_define_method);
                         call rax;
-                        addl [rip + class_version], 1;
                     );
                     self.xmm_restore(&xmm_using);
                 }

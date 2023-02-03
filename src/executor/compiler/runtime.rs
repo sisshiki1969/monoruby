@@ -316,6 +316,7 @@ pub(super) extern "C" fn define_method(
     if module_function {
         globals.add_singleton_method(class_id, name, func, visibility);
     }
+    globals.class_version_inc();
 }
 
 pub(super) extern "C" fn singleton_define_method(
@@ -327,6 +328,7 @@ pub(super) extern "C" fn singleton_define_method(
 ) {
     let class_id = globals.get_singleton(obj).class_id();
     globals.add_method(class_id, name, func, Visibility::Public);
+    globals.class_version_inc();
 }
 
 pub(super) extern "C" fn alias_method(
