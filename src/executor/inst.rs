@@ -170,7 +170,7 @@ impl Bc {
     pub(crate) fn from_with_func_name_id(op1: u64, name: IdentId, func_id: FuncId) -> Self {
         Self {
             op1,
-            op2: Bc2::from(((func_id.0 as u64) << 32) + (name.get() as u64)),
+            op2: Bc2::from(((func_id.get() as u64) << 32) + (name.get() as u64)),
         }
     }
 
@@ -522,11 +522,11 @@ impl TraceIr {
                 1 => Self::SingletonMethodDef {
                     obj: SlotId::new(op1),
                     name: IdentId::from((pc.op2.0) as u32),
-                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                    func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 2 => Self::MethodDef {
                     name: IdentId::from((pc.op2.0) as u32),
-                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                    func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 3 => Self::Br(op2 as i32),
                 4 => Self::CondBr(SlotId::new(op1), op2 as i32, false, BrKind::BrIf),
@@ -567,12 +567,12 @@ impl TraceIr {
                     ret: SlotId::new(op1),
                     superclass: SlotId::new(op2 as u16),
                     name: IdentId::from((pc.op2.0) as u32),
-                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                    func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 19 => Self::ModuleDef {
                     ret: SlotId::new(op1),
                     name: IdentId::from((pc.op2.0) as u32),
-                    func_id: FuncId((pc.op2.0 >> 32) as u32),
+                    func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1)),

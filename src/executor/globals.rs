@@ -284,7 +284,7 @@ impl Globals {
         interp: &Executor,
     ) -> BlockData {
         if let Some(bh) = block_handler.try_fixnum() {
-            let func_id = FuncId(u32::try_from((bh as u64) >> 16).unwrap());
+            let func_id = FuncId::new(u32::try_from((bh as u64) >> 16).unwrap());
             let mut cfp = interp.cfp;
             unsafe {
                 for _ in 0..bh as i16 as u16 {
@@ -600,7 +600,7 @@ impl Globals {
                             let i = i as u64;
                             let func_id = u32::try_from(i >> 16).unwrap();
                             let idx = i as u16;
-                            format!("BlockArgProxy {{ {:?}, {} }}", FuncId(func_id), idx)
+                            format!("BlockArgProxy {{ {:?}, {} }}", FuncId::new(func_id), idx)
                         }
                         _ => unimplemented!(),
                     }

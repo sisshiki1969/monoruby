@@ -6,13 +6,23 @@ use std::pin::Pin;
 ///
 /// ID of function.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct FuncId(pub u32);
+pub struct FuncId(std::num::NonZeroU32);
 
 impl From<FuncId> for u32 {
     fn from(id: FuncId) -> u32 {
-        id.0
+        id.0.get()
+    }
+}
+
+impl FuncId {
+    pub fn new(id: u32) -> Self {
+        Self(std::num::NonZeroU32::new(id).unwrap())
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0.get()
     }
 }
 
@@ -56,13 +66,13 @@ pub(super) struct Funcs(Vec<FuncInfo>);
 impl std::ops::Index<FuncId> for Funcs {
     type Output = FuncInfo;
     fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.0[index.0 as usize]
+        &self.0[u32::from(index) as usize]
     }
 }
 
 impl std::ops::IndexMut<FuncId> for Funcs {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.0[index.0 as usize]
+        &mut self.0[u32::from(index) as usize]
     }
 }
 
@@ -76,7 +86,7 @@ impl Funcs {
     fn default() -> Self {
         Self(vec![FuncInfo::new_iseq(
             None,
-            FuncId(0),
+            None,
             None,
             ArgumentNames::default(),
             vec![],
@@ -88,7 +98,7 @@ impl Funcs {
     }
 
     fn next_func_id(&self) -> FuncId {
-        FuncId(self.0.len() as u32)
+        FuncId::new(self.0.len() as u32)
     }
 
     pub(crate) fn add_method(
@@ -154,7 +164,7 @@ impl Funcs {
         let func_id = self.next_func_id();
         self.0.push(FuncInfo::new_iseq(
             name,
-            func_id,
+            Some(func_id),
             outer,
             args,
             expand,
@@ -379,9 +389,9 @@ impl FnStore {
         );
         let mut fid = main_fid;
 
-        while self.len() > fid.0 as usize {
+        while self.len() > fid.get() as usize {
             self.compile_func(fid)?;
-            fid = FuncId(fid.0 + 1);
+            fid = FuncId::new(fid.get() + 1);
         }
 
         Ok(main_fid)
@@ -471,7 +481,7 @@ impl GC<RValue> for FuncInfo {
 impl FuncInfo {
     fn new_iseq(
         name: Option<String>,
-        func_id: FuncId,
+        func_id: Option<FuncId>,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         args: ArgumentNames,
         expand: Vec<ExpandInfo>,
@@ -509,9 +519,9 @@ impl FuncInfo {
                 codeptr: None,
                 pc: BcPc::default(),
                 meta: if is_classdef {
-                    Meta::vm_classdef(info.id, 0)
+                    Meta::vm_classdef(func_id, 0)
                 } else {
-                    Meta::vm_method(info.id, 0)
+                    Meta::vm_method(func_id, 0)
                 },
             },
             kind: FuncKind::ISeq(info),
@@ -617,7 +627,7 @@ impl FuncInfo {
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ISeqInfo {
     /// ID of this function.
-    pub(crate) id: FuncId,
+    id: Option<FuncId>,
     outer: Option<FuncId>,
     name: Option<String>,
     /// Bytecode.
@@ -651,14 +661,16 @@ impl std::fmt::Debug for ISeqInfo {
         write!(
             f,
             "RubyFuncInfo {{ id: {}, name: {:?}. pos_num: {:?} }}",
-            self.id.0, self.name, self.args.pos_num
+            self.id().get(),
+            self.name,
+            self.args.pos_num
         )
     }
 }
 
 impl ISeqInfo {
     pub(crate) fn new(
-        id: FuncId,
+        id: Option<FuncId>,
         outer: Option<FuncId>,
         outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
@@ -697,7 +709,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn new_block(
-        id: FuncId,
+        id: Option<FuncId>,
         outer: (FuncId, Vec<HashMap<String, u16>>),
         name: Option<String>,
         args: ArgumentNames,
@@ -721,7 +733,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn new_method(
-        id: FuncId,
+        id: Option<FuncId>,
         name: Option<String>,
         args: ArgumentNames,
         expand: Vec<ExpandInfo>,
@@ -741,6 +753,10 @@ impl ISeqInfo {
             sourceinfo,
             false,
         )
+    }
+
+    pub(crate) fn id(&self) -> FuncId {
+        self.id.unwrap()
     }
 
     /// set bytecode.

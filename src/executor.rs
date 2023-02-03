@@ -313,7 +313,13 @@ impl Executor {
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, index), count) in v {
                 let name = globals.func[*func_id].as_ruby_func().name();
-                eprintln!("{:20}  {:5} [{:05}]  {:10}", name, func_id.0, index, count);
+                eprintln!(
+                    "{:20}  {:5} [{:05}]  {:10}",
+                    name,
+                    func_id.get(),
+                    index,
+                    count
+                );
             }
             eprintln!();
             eprintln!("method cache stats");
@@ -1227,7 +1233,7 @@ impl std::fmt::Debug for InstId {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]
 struct Meta {
-    func_id: FuncId,
+    func_id: Option<FuncId>,
     reg_num: u16,
     /// interpreter:0 native:2
     kind: u8,
@@ -1266,7 +1272,7 @@ impl std::fmt::Debug for Meta {
 }
 
 impl Meta {
-    fn new(func_id: FuncId, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
+    fn new(func_id: Option<FuncId>, reg_num: u16, kind: u8, is_class_def: bool) -> Self {
         Self {
             func_id,
             reg_num,
@@ -1283,26 +1289,26 @@ impl Meta {
         unsafe { std::mem::transmute(*self) }
     }
 
-    fn vm_method(func_id: FuncId, reg_num: i64) -> Self {
+    fn vm_method(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         // kind = VM, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 0, false)
+        Self::new(func_id.into(), reg_num, 0, false)
     }
 
-    fn vm_classdef(func_id: FuncId, reg_num: i64) -> Self {
+    fn vm_classdef(func_id: impl Into<Option<FuncId>>, reg_num: i64) -> Self {
         // kind = VM, mode = classdef
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 0, true)
+        Self::new(func_id.into(), reg_num, 0, true)
     }
 
     fn native(func_id: FuncId, reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
         let reg_num = reg_num as i16 as u16;
-        Self::new(func_id, reg_num, 2, false)
+        Self::new(Some(func_id), reg_num, 2, false)
     }
 
     fn func_id(&self) -> FuncId {
-        self.func_id
+        self.func_id.unwrap()
     }
 
     fn reg_num(&self) -> i64 {
@@ -1396,17 +1402,17 @@ mod test {
 
     #[test]
     fn meta_test() {
-        let meta = Meta::vm_method(FuncId(12), 42);
-        assert_eq!(FuncId(12), meta.func_id());
+        let meta = Meta::vm_method(FuncId::new(12), 42);
+        assert_eq!(FuncId::new(12), meta.func_id());
         assert_eq!(42, meta.reg_num());
         assert_eq!(false, meta.is_class_def());
-        let mut meta = Meta::vm_method(FuncId(42), -1);
-        assert_eq!(FuncId(42), meta.func_id());
+        let mut meta = Meta::vm_method(FuncId::new(42), -1);
+        assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(-1, meta.reg_num());
         meta.set_reg_num(12);
-        assert_eq!(FuncId(42), meta.func_id());
+        assert_eq!(FuncId::new(42), meta.func_id());
         assert_eq!(12, meta.reg_num());
-        let mut meta = Meta::vm_classdef(FuncId(12), 42);
+        let mut meta = Meta::vm_classdef(FuncId::new(12), 42);
         assert_eq!(true, meta.is_class_def());
         meta.set_reg_num(12);
         meta.set_jit();

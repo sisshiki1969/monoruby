@@ -570,7 +570,7 @@ impl Globals {
                     "whole"
                 },
                 func.name(),
-                func.id,
+                func.id(),
                 self_value.class().get_name(self),
                 start_pos,
                 func.bytecode().as_ptr(),

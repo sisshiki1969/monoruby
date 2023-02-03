@@ -1520,8 +1520,8 @@ impl IrContext {
                 NodeKind::Lambda(block) => {
                     let outer_locals = info.get_locals();
                     let func_id =
-                        ctx.add_block((info.id, outer_locals), block, info.sourceinfo.clone())?;
-                    let block_handler = ((func_id.0 as i64) << 16) + 1;
+                        ctx.add_block((info.id(), outer_locals), block, info.sourceinfo.clone())?;
+                    let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
                     self.gen_literal(info, None, Value::new_integer(block_handler));
                 }
                 NodeKind::LocalVar(proc_local) => {
