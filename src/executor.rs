@@ -432,7 +432,7 @@ impl Executor {
         args: &[Value],
     ) -> Option<Value> {
         let len = args.len();
-        let func_id = globals.find_method(receiver, method)?.0;
+        let func_id = globals.find_method(receiver, method)?;
         globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
@@ -485,8 +485,7 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
-        if let Some((func_id, _visi)) = globals.check_method(receiver, method) {
-            globals.check_arg(func_id, len)?;
+        if let Some(func_id) = globals.check_method(receiver, method) {
             self.invoke_func2(globals, func_id, receiver, args, len)
         } else {
             Some(Value::nil())
@@ -504,6 +503,7 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
+        globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
     }

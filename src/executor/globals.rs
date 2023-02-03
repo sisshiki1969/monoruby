@@ -45,6 +45,12 @@ impl<'a, 'b> GCRoot<RValue> for Root<'a, 'b> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct MethodTableEntry {
+    func_id: FuncId,
+    visibility: Visibility,
+}
+
 ///
 /// Global state.
 ///
@@ -60,7 +66,7 @@ pub struct Globals {
     /// error information.
     error: Option<MonorubyErr>,
     /// global method cache.
-    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<(FuncId, Visibility)>)>,
+    global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
     /// regex cache.
     pub regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.

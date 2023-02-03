@@ -57,8 +57,7 @@ extern "C" fn object_new(
 ) -> Option<Value> {
     let class = self_val.as_class();
     let obj = Value::new_object(class.class_id());
-    if let Some((func_id, _visi)) = globals.check_method(obj, IdentId::INITIALIZE) {
-        globals.check_arg(func_id, len)?;
+    if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
     Some(obj)
