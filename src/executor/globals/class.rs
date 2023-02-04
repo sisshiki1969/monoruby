@@ -283,7 +283,22 @@ impl Globals {
         self.class[class_id].methods.insert(
             name,
             MethodTableEntry {
-                func_id,
+                func_id: Some(func_id),
+                visibility,
+            },
+        );
+    }
+
+    pub(crate) fn add_empty_method(
+        &mut self,
+        class_id: ClassId,
+        name: IdentId,
+        visibility: Visibility,
+    ) {
+        self.class[class_id].methods.insert(
+            name,
+            MethodTableEntry {
+                func_id: None,
                 visibility,
             },
         );
@@ -303,7 +318,7 @@ impl Globals {
         self.class[singleton].methods.insert(
             name,
             MethodTableEntry {
-                func_id,
+                func_id: Some(func_id),
                 visibility,
             },
         );
@@ -320,7 +335,7 @@ impl Globals {
         func_name: IdentId,
     ) -> Option<FuncId> {
         match self.check_method_entry(obj, func_name) {
-            Some(entry) => Some(entry.func_id),
+            Some(entry) => Some(entry.func_id.unwrap()),
             None => {
                 self.err_method_not_found(func_name, obj);
                 None
@@ -339,7 +354,7 @@ impl Globals {
         func_name: IdentId,
     ) -> Option<FuncId> {
         match self.check_method_for_class(class, func_name) {
-            Some(entry) => Some(entry.func_id),
+            Some(entry) => Some(entry.func_id.unwrap()),
             None => {
                 self.err_method_not_found_for_class(func_name, class);
                 None
@@ -376,7 +391,8 @@ impl Globals {
         obj: Value,
         name: IdentId,
     ) -> Option<FuncId> {
-        self.check_method_entry(obj, name).map(|e| e.func_id)
+        self.check_method_entry(obj, name)
+            .map(|e| e.func_id.unwrap())
     }
 
     ///
@@ -418,25 +434,60 @@ impl Globals {
                 return entry.clone();
             }
         };
-        let entry = self.check_method_main(class_id, name).cloned();
+        let entry = self.check_method_main(class_id, name);
         self.global_method_cache
             .insert((name, class_id), (class_version, entry.clone()));
         entry
     }
 
-    fn check_method_main(&mut self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
-        if let Some(entry) = self.get_method(class_id, name) {
-            return Some(entry);
-        }
-        let mut class_obj = class_id.get_obj(self);
-        while let Some(super_class) = class_obj.superclass() {
-            class_obj = super_class;
-            //eprintln!("class: {}", class_id.get_obj(self).as_val().to_s(self));
-            if let Some(entry) = self.get_method(class_obj.class_id(), name) {
-                return Some(entry);
+    fn check_method_main(
+        &mut self,
+        mut class_id: ClassId,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        let mut visi = None;
+        loop {
+            if let Some(entry) = self.get_method(class_id, name) {
+                if entry.func_id.is_some() {
+                    return Some(MethodTableEntry {
+                        func_id: entry.func_id,
+                        visibility: if visi > Some(entry.visibility) {
+                            visi.unwrap()
+                        } else {
+                            entry.visibility
+                        },
+                    });
+                } else {
+                    if Some(entry.visibility) > visi {
+                        visi = Some(entry.visibility);
+                    }
+                }
             }
+            class_id = match class_id.get_obj(self).superclass() {
+                Some(super_class) => super_class.class_id(),
+                None => break,
+            };
         }
         None
+    }
+
+    pub(in crate::executor) fn change_method_visibility_for_class(
+        &mut self,
+        class_id: ClassId,
+        names: &[IdentId],
+        visi: Visibility,
+    ) {
+        for name in names {
+            match self.class[class_id].methods.get_mut(name) {
+                Some(entry) => {
+                    entry.visibility = visi;
+                }
+                None => {
+                    self.add_empty_method(class_id, *name, visi);
+                }
+            };
+        }
+        self.class_version_inc();
     }
 
     ///

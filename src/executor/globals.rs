@@ -47,7 +47,7 @@ impl<'a, 'b> GCRoot<RValue> for Root<'a, 'b> {
 
 #[derive(Debug, Clone, PartialEq)]
 struct MethodTableEntry {
-    func_id: FuncId,
+    func_id: Option<FuncId>,
     visibility: Visibility,
 }
 

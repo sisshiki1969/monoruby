@@ -110,7 +110,12 @@ impl Globals {
                 return None;
             }
         };
-        self.add_method(obj.class(), new_name, entry.func_id, entry.visibility);
+        self.add_method(
+            obj.class(),
+            new_name,
+            entry.func_id.unwrap(),
+            entry.visibility,
+        );
         Some(())
     }
 
@@ -124,7 +129,7 @@ impl Globals {
         old_name: IdentId,
     ) -> Option<()> {
         let entry = self.find_method_entry_for_class(class_id, old_name)?;
-        self.add_method(class_id, new_name, entry.func_id, entry.visibility);
+        self.add_method(class_id, new_name, entry.func_id.unwrap(), entry.visibility);
         Some(())
     }
 }

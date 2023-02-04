@@ -255,21 +255,20 @@ extern "C" fn private(
         return Some(Value::nil());
     }
     let class_id = self_val.as_class().class_id();
+    let mut names = vec![];
     if let Some(ary) = arg[0].is_array() {
         if len == 1 {
             for v in ary.iter() {
-                let name = v.expect_symbol_or_string(globals)?;
-                let func_id = globals.find_method_for_class(class_id, name)?;
-                //globals.change_visibility(func_id, Visibility::Protected);
+                names.push(v.expect_symbol_or_string(globals)?);
             }
+            globals.change_method_visibility_for_class(class_id, &names, Visibility::Private);
             return Some(arg[0]);
         }
     }
     for i in 0..len {
-        let name = arg[i].expect_symbol_or_string(globals)?;
-        let func_id = globals.find_method_for_class(class_id, name)?;
-        //globals.change_visibility(func_id, Visibility::Protected);
+        names.push(arg[i].expect_symbol_or_string(globals)?);
     }
+    globals.change_method_visibility_for_class(class_id, &names, Visibility::Private);
     let res = Value::new_array_from_vec(arg.to_vec(len));
     Some(res)
 }

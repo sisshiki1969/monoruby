@@ -1242,11 +1242,21 @@ struct Meta {
     mode: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Visibility {
     Public = 0,
-    Private = 1,
-    Protected = 2,
+    Protected = 1,
+    Private = 2,
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        self == &Self::Public
+    }
+
+    pub fn is_private(&self) -> bool {
+        self == &Self::Private
+    }
 }
 
 impl std::fmt::Debug for Meta {
