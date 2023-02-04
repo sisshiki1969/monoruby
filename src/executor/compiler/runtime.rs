@@ -14,8 +14,10 @@ pub(super) extern "C" fn find_method(
     func_name: IdentId,
     args_len: usize,
     receiver: Value,
+    // register id of *self*
+    recv_reg: u16,
 ) -> Option<std::ptr::NonNull<FuncData>> {
-    let func_id = globals.find_method(receiver, func_name)?;
+    let func_id = globals.find_method(receiver, func_name, recv_reg == 0)?;
     globals.check_arg(func_id, args_len)?;
     let func_data = globals.compile_on_demand(func_id);
     Some(std::ptr::NonNull::new(func_data as *const _ as _).unwrap())

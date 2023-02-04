@@ -303,6 +303,7 @@ impl Codegen {
             movq rsi, (u32::from(name)); // IdentId
             movq rdx, (len as usize); // args_len: usize
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
+            movw r8, (recv.0);
             movq rax, (runtime::find_method);
             call rax;
             // absolute address was returned to rax.

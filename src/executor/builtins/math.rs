@@ -7,15 +7,9 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.define_builtin_singleton_func_inlinable(
-        class_id,
-        "sqrt",
-        sqrt,
-        1,
-        InlineMethod::MathSqrt,
-    );
-    globals.define_builtin_singleton_func_inlinable(class_id, "cos", cos, 1, InlineMethod::MathCos);
-    globals.define_builtin_singleton_func_inlinable(class_id, "sin", sin, 1, InlineMethod::MathSin);
+    globals.define_builtin_module_func_inlinable(class_id, "sqrt", sqrt, 1, InlineMethod::MathSqrt);
+    globals.define_builtin_module_func_inlinable(class_id, "cos", cos, 1, InlineMethod::MathCos);
+    globals.define_builtin_module_func_inlinable(class_id, "sin", sin, 1, InlineMethod::MathSin);
 }
 
 /// ### Math.#sqrt
@@ -101,6 +95,17 @@ mod test {
     fn sqrt() {
         run_test("Math.sqrt 128");
         run_test("Math.sqrt 2192.56818");
+        run_test(
+            r#"
+        class C
+          include Math
+          def f
+            sqrt 2192.56818
+          end
+        end
+        C.new.f
+        "#,
+        );
     }
 
     #[test]

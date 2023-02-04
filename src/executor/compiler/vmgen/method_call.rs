@@ -137,6 +137,7 @@ impl Codegen {
             movq rsi, [rsp + 8];  // rsi: IdentId
             movzxw rdx, [r13];  // rdx: len
             movq rcx, [rsp]; // rcx: receiver:Value
+            movzxw r8, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
             testq rax, rax;

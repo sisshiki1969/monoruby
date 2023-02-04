@@ -13,9 +13,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader, -1);
     globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
     globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
-    globals.define_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
     globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
-    globals.define_builtin_func(MODULE_CLASS, "private", private, -1);
+    globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
+    globals.define_private_builtin_func(MODULE_CLASS, "private", private, -1);
+    globals.define_private_builtin_func(MODULE_CLASS, "public", public, -1);
 }
 
 /// ### Module#==
@@ -243,15 +244,42 @@ extern "C" fn include(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 extern "C" fn private(
-    vm: &mut Executor,
+    executor: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
+    change_visi(executor, globals, self_val, arg, len, Visibility::Private)
+}
+
+/// ### Module#public
+/// - public(*name) -> self
+/// - public(names) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
+extern "C" fn public(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    change_visi(executor, globals, self_val, arg, len, Visibility::Public)
+}
+
+fn change_visi(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    visi: Visibility,
+) -> Option<Value> {
     if len == 0 {
-        vm.set_context_visibility(Visibility::Private);
+        executor.set_context_visibility(visi);
         return Some(Value::nil());
     }
     let class_id = self_val.as_class().class_id();
@@ -261,14 +289,14 @@ extern "C" fn private(
             for v in ary.iter() {
                 names.push(v.expect_symbol_or_string(globals)?);
             }
-            globals.change_method_visibility_for_class(class_id, &names, Visibility::Private);
+            globals.change_method_visibility_for_class(class_id, &names, visi);
             return Some(arg[0]);
         }
     }
     for i in 0..len {
         names.push(arg[i].expect_symbol_or_string(globals)?);
     }
-    globals.change_method_visibility_for_class(class_id, &names, Visibility::Private);
+    globals.change_method_visibility_for_class(class_id, &names, visi);
     let res = Value::new_array_from_vec(arg.to_vec(len));
     Some(res)
 }
@@ -444,6 +472,48 @@ mod test {
               include
             end
             "#,
+        );
+    }
+
+    #[test]
+    fn private() {
+        run_test_with_prelude(
+            r#"
+            C.new.g
+            "#,
+            r#"
+            class C
+              private def f; 5; end
+              def g; f; end
+            end
+        "#,
+        );
+        run_test_error(
+            r#"
+            class C
+              private def f; 5; end
+              def g; f; end
+            end
+            C.new.f
+        "#,
+        );
+    }
+
+    #[test]
+    fn public() {
+        run_test_with_prelude(
+            r#"
+            D.new.f
+            "#,
+            r#"
+            class C
+              private def f; 5; end
+            end
+
+            class D < C
+              public :f
+            end
+        "#,
         );
     }
 }

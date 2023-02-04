@@ -333,9 +333,17 @@ impl Globals {
         &mut self,
         obj: Value,
         func_name: IdentId,
+        is_func_call: bool,
     ) -> Option<FuncId> {
         match self.check_method_entry(obj, func_name) {
-            Some(entry) => Some(entry.func_id.unwrap()),
+            Some(entry) => {
+                if !is_func_call && entry.visibility.is_private() {
+                    self.err_private_method_called(func_name, obj);
+                    None
+                } else {
+                    Some(entry.func_id.unwrap())
+                }
+            }
             None => {
                 self.err_method_not_found(func_name, obj);
                 None
@@ -451,24 +459,20 @@ impl Globals {
                 if entry.func_id.is_some() {
                     return Some(MethodTableEntry {
                         func_id: entry.func_id,
-                        visibility: if visi > Some(entry.visibility) {
-                            visi.unwrap()
+                        visibility: if let Some(visi) = visi {
+                            visi
                         } else {
                             entry.visibility
                         },
                     });
                 } else {
-                    if Some(entry.visibility) > visi {
+                    if visi.is_none() {
                         visi = Some(entry.visibility);
                     }
                 }
             }
-            class_id = match class_id.get_obj(self).superclass() {
-                Some(super_class) => super_class.class_id(),
-                None => break,
-            };
+            class_id = class_id.get_obj(self).superclass()?.class_id();
         }
-        None
     }
 
     pub(in crate::executor) fn change_method_visibility_for_class(
