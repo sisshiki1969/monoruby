@@ -183,7 +183,6 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        let jit_return = self.vm_return;
         if superclass.is_zero() {
             monoasm! { self.jit,
                 xorq rcx, rcx;
@@ -208,61 +207,8 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
-            testq rax, rax; // rax: Option<Value>
-            jeq  jit_return;
-            movq r15, rax; // r15 <- self
-            movl rsi, (func_id.get());  // rdx <- func_id
-            //movq rdi, rbx;  // &mut Interp
-            movq rdi, r12;  // &mut Globals
-            movq rax, (runtime::get_func_data);
-            call rax; // rax <- &FuncData
-            //
-            //       +-------------+
-            // +0x08 |     pc      |
-            //       +-------------+
-            //  0x00 |   ret reg   | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     |
-            //       +-------------+
-            // -0x20 |    block    |
-            //       +-------------+
-            // -0x28 |     %0      |
-            //       +-------------+
-            // -0x30 | %1(1st arg) | <- rdx
-            //       +-------------+
-            //       |             |
-            //
-            movq r8, rax;
-            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
-            movq [rsp - (16 + LBP_META)], rdi;
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_SELF)], r15;
-        }
-        self.set_method_outer();
-        monoasm! {self.jit,
-            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
-            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
-            xorq rdi, rdi;
-        }
-        self.call_rax();
-        monoasm! {self.jit,
-            testq rax, rax;
-            jeq jit_return;
         };
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
-        // pop class context.
-        monoasm!(self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::pop_class_context);
-            call rax;
-        );
+        self.jit_class_def_sub(func_id, ret);
         self.xmm_restore(&xmm_using);
     }
 
@@ -275,17 +221,25 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        let jit_return = self.vm_return;
         monoasm! { self.jit,
             movq rdx, [r14 - (conv(base))];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_singleton_class);
             call rax;  // rax <- self: Value
+        };
+        self.jit_class_def_sub(func_id, ret);
+        self.xmm_restore(&xmm_using);
+    }
+
+    fn jit_class_def_sub(&mut self, func_id: FuncId, ret: SlotId) {
+        let jit_return = self.vm_return;
+        monoasm! { self.jit,
             testq rax, rax; // rax: Option<Value>
             jeq  jit_return;
             movq r15, rax; // r15 <- self
             movl rsi, (func_id.get());  // rdx <- func_id
+            //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
             movq rax, (runtime::get_func_data);
             call rax; // rax <- &FuncData
@@ -317,7 +271,6 @@ impl Codegen {
             movq rax, (runtime::pop_class_context);
             call rax;
         );
-        self.xmm_restore(&xmm_using);
     }
 }
 
