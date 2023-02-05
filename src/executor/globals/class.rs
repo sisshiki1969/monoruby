@@ -201,8 +201,9 @@ impl Globals {
         &mut self,
         super_class: impl Into<Option<Module>>,
         base: Value,
+        original_class: ClassId,
     ) -> Module {
-        let id = self.class.add_class();
+        let id = self.class.copy_class(original_class);
         let class_obj = Value::new_empty_singleton_class(id, super_class.into(), base).as_class();
         self.class[id].object = Some(class_obj);
         class_obj
@@ -225,7 +226,8 @@ impl Globals {
                 None => CLASS_CLASS.get_obj(self),
             };
             let mut original_obj = original_obj.as_val();
-            let mut singleton = self.new_singleton_class(Some(super_singleton), original_obj);
+            let mut singleton =
+                self.new_singleton_class(super_singleton, original_obj, class.class_id());
             original_obj.change_class(singleton.class_id());
             let class_class = if class.class_id() == original {
                 singleton.class_id()
@@ -254,7 +256,7 @@ impl Globals {
         if org_class.is_singleton().is_some() {
             return org_class;
         }
-        let mut singleton = self.new_singleton_class(org_class, obj);
+        let mut singleton = self.new_singleton_class(org_class, obj, org_class.class_id());
         obj.change_class(singleton.class_id());
         let singleton_meta = org_class.get_real_class().as_val().class();
         singleton.change_class(singleton_meta);
@@ -544,6 +546,16 @@ impl ClassInfo {
             ivar_names: HashMap::default(),
         }
     }
+
+    fn copy(&self) -> Self {
+        Self {
+            name: None,
+            object: None,
+            methods: HashMap::default(),
+            constants: HashMap::default(),
+            ivar_names: self.ivar_names.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -581,6 +593,13 @@ impl ClassStore {
     fn add_class(&mut self) -> ClassId {
         let id = self.classes.len();
         self.classes.push(ClassInfo::new());
+        ClassId(id as u32)
+    }
+
+    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+        let id = self.classes.len();
+        let info = self[original_class].copy();
+        self.classes.push(info);
         ClassId(id as u32)
     }
 

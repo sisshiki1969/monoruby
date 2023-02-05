@@ -1651,4 +1651,44 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_singleton_class_def() {
+        run_test_with_prelude(
+            r#"
+            class << c
+              def f; end
+            end
+            [c.x, c.y, c.z]
+            "#,
+            r#"
+            class C
+              attr_accessor :x,:y,:z
+            end
+            c = C.new
+            c.x = 10
+            c.y = 20
+            c.z = 30
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_singleton_obj_attr() {
+        run_test_with_prelude(
+            r#"
+            def c.f; 42; end
+            [c.x, c.y, c.z]
+            "#,
+            r#"
+            class C
+              attr_accessor :x,:y,:z
+            end
+            c = C.new
+            c.x = 10
+            c.y = 20
+            c.z = 30
+        "#,
+        );
+    }
 }

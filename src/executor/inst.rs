@@ -86,19 +86,24 @@ pub(super) enum BcIr {
         name: IdentId,
         func_id: FuncId,
     },
-    SingletonMethodDef {
-        obj: BcReg,
-        name: IdentId,
-        func_id: FuncId,
-    },
     ClassDef {
         ret: Option<BcReg>,
         superclass: Option<BcReg>,
         name: IdentId,
         func_id: FuncId,
     },
+    SingletonClassDef {
+        ret: Option<BcReg>,
+        base: BcReg,
+        func_id: FuncId,
+    },
     ModuleDef {
         ret: Option<BcReg>,
+        name: IdentId,
+        func_id: FuncId,
+    },
+    SingletonMethodDef {
+        obj: BcReg,
         name: IdentId,
         func_id: FuncId,
     },
@@ -167,10 +172,17 @@ impl Bc {
         }
     }
 
-    pub(crate) fn from_with_func_name_id(op1: u64, name: IdentId, func_id: FuncId) -> Self {
+    pub(crate) fn from_with_func_name_id(op1: u64, name: Option<IdentId>, func_id: FuncId) -> Self {
         Self {
             op1,
-            op2: Bc2::from(((func_id.get() as u64) << 32) + (name.get() as u64)),
+            op2: Bc2::from(
+                ((func_id.get() as u64) << 32)
+                    + (if let Some(name) = name {
+                        name.get() as u64
+                    } else {
+                        0
+                    }),
+            ),
         }
     }
 
@@ -448,6 +460,11 @@ pub(super) enum TraceIr {
         name: IdentId,
         func_id: FuncId,
     },
+    SingletonClassDef {
+        ret: SlotId,
+        base: SlotId,
+        func_id: FuncId,
+    },
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
@@ -576,6 +593,11 @@ impl TraceIr {
                 },
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
                 21 => Self::BlockArgProxy(SlotId::new(op1)),
+                22 => Self::SingletonClassDef {
+                    ret: SlotId::new(op1),
+                    base: SlotId::new(op2 as u16),
+                    func_id: FuncId::new((pc.op2.0 >> 32) as u32),
+                },
                 25 => Self::LoadGvar {
                     dst: SlotId::new(op1),
                     name: IdentId::from(op2),

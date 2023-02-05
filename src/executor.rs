@@ -1053,6 +1053,14 @@ impl BcPc {
                 let name = IdentId::get_name(name);
                 format!("{} = module_def {:?}: {:?}", ret.ret_str(), name, func_id)
             }
+            TraceIr::SingletonClassDef { ret, base, func_id } => {
+                format!(
+                    "{} = singleton_class_def << {:?}: {:?}",
+                    ret.ret_str(),
+                    base,
+                    func_id
+                )
+            }
             TraceIr::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
             }

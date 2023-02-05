@@ -1089,6 +1089,21 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::SingletonClassDef {
+                box singleton,
+                info: block_info,
+            } => {
+                let dst = if use_mode.use_val() {
+                    Some(info.push().into())
+                } else {
+                    None
+                };
+                self.gen_singleton_class_def(ctx, info, singleton, *block_info.body, dst, loc)?;
+                if use_mode.is_ret() {
+                    self.gen_ret(info, None);
+                }
+                return Ok(());
+            }
             NodeKind::InterporatedString(nodes) => {
                 let len = nodes.len();
                 let arg = info.next_reg();
@@ -1396,6 +1411,28 @@ impl IrContext {
                     name,
                     func_id,
                 }
+            },
+            loc,
+        );
+        Ok(())
+    }
+
+    fn gen_singleton_class_def(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        base: Node,
+        body: Node,
+        dst: Option<BcReg>,
+        loc: Loc,
+    ) -> Result<()> {
+        let func_id = ctx.add_classdef(None, body, info.sourceinfo.clone());
+        let base = self.gen_temp_expr(ctx, info, base)?;
+        self.push(
+            BcIr::SingletonClassDef {
+                ret: dst,
+                base,
+                func_id,
             },
             loc,
         );

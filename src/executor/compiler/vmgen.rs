@@ -175,6 +175,7 @@ impl Codegen {
         self.dispatch[19] = self.vm_class_def(true);
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
+        self.dispatch[22] = self.vm_singleton_class_def();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[27] = self.vm_splat();
@@ -1123,7 +1124,6 @@ impl Codegen {
 
     fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        let vm_return = self.vm_return;
         let super_ = self.jit.label();
         if is_module {
             monoasm! { self.jit,
@@ -1147,36 +1147,42 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
+
+        };
+        self.class_def_sub();
+        label
+    }
+
+    fn vm_singleton_class_def(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let super_ = self.jit.label();
+        self.vm_get_rdi();
+        monoasm! { self.jit,
+        super_:
+            movq rdx, rdi; // rdx <- base: Value
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::define_singleton_class);
+            call rax;  // rax <- self: Value
+        };
+        self.class_def_sub();
+        label
+    }
+
+    fn class_def_sub(&mut self) {
+        let vm_return = self.vm_return;
+        monoasm! { self.jit,
             pushq r13;
             pushq r15;
             testq rax, rax; // rax: Option<Value>
             jeq  vm_return;
+
             movq r15, rax; // r15 <- self
             movl rsi, [r13 - 4];  // rdx <- func_id
-            //movq rdi, rbx;  // &mut Interp
             movq rdi, r12;  // &mut Globals
             movq rax, (runtime::get_func_data);
             call rax; // rax <- &FuncData
-            //
-            //       +-------------+
-            // +0x08 |     pc      |
-            //       +-------------+
-            //  0x00 |   ret reg   | <- rsp
-            //       +-------------+
-            // -0x08 | return addr |
-            //       +-------------+
-            // -0x10 |   old rbp   |
-            //       +-------------+
-            // -0x18 |    meta     |
-            //       +-------------+
-            // -0x20 |    block    |
-            //       +-------------+
-            // -0x28 |     %0      |
-            //       +-------------+
-            // -0x30 | %1(1st arg) | <- rdx
-            //       +-------------+
-            //       |             |
-            //
+
             movq r8, rax;
             movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rdi;
@@ -1206,7 +1212,6 @@ impl Codegen {
             call rax;
         );
         self.fetch_and_dispatch();
-        label
     }
 
     fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {

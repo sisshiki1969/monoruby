@@ -276,11 +276,11 @@ impl IrContext {
                     Bc::from(enc_www(130, op1.0, op2.0, *len as u16))
                 }
                 BcIr::MethodDef { name, func_id } => {
-                    Bc::from_with_func_name_id(enc_l(2, 0), *name, *func_id)
+                    Bc::from_with_func_name_id(enc_l(2, 0), Some(*name), *func_id)
                 }
                 BcIr::SingletonMethodDef { obj, name, func_id } => {
                     let op1 = info.get_index(obj);
-                    Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), *name, *func_id)
+                    Bc::from_with_func_name_id(enc_wl(1, op1.0, 0), Some(*name), *func_id)
                 }
                 BcIr::ClassDef {
                     ret,
@@ -296,14 +296,26 @@ impl IrContext {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
-                    Bc::from_with_func_name_id(enc_wl(18, op1.0, op2.0 as u32), *name, *func_id)
+                    Bc::from_with_func_name_id(
+                        enc_wl(18, op1.0, op2.0 as u32),
+                        Some(*name),
+                        *func_id,
+                    )
                 }
                 BcIr::ModuleDef { ret, name, func_id } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
-                    Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), *name, *func_id)
+                    Bc::from_with_func_name_id(enc_wl(19, op1.0, 0), Some(*name), *func_id)
+                }
+                BcIr::SingletonClassDef { ret, base, func_id } => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    let op2 = info.get_index(base);
+                    Bc::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, *func_id)
                 }
             };
             ops.push(op);

@@ -265,6 +265,60 @@ impl Codegen {
         );
         self.xmm_restore(&xmm_using);
     }
+
+    pub(super) fn jit_singleton_class_def(
+        &mut self,
+        ctx: &BBContext,
+        ret: SlotId,
+        base: SlotId,
+        func_id: FuncId,
+    ) {
+        let xmm_using = ctx.get_xmm_using();
+        self.xmm_save(&xmm_using);
+        let jit_return = self.vm_return;
+        monoasm! { self.jit,
+            movq rdx, [r14 - (conv(base))];  // rdx <- name
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::define_singleton_class);
+            call rax;  // rax <- self: Value
+            testq rax, rax; // rax: Option<Value>
+            jeq  jit_return;
+            movq r15, rax; // r15 <- self
+            movl rsi, (func_id.get());  // rdx <- func_id
+            movq rdi, r12;  // &mut Globals
+            movq rax, (runtime::get_func_data);
+            call rax; // rax <- &FuncData
+
+            movq r8, rax;
+            movq rdi, [r8 + (FUNCDATA_OFFSET_META)];
+            movq [rsp - (16 + LBP_META)], rdi;
+            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_SELF)], r15;
+        }
+        self.set_method_outer();
+        monoasm! {self.jit,
+            movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
+            movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
+            xorq rdi, rdi;
+        }
+        self.call_rax();
+        monoasm! {self.jit,
+            testq rax, rax;
+            jeq jit_return;
+        };
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+        // pop class context.
+        monoasm!(self.jit,
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (runtime::pop_class_context);
+            call rax;
+        );
+        self.xmm_restore(&xmm_using);
+    }
 }
 
 impl Codegen {

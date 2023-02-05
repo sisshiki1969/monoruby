@@ -299,6 +299,16 @@ pub(super) extern "C" fn define_class(
     Some(self_val.as_val())
 }
 
+pub(super) extern "C" fn define_singleton_class(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+) -> Option<Value> {
+    let self_val = globals.get_singleton(base);
+    executor.push_class_context(self_val.class_id());
+    Some(self_val.as_val())
+}
+
 pub(super) extern "C" fn pop_class_context(executor: &mut Executor, _globals: &mut Globals) {
     executor.pop_class_context();
 }
