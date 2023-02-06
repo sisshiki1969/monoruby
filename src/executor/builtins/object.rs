@@ -412,7 +412,8 @@ extern "C" fn require(
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
     let (file_body, path) = globals.load_lib(path)?;
-    executor.eval_script(globals, file_body, &path)
+    executor.eval_script(globals, file_body, &path);
+    Some(Value::bool(true))
 }
 
 #[cfg(test)]

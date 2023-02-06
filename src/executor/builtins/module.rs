@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "private", private, -1);
+    globals.define_private_builtin_func(MODULE_CLASS, "protected", protected, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "public", public, -1);
 }
 
@@ -252,6 +253,22 @@ extern "C" fn private(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     change_visi(executor, globals, self_val, arg, len, Visibility::Private)
+}
+
+/// ### Module#protected
+/// - protected(*name) -> self
+/// - protected(names) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
+extern "C" fn protected(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    change_visi(executor, globals, self_val, arg, len, Visibility::Protected)
 }
 
 /// ### Module#public

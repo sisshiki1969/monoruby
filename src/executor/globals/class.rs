@@ -339,12 +339,22 @@ impl Globals {
     ) -> Option<FuncId> {
         match self.check_method_entry(obj, func_name) {
             Some(entry) => {
-                if !is_func_call && entry.visibility.is_private() {
-                    self.err_private_method_called(func_name, obj);
-                    None
-                } else {
-                    Some(entry.func_id.unwrap())
+                match entry.visibility {
+                    Visibility::Private => {
+                        if !is_func_call {
+                            self.err_private_method_called(func_name, obj);
+                            return None;
+                        }
+                    }
+                    Visibility::Protected => {
+                        //if !is_func_call {
+                        //    self.err_protected_method_called(func_name, obj);
+                        //    return None;
+                        //}
+                    }
+                    _ => {}
                 }
+                Some(entry.func_id.unwrap())
             }
             None => {
                 self.err_method_not_found(func_name, obj);
