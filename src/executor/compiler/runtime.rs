@@ -29,10 +29,17 @@ pub(super) extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -
 
 pub(super) extern "C" fn get_block_data(
     globals: &mut Globals,
-    block_handler: BlockHandler,
+    block_handler: Option<BlockHandler>,
     interp: &Executor,
 ) -> BlockData {
-    globals.get_block_data(block_handler, interp)
+    if let Some(block_handler) = block_handler {
+        globals.get_block_data(block_handler, interp)
+    } else {
+        BlockData {
+            outer_lfp: LFP::default(),
+            func_data: std::ptr::null(),
+        }
+    }
 }
 
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
@@ -372,6 +379,10 @@ pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
 
 pub(super) extern "C" fn err_divide_by_zero(globals: &mut Globals) {
     globals.err_divide_by_zero();
+}
+
+pub(super) extern "C" fn err_no_block_given(globals: &mut Globals) {
+    globals.err_no_block_given();
 }
 
 pub(super) extern "C" fn err_wrong_number_of_arguments_range(

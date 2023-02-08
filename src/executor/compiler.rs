@@ -104,6 +104,7 @@ pub struct Codegen {
     f64_to_val: DestLabel,
     heap_to_f64: DestLabel,
     div_by_zero: DestLabel,
+    no_block: DestLabel,
     ///
     /// expand splat argument.
     ///
@@ -151,6 +152,7 @@ impl Codegen {
         let jit_return = jit.label();
         let vm_return = jit.label();
         let div_by_zero = jit.label();
+        let no_block = jit.label();
         let wrong_argument = jit.label();
         let heap_to_f64 = jit.label();
         let splat = jit.label();
@@ -181,6 +183,13 @@ impl Codegen {
         div_by_zero:
             movq rdi, r12;
             movq rax, (runtime::err_divide_by_zero);
+            call rax;
+            xorq rax, rax;
+            leave;
+            ret;
+        no_block:
+            movq rdi, r12;
+            movq rax, (runtime::err_no_block_given);
             call rax;
             xorq rax, rax;
             leave;
@@ -275,6 +284,7 @@ impl Codegen {
             heap_to_f64,
             splat,
             div_by_zero,
+            no_block,
             wrong_argument,
             dispatch,
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },

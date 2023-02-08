@@ -379,7 +379,7 @@ impl Globals {
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Symbol(id) => format!(":{}", IdentId::get_name(id)),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
-                Ok(s) => format!("\"{}\"", escape_string::escape(&s)),
+                Ok(s) => format!("{:?}", s),
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.kind() {

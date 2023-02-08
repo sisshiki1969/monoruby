@@ -47,6 +47,10 @@ impl Globals {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
+    pub(crate) fn err_no_block_given(&mut self) {
+        self.set_error(MonorubyErr::no_block_given());
+    }
+
     pub(crate) fn err_uninitialized_constant(&mut self, name: IdentId) {
         self.set_error(MonorubyErr::uninitialized_constant(name));
     }
@@ -250,6 +254,7 @@ pub enum MonorubyErrKind {
     Unimplemented(String),
     UninitConst(String),
     DivideByZero,
+    LocalJump(String),
     Range(String),
     Type(String),
     Index(String),
@@ -314,6 +319,7 @@ impl MonorubyErr {
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
             MonorubyErrKind::UninitConst(msg) => msg.to_string(),
             MonorubyErrKind::DivideByZero => "divided by 0".to_string(),
+            MonorubyErrKind::LocalJump(msg) => msg.to_string(),
             MonorubyErrKind::Range(msg) => msg.to_string(),
             MonorubyErrKind::Type(msg) => msg.to_string(),
             MonorubyErrKind::Index(msg) => msg.to_string(),
@@ -445,6 +451,12 @@ impl MonorubyErr {
 
     pub(crate) fn divide_by_zero() -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::DivideByZero)
+    }
+
+    pub(crate) fn no_block_given() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::LocalJump(format!(
+            "no block given (yield).",
+        )))
     }
 
     pub(crate) fn range(msg: String) -> MonorubyErr {

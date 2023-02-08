@@ -169,13 +169,12 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let vm_return = self.vm_return;
+        let no_block = self.no_block;
         // r15: %ret
         // rdi: %args
         // rsi: len
 
         monoasm! { self.jit,
-            pushq r15;
-            pushq r13; // push pc
             // rsp + 08:[%ret]
             // rsp + 00:[pc]
             pushq rdi;
@@ -188,6 +187,10 @@ impl Codegen {
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args
+            pushq r15;
+            pushq r13; // push pc
+            testq rax, rax;
+            jz  no_block;
             // r9 <- CodePtr
             movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta

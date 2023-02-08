@@ -561,6 +561,7 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
+        let no_block = self.no_block;
         monoasm! { self.jit,
             movq rdi, r12;
             movq rsi, [r14 - (LBP_BLOCK)];
@@ -568,6 +569,8 @@ impl Codegen {
             movq rax, (runtime::get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
+            testq rax, rax;
+            jz  no_block;
         }
 
         self.set_block_self_outer();
