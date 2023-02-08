@@ -50,6 +50,7 @@ impl std::fmt::Debug for RValue {
                     11 => format!("PROC({:?})", self.kind.proc),
                     12 => format!("HASH({:?})", self.kind.hash),
                     13 => format!("REGEXP({:?})", self.kind.regexp),
+                    14 => format!("IO({:?})", self.kind.io),
                     _ => unreachable!(),
                 }
             },
@@ -164,6 +165,7 @@ impl GC<RValue> for RValue {
                     v.mark(alloc);
                 }
             }
+            ObjKind::IO => {}
             _ => unreachable!("mark"),
         }
     }
@@ -439,6 +441,26 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_io(io: IoInfo) -> Self {
+        RValue {
+            flags: RVFlag::new(IO_CLASS, ObjKind::IO),
+            kind: ObjKind::io(io),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_io_stdin() -> Self {
+        Self::new_io(IoInfo::stdin())
+    }
+
+    pub(super) fn new_io_stdout() -> Self {
+        Self::new_io(IoInfo::stdout())
+    }
+
+    pub(super) fn new_io_stderr() -> Self {
+        Self::new_io(IoInfo::stderr())
+    }
+
     pub(super) fn new_splat(ary: ArrayInner) -> Self {
         RValue {
             flags: RVFlag::new(ARRAY_CLASS, ObjKind::SPLAT),
@@ -575,6 +597,10 @@ impl RValue {
         unsafe { &self.kind.regexp }
     }
 
+    pub(super) fn as_io(&self) -> &IoInfo {
+        unsafe { &self.kind.io }
+    }
+
     pub(super) fn as_proc(&self) -> &BlockData {
         unsafe { &self.kind.proc }
     }
@@ -654,6 +680,7 @@ pub union ObjKind {
     proc: ManuallyDrop<BlockData>,
     hash: ManuallyDrop<HashInfo>,
     regexp: ManuallyDrop<RegexpInfo>,
+    io: ManuallyDrop<IoInfo>,
 }
 
 #[allow(dead_code)]
@@ -672,6 +699,7 @@ impl ObjKind {
     pub const PROC: u8 = 11;
     pub const HASH: u8 = 12;
     pub const REGEXP: u8 = 13;
+    pub const IO: u8 = 14;
 }
 
 #[derive(Clone)]
@@ -773,6 +801,12 @@ impl ObjKind {
         }
     }
 
+    fn io(io: IoInfo) -> Self {
+        Self {
+            io: ManuallyDrop::new(io),
+        }
+    }
+
     fn time(info: TimeInfo) -> Self {
         Self {
             time: ManuallyDrop::new(info),
@@ -783,6 +817,40 @@ impl ObjKind {
         Self {
             proc: ManuallyDrop::new(block_data),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum IoInfo {
+    Stdin(std::io::Stdin),
+    Stdout(std::io::Stdout),
+    Stderr(std::io::Stderr),
+    Io {},
+}
+
+impl std::fmt::Display for IoInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match self {
+            Self::Stdin(_) => "<STDIN>",
+            Self::Stdout(_) => "<STDOUT>",
+            Self::Stderr(_) => "<STDERR>",
+            Self::Io {} => "fd 0",
+        };
+        write!(f, "#<IO:{}>", s)
+    }
+}
+
+impl IoInfo {
+    fn stdin() -> Self {
+        Self::Stdin(std::io::stdin())
+    }
+
+    fn stdout() -> Self {
+        Self::Stdout(std::io::stdout())
+    }
+
+    fn stderr() -> Self {
+        Self::Stderr(std::io::stderr())
     }
 }
 

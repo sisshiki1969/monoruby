@@ -417,12 +417,7 @@ impl Executor {
 
     fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {
         let parent = self.context_class_id();
-        if globals.set_constant(parent, name, val).is_some() && globals.warning >= 1 {
-            eprintln!(
-                "warning: already initialized constant {}",
-                IdentId::get_name(name)
-            )
-        }
+        globals.set_constant(parent, name, val);
     }
 }
 

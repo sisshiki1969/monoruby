@@ -1,13 +1,18 @@
 use super::*;
 
 impl Globals {
-    pub(crate) fn set_constant(
-        &mut self,
-        class_id: ClassId,
-        name: IdentId,
-        val: Value,
-    ) -> Option<Value> {
-        self.class[class_id].constants.insert(name, val)
+    pub(crate) fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
+        let name = IdentId::get_ident_id(name);
+        self.set_constant(class_id, name, val);
+    }
+
+    pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
+        if self.class[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
+            eprintln!(
+                "warning: already initialized constant {}",
+                IdentId::get_name(name)
+            )
+        }
     }
 
     ///

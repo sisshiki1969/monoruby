@@ -165,16 +165,12 @@ impl Globals {
         let pcg_version = env!("CARGO_PKG_VERSION");
         let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
         let val = Value::new_string_from_str(&description);
-        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_DESCRIPTION"), val);
+        self.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::new_string_from_str(pcg_name);
-        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_ENGINE"), val);
+        self.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
         let val = Value::new_string_from_str(pcg_version);
-        self.set_constant(OBJECT_CLASS, IdentId::get_ident_id("RUBY_VERSION"), val);
-        self.set_constant(
-            OBJECT_CLASS,
-            IdentId::get_ident_id("RUBY_ENGINE_VERSION"),
-            val,
-        );
+        self.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
+        self.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
     }
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
@@ -359,6 +355,8 @@ impl Globals {
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
+                ObjKind::REGEXP => self.regexp_tos(val),
+                ObjKind::IO => val.as_io().to_string(),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -393,6 +391,7 @@ impl Globals {
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
+                ObjKind::IO => val.as_io().to_string(),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }

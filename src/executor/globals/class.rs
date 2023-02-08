@@ -20,6 +20,7 @@ pub const PROC_CLASS: ClassId = ClassId::new(13);
 pub const HASH_CLASS: ClassId = ClassId::new(14);
 pub const REGEXP_CLASS: ClassId = ClassId::new(15);
 pub const MODULE_CLASS: ClassId = ClassId::new(16);
+pub const IO_CLASS: ClassId = ClassId::new(17);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -63,6 +64,7 @@ impl std::fmt::Debug for ClassId {
             14 => write!(f, "HASH"),
             15 => write!(f, "REGEXP"),
             16 => write!(f, "MODULE"),
+            17 => write!(f, "IO"),
             n => write!(f, "ClassId({})", n),
         }
     }
@@ -99,11 +101,6 @@ impl ClassId {
 impl Globals {
     fn get_class_obj(&self, class_id: ClassId) -> Module {
         self.class[class_id].object.unwrap()
-    }
-
-    pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
-        let object_class = OBJECT_CLASS.get_obj(self);
-        self.define_class_by_str(name, Some(object_class), OBJECT_CLASS)
     }
 
     pub(crate) fn define_module(&mut self, name: &str) -> Module {

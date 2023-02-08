@@ -6,6 +6,7 @@ mod file;
 mod float;
 mod hash;
 mod integer;
+mod io;
 mod math;
 mod module;
 mod object;
@@ -114,8 +115,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Regexp", REGEXP_CLASS)
             .class_id()
     );
+    let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
+    assert_eq!(IO_CLASS, io_class.class_id());
     let math_class = globals.define_module("Math").class_id();
-    let file_class = globals.define_class_under_obj("File").class_id();
+    let file_class = globals
+        .define_class_by_str("File", io_class, OBJECT_CLASS)
+        .class_id();
 
     object::init(globals);
     integer::init(globals);
@@ -129,8 +134,22 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     range::init(globals);
     proc::init(globals);
     time::init(globals);
+    io::init(globals);
     file::init(globals, file_class);
     math::init(globals, math_class);
+
+    let stdin = Value::new_io_stdin();
+    globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
+    globals.set_gvar(IdentId::get_ident_id("$stdin"), stdin);
+
+    let stdout = Value::new_io_stdout();
+    globals.set_constant_by_str(OBJECT_CLASS, "STDOUT", stdout);
+    globals.set_gvar(IdentId::get_ident_id("$stdout"), stdout);
+    globals.set_gvar(IdentId::get_ident_id("$>"), stdout);
+
+    let stderr = Value::new_io_stderr();
+    globals.set_constant_by_str(OBJECT_CLASS, "STDERR", stderr);
+    globals.set_gvar(IdentId::get_ident_id("$stderr"), stderr);
 }
 
 #[derive(Debug, Clone, Copy)]

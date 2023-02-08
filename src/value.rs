@@ -289,6 +289,22 @@ impl Value {
         RValue::new_regexp(regexp).pack()
     }
 
+    pub(crate) fn new_io(io: IoInfo) -> Self {
+        RValue::new_io(io).pack()
+    }
+
+    pub(crate) fn new_io_stdin() -> Self {
+        RValue::new_io_stdin().pack()
+    }
+
+    pub(crate) fn new_io_stdout() -> Self {
+        RValue::new_io_stdout().pack()
+    }
+
+    pub(crate) fn new_io_stderr() -> Self {
+        RValue::new_io_stderr().pack()
+    }
+
     pub(crate) fn new_splat(val: Value) -> Self {
         match val.is_array() {
             Some(ary) => RValue::new_splat(ary.clone()).pack(),
@@ -629,6 +645,11 @@ impl Value {
     pub(crate) fn as_range(&self) -> &Range {
         assert_eq!(ObjKind::RANGE, self.rvalue().kind());
         self.rvalue().as_range()
+    }
+
+    pub(crate) fn as_io(&self) -> &IoInfo {
+        assert_eq!(ObjKind::IO, self.rvalue().kind());
+        self.rvalue().as_io()
     }
 
     pub(crate) fn as_proc(&self) -> &BlockData {
