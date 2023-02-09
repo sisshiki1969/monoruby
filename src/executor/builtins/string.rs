@@ -15,6 +15,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "sub!", sub_, -1);
     globals.define_builtin_func(STRING_CLASS, "match", string_match, -1);
     globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
+    globals.define_builtin_func(STRING_CLASS, "length", length, 0);
+    globals.define_builtin_func(STRING_CLASS, "size", length, 0);
 }
 
 /// ### String#+
@@ -465,6 +467,24 @@ extern "C" fn tos(
     Some(self_val)
 }
 
+///
+/// ### String#length
+/// - length -> Integer
+/// - size -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
+extern "C" fn length(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let length = self_val.as_string().chars().count();
+    Some(Value::new_integer(length as i64))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -593,5 +613,10 @@ mod test {
         );
         run_test(r##"'hoge hige hege bar'.match('h.ge', 0)[0]"##);
         run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
+    }
+
+    #[test]
+    fn string_length() {
+        run_test(r##""本日は快晴なり".length"##);
     }
 }

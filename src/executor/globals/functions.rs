@@ -60,7 +60,7 @@ pub(crate) struct OptionalInfo {
     pub(crate) initializer: Node,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(super) struct Funcs(Vec<FuncInfo>);
 
 impl std::ops::Index<FuncId> for Funcs {
@@ -281,7 +281,7 @@ pub struct ConstSiteInfo {
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct FnStore {
     functions: Funcs,
     inline: HashMap<FuncId, InlineMethod>,
@@ -434,7 +434,7 @@ impl FnStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) enum FuncKind {
     ISeq(ISeqInfo),
     Builtin { abs_address: u64 },
@@ -461,7 +461,7 @@ pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
 pub const FUNCDATA_OFFSET_META: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct FuncInfo {
     /// name of this function.
     name: Option<String>,
@@ -585,7 +585,7 @@ impl FuncInfo {
         }
     }
 
-    fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
+    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
         match &mut self.kind {
             FuncKind::ISeq(info) => info,
             _ => unreachable!(),
@@ -624,7 +624,7 @@ impl FuncInfo {
 ///
 /// Information of instruction sequences.
 ///
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub(crate) struct ISeqInfo {
     /// ID of this function.
     id: Option<FuncId>,
@@ -650,6 +650,7 @@ pub(crate) struct ISeqInfo {
     pub temp: u16,
     /// The number of temporary registers.
     temp_num: u16,
+    pub lexical_context: Vec<Module>,
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
@@ -695,6 +696,7 @@ impl ISeqInfo {
             literals: vec![],
             temp: 0,
             temp_num: 0,
+            lexical_context: vec![],
             ast: Some(body),
             sourceinfo,
             is_block,

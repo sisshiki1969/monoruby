@@ -81,6 +81,20 @@ impl CFP {
         let bp = self.bp() as *mut usize;
         *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
     }
+
+    ///
+    /// Get func_id of a current method / classdef.
+    ///
+    unsafe fn method_func_id(&self) -> FuncId {
+        let mut lfp = self.lfp();
+        loop {
+            if lfp.outer().is_null() {
+                break;
+            }
+            lfp = lfp.outer().lfp();
+        }
+        lfp.meta().func_id()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -173,6 +187,15 @@ impl DFP {
 pub(crate) struct BlockData {
     outer_lfp: LFP,
     func_data: *const FuncData,
+}
+
+impl std::default::Default for BlockData {
+    fn default() -> Self {
+        Self {
+            outer_lfp: LFP::default(),
+            func_data: std::ptr::null(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -400,10 +423,6 @@ impl Executor {
     fn set_context_visibility(&mut self, visi: Visibility) {
         self.lexical_class.last_mut().unwrap().visibility = visi;
     }
-
-    fn class_context_stack(&self) -> &[Cref] {
-        &self.lexical_class
-    }
 }
 
 impl Executor {
@@ -411,8 +430,8 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
-        let current = self.class_context_stack();
-        globals.find_constant(site_id, current)
+        let current_func = unsafe { self.cfp.method_func_id() };
+        globals.find_constant(site_id, current_func)
     }
 
     fn set_constant(&self, globals: &mut Globals, name: IdentId, val: Value) {

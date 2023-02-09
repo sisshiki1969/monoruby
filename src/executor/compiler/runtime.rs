@@ -23,7 +23,19 @@ pub(super) extern "C" fn find_method(
     Some(std::ptr::NonNull::new(func_data as *const _ as _).unwrap())
 }
 
-pub(super) extern "C" fn get_func_data(globals: &mut Globals, func_id: FuncId) -> &FuncData {
+pub(super) extern "C" fn get_classdef_data<'a>(
+    executor: &mut Executor,
+    globals: &'a mut Globals,
+    func_id: FuncId,
+    self_value: Module,
+) -> &'a FuncData {
+    let current_func = unsafe { executor.cfp.method_func_id() };
+    let mut lexical_context = globals.func[current_func]
+        .as_ruby_func()
+        .lexical_context
+        .clone();
+    lexical_context.push(self_value);
+    globals.func[func_id].as_ruby_func_mut().lexical_context = lexical_context;
     globals.compile_on_demand(func_id)
 }
 
@@ -32,14 +44,9 @@ pub(super) extern "C" fn get_block_data(
     block_handler: Option<BlockHandler>,
     interp: &Executor,
 ) -> BlockData {
-    if let Some(block_handler) = block_handler {
-        globals.get_block_data(block_handler, interp)
-    } else {
-        BlockData {
-            outer_lfp: LFP::default(),
-            func_data: std::ptr::null(),
-        }
-    }
+    block_handler
+        .map(|bh| globals.get_block_data(bh, interp))
+        .unwrap_or_default()
 }
 
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
@@ -331,6 +338,11 @@ pub(super) extern "C" fn define_method(
         module_function,
         visibility,
     } = executor.get_class_context();
+    let current_func = unsafe { executor.cfp.method_func_id() };
+    globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
+        .as_ruby_func()
+        .lexical_context
+        .clone();
     globals.add_method(class_id, name, func, visibility);
     if module_function {
         globals.add_singleton_method(class_id, name, func, visibility);
@@ -339,12 +351,17 @@ pub(super) extern "C" fn define_method(
 }
 
 pub(super) extern "C" fn singleton_define_method(
-    _executor: &mut Executor,
+    executor: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
     obj: Value,
 ) {
+    let current_func = unsafe { executor.cfp.method_func_id() };
+    globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
+        .as_ruby_func()
+        .lexical_context
+        .clone();
     let class_id = globals.get_singleton(obj).class_id();
     globals.add_method(class_id, name, func, Visibility::Public);
     globals.class_version_inc();

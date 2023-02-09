@@ -4,18 +4,13 @@ use crate::*;
 // IO class
 //
 
-pub(super) fn init(_globals: &mut Globals) {
+pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_singleton_func(IO_CLASS, "new", now, 0);
-    //globals.define_builtin_func(IO_CLASS, "-", sub, 1);
+    globals.define_builtin_func(IO_CLASS, "sync", sync, 0);
+    globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
 }
 
-/*
-/// ### Time.new
-/// - new -> Time
-/// - now -> Time
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
-extern "C" fn now(
+extern "C" fn sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
     _self_val: Value,
@@ -23,9 +18,19 @@ extern "C" fn now(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(Value::nil())
+    Some(Value::bool(false))
 }
-*/
+
+extern "C" fn assign_sync(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(arg[0])
+}
 
 #[cfg(test)]
 mod test {
@@ -33,6 +38,11 @@ mod test {
 
     #[test]
     fn test() {
-        run_test("");
+        run_test_no_result_check(
+            r#"
+            $stdin.sync
+            $stdin.sync = true
+        "#,
+        );
     }
 }

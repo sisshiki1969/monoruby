@@ -238,10 +238,11 @@ impl Codegen {
             testq rax, rax; // rax: Option<Value>
             jeq  jit_return;
             movq r15, rax; // r15 <- self
-            movl rsi, (func_id.get());  // rdx <- func_id
-            //movq rdi, rbx;  // &mut Interp
-            movq rdi, r12;  // &mut Globals
-            movq rax, (runtime::get_func_data);
+            movq rcx, rax; // rcx <- self
+            movl rdx, (func_id.get());  // rdx <- func_id
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::get_classdef_data);
             call rax; // rax <- &FuncData
 
             movq r8, rax;

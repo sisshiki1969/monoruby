@@ -1691,4 +1691,65 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_constant_in_method() {
+        run_test(
+            r#"
+            class C
+              CONST = 1
+              def f
+                a = 0;
+                5.times { a += CONST }
+                a
+              end
+            end
+            CONST = 2
+            C.new.f
+        "#,
+        );
+        run_test(
+            r#"
+            class C
+                CONST = 1
+            end
+            CONST = 2
+            [CONST, C::CONST]
+        "#,
+        );
+        run_test(
+            r#"
+            $a = []
+            class Foo
+                CONST = 'Foo'
+            end
+          
+            class Bar
+                CONST = 'Bar'
+                class Baz < Foo
+                    $a << CONST             # => "Bar"      外側の定数
+                    # この場合、親クラスの定数は明示的に指定しなければ見えない
+                    $a << Foo::CONST        # => "Foo"
+                end
+            end
+            $a
+        "#,
+        );
+        run_test_with_prelude(
+            "$a",
+            r#"
+            $a = []
+            class Foo
+                CONST = 'Foo'
+            end
+          
+            class Bar < Foo
+                $a << CONST               # => "Foo"
+                CONST = 'Bar'         # Bar の定数 CONST を定義
+                $a << CONST               # => "Bar"  (Foo::CONST は隠蔽される)
+                $a << Foo::CONST          # => "Foo"  (:: 演算子で明示すれば見える)
+            end
+        "#,
+        );
+    }
 }

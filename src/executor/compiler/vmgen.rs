@@ -1172,15 +1172,18 @@ impl Codegen {
     fn class_def_sub(&mut self) {
         let vm_return = self.vm_return;
         monoasm! { self.jit,
-            pushq r13;
-            pushq r15;
             testq rax, rax; // rax: Option<Value>
             jeq  vm_return;
 
+            pushq r13;
+            pushq r15;
+
             movq r15, rax; // r15 <- self
-            movl rsi, [r13 - 4];  // rdx <- func_id
-            movq rdi, r12;  // &mut Globals
-            movq rax, (runtime::get_func_data);
+            movq rcx, rax; // rcx <- self
+            movl rdx, [r13 - 4];  // rdx <- func_id
+            movq rdi, rbx;  // &mut Executor
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::get_classdef_data);
             call rax; // rax <- &FuncData
 
             movq r8, rax;

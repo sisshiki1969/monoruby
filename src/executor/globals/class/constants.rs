@@ -36,11 +36,7 @@ impl Globals {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    pub(crate) fn find_constant(
-        &mut self,
-        id: ConstSiteId,
-        class_context: &[Cref],
-    ) -> Option<Value> {
+    pub(crate) fn find_constant(&mut self, id: ConstSiteId, current_func: FuncId) -> Option<Value> {
         let ConstSiteInfo {
             toplevel,
             mut prefix,
@@ -56,13 +52,20 @@ impl Globals {
             }
             self.get_constant_checked(parent, name)
         } else if prefix.is_empty() {
-            match self.search_lexical_stack(name, class_context) {
+            match self.search_lexical_stack(name, current_func) {
                 Some(v) => Some(v),
-                _ => self.get_constant_checked(OBJECT_CLASS, name),
+                _ => {
+                    let class = self.func[current_func]
+                        .as_ruby_func()
+                        .lexical_context
+                        .last()
+                        .map_or(OBJECT_CLASS, |m| m.class_id());
+                    self.search_superclass(class, name)
+                }
             }
         } else {
             let parent = prefix.remove(0);
-            let mut parent = match self.search_lexical_stack(parent, class_context) {
+            let mut parent = match self.search_lexical_stack(parent, current_func) {
                 Some(v) => v,
                 None => self.get_constant_checked(OBJECT_CLASS, parent)?,
             }
@@ -93,10 +96,26 @@ impl Globals {
         }
     }
 
-    fn search_lexical_stack(&self, name: IdentId, class_context: &[Cref]) -> Option<Value> {
-        class_context
+    fn search_superclass(&mut self, mut class_id: ClassId, name: IdentId) -> Option<Value> {
+        loop {
+            match self.get_constant(class_id, name) {
+                Some(v) => return Some(v),
+                None => match class_id.get_obj(self).superclass() {
+                    Some(class) => class_id = class.class_id(),
+                    None => break,
+                },
+            };
+        }
+        self.err_uninitialized_constant(name);
+        None
+    }
+
+    fn search_lexical_stack(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
+        self.func[current_func]
+            .as_ruby_func()
+            .lexical_context
             .iter()
             .rev()
-            .find_map(|class| self.get_constant(class.class_id, name))
+            .find_map(|module| self.get_constant(module.class_id(), name))
     }
 }
