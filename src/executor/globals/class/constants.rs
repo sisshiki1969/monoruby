@@ -43,40 +43,21 @@ impl Globals {
             name,
             ..
         } = self.func[id].clone();
-        if toplevel {
-            let mut parent = OBJECT_CLASS;
-            for constant in prefix {
-                parent = self
-                    .get_constant_checked(parent, constant)?
-                    .expect_class_or_module(self)?;
-            }
-            self.get_constant_checked(parent, name)
+        let mut parent = if toplevel {
+            OBJECT_CLASS
         } else if prefix.is_empty() {
-            match self.search_lexical_stack(name, current_func) {
-                Some(v) => Some(v),
-                _ => {
-                    let class = self.func[current_func]
-                        .as_ruby_func()
-                        .lexical_context
-                        .last()
-                        .map_or(OBJECT_CLASS, |m| m.class_id());
-                    self.search_superclass(class, name)
-                }
-            }
+            return self.search_constant(name, current_func);
         } else {
             let parent = prefix.remove(0);
-            let mut parent = match self.search_lexical_stack(parent, current_func) {
-                Some(v) => v,
-                None => self.get_constant_checked(OBJECT_CLASS, parent)?,
-            }
-            .expect_class_or_module(self)?;
-            for constant in prefix {
-                parent = self
-                    .get_constant_checked(parent, constant)?
-                    .expect_class_or_module(self)?;
-            }
-            self.get_constant_checked(parent, name)
+            self.search_constant(parent, current_func)?
+                .expect_class_or_module(self)?
+        };
+        for constant in prefix {
+            parent = self
+                .get_constant_checked(parent, constant)?
+                .expect_class_or_module(self)?;
         }
+        self.get_constant_checked(parent, name)
     }
 }
 
@@ -96,17 +77,34 @@ impl Globals {
         }
     }
 
-    fn search_superclass(&mut self, mut class_id: ClassId, name: IdentId) -> Option<Value> {
+    fn search_constant(&mut self, name: IdentId, current_func: FuncId) -> Option<Value> {
+        if let Some(v) = self.search_lexical_stack(name, current_func) {
+            return Some(v);
+        }
+        match self.search_superclass(name, current_func) {
+            Some(v) => Some(v),
+            None => {
+                self.err_uninitialized_constant(name);
+                None
+            }
+        }
+    }
+
+    fn search_superclass(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
+        let mut class_id = self.func[current_func]
+            .as_ruby_func()
+            .lexical_context
+            .last()
+            .map_or(OBJECT_CLASS, |m| m.superclass_id().unwrap_or(OBJECT_CLASS));
         loop {
             match self.get_constant(class_id, name) {
                 Some(v) => return Some(v),
-                None => match class_id.get_obj(self).superclass() {
-                    Some(class) => class_id = class.class_id(),
+                None => match class_id.get_obj(self).superclass_id() {
+                    Some(superclass) => class_id = superclass,
                     None => break,
                 },
             };
         }
-        self.err_uninitialized_constant(name);
         None
     }
 

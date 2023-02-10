@@ -628,7 +628,6 @@ impl FuncInfo {
 pub(crate) struct ISeqInfo {
     /// ID of this function.
     id: Option<FuncId>,
-    outer: Option<FuncId>,
     name: Option<String>,
     /// Bytecode.
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
@@ -672,7 +671,6 @@ impl std::fmt::Debug for ISeqInfo {
 impl ISeqInfo {
     pub(crate) fn new(
         id: Option<FuncId>,
-        outer: Option<FuncId>,
         outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
         args: ArgumentNames,
@@ -684,7 +682,6 @@ impl ISeqInfo {
     ) -> Self {
         let mut info = ISeqInfo {
             id,
-            outer,
             name,
             bytecode: None,
             sourcemap: vec![],
@@ -721,16 +718,7 @@ impl ISeqInfo {
         sourceinfo: SourceInfoRef,
     ) -> Self {
         Self::new(
-            id,
-            Some(outer.0),
-            outer.1,
-            name,
-            args,
-            expand,
-            optional,
-            body,
-            sourceinfo,
-            true,
+            id, outer.1, name, args, expand, optional, body, sourceinfo, true,
         )
     }
 
@@ -745,7 +733,6 @@ impl ISeqInfo {
     ) -> Self {
         Self::new(
             id,
-            None,
             vec![],
             name,
             args,

@@ -7,7 +7,7 @@ pub struct Module(Value);
 impl std::ops::Deref for Module {
     type Target = ModuleInner;
     fn deref(&self) -> &Self::Target {
-        &self.as_ref_val().rvalue().as_class()
+        self.as_ref_val().rvalue().as_class()
     }
 }
 
@@ -89,6 +89,10 @@ impl ModuleInner {
 
     pub fn superclass_value(&self) -> Option<Value> {
         self.superclass.map(|m| m.0)
+    }
+
+    pub fn superclass_id(&self) -> Option<ClassId> {
+        self.superclass.map(|m| m.class_id())
     }
 
     pub fn change_superclass(&mut self, superclass: Option<Module>) {

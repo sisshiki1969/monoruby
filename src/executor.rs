@@ -399,11 +399,10 @@ impl Executor {
     }
 
     fn get_class_context(&self) -> Cref {
-        self.lexical_class.last().cloned().unwrap_or(Cref::new(
-            OBJECT_CLASS,
-            false,
-            Visibility::Private,
-        ))
+        self.lexical_class
+            .last()
+            .cloned()
+            .unwrap_or_else(|| Cref::new(OBJECT_CLASS, false, Visibility::Private))
     }
 
     fn context_class_id(&self) -> ClassId {
@@ -562,7 +561,7 @@ impl Executor {
 
     pub(crate) fn get_special_matches(&self, mut nth: i64) -> Value {
         if nth < 0 {
-            nth = self.sp_matches.len() as i64 + nth
+            nth += self.sp_matches.len() as i64
         }
         if nth >= 0 {
             self.sp_matches

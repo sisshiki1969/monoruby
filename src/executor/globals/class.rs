@@ -218,8 +218,8 @@ impl Globals {
             if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
                 return class;
             }
-            let super_singleton = match original_obj.superclass() {
-                Some(id) => self.get_metaclass(id.class_id()),
+            let super_singleton = match original_obj.superclass_id() {
+                Some(id) => self.get_metaclass(id),
                 None => CLASS_CLASS.get_obj(self),
             };
             let mut original_obj = original_obj.as_val();
@@ -474,13 +474,11 @@ impl Globals {
                             entry.visibility
                         },
                     });
-                } else {
-                    if visi.is_none() {
-                        visi = Some(entry.visibility);
-                    }
+                } else if visi.is_none() {
+                    visi = Some(entry.visibility);
                 }
             }
-            class_id = class_id.get_obj(self).superclass()?.class_id();
+            class_id = class_id.get_obj(self).superclass_id()?;
         }
     }
 

@@ -1187,7 +1187,7 @@ impl Codegen {
                     self.gen_generic_binop(&ctx, pc, kind, ret);
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
-                    if mode.is_float_op(&*pc) {
+                    if mode.is_float_op(&pc) {
                         match mode {
                             OpMode::RR(lhs, rhs) => {
                                 let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
@@ -1210,7 +1210,7 @@ impl Codegen {
                         }
                         self.setflag_float(kind);
                         self.store_rax(ret);
-                    } else if mode.is_integer_op(&*pc) {
+                    } else if mode.is_integer_op(&pc) {
                         self.writeback_binary(&mut ctx, &mode);
                         ctx.dealloc_xmm(ret);
                         let deopt = self.gen_side_deopt(pc, &ctx);

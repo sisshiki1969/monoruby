@@ -288,9 +288,9 @@ pub(super) extern "C" fn define_class(
         Some(val) => {
             val.expect_class_or_module(globals)?;
             if let Some(superclass) = superclass {
-                assert!(!(is_module == 1));
+                assert!(is_module != 1);
                 let superclass_id = superclass.expect_class(globals)?;
-                if Some(superclass_id) != val.as_class().superclass().map(|v| v.class_id()) {
+                if Some(superclass_id) != val.as_class().superclass_id() {
                     globals.err_superclass_mismatch(name);
                     return None;
                 }
@@ -300,7 +300,7 @@ pub(super) extern "C" fn define_class(
         None => {
             let superclass = match superclass {
                 Some(superclass) => {
-                    assert!(!(is_module == 1));
+                    assert!(is_module != 1);
                     superclass.expect_class(globals)?;
                     superclass.as_class()
                 }

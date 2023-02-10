@@ -454,9 +454,9 @@ impl MonorubyErr {
     }
 
     pub(crate) fn no_block_given() -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::LocalJump(format!(
-            "no block given (yield).",
-        )))
+        MonorubyErr::new(MonorubyErrKind::LocalJump(
+            "no block given (yield).".to_string(),
+        ))
     }
 
     pub(crate) fn range(msg: String) -> MonorubyErr {

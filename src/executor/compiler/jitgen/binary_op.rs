@@ -405,7 +405,7 @@ impl Codegen {
             TraceIr::CondBr(_, disp, true, brkind) => {
                 let dest_idx = (index as i32 + disp + 1) as usize;
                 let branch_dest = self.jit.label();
-                if mode.is_float_op(&*pc) {
+                if mode.is_float_op(&pc) {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.xmm_read_binary(ctx, lhs, rhs, pc);
@@ -428,7 +428,7 @@ impl Codegen {
                 } else {
                     self.writeback_binary(ctx, &mode);
                     ctx.dealloc_xmm(ret);
-                    if mode.is_integer_op(&*pc) {
+                    if mode.is_integer_op(&pc) {
                         let deopt = self.gen_side_deopt(pc, ctx);
                         match mode {
                             OpMode::RR(lhs, rhs) => {

@@ -398,10 +398,10 @@ pub(super) extern "C" fn cmp_teq_values(
 ) -> Option<Value> {
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => lhs.eq(&rhs),
-        (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(&rhs),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
         (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.eq(&BigInt::from(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(&rhs),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().eq(&rhs),
         (RV::Float(lhs), RV::Integer(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),

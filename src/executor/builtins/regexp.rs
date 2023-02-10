@@ -90,7 +90,7 @@ extern "C" fn regexp_match(
 ) -> Option<Value> {
     let regex = self_val.is_regex().unwrap();
     let given = arg[0].expect_string(globals)?;
-    let res = match RegexpInfo::find_one(vm, globals, &regex, &given).unwrap() {
+    let res = match RegexpInfo::find_one(vm, globals, regex, &given).unwrap() {
         Some(mat) => Value::new_integer(mat.start() as i64),
         None => Value::nil(),
     };
