@@ -17,9 +17,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "to_s", tos, 0);
     globals.define_builtin_func(STRING_CLASS, "length", length, 0);
     globals.define_builtin_func(STRING_CLASS, "size", length, 0);
+    globals.define_builtin_func(STRING_CLASS, "ljust", ljust, -1);
+    globals.define_builtin_func(STRING_CLASS, "rjust", rjust, -1);
 }
 
+///
 /// ### String#+
+///
 /// - self + other -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
@@ -133,7 +137,9 @@ macro_rules! next_char {
     };
 }
 
+///
 /// ### String#%
+///
 /// - self % args -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
@@ -306,7 +312,9 @@ extern "C" fn rem(
     Some(res)
 }
 
+///
 /// ### String#sub
+///
 /// - sub(pattern, replace) -> String
 /// - sub(pattern) {|matched| .... } -> String
 ///
@@ -323,7 +331,9 @@ extern "C" fn sub(
     Some(Value::new_string(res))
 }
 
+///
 /// ### String#sub
+///
 /// - sub!(pattern, replace) -> self | nil
 /// - sub!(pattern) {|matched| .... } -> self | nil
 ///
@@ -365,7 +375,9 @@ fn sub_main(
     }
 }
 
+///
 /// ### String#gsub
+///
 /// - gsub(pattern, replace) -> String
 /// - gsub(pattern) {|matched| .... } -> String
 /// - gsub(pattern) -> Enumerator
@@ -383,7 +395,9 @@ extern "C" fn gsub(
     Some(Value::new_string(res))
 }
 
+///
 /// ### String#gsub!
+///
 /// - gsub!(pattern, replace) -> self | nil
 /// - gsub!(pattern) {|matched| .... } -> self | nil
 /// - gsub!(pattern) -> Enumerator
@@ -426,7 +440,9 @@ fn gsub_main(
     }
 }
 
+///
 /// ### String#match
+///
 /// - match(regexp, pos = 0) -> MatchData | nil
 /// - match(regexp, pos = 0) {|m| ... } -> object
 ///
@@ -469,6 +485,7 @@ extern "C" fn tos(
 
 ///
 /// ### String#length
+///
 /// - length -> Integer
 /// - size -> Integer
 ///
@@ -483,6 +500,91 @@ extern "C" fn length(
 ) -> Option<Value> {
     let length = self_val.as_string().chars().count();
     Some(Value::new_integer(length as i64))
+}
+
+fn gen_pad(padding: &str, len: usize) -> String {
+    let pad_len = padding.chars().count();
+    let pad_repeat = padding.repeat(len / pad_len);
+    let pad_end: String = padding.chars().take(len % pad_len).collect();
+    format!("{}{}", pad_repeat, pad_end)
+}
+
+///
+/// ### String#ljust
+///
+/// - ljust(width, padding = ' ') -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
+extern "C" fn ljust(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let padding = if len == 2 {
+        let arg = arg[1];
+        arg.expect_string(globals)?.to_string()
+    } else {
+        " ".to_string()
+    };
+    if padding.len() == 0 {
+        globals.err_zero_width_padding();
+        return None;
+    };
+    let lhs = self_val.as_string();
+    let width = arg[0].coerce_to_fixnum(globals)?;
+    let str_len = lhs.chars().count();
+    if width <= 0 || width as usize <= str_len {
+        return Some(Value::new_string(lhs));
+    }
+    let tail = width as usize - str_len;
+    Some(Value::new_string(format!(
+        "{}{}",
+        lhs,
+        gen_pad(&padding, tail)
+    )))
+}
+
+///
+/// ### String#rjust
+///
+/// - rjust(width, padding = ' ') -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
+extern "C" fn rjust(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let padding = if len == 2 {
+        let arg = arg[1];
+        arg.expect_string(globals)?.to_string()
+    } else {
+        " ".to_string()
+    };
+    if padding.len() == 0 {
+        globals.err_zero_width_padding();
+        return None;
+    };
+    let lhs = self_val.as_string();
+    let width = arg[0].coerce_to_fixnum(globals)?;
+    let str_len = lhs.chars().count();
+    if width <= 0 || width as usize <= str_len {
+        return Some(Value::new_string(lhs));
+    }
+    let tail = width as usize - str_len;
+    Some(Value::new_string(format!(
+        "{}{}",
+        gen_pad(&padding, tail),
+        lhs
+    )))
 }
 
 #[cfg(test)]
@@ -618,5 +720,23 @@ mod test {
     #[test]
     fn string_length() {
         run_test(r##""本日は快晴なり".length"##);
+    }
+
+    #[test]
+    fn string_ljust() {
+        run_test(r##""戦闘妖精".ljust 11"##);
+        run_test(r##""戦闘妖精".ljust 11,"$""##);
+        run_test(r##""戦闘妖精".ljust 11,"123""##);
+        run_test_error(r##""戦闘妖精".ljust"##);
+        run_test_error(r##""戦闘妖精".ljust 8, """##);
+    }
+
+    #[test]
+    fn string_rjust() {
+        run_test(r##""戦闘妖精".rjust 11"##);
+        run_test(r##""戦闘妖精".rjust 11,"$""##);
+        run_test(r##""戦闘妖精".rjust 11,"123""##);
+        run_test_error(r##""戦闘妖精".rjust"##);
+        run_test_error(r##""戦闘妖精".rjust 8, """##);
     }
 }

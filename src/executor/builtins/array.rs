@@ -11,9 +11,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
+    globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
 }
 
+///
 /// ### Array.new
+///
 /// - new(size = 0, val = nil) -> Array
 /// - new(ary) -> Array
 /// - new(size) {|index| ... } -> Array
@@ -35,7 +39,9 @@ extern "C" fn new(
     Some(obj)
 }
 
+///
 /// ### Array#length
+///
 /// - length -> Integer
 /// - size -> Integer
 ///
@@ -52,7 +58,9 @@ extern "C" fn size(
     Some(Value::new_integer(len as i64))
 }
 
+///
 /// ### Array#+
+///
 /// - self + other -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
@@ -76,7 +84,9 @@ extern "C" fn add(
     Some(Value::new_array(lhs))
 }
 
+///
 /// ### Array#<<
+///
 /// - self << obj -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
@@ -92,7 +102,9 @@ extern "C" fn shl(
     Some(self_val)
 }
 
+///
 /// ### Array#[]=
+///
 /// - self[nth] = val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
@@ -111,6 +123,42 @@ extern "C" fn index_assign(
     } else {
         unimplemented!()
     }
+}
+
+///
+/// ### Array#inject
+///
+/// - inject(init = self.first) {|result, item| ... } -> object
+/// - reduce(init = self.first) {|result, item| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
+extern "C" fn inject(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block_handler: Option<BlockHandler>,
+) -> Option<Value> {
+    let bh = match block_handler {
+        Some(bh) => bh,
+        None => {
+            globals.err_no_block_given();
+            return None;
+        }
+    };
+    globals.check_number_of_arguments(len, 0..=1)?;
+    let ary = self_val.as_array();
+    let mut iter = ary.iter();
+    let mut res = if len == 0 {
+        iter.next().cloned().unwrap_or_default()
+    } else {
+        arg[0]
+    };
+    for elem in iter {
+        res = vm.invoke_block(globals, bh, &vec![res, *elem])?;
+    }
+    Some(res)
 }
 
 #[cfg(test)]
@@ -187,5 +235,12 @@ mod test {
         a
         "##,
         );
+    }
+
+    #[test]
+    fn inject() {
+        run_test(r##"[2, 3, 4, 5].inject(0) {|result, item| result + item }"##);
+        run_test(r##"[2, 3, 4, 5].inject {|result, item| result + item }"##);
+        run_test(r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##);
     }
 }

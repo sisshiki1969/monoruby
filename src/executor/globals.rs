@@ -337,7 +337,7 @@ impl Globals {
     pub(crate) fn val_tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
-            RV::Nil => "nil".to_string(),
+            RV::Nil => "".to_string(),
             RV::Bool(b) => format!("{:?}", b),
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),

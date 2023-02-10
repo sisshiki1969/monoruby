@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
@@ -43,7 +44,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
 
+///
 /// ### Object.new
+///
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
@@ -63,7 +66,9 @@ extern "C" fn object_new(
     Some(obj)
 }
 
+///
 /// ### Kernel#puts
+///
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
@@ -79,7 +84,9 @@ extern "C" fn is_a(
     Some(Value::bool(self_val.is_kind_of(globals, class)))
 }
 
+///
 /// ### Kernel#puts
+///
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
@@ -113,7 +120,9 @@ extern "C" fn puts(
     Some(Value::nil())
 }
 
+///
 /// ### Kernel#print
+///
 /// - print(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
@@ -131,7 +140,27 @@ extern "C" fn print(
     Some(Value::nil())
 }
 
+///
+/// ### Object#to_s
+///
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
+extern "C" fn to_s(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let s = self_val.to_s(globals);
+    Some(Value::new_string(s))
+}
+
+///
 /// ### Kernel#p
+///
 /// - p(*arg) -> object | Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
@@ -196,7 +225,9 @@ extern "C" fn dump(
     Some(Value::nil())
 }
 
+///
 /// ### Object#respond_to?
+///
 /// - respond_to?(name, include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
@@ -216,7 +247,9 @@ extern "C" fn respond_to(
     Some(Value::bool(globals.check_method(self_val, name).is_some()))
 }
 
+///
 /// ### Object#inspect
+///
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
@@ -232,7 +265,9 @@ extern "C" fn inspect(
     Some(Value::new_string(s))
 }
 
+///
 /// ### Object#class
+///
 /// - class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
@@ -247,7 +282,9 @@ extern "C" fn class(
     Some(self_val.real_class(globals).as_val())
 }
 
+///
 /// ### Object#instance_of?
+///
 /// - instance_of?(klass) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
@@ -263,7 +300,9 @@ extern "C" fn instance_of(
     Some(Value::bool(b))
 }
 
+///
 /// ### Kernel.#rand
+///
 /// - rand(max = 0) -> Integer | Float
 /// - rand(range) -> Integer | Float | nil
 ///
@@ -291,7 +330,9 @@ extern "C" fn rand(
     }
 }
 
+///
 /// ### Object#singleton_class
+///
 /// - singleton_class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
@@ -306,7 +347,9 @@ extern "C" fn singleton_class(
     Some(self_val.get_singleton(globals))
 }
 
+///
 /// ### Object#instance_variable_defined?
+///
 /// - instance_variable_defined?(var) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
@@ -327,7 +370,9 @@ extern "C" fn instance_variable_defined(
     Some(Value::bool(b))
 }
 
+///
 /// ### Object#instance_variable_set
+///
 /// - instance_variable_set(var, value) -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
@@ -345,7 +390,9 @@ extern "C" fn instance_variable_set(
     Some(val)
 }
 
+///
 /// ### Object#instance_variable_get
+///
 /// - instance_variable_get(var) -> Object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
@@ -362,7 +409,9 @@ extern "C" fn instance_variable_get(
     Some(v)
 }
 
+///
 /// ### Kernel.#Integer
+///
 /// - Integer(arg, base = 0, exception: true) -> Integer | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
@@ -397,7 +446,9 @@ extern "C" fn kernel_integer(
     None
 }
 
+///
 /// ### Kernel.#require
+///
 /// - require(feature) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
