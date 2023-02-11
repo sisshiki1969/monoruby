@@ -76,8 +76,8 @@ impl std::ops::IndexMut<FuncId> for Funcs {
     }
 }
 
-impl GC<RValue> for Funcs {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for Funcs {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.0.iter().for_each(|info| info.mark(alloc))
     }
 }
@@ -315,8 +315,8 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
     }
 }
 
-impl GC<RValue> for FnStore {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for FnStore {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
     }
 }
@@ -442,8 +442,8 @@ pub(crate) enum FuncKind {
     AttrWriter { ivar_name: IdentId },
 }
 
-impl GC<RValue> for FuncKind {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for FuncKind {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         match self {
             FuncKind::ISeq(info) => info.mark(alloc),
             _ => {}
@@ -472,8 +472,8 @@ pub(crate) struct FuncInfo {
     pub(in crate::executor) kind: FuncKind,
 }
 
-impl GC<RValue> for FuncInfo {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for FuncInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.kind.mark(alloc);
     }
 }

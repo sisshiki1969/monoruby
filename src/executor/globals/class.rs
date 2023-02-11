@@ -532,8 +532,8 @@ pub(super) struct ClassInfo {
     ivar_names: HashMap<IdentId, IvarId>,
 }
 
-impl GC<RValue> for ClassInfo {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for ClassInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
@@ -582,8 +582,8 @@ impl std::ops::IndexMut<ClassId> for ClassStore {
     }
 }
 
-impl GC<RValue> for ClassStore {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for ClassStore {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.classes.iter().for_each(|info| info.mark(alloc));
     }
 }

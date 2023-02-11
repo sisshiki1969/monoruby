@@ -209,8 +209,8 @@ impl IntoIterator for HashInfo {
     }
 }
 
-impl GC<RValue> for HashInfo {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for HashInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         for (k, v) in self.iter() {
             k.mark(alloc);
             v.mark(alloc);

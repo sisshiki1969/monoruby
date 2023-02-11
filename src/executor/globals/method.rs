@@ -1,6 +1,20 @@
 use super::*;
 
 impl Globals {
+    fn new_builtin_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arity: i32,
+        visi: Visibility,
+    ) -> FuncId {
+        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
+        let name_id = IdentId::get_ident_id(name);
+        self.add_method(class_id, name_id, func_id, visi);
+        func_id
+    }
+
     pub(crate) fn define_builtin_func(
         &mut self,
         class_id: ClassId,
@@ -8,10 +22,7 @@ impl Globals {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
-        func_id
+        self.new_builtin_func(class_id, name, address, arity, Visibility::Public)
     }
 
     pub(crate) fn define_private_builtin_func(
@@ -21,9 +32,21 @@ impl Globals {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
+        self.new_builtin_func(class_id, name, address, arity, Visibility::Private)
+    }
+
+    pub(crate) fn define_builtin_module_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        arity: i32,
+    ) -> FuncId {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_ident_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Private);
+        let class_id = self.get_metaclass(class_id).class_id();
+        self.add_method(class_id, name_id, func_id, Visibility::Public);
         func_id
     }
 
@@ -35,9 +58,7 @@ impl Globals {
         arity: i32,
         inline_id: InlineMethod,
     ) -> FuncId {
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
+        let func_id = self.define_builtin_func(class_id, name, address, arity);
         self.func.add_inline(func_id, inline_id);
         func_id
     }
@@ -50,27 +71,8 @@ impl Globals {
         arity: i32,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).class_id();
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
-        func_id
+        self.define_builtin_func(class_id, name, address, arity)
     }
-
-    /*pub(crate) fn define_builtin_singleton_func_inlinable(
-        &mut self,
-        class_id: ClassId,
-        name: &str,
-        address: BuiltinFn,
-        arity: i32,
-        inline_id: InlineMethod,
-    ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).class_id();
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
-        self.func.add_inline(func_id, inline_id);
-        func_id
-    }*/
 
     pub(crate) fn define_builtin_module_func_inlinable(
         &mut self,
@@ -80,11 +82,7 @@ impl Globals {
         arity: i32,
         inline_id: InlineMethod,
     ) -> FuncId {
-        let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
-        let name_id = IdentId::get_ident_id(name);
-        self.add_method(class_id, name_id, func_id, Visibility::Private);
-        let class_id = self.get_metaclass(class_id).class_id();
-        self.add_method(class_id, name_id, func_id, Visibility::Public);
+        let func_id = self.define_builtin_module_func(class_id, name, address, arity);
         self.func.add_inline(func_id, inline_id);
         func_id
     }

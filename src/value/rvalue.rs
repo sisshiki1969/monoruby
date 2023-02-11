@@ -120,8 +120,8 @@ impl RValue {
     }
 }
 
-impl GC<RValue> for RValue {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for RValue {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         if alloc.gc_check_and_mark(self) {
             return;
         }
@@ -171,7 +171,7 @@ impl GC<RValue> for RValue {
     }
 }
 
-impl GCBox for RValue {
+impl alloc::GCBox for RValue {
     fn free(&mut self) {}
 
     fn next(&self) -> Option<std::ptr::NonNull<RValue>> {
@@ -672,7 +672,7 @@ impl RValue {
     /// This method consumes `self` and allocates it on the heap, returning `Value`,
     /// a wrapped raw pointer.  
     pub(crate) fn pack(self) -> Value {
-        let ptr = ALLOC.with(|alloc| alloc.borrow_mut().alloc(self));
+        let ptr = alloc::ALLOC.with(|alloc| alloc.borrow_mut().alloc(self));
         Value::from_ptr(ptr)
     }
 }

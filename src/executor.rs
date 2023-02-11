@@ -272,8 +272,8 @@ pub struct Executor {
     sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
 }
 
-impl GC<RValue> for Executor {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for Executor {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.sp_matches.iter().for_each(|v| {
             if let Some(v) = v {
                 v.mark(alloc)
@@ -1375,7 +1375,7 @@ impl Meta {
 #[repr(C)]
 struct FuncData {
     /// address of function.
-    codeptr: Option<CodePtr>,
+    codeptr: Option<monoasm::CodePtr>,
     /// metadata of this function.
     meta: Meta,
     /// the address of program counter
@@ -1395,7 +1395,7 @@ extern "C" fn exec_jit_compile(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
-) -> CodePtr {
+) -> monoasm::CodePtr {
     globals.func[func_id].data.meta.set_jit();
     let label = globals.jit_compile_ruby(func_id, self_value, None);
     globals.codegen.jit.get_label_address(label)
@@ -1405,7 +1405,7 @@ extern "C" fn exec_jit_recompile(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
-) -> CodePtr {
+) -> monoasm::CodePtr {
     let codeptr = exec_jit_compile(globals, func_id, self_value);
     let target = globals.func[func_id].data.codeptr.unwrap();
     let offset = codeptr - target - 5;
@@ -1449,7 +1449,7 @@ mod test {
         meta.set_jit();
         assert_eq!(true, meta.is_class_def());
         assert_eq!(8, std::mem::size_of::<i64>());
-        assert_eq!(8, std::mem::size_of::<Option<CodePtr>>());
+        assert_eq!(8, std::mem::size_of::<Option<monoasm::CodePtr>>());
         assert_eq!(8, std::mem::size_of::<BcPc>());
         assert_eq!(8, std::mem::size_of::<Meta>());
     }
