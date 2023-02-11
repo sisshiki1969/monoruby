@@ -308,6 +308,21 @@ impl alloc::GC<RValue> for Executor {
 }
 
 impl Executor {
+    pub fn init(globals: &mut Globals) -> Self {
+        let mut executor = Self::default();
+        let path = std::path::Path::new("startup/startup.rb");
+        let code = include_str!("../startup/startup.rb").to_string();
+        match executor.eval_script(globals, code, path) {
+            Some(_) => {}
+            None => {
+                let err = globals.take_error().unwrap();
+                err.show_error_message_and_all_loc();
+                panic!("error occurred in startup.");
+            }
+        };
+        executor
+    }
+
     fn within_stack(&self, lfp: LFP) -> bool {
         self.lfp_top >= lfp && lfp.0 > self.cfp.0 as _
     }

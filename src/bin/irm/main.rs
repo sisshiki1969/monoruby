@@ -28,13 +28,11 @@ fn main() {
     let mut rl = Editor::<()>::new().unwrap();
     let mut globals = Globals::new(args.warning, args.no_jit);
 
-    globals.exec_startup();
-
     let mut cont_mode = false;
     let mut buf = String::new();
     let mut script_line = 0;
     let mut context = None;
-    let mut interp = Executor::default();
+    let mut interp = Executor::init(&mut globals);
     loop {
         let prompt = format!(
             "monoruby:{:03}{} ",

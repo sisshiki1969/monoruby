@@ -126,18 +126,6 @@ impl Globals {
             IdentId::_NAME,
             Value::new_string_from_str("main"),
         );
-        globals
-    }
-
-    pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
-        let mut executor = Executor::default();
-        match executor.eval_script(self, code.to_string(), path) {
-            Some(val) => Ok(val),
-            None => Err(self.take_error().unwrap()),
-        }
-    }
-
-    pub fn exec_startup(&mut self) {
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
         let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
@@ -149,28 +137,27 @@ impl Globals {
             .iter()
             .map(|v| v.as_string())
             .collect();
-        self.lib_directories.append(&mut lib);
-        let path = std::path::Path::new("startup/startup.rb");
-        let code = include_str!("../../startup/startup.rb").to_string();
-        let mut executor = Executor::default();
-        match executor.eval_script(self, code, path) {
-            Some(_) => {}
-            None => {
-                let err = self.take_error().unwrap();
-                err.show_error_message_and_all_loc();
-                panic!("error occurred in startup.");
-            }
-        };
+        globals.lib_directories.append(&mut lib);
+        // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
         let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
         let val = Value::new_string_from_str(&description);
-        self.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
         let val = Value::new_string_from_str(pcg_name);
-        self.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
         let val = Value::new_string_from_str(pcg_version);
-        self.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
-        self.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
+        globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
+        globals
+    }
+
+    pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
+        let mut executor = Executor::init(self);
+        match executor.eval_script(self, code.to_string(), path) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error().unwrap()),
+        }
     }
 
     pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {

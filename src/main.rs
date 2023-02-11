@@ -39,7 +39,6 @@ fn main() {
         })
         .collect();
     globals.lib_directories.append(&mut lib);
-    globals.exec_startup();
 
     if !args.exec.is_empty() {
         let path = std::path::Path::new("irm");
@@ -55,7 +54,7 @@ fn main() {
         return;
     }
 
-    let mut executor = Executor::default();
+    let mut executor = Executor::init(&mut globals);
     let (code, path) = match args.file {
         Some(file_name) => {
             let path = std::path::PathBuf::from(&file_name);
