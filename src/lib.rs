@@ -7,16 +7,16 @@
 mod alloc;
 mod executor;
 mod id_table;
+pub mod rusage;
 #[cfg(test)]
 mod tests;
 mod value;
 
-use alloc::*;
+// use alloc::*;
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 use id_table::*;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
-use monoasm::CodePtr;
 use value::*;
 
 pub use value::rvalue::regexp::RegexpInfo;

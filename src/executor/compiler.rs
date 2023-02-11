@@ -298,7 +298,7 @@ impl Codegen {
         codegen.class_version_addr =
             codegen.jit.get_label_address(class_version).as_ptr() as *mut u32;
         let address = codegen.jit.get_label_address(alloc_flag).as_ptr() as *mut u32;
-        ALLOC.with(|alloc| {
+        alloc::ALLOC.with(|alloc| {
             alloc.borrow_mut().set_alloc_flag_address(address);
         });
         codegen

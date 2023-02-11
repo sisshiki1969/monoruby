@@ -32,14 +32,14 @@ struct Root<'a, 'b> {
     executor: &'b Executor,
 }
 
-impl<'a, 'b> GC<RValue> for Root<'a, 'b> {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.globals.mark(alloc);
         self.executor.mark(alloc);
     }
 }
 
-impl<'a, 'b> GCRoot<RValue> for Root<'a, 'b> {
+impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
     fn startup_flag(&self) -> bool {
         true
     }
@@ -85,8 +85,8 @@ pub struct Globals {
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
 }
 
-impl GC<RValue> for Globals {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for Globals {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.class.mark(alloc);
         self.func.mark(alloc);
         self.global_vars.values().for_each(|v| v.mark(alloc));
@@ -97,7 +97,7 @@ impl GC<RValue> for Globals {
 /// Execute garbage collection.
 ///
 pub(in crate::executor) extern "C" fn execute_gc(globals: &Globals, executor: &Executor) {
-    ALLOC.with(|alloc| alloc.borrow_mut().check_gc(&Root { globals, executor }));
+    alloc::ALLOC.with(|alloc| alloc.borrow_mut().check_gc(&Root { globals, executor }));
 }
 
 impl Globals {

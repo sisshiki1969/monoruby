@@ -11,6 +11,7 @@ mod math;
 mod module;
 mod object;
 mod proc;
+mod process;
 mod range;
 mod regexp;
 mod string;
@@ -121,6 +122,9 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     let file_class = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
         .class_id();
+    let process_class = globals
+        .define_class_by_str("Process", Some(OBJECT_CLASS.get_obj(globals)), OBJECT_CLASS)
+        .class_id();
 
     object::init(globals);
     integer::init(globals);
@@ -137,6 +141,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     io::init(globals);
     file::init(globals, file_class);
     math::init(globals, math_class);
+    process::init(globals, process_class);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
