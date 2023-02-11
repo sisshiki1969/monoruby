@@ -38,24 +38,24 @@ extern "C" fn times(
     rusage::getrusage(rusage::RusageWho::Self_, &mut self_rusage);
     val.set_instance_var(
         globals,
-        "utime",
+        "@utime",
         Value::new_float(self_rusage.ru_utime.get_f64()),
     );
     val.set_instance_var(
         globals,
-        "stime",
+        "@stime",
         Value::new_float(self_rusage.ru_stime.get_f64()),
     );
     let mut child_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Children, &mut child_rusage);
     val.set_instance_var(
         globals,
-        "cutime",
+        "@cutime",
         Value::new_float(child_rusage.ru_utime.get_f64()),
     );
     val.set_instance_var(
         globals,
-        "cstime",
+        "@cstime",
         Value::new_float(child_rusage.ru_stime.get_f64()),
     );
     Some(val)

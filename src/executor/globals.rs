@@ -284,14 +284,6 @@ impl Globals {
         }
     }
 
-    pub(super) fn execute(
-        &mut self,
-        executor: &mut Executor,
-        func_data: *const FuncData,
-    ) -> Option<Value> {
-        (self.codegen.entry_point)(executor, self, func_data)
-    }
-
     pub(super) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
     }

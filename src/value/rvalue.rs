@@ -150,7 +150,10 @@ impl alloc::GC<RValue> for RValue {
                     });
                 });
             }
-            ObjKind::BIGNUM | ObjKind::FLOAT | ObjKind::TIME | ObjKind::BYTES => {}
+            ObjKind::BIGNUM => {}
+            ObjKind::FLOAT => {}
+            ObjKind::BYTES => {}
+            ObjKind::TIME => {}
             ObjKind::ARRAY | ObjKind::SPLAT => {
                 self.as_array().iter().for_each(|v| v.mark(alloc));
             }
@@ -159,12 +162,14 @@ impl alloc::GC<RValue> for RValue {
                 range.start.mark(alloc);
                 range.end.mark(alloc);
             }
+            ObjKind::PROC => {}
             ObjKind::HASH => {
                 for (k, v) in self.as_hash().iter() {
                     k.mark(alloc);
                     v.mark(alloc);
                 }
             }
+            ObjKind::REGEXP => {}
             ObjKind::IO => {}
             _ => unreachable!("mark"),
         }

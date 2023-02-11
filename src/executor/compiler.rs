@@ -92,6 +92,7 @@ macro_rules! cmp_opt_main {
 ///
 pub struct Codegen {
     pub jit: JitMemory,
+    pub main_object: Value,
     class_version: DestLabel,
     pub(super) class_version_addr: *mut u32,
     alloc_flag: DestLabel,
@@ -145,9 +146,9 @@ impl Codegen {
 
     pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
-        let class_version = jit.const_i32(0);
+        let class_version = jit.const_i32(1);
+        let const_version = jit.const_i64(1);
         let alloc_flag = jit.const_i32(0);
-        let const_version = jit.const_i64(0);
         let entry_panic = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();
@@ -271,6 +272,7 @@ impl Codegen {
         let dispatch = vec![entry_unimpl; 256];
         let mut codegen = Self {
             jit,
+            main_object,
             class_version,
             class_version_addr: std::ptr::null_mut(),
             alloc_flag,

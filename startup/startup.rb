@@ -20,6 +20,6 @@ class Process
   CLOCK_REALTIME_ALARM = 8
   CLOCK_BOOTTIME_ALARM = 9
   class Tms
-    #attr_accessor :utime, :stime, :cutime, :cstime
+    attr_accessor :utime, :stime, :cutime, :cstime
   end
 end

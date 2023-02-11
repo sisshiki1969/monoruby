@@ -81,6 +81,8 @@ impl Codegen {
         monoasm! { self.jit,
             // set meta
             movq rdi, [r13 + 8];
+            //testq rdi, rdi;
+            //jz   slowpath;
             movq rdi, [rdi + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args

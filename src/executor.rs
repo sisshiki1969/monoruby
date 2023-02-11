@@ -339,7 +339,7 @@ impl Executor {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let res = globals.execute(self, main_data);
+        let res = (globals.codegen.entry_point)(self, globals, main_data);
         globals.flush_stdout();
         #[cfg(feature = "log-jit")]
         {
