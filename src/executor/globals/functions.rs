@@ -445,7 +445,7 @@ pub(crate) enum FuncKind {
 impl GC<RValue> for FuncKind {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         match self {
-            FuncKind::ISeq(info) => info.literals.iter().for_each(|v| v.mark(alloc)),
+            FuncKind::ISeq(info) => info.mark(alloc),
             _ => {}
         }
     }
@@ -665,6 +665,12 @@ impl std::fmt::Debug for ISeqInfo {
             self.name,
             self.args.pos_num
         )
+    }
+}
+
+impl GC<RValue> for ISeqInfo {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.lexical_context.iter().for_each(|m| m.mark(alloc))
     }
 }
 

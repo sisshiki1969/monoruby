@@ -17,6 +17,12 @@ impl std::ops::DerefMut for Module {
     }
 }
 
+impl GC<RValue> for Module {
+    fn mark(&self, alloc: &mut Allocator<RValue>) {
+        self.0.mark(alloc);
+    }
+}
+
 impl Module {
     pub(in crate::value) fn new(val: Value) -> Self {
         match val.rvalue().kind() {

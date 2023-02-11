@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(
         OBJECT_CLASS,
         "instance_variable_defined?",
@@ -82,6 +83,23 @@ extern "C" fn is_a(
 ) -> Option<Value> {
     let class = arg[0].expect_class_or_module(globals)?;
     Some(Value::bool(self_val.is_kind_of(globals, class)))
+}
+
+///
+/// ### Object#dup
+///
+/// - dup -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
+extern "C" fn dup(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(self_val.dup())
 }
 
 ///

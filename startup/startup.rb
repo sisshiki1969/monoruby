@@ -3,9 +3,9 @@ class Math
 end
 
 class RbConfig
-  #def self.ruby
-  #  "~/monoruby/target/release/monoruby"
-  #end
+  def self.ruby
+    "~/monoruby/target/release/monoruby"
+  end
 end
 
 class Process
@@ -19,4 +19,7 @@ class Process
   CLOCK_BOOTTIME = 7
   CLOCK_REALTIME_ALARM = 8
   CLOCK_BOOTTIME_ALARM = 9
+  class Tms
+    attr_accessor :cstime, :cutime, :stime, :utime
+  end
 end

@@ -156,6 +156,10 @@ impl Globals {
         self.set_error(MonorubyErr::argumenterr("zero width padding".to_string()));
     }
 
+    pub(crate) fn err_negative_argument(&mut self) {
+        self.set_error(MonorubyErr::argumenterr("negative_argument".to_string()));
+    }
+
     pub(crate) fn err_internal(&mut self, msg: String) {
         self.set_error(MonorubyErr::internalerr(msg));
     }

@@ -167,6 +167,14 @@ impl Value {
         val.deep_copy()
     }
 
+    pub(crate) fn dup(&self) -> Self {
+        if let Some(rv) = self.try_rvalue() {
+            rv.dup().pack()
+        } else {
+            *self
+        }
+    }
+
     pub(crate) fn get(&self) -> u64 {
         self.0.get()
     }
@@ -263,6 +271,10 @@ impl Value {
 
     pub(crate) fn new_string_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
+    }
+
+    pub(crate) fn new_string_from_vec(b: Vec<u8>) -> Self {
+        RValue::new_bytes(b).pack()
     }
 
     pub(crate) fn new_array(ary: ArrayInner) -> Self {

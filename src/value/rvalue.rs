@@ -308,6 +308,58 @@ impl RValue {
         }
     }
 
+    pub(super) fn dup(&self) -> Self {
+        RValue {
+            flags: self.flags,
+            var_table: self.var_table.clone(),
+            kind: unsafe {
+                match self.kind() {
+                    ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                    ObjKind::CLASS | ObjKind::MODULE => ObjKind {
+                        class: self.kind.class.clone(),
+                    },
+                    ObjKind::OBJECT => ObjKind {
+                        object: self.kind.object.clone(),
+                    },
+                    ObjKind::BIGNUM => ObjKind {
+                        bignum: self.kind.bignum.clone(),
+                    },
+                    ObjKind::FLOAT => ObjKind {
+                        float: self.kind.float.clone(),
+                    },
+                    ObjKind::BYTES => ObjKind {
+                        string: self.kind.string.clone(),
+                    },
+                    ObjKind::TIME => ObjKind {
+                        time: self.kind.time.clone(),
+                    },
+                    ObjKind::ARRAY => ObjKind {
+                        array: self.kind.array.clone(),
+                    },
+                    ObjKind::RANGE => ObjKind {
+                        range: self.kind.range.clone(),
+                    },
+                    ObjKind::SPLAT => ObjKind {
+                        array: self.kind.array.clone(),
+                    },
+                    ObjKind::PROC => ObjKind {
+                        proc: self.kind.proc.clone(),
+                    },
+                    ObjKind::HASH => ObjKind {
+                        hash: self.kind.hash.clone(),
+                    },
+                    ObjKind::REGEXP => ObjKind {
+                        regexp: self.kind.regexp.clone(),
+                    },
+                    ObjKind::IO => ObjKind {
+                        io: self.kind.io.clone(),
+                    },
+                    _ => unreachable!("clone()"),
+                }
+            },
+        }
+    }
+
     pub(super) fn class(&self) -> ClassId {
         self.flags.class()
     }
@@ -706,21 +758,13 @@ impl ObjKind {
 #[repr(transparent)]
 struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 #[repr(C)]
 pub struct Range {
     pub start: Value,
     pub end: Value,
     pub exclude_end: u32,
 }
-
-/*impl std::hash::Hash for Range {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.start.hash(state);
-        self.end.hash(state);
-        self.exclude_end.hash(state);
-    }
-}*/
 
 impl Range {
     pub(crate) fn eql(&self, other: &Self) -> bool {
@@ -826,6 +870,17 @@ pub enum IoInfo {
     Stdout(std::io::Stdout),
     Stderr(std::io::Stderr),
     Io {},
+}
+
+impl std::clone::Clone for IoInfo {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Stdin(_) => Self::Stdin(std::io::stdin()),
+            Self::Stdout(_) => Self::Stdout(std::io::stdout()),
+            Self::Stderr(_) => Self::Stderr(std::io::stderr()),
+            Self::Io {} => Self::Io {},
+        }
+    }
 }
 
 impl std::fmt::Display for IoInfo {

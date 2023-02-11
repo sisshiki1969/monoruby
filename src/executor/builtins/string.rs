@@ -8,6 +8,7 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
+    globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "gsub", gsub, -1);
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_, -1);
@@ -19,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "size", length, 0);
     globals.define_builtin_func(STRING_CLASS, "ljust", ljust, -1);
     globals.define_builtin_func(STRING_CLASS, "rjust", rjust, -1);
+    globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
 }
 
 ///
@@ -37,7 +39,34 @@ extern "C" fn add(
 ) -> Option<Value> {
     let mut b = self_val.as_bytes().to_vec();
     b.extend_from_slice(arg[0].as_bytes());
-    Some(Value::new_string_from_slice(&b))
+    Some(Value::new_string_from_vec(b))
+}
+
+///
+/// ### String#*
+///
+/// - self * times -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
+extern "C" fn mul(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let lhs = self_val.as_bytes();
+    let count = match arg[0].coerce_to_fixnum(globals)? {
+        i if i < 0 => {
+            globals.err_negative_argument();
+            return None;
+        }
+        i => i as usize,
+    };
+
+    let res = Value::new_string_from_vec(lhs.repeat(count));
+    Some(res)
 }
 
 fn expect_char(globals: &mut Globals, chars: &mut std::str::Chars) -> Option<char> {
@@ -587,13 +616,43 @@ extern "C" fn rjust(
     )))
 }
 
+///
+/// ### String#empty?
+///
+/// - empty? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/empty=3f.html]
+extern "C" fn empty(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(Value::bool(self_val.as_bytes().is_empty()))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
 
     #[test]
+    fn string() {
+        run_test(r##""文字列".empty?"##);
+        run_test(r##""".empty?"##);
+    }
+
+    #[test]
     fn string_add() {
         run_test(r##"a = "We will"; a + " " + "rock you." "##);
+    }
+
+    #[test]
+    fn string_mul() {
+        run_test(r##""abcde" * 5"##);
+        run_test(r##""機動戦士" * 3"##);
+        run_test_error(r##""機動戦士" * -1"##);
     }
 
     #[test]
