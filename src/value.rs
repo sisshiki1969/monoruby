@@ -30,15 +30,6 @@ impl std::default::Default for Value {
     }
 }
 
-/*impl std::hash::Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self.try_rvalue() {
-            None => self.0.hash(state),
-            Some(rval) => rval.hash(state),
-        }
-    }
-} */
-
 impl GC<RValue> for Value {
     fn mark(&self, alloc: &mut Allocator<RValue>) {
         if let Some(rvalue) = self.try_rvalue() {
@@ -183,6 +174,15 @@ impl Value {
         self.get() & !0x10 != NIL_VALUE
     }
 
+    pub fn set_instance_var(&mut self, globals: &mut Globals, name: &str, val: Value) {
+        globals.set_ivar(*self, IdentId::get_ident_id(name), val);
+    }
+}
+
+//
+// constructors
+//
+impl Value {
     pub const fn nil() -> Self {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }

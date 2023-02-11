@@ -17,8 +17,8 @@ impl std::ops::DerefMut for Module {
     }
 }
 
-impl GC<RValue> for Module {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
+impl alloc::GC<RValue> for Module {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.0.mark(alloc);
     }
 }

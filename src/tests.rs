@@ -108,6 +108,7 @@ pub fn run_test_error(code: &str) {
     #[cfg(debug_assertions)]
     dbg!(code);
     let mut globals = Globals::new(1, false);
+    globals.exec_startup();
     globals
         .compile_and_run(code, std::path::Path::new(""))
         .unwrap_err();
@@ -117,6 +118,7 @@ fn run_test_main(code: &str) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
+    globals.exec_startup();
     let res = globals
         .compile_and_run(code, std::path::Path::new(""))
         .unwrap();

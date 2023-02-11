@@ -668,9 +668,10 @@ impl std::fmt::Debug for ISeqInfo {
     }
 }
 
-impl GC<RValue> for ISeqInfo {
-    fn mark(&self, alloc: &mut Allocator<RValue>) {
-        self.lexical_context.iter().for_each(|m| m.mark(alloc))
+impl alloc::GC<RValue> for ISeqInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.literals.iter().for_each(|v| v.mark(alloc));
+        self.lexical_context.iter().for_each(|m| m.mark(alloc));
     }
 }
 

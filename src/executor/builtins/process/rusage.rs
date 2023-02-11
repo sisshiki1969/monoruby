@@ -2,12 +2,20 @@
 // getrusage
 //
 
+use num::ToPrimitive;
+
 /// wrapper for libc::timeval
 #[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub struct Timeval {
     pub sec: i64,
     pub usec: i64,
+}
+
+impl Timeval {
+    pub fn get_f64(&self) -> f64 {
+        self.sec.to_f64().unwrap() + self.usec.to_f64().unwrap() / 1e6
+    }
 }
 
 /// wrapper for libc::rusage
@@ -40,7 +48,7 @@ pub enum RusageWho {
     Thread,
 }
 
-pub fn rusage(who: RusageWho, usage: &mut Rusage) {
+pub fn getrusage(who: RusageWho, usage: &mut Rusage) {
     unsafe {
         let who = match who {
             RusageWho::Self_ => libc::RUSAGE_SELF,

@@ -7,7 +7,6 @@
 mod alloc;
 mod executor;
 mod id_table;
-pub mod rusage;
 #[cfg(test)]
 mod tests;
 mod value;

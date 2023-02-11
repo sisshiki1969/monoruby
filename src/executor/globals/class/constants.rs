@@ -24,6 +24,16 @@ impl Globals {
         self.class[class_id].constants.get(&name).cloned()
     }
 
+    pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Option<Value> {
+        let mut class = OBJECT_CLASS;
+        for name in name {
+            class = self
+                .get_constant(class, IdentId::get_ident_id(name))?
+                .expect_class_or_module(self)?;
+        }
+        Some(class.get_obj(self).as_val())
+    }
+
     ///
     /// Get constant names in the class of *class_id*.
     ///

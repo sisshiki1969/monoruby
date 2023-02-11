@@ -122,9 +122,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     let file_class = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
         .class_id();
-    let process_class = globals
-        .define_class_by_str("Process", Some(OBJECT_CLASS.get_obj(globals)), OBJECT_CLASS)
-        .class_id();
+    let process_class = globals.define_module("Process").class_id();
 
     object::init(globals);
     integer::init(globals);

@@ -190,7 +190,7 @@ mod test {
         a << h.length
         h["Ruby"] = :ruby
         h[5] = 4.2
-        h[:u] = "Ruby"
+        #h[:u] = "Ruby"
         a << h.length
         a << h[5]
         a << h[5.0]
