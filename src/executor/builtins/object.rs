@@ -41,6 +41,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
@@ -481,7 +482,30 @@ extern "C" fn require(
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
     let (file_body, path) = globals.load_lib(path)?;
-    executor.eval_script(globals, file_body, &path);
+    executor.eval_script(globals, file_body, &path)?;
+    Some(Value::bool(true))
+}
+
+///
+/// ### Kernel.#require_relative
+///
+/// - require_relative(relative_feature) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
+extern "C" fn require_relative(
+    executor: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let mut path = globals.current_source_path(executor);
+    path.pop();
+    let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
+    path.extend(&feature);
+    let (file_body, path) = globals.load_lib(&path)?;
+    executor.eval_script(globals, file_body, &path)?;
     Some(Value::bool(true))
 }
 

@@ -29,7 +29,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     func_id: FuncId,
     self_value: Module,
 ) -> &'a FuncData {
-    let current_func = unsafe { executor.cfp.method_func_id() };
+    let current_func = executor.cfp.method_func_id();
     let mut lexical_context = globals.func[current_func]
         .as_ruby_func()
         .lexical_context
@@ -338,7 +338,7 @@ pub(super) extern "C" fn define_method(
         module_function,
         visibility,
     } = executor.get_class_context();
-    let current_func = unsafe { executor.cfp.method_func_id() };
+    let current_func = executor.cfp.method_func_id();
     globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
         .as_ruby_func()
         .lexical_context
@@ -357,7 +357,7 @@ pub(super) extern "C" fn singleton_define_method(
     func: FuncId,
     obj: Value,
 ) {
-    let current_func = unsafe { executor.cfp.method_func_id() };
+    let current_func = executor.cfp.method_func_id();
     globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
         .as_ruby_func()
         .lexical_context

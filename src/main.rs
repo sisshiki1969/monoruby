@@ -4,19 +4,21 @@ use std::io::Read;
 use monoruby::*;
 
 #[derive(clap::Parser, Debug)]
-#[command(author, version, about, long_about = None, trailing_var_arg = true)]
+#[command(author, about, long_about = None, trailing_var_arg = true)]
 struct CommandLineArgs {
-    /// one liner. several -e's allowed. Omit [programfile]
+    /// one line of script. several -e's allowed. Omit [programfile]
     #[arg(short, num_args = 0..)]
     exec: Vec<String>,
-    /// print the version number, then turn on verbose mode
-    #[arg(short)]
-    verbose: bool,
-    /// switch just-in-time compilation.
+    /// print the version number, then exit
     #[arg(short, long)]
+    version: bool,
+    /// switch just-in-time compilation.
+    #[arg(long)]
     no_jit: bool,
+    /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
-    import: Vec<String>,
+    directory: Vec<String>,
+    /// set warning level; 0=silence, 1=medium, 2=verbose.
     #[arg(short = 'W', default_value = "1")]
     warning: u8,
     /// File name.
@@ -26,10 +28,11 @@ struct CommandLineArgs {
 
 fn main() {
     use clap::Parser;
+    let mut finish_flag = false;
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit);
     let mut lib = args
-        .import
+        .directory
         .iter()
         .filter_map(|s| {
             std::path::Path::new(s)
@@ -39,6 +42,11 @@ fn main() {
         })
         .collect();
     globals.lib_directories.append(&mut lib);
+
+    if args.version {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        finish_flag = true;
+    }
 
     if !args.exec.is_empty() {
         let path = std::path::Path::new("irm");
@@ -55,20 +63,22 @@ fn main() {
     }
 
     let mut executor = Executor::init(&mut globals);
-    let (code, path) = match args.file {
+    let mut code = String::new();
+    let path = match args.file {
         Some(file_name) => {
             let path = std::path::PathBuf::from(&file_name);
             let mut file = File::open(file_name).unwrap();
-            let mut code = String::new();
             file.read_to_string(&mut code).unwrap();
-            (code, path)
+            path
         }
         None => {
+            if finish_flag {
+                return;
+            }
             let path = std::path::PathBuf::from("-");
             let mut stdin = std::io::stdin();
-            let mut code = String::new();
             stdin.read_to_string(&mut code).unwrap();
-            (code, path)
+            path
         }
     };
     match globals.compile_script(code, path) {

@@ -85,15 +85,36 @@ impl CFP {
     ///
     /// Get func_id of a current method / classdef.
     ///
-    unsafe fn method_func_id(&self) -> FuncId {
-        let mut lfp = self.lfp();
-        loop {
-            if lfp.outer().is_null() {
-                break;
+    fn method_func_id(&self) -> FuncId {
+        unsafe {
+            let mut lfp = self.lfp();
+            loop {
+                if lfp.outer().is_null() {
+                    break;
+                }
+                lfp = lfp.outer().lfp();
             }
-            lfp = lfp.outer().lfp();
+            lfp.meta().func_id()
         }
-        lfp.meta().func_id()
+    }
+
+    ///
+    /// Get func_id of a current source position.
+    ///
+    fn get_source_pos(&self) -> FuncId {
+        let mut cfp = *self;
+        unsafe {
+            loop {
+                if !cfp.lfp().meta().is_native() {
+                    return cfp.lfp().meta().func_id();
+                }
+                let prev_cfp = cfp.prev();
+                if prev_cfp.is_null() {
+                    unreachable!("get_source_pos: non-native method not found.");
+                };
+                cfp = prev_cfp;
+            }
+        }
     }
 }
 
@@ -444,7 +465,7 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
-        let current_func = unsafe { self.cfp.method_func_id() };
+        let current_func = self.cfp.method_func_id();
         globals.find_constant(site_id, current_func)
     }
 
@@ -1364,6 +1385,10 @@ impl Meta {
     /// interpreter:0 JIT code: 1 native:2
     fn kind(&self) -> u8 {
         self.kind
+    }
+
+    fn is_native(&self) -> bool {
+        self.kind == 2
     }
 
     /// method:0 class_def:1

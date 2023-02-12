@@ -1,0 +1,1 @@
+cargo run -- -I ../yjit-bench/harness ../yjit-bench/benchmarks/fib.rb
