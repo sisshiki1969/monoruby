@@ -563,9 +563,8 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         let no_block = self.no_block;
         monoasm! { self.jit,
-            movq rdi, r12;
-            movq rsi, [r14 - (LBP_BLOCK)];
-            movq rdx, rbx;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData

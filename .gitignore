@@ -4,4 +4,4 @@
 *.disas
 *.bytecode
 *.jpg
-
+.quine

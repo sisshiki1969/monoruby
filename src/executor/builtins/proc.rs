@@ -53,8 +53,7 @@ impl Executor {
                 self.move_frame_to_heap(lfp);
             }
         }
-        //crate::executor::op::_dump_stacktrace(self, globals);
-        let block_data = globals.get_block_data(block_handler, self);
+        let block_data = self.get_block_data(globals, block_handler);
         Some(Value::new_proc(block_data))
     }
 

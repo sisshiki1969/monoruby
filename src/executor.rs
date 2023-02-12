@@ -69,9 +69,11 @@ impl CFP {
     ///
     /// Get LFP.
     ///
-    unsafe fn lfp(&self) -> LFP {
-        let bp = self.bp();
-        LFP(*bp.sub(BP_LFP as usize / 8) as _)
+    fn lfp(&self) -> LFP {
+        unsafe {
+            let bp = self.bp();
+            LFP(*bp.sub(BP_LFP as usize / 8) as _)
+        }
     }
 
     ///
@@ -161,8 +163,8 @@ impl LFP {
     ///
     /// Get block.
     ///
-    unsafe fn block(&self) -> Option<Value> {
-        *(self.0.sub(LBP_BLOCK as usize) as *const Option<Value>)
+    fn block(&self) -> Option<BlockHandler> {
+        unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const _) }
     }
 
     ///
@@ -316,7 +318,7 @@ impl alloc::GC<RValue> for Executor {
                     v.mark(alloc);
                 }
                 if let Some(v) = lfp.block() {
-                    v.mark(alloc)
+                    v.0.mark(alloc)
                 };
 
                 cfp = cfp.prev();
@@ -397,6 +399,29 @@ impl Executor {
         }
 
         res.ok_or_else(|| globals.take_error().unwrap())
+    }
+
+    pub(super) fn get_block_data(
+        &self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+    ) -> BlockData {
+        if let Some(bh) = block_handler.try_fixnum() {
+            let func_id = FuncId::new(u32::try_from((bh as u64) >> 16).unwrap());
+            let mut cfp = self.cfp;
+            unsafe {
+                for _ in 0..bh as i16 as u16 {
+                    cfp = cfp.prev();
+                }
+                let func_data = globals.compile_on_demand(func_id) as _;
+                BlockData {
+                    outer_lfp: cfp.lfp(),
+                    func_data,
+                }
+            }
+        } else {
+            block_handler.as_proc().clone()
+        }
     }
 
     fn eval_script(
@@ -502,7 +527,7 @@ impl Executor {
         block_handler: BlockHandler,
         args: &[Value],
     ) -> Option<Value> {
-        let data = globals.get_block_data(block_handler, self);
+        let data = self.get_block_data(globals, block_handler);
         (globals.codegen.block_invoker)(
             self,
             globals,

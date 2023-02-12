@@ -181,18 +181,17 @@ impl Codegen {
             // rsp + 00:[pc]
             pushq rdi;
             pushq rsi;
-            movq rdi, r12;
-            movq rsi, [r14 - (LBP_BLOCK)];
-            movq rdx, rbx;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::get_block_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args
-            pushq r15;
-            pushq r13; // push pc
             testq rax, rax;
             jz  no_block;
+            pushq r15;
+            pushq r13; // push pc
             // r9 <- CodePtr
             movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
@@ -256,7 +255,7 @@ impl Codegen {
             jeq  loop_exit;
             movl r15, rdi;
             lea  rsi, [rsp - (16 + LBP_ARG0)];
-            loop_:
+        loop_:
             movq rax, [rcx];
         }
         if has_splat {

@@ -269,29 +269,6 @@ impl Globals {
         &self.func[func_id].data
     }
 
-    pub(super) fn get_block_data(
-        &mut self,
-        block_handler: BlockHandler,
-        interp: &Executor,
-    ) -> BlockData {
-        if let Some(bh) = block_handler.try_fixnum() {
-            let func_id = FuncId::new(u32::try_from((bh as u64) >> 16).unwrap());
-            let mut cfp = interp.cfp;
-            unsafe {
-                for _ in 0..bh as i16 as u16 {
-                    cfp = cfp.prev();
-                }
-                let func_data = self.compile_on_demand(func_id) as _;
-                BlockData {
-                    outer_lfp: cfp.lfp(),
-                    func_data,
-                }
-            }
-        } else {
-            block_handler.as_proc().clone()
-        }
-    }
-
     pub(super) fn class_version_inc(&mut self) {
         unsafe { *self.codegen.class_version_addr += 1 }
     }
@@ -575,8 +552,8 @@ impl Globals {
                 .unwrap_or(&"<unnamed>".to_string()),
             match block {
                 Some(block) => {
-                    match block.unpack() {
-                        RV::Integer(i) => {
+                    match block.try_fixnum() {
+                        Some(i) => {
                             let i = i as u64;
                             let func_id = u32::try_from(i >> 16).unwrap();
                             let idx = i as u16;

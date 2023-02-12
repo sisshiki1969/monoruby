@@ -73,7 +73,7 @@ extern "C" fn object_new(
 }
 
 ///
-/// ### Kernel#puts
+/// ### Kernel.#puts
 ///
 /// - puts(*arg) -> nil
 ///
@@ -108,7 +108,7 @@ extern "C" fn dup(
 }
 
 ///
-/// ### Kernel#puts
+/// ### Kernel.#puts
 ///
 /// - puts(*arg) -> nil
 ///
@@ -144,7 +144,7 @@ extern "C" fn puts(
 }
 
 ///
-/// ### Kernel#print
+/// ### Kernel.#print
 ///
 /// - print(*arg) -> nil
 ///
@@ -182,7 +182,7 @@ extern "C" fn to_s(
 }
 
 ///
-/// ### Kernel#p
+/// ### Kernel.#p
 ///
 /// - p(*arg) -> object | Array
 ///
@@ -539,6 +539,13 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
     (program, args)
 }
 
+///
+/// ### Kernel.#system
+///
+/// - system(command, options={}) -> bool | nil
+/// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 extern "C" fn system(
     _executor: &mut Executor,
     _globals: &mut Globals,
@@ -556,6 +563,12 @@ extern "C" fn system(
     })
 }
 
+///
+/// Kernel.#`
+///
+/// - `command` -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 extern "C" fn command(
     _executor: &mut Executor,
     globals: &mut Globals,

@@ -39,13 +39,12 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     globals.compile_on_demand(func_id)
 }
 
-pub(super) extern "C" fn get_block_data(
-    globals: &mut Globals,
-    block_handler: Option<BlockHandler>,
-    interp: &Executor,
-) -> BlockData {
-    block_handler
-        .map(|bh| globals.get_block_data(bh, interp))
+pub(super) extern "C" fn get_block_data(executor: &Executor, globals: &mut Globals) -> BlockData {
+    executor
+        .cfp
+        .lfp()
+        .block()
+        .map(|bh| executor.get_block_data(globals, bh))
         .unwrap_or_default()
 }
 
