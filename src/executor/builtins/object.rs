@@ -42,6 +42,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "system", system, 1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
@@ -509,6 +510,39 @@ extern "C" fn require_relative(
     Some(Value::bool(true))
 }
 
+extern "C" fn system(
+    _executor: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    use std::process::Command;
+    let mut args = vec![if cfg!(windows) { "/C" } else { "-c" }.to_string()];
+    let input = arg[0].expect_string(globals)?;
+    let include_meta = input.contains(&['*', '?', '{', '}', '[', ']', '\\', '\'', '\"', '`', '\n']);
+    let program = if include_meta {
+        args.push(input);
+        if cfg!(windows) {
+            "cmd"
+        } else {
+            "sh"
+        }
+    } else {
+        let input: Vec<&str> = input.split(' ').collect();
+        let arg = input[1..].concat();
+        if !arg.is_empty() {
+            args.push(arg)
+        };
+        input[0]
+    };
+    Some(match Command::new(program).args(&args).status() {
+        Ok(status) => Value::bool(status.success()),
+        Err(_) => Value::nil(),
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -615,5 +649,12 @@ mod test {
         c = C.new
         [c.is_a?(S), c.is_a?(C)]"#,
         );
+    }
+
+    #[test]
+    fn kernel_system() {
+        run_test(r#"system "ls""#);
+        run_test(r#"system "jkjkjk""#);
+        run_test(r#"system "*""#);
     }
 }

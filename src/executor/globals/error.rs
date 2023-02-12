@@ -160,14 +160,6 @@ impl Globals {
         self.set_error(MonorubyErr::argumenterr("negative_argument".to_string()));
     }
 
-    pub(crate) fn err_internal(&mut self, msg: String) {
-        self.set_error(MonorubyErr::internalerr(msg));
-    }
-
-    pub(crate) fn err_regex(&mut self, msg: String) {
-        self.set_error(MonorubyErr::regexerr(msg));
-    }
-
     pub(crate) fn err_create_proc_no_block(&mut self) {
         self.err_argument("tried to create Proc object without a block");
     }
@@ -200,6 +192,18 @@ impl Globals {
             "wrong number of arguments (given {given}, expeted {min}+)",
         ));
         None
+    }
+
+    pub(crate) fn err_internal(&mut self, msg: String) {
+        self.set_error(MonorubyErr::internalerr(msg));
+    }
+
+    pub(crate) fn err_regex(&mut self, msg: String) {
+        self.set_error(MonorubyErr::regexerr(msg));
+    }
+
+    pub(crate) fn err_runtime(&mut self, msg: String) {
+        self.set_error(MonorubyErr::runtimeerr(msg));
     }
 
     ///
@@ -270,6 +274,7 @@ pub enum MonorubyErrKind {
     Load(String),
     Internal(String),
     Regex(String),
+    Runtime(String),
 }
 
 impl MonorubyErr {
@@ -317,8 +322,8 @@ impl MonorubyErr {
             /*MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
             }*/
-            MonorubyErrKind::NotMethod(msg) => msg.to_string(),
-            MonorubyErrKind::Arguments(msg) => msg.to_string(),
+            MonorubyErrKind::NotMethod(msg) => format!("{} (NoMethodError)", msg),
+            MonorubyErrKind::Arguments(msg) => format!("{} (ArgumentError)", msg),
             MonorubyErrKind::Syntax(kind) => match kind {
                 ParseErrKind::SyntaxError(msg) => msg.to_string(),
                 ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
@@ -326,15 +331,16 @@ impl MonorubyErr {
             MonorubyErrKind::Syntax2(msg) => msg.to_string(),
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
             MonorubyErrKind::UninitConst(msg) => msg.to_string(),
-            MonorubyErrKind::DivideByZero => "divided by 0".to_string(),
-            MonorubyErrKind::LocalJump(msg) => msg.to_string(),
-            MonorubyErrKind::Range(msg) => msg.to_string(),
-            MonorubyErrKind::Type(msg) => msg.to_string(),
-            MonorubyErrKind::Index(msg) => msg.to_string(),
-            MonorubyErrKind::Frozen(msg) => msg.to_string(),
-            MonorubyErrKind::Load(msg) => msg.to_string(),
+            MonorubyErrKind::DivideByZero => "divided by 0 (ZeroDivisionError)".to_string(),
+            MonorubyErrKind::LocalJump(msg) => format!("{} (LocalJumpError)", msg),
+            MonorubyErrKind::Range(msg) => format!("{} (RangeError)", msg),
+            MonorubyErrKind::Type(msg) => format!("{} (TypeError)", msg),
+            MonorubyErrKind::Index(msg) => format!("{} (IndexError)", msg),
+            MonorubyErrKind::Frozen(msg) => format!("{} (FrozenError)", msg),
+            MonorubyErrKind::Load(msg) => format!("{} (LoadError)", msg),
             MonorubyErrKind::Internal(msg) => msg.to_string(),
-            MonorubyErrKind::Regex(msg) => msg.to_string(),
+            MonorubyErrKind::Regex(msg) => format!("{} (RegexError)", msg),
+            MonorubyErrKind::Runtime(msg) => format!("{} (RuntimeError)", msg),
         }
     }
 }
@@ -504,6 +510,10 @@ impl MonorubyErr {
 
     pub(crate) fn regexerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Regex(msg))
+    }
+
+    pub(crate) fn runtimeerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Runtime(msg))
     }
 }
 
