@@ -851,6 +851,20 @@ impl IrContext {
             } => {
                 return self.gen_method_call(ctx, info, method, None, arglist, None, use_mode, loc);
             }
+            NodeKind::Command(box expr) => {
+                let mut arglist = ArgList::default();
+                arglist.args.push(expr);
+                return self.gen_method_call(
+                    ctx,
+                    info,
+                    "`".to_string(),
+                    None,
+                    arglist,
+                    None,
+                    use_mode,
+                    loc,
+                );
+            }
             NodeKind::Yield(arglist) => {
                 let ret = if use_mode.use_val() {
                     Some(info.push().into())

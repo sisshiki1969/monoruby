@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use num::Zero;
 
 use crate::*;
@@ -43,6 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
     globals.define_builtin_func(OBJECT_CLASS, "system", system, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
@@ -510,19 +513,14 @@ extern "C" fn require_relative(
     Some(Value::bool(true))
 }
 
-extern "C" fn system(
-    _executor: &mut Executor,
-    globals: &mut Globals,
-    _: Value,
-    arg: Arg,
-    _: usize,
-    _: Option<BlockHandler>,
-) -> Option<Value> {
-    use std::process::Command;
-    let mut args = vec![if cfg!(windows) { "/C" } else { "-c" }.to_string()];
-    let input = arg[0].expect_string(globals)?;
-    let include_meta = input.contains(&['*', '?', '{', '}', '[', ']', '\\', '\'', '\"', '`', '\n']);
+fn prepare_command_arg(input: String) -> (String, Vec<String>) {
+    let mut args = vec![];
+    let include_meta = input.contains(&[
+        '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
+        '\"', '`', '\n',
+    ]);
     let program = if include_meta {
+        args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
         args.push(input);
         if cfg!(windows) {
             "cmd"
@@ -536,11 +534,49 @@ extern "C" fn system(
             args.push(arg)
         };
         input[0]
-    };
+    }
+    .to_string();
+    (program, args)
+}
+
+extern "C" fn system(
+    _executor: &mut Executor,
+    _globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    use std::process::Command;
+    let input = arg[0].as_string();
+    let (program, args) = prepare_command_arg(input);
     Some(match Command::new(program).args(&args).status() {
         Ok(status) => Value::bool(status.success()),
         Err(_) => Value::nil(),
     })
+}
+
+extern "C" fn command(
+    _executor: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    use std::process::Command;
+    let input = arg[0].as_string();
+    let (program, args) = prepare_command_arg(input);
+    match Command::new(program).args(&args).output() {
+        Ok(output) => {
+            std::io::stderr().write_all(&output.stderr).unwrap();
+            Some(Value::new_string_from_slice(&output.stdout))
+        }
+        Err(err) => {
+            globals.err_runtime(format!("{}", err));
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -656,5 +692,8 @@ mod test {
         run_test(r#"system "ls""#);
         run_test(r#"system "jkjkjk""#);
         run_test(r#"system "*""#);
+        run_test(r#"`pwd`"#);
+        run_test(r#"`*`"#);
+        run_test_error(r#"``"#);
     }
 }
