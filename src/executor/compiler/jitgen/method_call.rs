@@ -119,11 +119,11 @@ impl Codegen {
             args, len, recv, ..
         } = method_info;
         self.write_back_slot(ctx, recv);
-        self.write_back_range(ctx, args, len + 1);
+        self.write_back_range(ctx, args, len + 2);
         ctx.dealloc_xmm(ret);
         // We must write back and unlink all local vars since they may be accessed from block.
         self.gen_write_back_locals(ctx);
-        method_info.args = args + 1;
+        method_info.args = args + 2;
         self.gen_call(
             fnstore,
             ctx,
@@ -194,6 +194,7 @@ impl Codegen {
         match fnstore[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
+                assert!(block.is_none());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -207,6 +208,7 @@ impl Codegen {
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
+                assert!(block.is_none());
                 self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {

@@ -1478,11 +1478,11 @@ impl IrContext {
         ret: Option<BcReg>,
         arg: BcReg,
         len: usize,
-        block: bool,
+        has_block_or_kw: bool,
         has_splat: bool,
         loc: Loc,
     ) {
-        if block {
+        if has_block_or_kw {
             self.push(BcIr::MethodCallBlock(ret, method, has_splat), loc)
         } else {
             self.push(BcIr::MethodCall(ret, method, has_splat), loc)
@@ -1561,36 +1561,43 @@ impl IrContext {
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
-        let mut has_block = false;
+        let mut has_block_or_kw = false;
         let old_temp = info.temp;
         let arg = info.next_reg();
-        if let Some(box block) = arglist.block {
-            has_block = true;
-
-            match block.kind {
-                NodeKind::Lambda(block) => {
-                    let outer_locals = info.get_locals();
-                    let func_id =
-                        ctx.add_block((info.id(), outer_locals), block, info.sourceinfo.clone())?;
-                    let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-                    self.gen_literal(info, None, Value::new_integer(block_handler));
-                }
-                NodeKind::LocalVar(proc_local) => {
-                    if Some(&proc_local) == info.block_param_name() {
-                        let proc_temp = info.push().into();
-                        self.push(BcIr::BlockArgProxy(proc_temp), loc);
-                    } else {
-                        let local = info.refer_local(&proc_local).into();
-                        self.gen_temp_mov(info, local);
+        if arglist.block.is_some() || !arglist.kw_args.is_empty() {
+            has_block_or_kw = true;
+            if let Some(box block) = arglist.block {
+                match block.kind {
+                    NodeKind::Lambda(block) => {
+                        let outer_locals = info.get_locals();
+                        let func_id = ctx.add_block(
+                            (info.id(), outer_locals),
+                            block,
+                            info.sourceinfo.clone(),
+                        )?;
+                        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+                        self.gen_literal(info, None, Value::new_integer(block_handler));
+                    }
+                    NodeKind::LocalVar(proc_local) => {
+                        if Some(&proc_local) == info.block_param_name() {
+                            let proc_temp = info.push().into();
+                            self.push(BcIr::BlockArgProxy(proc_temp), loc);
+                        } else {
+                            let local = info.refer_local(&proc_local).into();
+                            self.gen_temp_mov(info, local);
+                        }
+                    }
+                    _ => {
+                        return Err(MonorubyErr::unsupported_block_param(
+                            &block,
+                            info.sourceinfo.clone(),
+                        ))
                     }
                 }
-                _ => {
-                    return Err(MonorubyErr::unsupported_block_param(
-                        &block,
-                        info.sourceinfo.clone(),
-                    ))
-                }
+            } else {
+                self.gen_nil(info, None);
             }
+            self.gen_nil(info, None);
         }
         let args = arglist.args;
         let len = args.len();
@@ -1615,7 +1622,7 @@ impl IrContext {
             ret,
             arg.into(),
             len,
-            has_block,
+            has_block_or_kw,
             has_splat,
             loc,
         );

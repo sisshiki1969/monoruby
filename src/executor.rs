@@ -1075,13 +1075,14 @@ impl BcPc {
                     format!("{} = {:?}.call {}(&{:?})", ret.ret_str(), recv, name, args)
                 } else {
                     format!(
-                        "{} = {:?}.call {}({:?}; {} &{:?}){}",
+                        "{} = {:?}.call {}({:?}; {} &{:?} kw:{:?}){}",
                         ret.ret_str(),
                         recv,
                         name,
-                        args + 1,
+                        args + 2,
                         len,
                         args,
+                        args + 1,
                         if has_splat { "*" } else { "" }
                     )
                 };

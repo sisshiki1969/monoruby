@@ -329,6 +329,7 @@ impl LoopAnalysis {
                     for i in 0..len {
                         reg_info.use_non_float(args + i);
                     }
+                    // unlink all local variables.
                     for i in 1..1 + func.local_num() as u16 {
                         reg_info.unlink(SlotId(i));
                     }
@@ -339,7 +340,7 @@ impl LoopAnalysis {
                         recv, args, len, ..
                     } = info;
                     reg_info.use_non_float(recv);
-                    for i in 0..len + 1 {
+                    for i in 0..len + 2 {
                         reg_info.use_non_float(args + i);
                     }
                     // unlink all local variables.

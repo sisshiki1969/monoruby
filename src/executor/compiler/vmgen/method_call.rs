@@ -25,7 +25,7 @@ impl Codegen {
     /// version:  class version
     /// func data: the data of the function
     /// ~~~
-    pub(super) fn vm_method_call(&mut self, has_block: bool, has_splat: bool) -> CodePtr {
+    pub(super) fn vm_method_call(&mut self, has_block_or_kw: bool, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let slowpath = self.jit.label();
@@ -93,12 +93,12 @@ impl Codegen {
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        if has_block {
+        if has_block_or_kw {
             // set block
             monoasm! { self.jit,
                 movq rax, [rcx];
                 movq [rsp - (16 + LBP_BLOCK)], rax;
-                subq rcx, 8;
+                subq rcx, 16;
             };
         } else {
             monoasm! { self.jit,
