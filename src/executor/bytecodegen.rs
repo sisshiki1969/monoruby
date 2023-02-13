@@ -1557,7 +1557,7 @@ impl IrContext {
             None => RecvKind::SelfValue,
         };
 
-        assert!(arglist.kw_args.is_empty());
+        //assert!(arglist.kw_args.is_empty());
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
@@ -1597,7 +1597,21 @@ impl IrContext {
             } else {
                 self.gen_nil(info, None);
             }
-            self.gen_nil(info, None);
+
+            if arglist.kw_args.is_empty() {
+                self.gen_nil(info, None);
+            } else {
+                let len = arglist.kw_args.len();
+                let old_reg = info.temp;
+                let args = info.next_reg();
+                for (name, node) in arglist.kw_args {
+                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
+                    self.push_expr(ctx, info, node)?;
+                }
+                info.temp = old_reg;
+                self.emit_hash(args.into(), args.into(), len, loc);
+                info.push();
+            }
         }
         let args = arglist.args;
         let len = args.len();
