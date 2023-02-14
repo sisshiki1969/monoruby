@@ -123,6 +123,30 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
     unsafe { *src = Value::new_splat(*src) };
 }
 
+pub(super) extern "C" fn distibute_keyword_arguments(
+    globals: &Globals,
+    reg: *mut Value,
+    keyword: Value,
+    data: &FuncData,
+) {
+    let func_id = data.meta.func_id.unwrap();
+    match &globals.func[func_id].kind {
+        FuncKind::ISeq(info) => {
+            let kw_arg = keyword.as_hash();
+            let params = &info.args.keyword_args;
+            for (param_name, (id, _)) in params {
+                match kw_arg.get(Value::new_symbol(*param_name)) {
+                    Some(v) => unsafe {
+                        *reg.sub(dbg!(*id)) = dbg!(v);
+                    },
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[repr(C)]
 pub(super) struct ClassIdSlot {
     base: ClassId,

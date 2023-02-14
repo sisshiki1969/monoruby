@@ -7,16 +7,17 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|pos|ofs||   |blk|arg|req|
+    /// | op|reg|pos|ofs||key|blk|arg|req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
     /// - reg: a number of resisters
-    /// - blk: position of block parameter
-    /// - arg: a number of arguments (req + opt + rest)
-    /// - pos: a number of positional arguments (req + opt)
-    /// - req: a number of required arguments
     /// - ofs: stack pointer offset
+    /// - req: a number of required arguments
+    /// - pos: a number of positional arguments (req + opt)
+    /// - arg: a number of arguments (req + opt + rest)
+    /// - blk: position of block parameter
+    /// - key: position of keyword parameter
     ///
     /// ### registers
     ///
@@ -77,8 +78,12 @@ impl Codegen {
         // if passed_args < pos_num then goto l5
         // if passed_args == pos_num then goto l1
             cmpw rdx, rdi;
+            // if passed == pos_num, required and optional param was done. goto rest param handling.
             jeq  set_rest_empty;
+            // if passed < pos_num, we must fill nil to residual required/optional params.
             jlt  fill_req;
+            // in the case of passed > pos_num
+            // does rest param exists?
             movzxw rax, [r13 - 6];
             cmpw rax, [r13 - 14];
         }
@@ -94,8 +99,8 @@ impl Codegen {
           subl rsi, rdi;
           negq rdi;
           lea  rdi, [r14 + rdi * 8 - (LBP_ARG0)];
-          // This is necessary because *make_rest_array* may destroy values under sp
-          // when the number of arguments passed > the number of registers in this function.
+          // This is necessary because *make_rest_array* may destroy values under the sp
+          // when the number of arguments passed > the number of registers.
           // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
           subq rsp, 1024;
           movq rax, (make_rest_array);

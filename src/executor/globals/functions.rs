@@ -28,14 +28,14 @@ impl FuncId {
 
 #[derive(Clone, Default, PartialEq)]
 pub struct ArgumentsInfo {
-    // required + optional + rest
-    pub arg_num: usize,
+    pub required_num: usize,
     // required + optional
     pub positional_num: usize,
-    pub required_num: usize,
-    pub block_param: Option<String>,
+    // required + optional + rest
+    pub arg_num: usize,
     pub positional_args_names: Vec<Option<String>>,
-    pub keyword_args: Vec<(String, Option<Box<Node>>)>,
+    pub keyword_args: HashMap<IdentId, (usize, Option<Box<Node>>)>,
+    pub block_param: Option<String>,
 }
 
 impl ArgumentsInfo {
@@ -201,28 +201,19 @@ fn handle_args(
     sourceinfo: &SourceInfoRef,
 ) -> Result<(ArgumentsInfo, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
     let mut positional_args_names = vec![];
-    let mut keyword_args = vec![];
+    let mut keyword_args = HashMap::default();
     let mut destruct_args = vec![];
     let mut expand = vec![];
     let mut optional = vec![];
     let mut required_num = 0;
     let mut rest = 0;
+    let mut keyword_num = 0;
     let mut block_param = None;
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
                 positional_args_names.push(Some(name));
                 required_num += 1;
-            }
-            ParamKind::Optional(name, box initializer) => {
-                let local = BcLocal(positional_args_names.len() as u16);
-                positional_args_names.push(Some(name));
-                optional.push(OptionalInfo { local, initializer });
-            }
-            ParamKind::Rest(name) => {
-                positional_args_names.push(Some(name));
-                assert_eq!(0, rest);
-                rest = 1;
             }
             ParamKind::Destruct(names) => {
                 expand.push((
@@ -236,11 +227,23 @@ fn handle_args(
                     destruct_args.push(Some(name));
                 });
             }
-            ParamKind::Block(name) => {
-                block_param = Some(name);
+            ParamKind::Optional(name, box initializer) => {
+                let local = BcLocal(positional_args_names.len() as u16);
+                positional_args_names.push(Some(name));
+                optional.push(OptionalInfo { local, initializer });
+            }
+            ParamKind::Rest(name) => {
+                positional_args_names.push(Some(name));
+                assert_eq!(0, rest);
+                rest = 1;
             }
             ParamKind::Keyword(name, init) => {
-                keyword_args.push((name, init));
+                let name = IdentId::get_ident_id_from_string(name);
+                keyword_args.insert(name, (positional_args_names.len() + keyword_num, init));
+                keyword_num += 1;
+            }
+            ParamKind::Block(name) => {
+                block_param = Some(name);
             }
             _ => {
                 return Err(MonorubyErr::unsupported_parameter_kind(
@@ -644,7 +647,7 @@ pub(crate) struct ISeqInfo {
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
-    args: ArgumentsInfo,
+    pub args: ArgumentsInfo,
     /// expand array info.
     pub(crate) expand: Vec<ExpandInfo>,
     /// optional parameters initializer
@@ -719,7 +722,7 @@ impl ISeqInfo {
             info.add_local(name);
         });
         args.keyword_args.into_iter().for_each(|(name, _)| {
-            info.add_local(name);
+            info.add_local(IdentId::get_name(name));
         });
         if let Some(name) = args.block_param {
             info.add_local(name);

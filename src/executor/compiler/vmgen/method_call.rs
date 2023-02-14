@@ -98,6 +98,26 @@ impl Codegen {
             monoasm! { self.jit,
                 movq rax, [rcx];
                 movq [rsp - (16 + LBP_BLOCK)], rax;
+            };
+            // set keyword arguments
+            let exit = self.jit.label();
+            monoasm! { self.jit,
+                movq rax, [rcx - 8];
+                cmpq rax, (NIL_VALUE);
+                je   exit;
+                lea  rsi, [rsp - (16 + LBP_ARG0)];
+                subq rsp, 4096;
+                pushq rdi;
+                pushq rcx;
+                movq rdi, r12;
+                movq rdx, rax;
+                movq rcx, [r13 + 8];
+                movq rax, (runtime::distibute_keyword_arguments);
+                call rax;
+                popq rcx;
+                popq rdi;
+                addq rsp, 4096;
+            exit:
                 subq rcx, 16;
             };
         } else {
@@ -144,10 +164,10 @@ impl Codegen {
             call rax;   // rax <- Option<&FuncData>
             testq rax, rax;
             jeq vm_return;
-            movq [r13 + 8], rax;
-            movl [r13 - 8], r15;
+            movq [r13 + 8], rax;    // FuncData
+            movl [r13 - 8], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
-            movl [r13 - 4], rdi;
+            movl [r13 - 4], rdi;    // class_version
             jmp exec;
         );
         self.jit.select_page(0);
@@ -265,23 +285,19 @@ impl Codegen {
                 cmpw [rax + 2], (ObjKind::SPLAT);
                 jne  no_splat;
                 // TODO: this possibly cause problem.
-                subq rsp, 1024;
+                subq rsp, 4096;
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
                 pushq rcx;
-                pushq r8;
-                pushq r9;
                 movq rdi, rax;
                 movq rax, (expand_splat);
                 call rax;
-                popq r9;
-                popq r8;
                 popq rcx;
                 popq rdx;
                 popq rsi;
                 popq rdi;
-                addq rsp, 1024;
+                addq rsp, 4096;
                 lea  rdi, [rdi + rax * 1 - 1];
                 shlq rax, 3;
                 subq rsi, rax;
