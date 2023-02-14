@@ -1072,7 +1072,14 @@ impl BcPc {
                 } = info;
                 let name = IdentId::get_name(name);
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.call {}(&{:?})", ret.ret_str(), recv, name, args)
+                    format!(
+                        "{} = {:?}.call {}(&{:?} kw:{:?})",
+                        ret.ret_str(),
+                        recv,
+                        name,
+                        args,
+                        args + 1
+                    )
                 } else {
                     format!(
                         "{} = {:?}.call {}({:?}; {} &{:?} kw:{:?}){}",

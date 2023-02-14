@@ -83,6 +83,8 @@ pub struct Globals {
     #[cfg(feature = "log-jit")]
     /// stats for method cache miss
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    #[cfg(feature = "emit-bc")]
+    pub(crate) dumped_bc: usize,
 }
 
 impl alloc::GC<RValue> for Globals {
@@ -119,6 +121,8 @@ impl Globals {
             deopt_stats: HashMap::default(),
             #[cfg(feature = "log-jit")]
             method_cache_stats: HashMap::default(),
+            #[cfg(feature = "emit-bc")]
+            dumped_bc: 1,
         };
         builtins::init_builtins(&mut globals);
         globals.set_ivar(
@@ -472,15 +476,17 @@ impl Globals {
 
 impl Globals {
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn dump_bc(&self) {
+    pub(crate) fn dump_bc(&mut self) {
+        let dumped_bc = self.dumped_bc;
         self.func
             .functions()
             .iter()
-            .skip(1)
+            .skip(dumped_bc)
             .for_each(|info| match &info.kind {
                 FuncKind::ISeq(_) => info.dump_bc(self),
                 _ => {}
             });
+        self.dumped_bc = self.func.functions().len();
     }
 
     #[cfg(any(feature = "emit-asm"))]

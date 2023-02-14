@@ -27,20 +27,21 @@ impl FuncId {
 }
 
 #[derive(Clone, Default, PartialEq)]
-pub struct ArgumentNames {
-    // req + opt + rest
+pub struct ArgumentsInfo {
+    // required + optional + rest
     pub arg_num: usize,
-    // req + optional
-    pub pos_num: usize,
-    pub req_num: usize,
+    // required + optional
+    pub positional_num: usize,
+    pub required_num: usize,
     pub block_param: Option<String>,
-    pub names: Vec<Option<String>>,
+    pub positional_args_names: Vec<Option<String>>,
+    pub keyword_args: Vec<(String, Option<Box<Node>>)>,
 }
 
-impl ArgumentNames {
+impl ArgumentsInfo {
     fn arity(&self) -> i32 {
-        if self.pos_num == self.req_num && self.pos_num == self.arg_num {
-            self.pos_num as i32
+        if self.positional_num == self.required_num && self.positional_num == self.arg_num {
+            self.positional_num as i32
         } else {
             -1
         }
@@ -88,7 +89,7 @@ impl Funcs {
             None,
             None,
             None,
-            ArgumentNames::default(),
+            ArgumentsInfo::default(),
             vec![],
             vec![],
             Node::new_nil(Loc(0, 0)),
@@ -141,7 +142,7 @@ impl Funcs {
         self.add_iseq(
             None,
             name,
-            ArgumentNames::default(),
+            ArgumentsInfo::default(),
             vec![],
             vec![],
             body,
@@ -154,7 +155,7 @@ impl Funcs {
         &mut self,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
         name: Option<String>,
-        args: ArgumentNames,
+        args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
         body: Node,
@@ -198,40 +199,48 @@ impl Funcs {
 fn handle_args(
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
-) -> Result<(ArgumentNames, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
-    let mut args = vec![];
+) -> Result<(ArgumentsInfo, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
+    let mut positional_args_names = vec![];
+    let mut keyword_args = vec![];
     let mut destruct_args = vec![];
     let mut expand = vec![];
     let mut optional = vec![];
-    let mut req_num = 0;
+    let mut required_num = 0;
     let mut rest = 0;
     let mut block_param = None;
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
-                args.push(Some(name));
-                req_num += 1;
+                positional_args_names.push(Some(name));
+                required_num += 1;
             }
             ParamKind::Optional(name, box initializer) => {
-                let local = BcLocal(args.len() as u16);
-                args.push(Some(name));
+                let local = BcLocal(positional_args_names.len() as u16);
+                positional_args_names.push(Some(name));
                 optional.push(OptionalInfo { local, initializer });
             }
             ParamKind::Rest(name) => {
-                args.push(Some(name));
+                positional_args_names.push(Some(name));
                 assert_eq!(0, rest);
                 rest = 1;
             }
             ParamKind::Destruct(names) => {
-                expand.push((args.len(), destruct_args.len(), names.len()));
-                args.push(None);
-                req_num += 1;
+                expand.push((
+                    positional_args_names.len(),
+                    destruct_args.len(),
+                    names.len(),
+                ));
+                positional_args_names.push(None);
+                required_num += 1;
                 names.into_iter().for_each(|(name, _)| {
                     destruct_args.push(Some(name));
                 });
             }
             ParamKind::Block(name) => {
                 block_param = Some(name);
+            }
+            ParamKind::Keyword(name, init) => {
+                keyword_args.push((name, init));
             }
             _ => {
                 return Err(MonorubyErr::unsupported_parameter_kind(
@@ -242,22 +251,23 @@ fn handle_args(
             }
         }
     }
-    let pos_num = args.len() - rest;
+    let positional_num = positional_args_names.len() - rest;
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
             src,
-            dst: args.len() + dst,
+            dst: positional_args_names.len() + dst,
             len,
         })
         .collect();
-    args.append(&mut destruct_args);
+    positional_args_names.append(&mut destruct_args);
     Ok((
-        ArgumentNames {
-            names: args,
-            arg_num: pos_num + rest,
-            pos_num,
-            req_num,
+        ArgumentsInfo {
+            positional_args_names,
+            keyword_args,
+            arg_num: positional_num + rest,
+            positional_num,
+            required_num,
             block_param,
         },
         expand,
@@ -380,7 +390,7 @@ impl FnStore {
         let main_fid = self.functions.add_iseq(
             None,
             Some("/main".to_string()),
-            ArgumentNames::default(),
+            ArgumentsInfo::default(),
             vec![],
             vec![],
             ast,
@@ -483,7 +493,7 @@ impl FuncInfo {
         name: Option<String>,
         func_id: Option<FuncId>,
         outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
-        args: ArgumentNames,
+        args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
         body: Node,
@@ -605,7 +615,7 @@ impl FuncInfo {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.pos_num,
+            info.args.positional_num,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -634,8 +644,8 @@ pub(crate) struct ISeqInfo {
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
-    args: ArgumentNames,
-    /// expand array info. (src_reg, dst_reg, len)
+    args: ArgumentsInfo,
+    /// expand array info.
     pub(crate) expand: Vec<ExpandInfo>,
     /// optional parameters initializer
     pub(crate) optional: Vec<OptionalInfo>,
@@ -663,7 +673,7 @@ impl std::fmt::Debug for ISeqInfo {
             "RubyFuncInfo {{ id: {}, name: {:?}. pos_num: {:?} }}",
             self.id().get(),
             self.name,
-            self.args.pos_num
+            self.args.positional_num
         )
     }
 }
@@ -680,7 +690,7 @@ impl ISeqInfo {
         id: Option<FuncId>,
         outer_locals: Vec<HashMap<String, u16>>,
         name: Option<String>,
-        args: ArgumentNames,
+        args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
         body: Node,
@@ -705,7 +715,10 @@ impl ISeqInfo {
             sourceinfo,
             is_block,
         };
-        args.names.into_iter().for_each(|name| {
+        args.positional_args_names.into_iter().for_each(|name| {
+            info.add_local(name);
+        });
+        args.keyword_args.into_iter().for_each(|(name, _)| {
             info.add_local(name);
         });
         if let Some(name) = args.block_param {
@@ -718,7 +731,7 @@ impl ISeqInfo {
         id: Option<FuncId>,
         outer: (FuncId, Vec<HashMap<String, u16>>),
         name: Option<String>,
-        args: ArgumentNames,
+        args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
         body: Node,
@@ -732,7 +745,7 @@ impl ISeqInfo {
     pub(crate) fn new_method(
         id: Option<FuncId>,
         name: Option<String>,
-        args: ArgumentNames,
+        args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
         body: Node,
@@ -782,12 +795,12 @@ impl ISeqInfo {
 
     /// get a number of required arguments.
     pub(crate) fn req_num(&self) -> usize {
-        self.args.req_num
+        self.args.required_num
     }
 
     /// get a number of positional arguments.
     pub(crate) fn pos_num(&self) -> usize {
-        self.args.pos_num
+        self.args.positional_num
     }
 
     /// get a position of a block argument.

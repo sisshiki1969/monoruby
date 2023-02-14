@@ -1699,15 +1699,18 @@ impl Codegen {
                 }
                 if has_rest_param {
                     monoasm! { self.jit,
-                        lea  rdi, [r14 - (pos_num as i32 * 8 + LBP_ARG0)];
-                        movl rsi, rdx;
-                        subl rsi, (pos_num);
-                        subq rsp, 1024;
-                        movq rax, (make_rest_array);
-                        call rax;
-                        addq rsp, 1024;
-                        jmp  fill_temp;
-                    };
+                    lea  rdi, [r14 - (pos_num as i32 * 8 + LBP_ARG0)];
+                    movl rsi, rdx;
+                    subl rsi, (pos_num);
+                    // This is necessary because *make_rest_array* may destroy values under sp
+                    // when the number of arguments passed > the number of registers in this function.
+                    // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
+                    subq rsp, 1024;
+                    movq rax, (make_rest_array);
+                    call rax;
+                    addq rsp, 1024;
+                    jmp  fill_temp;
+                        };
                 } else if is_block {
                     monoasm! { self.jit, jmp  fill_temp; }
                 } else {

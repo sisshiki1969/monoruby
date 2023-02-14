@@ -259,9 +259,12 @@ impl IrContext {
         self.gen_literal(info, dst, Value::new_float(f));
     }
 
-    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: IdentId) {
+    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: String) {
         let reg = BcReg::get_reg(info, dst);
-        self.push(BcIr::Symbol(reg, sym), Loc::default());
+        self.push(
+            BcIr::Symbol(reg, IdentId::get_ident_id_from_string(sym)),
+            Loc::default(),
+        );
     }
 
     fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
@@ -716,7 +719,6 @@ impl IrContext {
                 self.gen_integer(info, None, i);
             }
             NodeKind::Symbol(sym) => {
-                let sym = IdentId::get_ident_id_from_string(sym);
                 self.gen_symbol(info, None, sym);
             }
             NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
@@ -1057,7 +1059,7 @@ impl IrContext {
             NodeKind::MethodDef(name, block) => {
                 self.gen_method_def(ctx, info, name.clone(), block, loc)?;
                 if use_mode.use_val() {
-                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
+                    self.gen_symbol(info, None, name);
                 }
                 if use_mode.is_ret() {
                     self.gen_ret(info, None);
@@ -1068,7 +1070,7 @@ impl IrContext {
                 self.gen_expr(ctx, info, obj, UseMode::Use)?;
                 self.gen_singleton_method_def(ctx, info, name.clone(), block, loc)?;
                 if use_mode.use_val() {
-                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
+                    self.gen_symbol(info, None, name);
                 }
                 if use_mode.is_ret() {
                     self.gen_ret(info, None);
@@ -1139,8 +1141,6 @@ impl IrContext {
             NodeKind::AliasMethod(box new, box old) => {
                 match (new.kind, old.kind) {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
-                        let new = IdentId::get_ident_id_from_string(new);
-                        let old = IdentId::get_ident_id_from_string(old);
                         self.gen_symbol(info, None, new);
                         self.gen_symbol(info, None, old);
                         let old = info.pop().into();
@@ -1188,10 +1188,7 @@ impl IrContext {
             NodeKind::Bool(b) => self.gen_literal(info, Some(dst), Value::bool(b)),
             NodeKind::SelfValue => self.gen_mov(dst, BcReg::Self_),
             NodeKind::Integer(i) => self.gen_integer(info, Some(dst), i),
-            NodeKind::Symbol(sym) => {
-                let sym = IdentId::get_ident_id_from_string(sym);
-                self.gen_symbol(info, Some(dst), sym)
-            }
+            NodeKind::Symbol(sym) => self.gen_symbol(info, Some(dst), sym),
             NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(dst), bigint),
             NodeKind::Float(f) => self.gen_float(info, Some(dst), f),
             NodeKind::String(s) => self.gen_string(info, Some(dst), s),
@@ -1605,7 +1602,7 @@ impl IrContext {
                 let old_reg = info.temp;
                 let args = info.next_reg();
                 for (name, node) in arglist.kw_args {
-                    self.gen_symbol(info, None, IdentId::get_ident_id_from_string(name));
+                    self.gen_symbol(info, None, name);
                     self.push_expr(ctx, info, node)?;
                 }
                 info.temp = old_reg;

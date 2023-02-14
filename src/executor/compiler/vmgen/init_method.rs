@@ -3,19 +3,27 @@ use super::*;
 impl Codegen {
     /// Initialize method frame
     ///
+    /// ### bytecode
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
     /// | op|reg|pos|ofs||   |blk|arg|req|
     /// +---+---+---+---++---+---+---+---+
+    /// ~~~
     ///
-    /// reg: a number of resisters
-    /// blk: position of block parameter
-    /// arg: a number of arguments (req + opt + rest)
-    /// pos: a number of positional arguments (req + opt)
-    /// req: a number of required arguments
-    /// ofs: stack pointer offset
-    ///  /// ~~~
+    /// - reg: a number of resisters
+    /// - blk: position of block parameter
+    /// - arg: a number of arguments (req + opt + rest)
+    /// - pos: a number of positional arguments (req + opt)
+    /// - req: a number of required arguments
+    /// - ofs: stack pointer offset
+    ///
+    /// ### registers
+    ///
+    /// - r15 <- reg
+    /// - rdi <- pos
+    /// - rsi <- ofs
+    ///
     pub(super) fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
@@ -68,11 +76,11 @@ impl Codegen {
         //
         // if passed_args < pos_num then goto l5
         // if passed_args == pos_num then goto l1
-          cmpw rdx, rdi;
-          jeq  set_rest_empty;
-          jlt  fill_req;
-          movzxw rax, [r13 - 6];
-          cmpw rax, [r13 - 14];
+            cmpw rdx, rdi;
+            jeq  set_rest_empty;
+            jlt  fill_req;
+            movzxw rax, [r13 - 6];
+            cmpw rax, [r13 - 14];
         }
         if is_block {
             monoasm! { self.jit, jeq  fill_temp; }
@@ -86,7 +94,9 @@ impl Codegen {
           subl rsi, rdi;
           negq rdi;
           lea  rdi, [r14 + rdi * 8 - (LBP_ARG0)];
-          // TODO: this work aroud may cause error if the number of arguments exceeds 128.
+          // This is necessary because *make_rest_array* may destroy values under sp
+          // when the number of arguments passed > the number of registers in this function.
+          // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
           subq rsp, 1024;
           movq rax, (make_rest_array);
           call rax;
@@ -144,6 +154,7 @@ impl Codegen {
             jz   exit;
         }
         self.fill(15 /* r15 */, NIL_VALUE);
+        let set_block = self.jit.label();
         let exit2 = self.jit.label();
         monoasm! { self.jit,
         exit:
@@ -152,6 +163,10 @@ impl Codegen {
             movzxw rax, [r13 - 4];
             negq rax;
             movq rdi, [r14 - (LBP_BLOCK)];
+            testq rdi, rdi;
+            jnz set_block;
+            movq rdi, (NIL_VALUE);
+        set_block:
             movq [r14 + rax * 8 - (LBP_SELF)], rdi;
         exit2:
         };
