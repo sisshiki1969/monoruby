@@ -7,17 +7,16 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|pos|ofs||key|blk|arg|req|
+    /// | op|reg|rop|ofs||   |blk|pos|req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
     /// - reg: a number of resisters
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
-    /// - pos: a number of positional arguments (req + opt)
-    /// - arg: a number of arguments (req + opt + rest)
+    /// - reqopt: a number of positional arguments (req + opt)
+    /// - pos: a number of arguments (req + opt + rest)
     /// - blk: position of block parameter
-    /// - key: position of keyword parameter
     ///
     /// ### registers
     ///
@@ -72,6 +71,9 @@ impl Codegen {
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
+            movzxw r15, [r13 - 14];
+            negq r15;
+            lea  r15, [r14 + r15 * 8 - (LBP_ARG0)];
             cmpw rdx, rdi;
             // if passed == reqopt, required and optional param was done. goto rest param handling.
             jeq  set_rest_empty;
@@ -92,8 +94,7 @@ impl Codegen {
         // set rest parameter.
           movl rsi, rdx;
           subl rsi, rdi;
-          negq rdi;
-          lea  rdi, [r14 + rdi * 8 - (LBP_ARG0)];
+          movq rdi, r15;
           // This is necessary because *make_rest_array* may destroy values under the sp
           // when the number of arguments passed > the number of registers.
           // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
@@ -101,6 +102,7 @@ impl Codegen {
           movq rax, (make_rest_array);
           call rax;
           addq rsp, 1024;
+          subq r15, 8;
           jmp  fill_temp;
         }
         monoasm! { self.jit,
@@ -141,34 +143,42 @@ impl Codegen {
             movzxw rax, [r13 - 6];
             cmpw rax, [r13 - 14];
             jeq  fill_temp;
-            negq rdi;
-            lea  rdi, [r14 + rdi * 8 - (LBP_ARG0)];
+            movq rdi, r15;
             xorq rsi, rsi;
             movq rax, (make_rest_array);
             call rax;
+            subq r15, 8;
         fill_temp:
-        // fill nil to temporary registers.
-        // rax = reg_num - pos_num
-            movl rax, r15;
-            subw rax, [r13 - 6];
-            //jz   exit;
         }
-        self.fill(15 /* r15 */, NIL_VALUE);
         let set_block = self.jit.label();
         let exit = self.jit.label();
+        let l0 = self.jit.label();
+        let l1 = self.jit.label();
         monoasm! { self.jit,
             cmpw [r13 - 4], 0;
             jeq  exit;
-            movzxw rax, [r13 - 4];
-            negq rax;
             movq rdi, [r14 - (LBP_BLOCK)];
             testq rdi, rdi;
             jnz set_block;
             movq rdi, (NIL_VALUE);
         set_block:
-            movq [r14 + rax * 8 - (LBP_SELF)], rdi;
+            movq [r15], rdi;
+            subq r15, 8;
         exit:
+            // fill nil to temporary registers.
+            // rax = [reg_num]
+            movzxw rax, [r13 - 12];
+            negq rax;
+            lea  rax, [r14 + rax * 8 - (LBP_ARG0)];
+        l0:
+            cmpq rax, r15;
+            je  l1;
+            movq [r15], (NIL_VALUE);
+            subq r15, 8;
+            jmp  l0;
+        l1:
         };
+        //self.fill(2 /* rdx */, NIL_VALUE);
     }
 
     /// fill *val* to the slots from *ptr* to *ptr* + rax - 1

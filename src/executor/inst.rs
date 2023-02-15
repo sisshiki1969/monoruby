@@ -124,6 +124,7 @@ pub(super) struct FnInitInfo {
     pub(super) arg_num: usize,
     pub(super) pos_num: usize,
     pub(super) req_num: usize,
+    /// bit 0:rest(yes=1 no =0) bit 1:block
     pub(super) block_pos: usize,
     pub(super) stack_offset: usize,
 }
