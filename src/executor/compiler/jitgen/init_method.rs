@@ -11,28 +11,28 @@ impl Codegen {
         match pc.get_ir(fnstore) {
             TraceIr::InitMethod {
                 reg_num,
-                arg_num,
                 pos_num,
+                reqopt_num,
                 req_num,
                 block_pos,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, arg_num, pos_num, req_num, block_pos, pc, false);
+                self.init_func(reg_num, pos_num, reqopt_num, req_num, block_pos, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
-                arg_num,
                 pos_num,
+                reqopt_num,
                 req_num,
                 block_pos,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                if pos_num >= 2 {
+                if reqopt_num >= 2 {
                     self.jit_expand_arg0(req_num);
                 }
-                self.init_func(reg_num, arg_num, pos_num, req_num, block_pos, pc, true);
+                self.init_func(reg_num, pos_num, reqopt_num, req_num, block_pos, pc, true);
             }
             _ => unreachable!(),
         }
@@ -47,8 +47,8 @@ impl Codegen {
     fn init_func(
         &mut self,
         reg_num: usize,
-        arg_num: usize,
         pos_num: usize,
+        reqopt_num: usize,
         req_num: usize,
         _block_pos: usize,
         pc: BcPc,
@@ -65,12 +65,12 @@ impl Codegen {
         self.jit.select_page(0);
 
         // rdx: number of args passed from caller
-        let has_rest_param = pos_num != arg_num;
+        let has_rest_param = reqopt_num != pos_num;
 
-        if pos_num > 0 {
-            if pos_num == req_num && !has_rest_param {
+        if reqopt_num > 0 {
+            if reqopt_num == req_num && !has_rest_param {
                 monoasm! { self.jit,
-                    cmpl rdx, (pos_num);
+                    cmpl rdx, (reqopt_num);
                 }
                 if is_block {
                     let fill_temp = self.jit.label();
@@ -94,16 +94,16 @@ impl Codegen {
                 let fill_opt = self.jit.label();
                 let fill_temp = self.jit.label();
                 monoasm! { self.jit,
-                    // if passed_args >= pos_num then goto l1
-                    cmpl rdx, (pos_num);
+                    // if passed_args >= reqopt_num then goto l1
+                    cmpl rdx, (reqopt_num);
                     jeq  set_rest_empty;
                     jlt  fill_req;
                 }
                 if has_rest_param {
                     monoasm! { self.jit,
-                    lea  rdi, [r14 - (pos_num as i32 * 8 + LBP_ARG0)];
+                    lea  rdi, [r14 - (reqopt_num as i32 * 8 + LBP_ARG0)];
                     movl rsi, rdx;
-                    subl rsi, (pos_num);
+                    subl rsi, (reqopt_num);
                     // This is necessary because *make_rest_array* may destroy values under sp
                     // when the number of arguments passed > the number of registers in this function.
                     // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
@@ -123,7 +123,7 @@ impl Codegen {
                 fill_req:
                 }
                 if req_num > 0 {
-                    if pos_num != req_num {
+                    if reqopt_num != req_num {
                         monoasm! { self.jit,
                             // if passed_args >= req_num then goto l2
                             cmpl rdx, (req_num);
@@ -149,17 +149,17 @@ impl Codegen {
                 monoasm! { self.jit,
                 fill_opt:
                 // rax = pos_num - max(passed_args, req_num)
-                    movl rax, (pos_num);
+                    movl rax, (reqopt_num);
                     subl rax, rdx;
                 // fill zero to residual locals.
                 }
-                self.jit_fill(pos_num, 0);
+                self.jit_fill(reqopt_num, 0);
                 monoasm! { self.jit,
                 set_rest_empty:
                 };
                 if has_rest_param {
                     monoasm! { self.jit,
-                        lea  rdi, [r14 - (pos_num as i32 * 8 + LBP_ARG0)];
+                        lea  rdi, [r14 - (reqopt_num as i32 * 8 + LBP_ARG0)];
                         xorq rsi, rsi;
                         movq rax, (make_rest_array);
                         call rax;
@@ -187,20 +187,20 @@ impl Codegen {
         }
 
         // fill nil to temporary registers.
-        let clear_len = reg_num - arg_num - 1;
+        let clear_len = reg_num - pos_num;
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((arg_num + i) as i32 * 8 + LBP_ARG0)], rax;
+                    movq [r14 - ((pos_num + i) as i32 * 8 + LBP_ARG0)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((arg_num + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
+                    movq [r14 - ((pos_num + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
                 );
             }
         }

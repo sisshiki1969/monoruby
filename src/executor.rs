@@ -765,8 +765,8 @@ impl BcPc {
         let s = match self.get_ir(&globals.func) {
             TraceIr::InitMethod {
                 reg_num,
-                arg_num,
-                pos_num,
+                pos_num: arg_num,
+                reqopt_num: pos_num,
                 req_num,
                 block_pos,
                 stack_offset,
@@ -777,8 +777,8 @@ impl BcPc {
             }
             TraceIr::InitBlock {
                 reg_num,
-                arg_num,
-                pos_num,
+                pos_num: arg_num,
+                reqopt_num: pos_num,
                 req_num,
                 block_pos,
                 stack_offset,

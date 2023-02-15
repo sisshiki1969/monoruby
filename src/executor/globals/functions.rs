@@ -30,9 +30,9 @@ impl FuncId {
 pub struct ArgumentsInfo {
     pub required_num: usize,
     // required + optional
-    pub positional_num: usize,
+    pub reqopt_num: usize,
     // required + optional + rest
-    pub arg_num: usize,
+    pub pos_num: usize,
     pub positional_args_names: Vec<Option<String>>,
     pub keyword_args: HashMap<IdentId, (usize, Option<Box<Node>>)>,
     pub block_param: Option<String>,
@@ -40,8 +40,8 @@ pub struct ArgumentsInfo {
 
 impl ArgumentsInfo {
     fn arity(&self) -> i32 {
-        if self.positional_num == self.required_num && self.positional_num == self.arg_num {
-            self.positional_num as i32
+        if self.reqopt_num == self.required_num && self.reqopt_num == self.pos_num {
+            self.reqopt_num as i32
         } else {
             -1
         }
@@ -254,7 +254,7 @@ fn handle_args(
             }
         }
     }
-    let positional_num = positional_args_names.len() - rest;
+    let reqopt_num = positional_args_names.len() - rest;
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
@@ -268,8 +268,8 @@ fn handle_args(
         ArgumentsInfo {
             positional_args_names,
             keyword_args,
-            arg_num: positional_num + rest,
-            positional_num,
+            pos_num: reqopt_num + rest,
+            reqopt_num,
             required_num,
             block_param,
         },
@@ -618,7 +618,7 @@ impl FuncInfo {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.positional_num,
+            info.args.reqopt_num,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -676,7 +676,7 @@ impl std::fmt::Debug for ISeqInfo {
             "RubyFuncInfo {{ id: {}, name: {:?}. pos_num: {:?} }}",
             self.id().get(),
             self.name,
-            self.args.positional_num
+            self.args.reqopt_num
         )
     }
 }
@@ -792,8 +792,8 @@ impl ISeqInfo {
     }
 
     /// get a number of required arguments.
-    pub(crate) fn arg_num(&self) -> usize {
-        self.args.arg_num
+    pub(crate) fn pos_num(&self) -> usize {
+        self.args.pos_num
     }
 
     /// get a number of required arguments.
@@ -802,14 +802,14 @@ impl ISeqInfo {
     }
 
     /// get a number of positional arguments.
-    pub(crate) fn pos_num(&self) -> usize {
-        self.args.positional_num
+    pub(crate) fn reqopt_num(&self) -> usize {
+        self.args.reqopt_num
     }
 
     /// get a position of a block argument.
     pub(crate) fn block_pos(&self) -> usize {
         if self.args.block_param.is_some() {
-            self.args.arg_num + 1
+            self.args.pos_num + 1
         } else {
             0
         }

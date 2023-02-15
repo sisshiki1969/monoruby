@@ -59,30 +59,25 @@ impl Codegen {
         let fill_opt = self.jit.label();
         let set_rest_empty = self.jit.label();
         let fill_temp = self.jit.label();
-        let exit = self.jit.label();
         let err = self.wrong_argument;
         monoasm! { self.jit,
-            subl r15, 1;
         // in
-        // r15: reg_num (except *self*)
-        // rdi: pos_num
-        // [R13 - 14]: pos_num
+        // r15: reg_num
+        // rdi: reqopt_num
+        // [R13 - 14]: reqopt_num
         // [R13 - 12]: reg_num
         // [R13 - 8]: req_num
-        // [R13 - 6]: arg_num
+        // [R13 - 6]: pos_num
         // [R13 - 4]: block_pos
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
-        //
-        // if passed_args < pos_num then goto l5
-        // if passed_args == pos_num then goto l1
             cmpw rdx, rdi;
-            // if passed == pos_num, required and optional param was done. goto rest param handling.
+            // if passed == reqopt, required and optional param was done. goto rest param handling.
             jeq  set_rest_empty;
-            // if passed < pos_num, we must fill nil to residual required/optional params.
+            // if passed < reqopt, we must fill nil to residual required/optional params.
             jlt  fill_req;
-            // in the case of passed > pos_num
+            // in the case of passed > reqopt
             // does rest param exists?
             movzxw rax, [r13 - 6];
             cmpw rax, [r13 - 14];
@@ -115,7 +110,7 @@ impl Codegen {
         if is_block {
             // fill nil to residual required arguments.
             monoasm! { self.jit,
-            // if passed_args >= req_num then goto l2
+            // if passed_args >= req then goto fill_opt
                 jge  fill_opt;
                 movzxw rcx, [r13 - 8];
                 movl rax, rcx;
@@ -134,7 +129,7 @@ impl Codegen {
         monoasm! { self.jit,
         fill_opt:
         // fill zero to residual locals.
-        // rax = pos_num - max(passed_args, req_num)
+        // rax = reqopt - max(passed_args, req_num)
             movl rax, rdi;
             subl rax, rdx;
             movl rdx, rdi;
@@ -153,18 +148,17 @@ impl Codegen {
             call rax;
         fill_temp:
         // fill nil to temporary registers.
-        // rax = reg_num - 1 - arg_num
+        // rax = reg_num - pos_num
             movl rax, r15;
             subw rax, [r13 - 6];
-            jz   exit;
+            //jz   exit;
         }
         self.fill(15 /* r15 */, NIL_VALUE);
         let set_block = self.jit.label();
-        let exit2 = self.jit.label();
+        let exit = self.jit.label();
         monoasm! { self.jit,
-        exit:
             cmpw [r13 - 4], 0;
-            jeq  exit2;
+            jeq  exit;
             movzxw rax, [r13 - 4];
             negq rax;
             movq rdi, [r14 - (LBP_BLOCK)];
@@ -173,7 +167,7 @@ impl Codegen {
             movq rdi, (NIL_VALUE);
         set_block:
             movq [r14 + rax * 8 - (LBP_SELF)], rdi;
-        exit2:
+        exit:
         };
     }
 

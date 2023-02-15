@@ -130,12 +130,12 @@ pub(super) struct FnInitInfo {
 
 impl FnInitInfo {
     pub(super) fn new(info: &ISeqInfo) -> Self {
-        let reg_num = info.total_reg_num();
-        let stack_offset = (reg_num * 8 + LBP_SELF as usize + 15) >> 4;
+        let reg_num = info.total_reg_num() - 1;
+        let stack_offset = (reg_num * 8 + LBP_ARG0 as usize + 15) >> 4;
         FnInitInfo {
             reg_num,
-            arg_num: info.arg_num(),
-            pos_num: info.pos_num(),
+            arg_num: info.pos_num(),
+            pos_num: info.reqopt_num(),
             req_num: info.req_num(),
             block_pos: info.block_pos(),
             stack_offset,
@@ -383,8 +383,8 @@ pub(super) enum TraceIr {
     /// initialize_method
     InitMethod {
         reg_num: usize,
-        arg_num: usize,
         pos_num: usize,
+        reqopt_num: usize,
         req_num: usize,
         block_pos: usize,
         stack_offset: usize,
@@ -392,8 +392,8 @@ pub(super) enum TraceIr {
     /// initialize_block
     InitBlock {
         reg_num: usize,
-        arg_num: usize,
         pos_num: usize,
+        reqopt_num: usize,
         req_num: usize,
         block_pos: usize,
         stack_offset: usize,
@@ -728,8 +728,8 @@ impl TraceIr {
                 ),
                 170 => Self::InitMethod {
                     reg_num: op1 as usize,
-                    arg_num: pc.u16(1) as usize,
-                    pos_num: op2 as usize,
+                    pos_num: pc.u16(1) as usize,
+                    reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     block_pos: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
@@ -737,8 +737,8 @@ impl TraceIr {
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 172 => Self::InitBlock {
                     reg_num: op1 as usize,
-                    arg_num: pc.u16(1) as usize,
-                    pos_num: op2 as usize,
+                    pos_num: pc.u16(1) as usize,
+                    reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     block_pos: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
