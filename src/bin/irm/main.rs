@@ -43,13 +43,13 @@ fn main() {
         match readline {
             Ok(code) => {
                 buf = if cont_mode {
-                    format!("{}\n{}", buf, code)
+                    format!("{buf}\n{code}")
                 } else {
                     code.clone()
                 };
                 let main_fid = match globals.compile_script_with_binding(
                     buf.clone(),
-                    std::path::Path::new(&format!("irm:{:03}", script_line)),
+                    std::path::Path::new("irm:{script_line:03}"),
                     context.clone(),
                 ) {
                     Ok((fid, collector)) => {
@@ -84,7 +84,7 @@ fn main() {
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                println!("Error: {err:?}");
                 break;
             }
         }

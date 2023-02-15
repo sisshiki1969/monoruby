@@ -65,7 +65,7 @@ impl std::fmt::Debug for ClassId {
             15 => write!(f, "REGEXP"),
             16 => write!(f, "MODULE"),
             17 => write!(f, "IO"),
-            n => write!(f, "ClassId({})", n),
+            n => write!(f, "ClassId({n})"),
         }
     }
 }

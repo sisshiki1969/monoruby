@@ -22,8 +22,8 @@ impl std::fmt::Debug for BcReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Self_ => write!(f, "S"),
-            Self::Local(local) => write!(f, "{:?}", local),
-            Self::Temp(temp) => write!(f, "{:?}", temp),
+            Self::Local(local) => write!(f, "{local:?}"),
+            Self::Temp(temp) => write!(f, "{temp:?}"),
         }
     }
 }
@@ -529,7 +529,7 @@ impl IrContext {
                 && !safe_nav =>
             {
                 let recv = self.gen_expr_reg(ctx, info, receiver.clone())?;
-                let method = IdentId::get_ident_id(&format!("{}=", method));
+                let method = IdentId::get_ident_id(&format!("{method}="));
                 LvalueKind::Send { recv, method }
             }
             NodeKind::LocalVar(_) => LvalueKind::Other,

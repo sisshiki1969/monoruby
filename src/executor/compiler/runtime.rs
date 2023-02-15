@@ -410,7 +410,7 @@ pub(super) extern "C" fn alias_method(
 // error handling
 
 pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
-    panic!("unimplemented inst. {:016x}", opcode);
+    panic!("unimplemented inst. {opcode:016x}");
 }
 
 pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
@@ -459,7 +459,7 @@ pub unsafe extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut
     for i in 0..16 {
         eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
         let ret_addr = cfp.return_addr();
-        eprintln!("ret adr: {:?} ", ret_addr);
+        eprintln!("ret adr: {ret_addr:?} ");
         let prev_cfp = cfp.prev();
         globals.dump_frame_info(cfp.lfp());
         if prev_cfp.is_null() {

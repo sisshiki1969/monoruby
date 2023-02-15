@@ -14,25 +14,25 @@ impl Codegen {
                 pos_num,
                 reqopt_num,
                 req_num,
-                block_pos,
+                info,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
-                self.init_func(reg_num, pos_num, reqopt_num, req_num, block_pos, pc, false);
+                self.init_func(reg_num, pos_num, reqopt_num, req_num, info, pc, false);
             }
             TraceIr::InitBlock {
                 reg_num,
                 pos_num,
                 reqopt_num,
                 req_num,
-                block_pos,
+                info,
                 stack_offset,
             } => {
                 self.setup_stack(stack_offset);
                 if reqopt_num >= 2 {
                     self.jit_expand_arg0(req_num);
                 }
-                self.init_func(reg_num, pos_num, reqopt_num, req_num, block_pos, pc, true);
+                self.init_func(reg_num, pos_num, reqopt_num, req_num, info, pc, true);
             }
             _ => unreachable!(),
         }
@@ -47,10 +47,10 @@ impl Codegen {
     fn init_func(
         &mut self,
         reg_num: usize,
-        pos_num: usize,
+        _pos_num: usize,
         reqopt_num: usize,
         req_num: usize,
-        _block_pos: usize,
+        info: usize,
         pc: BcPc,
         is_block: bool,
     ) {
@@ -65,7 +65,8 @@ impl Codegen {
         self.jit.select_page(0);
 
         // rdx: number of args passed from caller
-        let has_rest_param = reqopt_num != pos_num;
+        let has_rest_param = (info & 0b1) != 0;
+        let pos_num = reqopt_num + if has_rest_param { 1 } else { 0 };
 
         if reqopt_num > 0 {
             if reqopt_num == req_num && !has_rest_param {

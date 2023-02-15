@@ -7,7 +7,7 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|rop|ofs||   |blk|pos|req|
+    /// | op|reg|rop|ofs||   |inf| |req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
@@ -15,8 +15,7 @@ impl Codegen {
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
     /// - reqopt: a number of positional arguments (req + opt)
-    /// - pos: a number of arguments (req + opt + rest)
-    /// - blk: position of block parameter
+    /// - inf:
     ///
     /// ### registers
     ///
@@ -66,8 +65,8 @@ impl Codegen {
         // [R13 - 14]: reqopt_num
         // [R13 - 12]: reg_num
         // [R13 - 8]: req_num
-        // [R13 - 6]: pos_num
-        // [R13 - 4]: block_pos
+        // [R13 - 6]:
+        // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
@@ -81,14 +80,14 @@ impl Codegen {
             jlt  fill_req;
             // in the case of passed > reqopt
             // does rest param exists?
-            movzxw rax, [r13 - 6];
-            cmpw rax, [r13 - 14];
+            movzxw rax, [r13 - 4];
+            testq rax, 0b1;
         }
         if is_block {
-            monoasm! { self.jit, jeq  fill_temp; }
+            monoasm! { self.jit, jz fill_temp; }
         } else {
             // if passed_args > pos_num && no rest parameter then goto err
-            monoasm! { self.jit, jeq  err; }
+            monoasm! { self.jit, jz err; }
         }
         monoasm! { self.jit,
         // set rest parameter.
@@ -140,9 +139,9 @@ impl Codegen {
         monoasm! { self.jit,
         set_rest_empty:
         // set rest parameter to empty Array.
-            movzxw rax, [r13 - 6];
-            cmpw rax, [r13 - 14];
-            jeq  fill_temp;
+            movzxw rax, [r13 - 4];
+            testq rax, 0b1;
+            jz  fill_temp;
             movq rdi, r15;
             xorq rsi, rsi;
             movq rax, (make_rest_array);
@@ -155,8 +154,9 @@ impl Codegen {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
         monoasm! { self.jit,
-            cmpw [r13 - 4], 0;
-            jeq  exit;
+            movzxw rax, [r13 - 4];
+            testq rax, 0b10;
+            jz exit;
             movq rdi, [r14 - (LBP_BLOCK)];
             testq rdi, rdi;
             jnz set_block;

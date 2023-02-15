@@ -175,10 +175,7 @@ impl Globals {
             if range.start() == range.end() {
                 self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
             } else {
-                self.err_argument(&format!(
-                    "wrong number of arguments (given {given}, expeted {:?})",
-                    range
-                ));
+                self.err_argument("wrong number of arguments (given {given}, expeted {range:?})");
             };
             None
         }
@@ -188,9 +185,7 @@ impl Globals {
         if given >= min {
             return Some(());
         }
-        self.err_argument(&format!(
-            "wrong number of arguments (given {given}, expeted {min}+)",
-        ));
+        self.err_argument("wrong number of arguments (given {given}, expeted {min}+)");
         None
     }
 
@@ -232,8 +227,8 @@ impl Globals {
     ///
     pub(crate) fn err_cant_load(&mut self, err: Option<std::io::Error>, path: &std::path::Path) {
         self.set_error(MonorubyErr::loaderr(match err {
-            Some(err) => format!("can't load {:?}. {}", path, err,),
-            None => format!("can't load {:?}", path),
+            Some(err) => format!("can't load {path:?}. {err}"),
+            None => format!("can't load {path:?}"),
         }));
     }
 
@@ -322,8 +317,8 @@ impl MonorubyErr {
             /*MonorubyErrKind::UndefinedLocal(ident) => {
                 format!("undefined local variable or method `{}'", ident)
             }*/
-            MonorubyErrKind::NotMethod(msg) => format!("{} (NoMethodError)", msg),
-            MonorubyErrKind::Arguments(msg) => format!("{} (ArgumentError)", msg),
+            MonorubyErrKind::NotMethod(msg) => format!("{msg} (NoMethodError)"),
+            MonorubyErrKind::Arguments(msg) => format!("{msg} (ArgumentError)"),
             MonorubyErrKind::Syntax(kind) => match kind {
                 ParseErrKind::SyntaxError(msg) => msg.to_string(),
                 ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
@@ -332,15 +327,15 @@ impl MonorubyErr {
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
             MonorubyErrKind::UninitConst(msg) => msg.to_string(),
             MonorubyErrKind::DivideByZero => "divided by 0 (ZeroDivisionError)".to_string(),
-            MonorubyErrKind::LocalJump(msg) => format!("{} (LocalJumpError)", msg),
-            MonorubyErrKind::Range(msg) => format!("{} (RangeError)", msg),
-            MonorubyErrKind::Type(msg) => format!("{} (TypeError)", msg),
-            MonorubyErrKind::Index(msg) => format!("{} (IndexError)", msg),
-            MonorubyErrKind::Frozen(msg) => format!("{} (FrozenError)", msg),
-            MonorubyErrKind::Load(msg) => format!("{} (LoadError)", msg),
+            MonorubyErrKind::LocalJump(msg) => format!("{msg} (LocalJumpError)"),
+            MonorubyErrKind::Range(msg) => format!("{msg} (RangeError)"),
+            MonorubyErrKind::Type(msg) => format!("{msg} (TypeError)"),
+            MonorubyErrKind::Index(msg) => format!("{msg} (IndexError)"),
+            MonorubyErrKind::Frozen(msg) => format!("{msg} (FrozenError)"),
+            MonorubyErrKind::Load(msg) => format!("{msg} (LoadError)"),
             MonorubyErrKind::Internal(msg) => msg.to_string(),
-            MonorubyErrKind::Regex(msg) => format!("{} (RegexError)", msg),
-            MonorubyErrKind::Runtime(msg) => format!("{} (RuntimeError)", msg),
+            MonorubyErrKind::Regex(msg) => format!("{msg} (RegexError)"),
+            MonorubyErrKind::Runtime(msg) => format!("{msg} (RuntimeError)"),
         }
     }
 }
@@ -364,7 +359,7 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!("unsupported parameter kind {:?}", param)),
+            MonorubyErrKind::Unimplemented(format!("unsupported parameter kind {param:?}")),
             loc,
             sourceinfo,
         )

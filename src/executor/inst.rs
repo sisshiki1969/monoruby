@@ -125,7 +125,7 @@ pub(super) struct FnInitInfo {
     pub(super) pos_num: usize,
     pub(super) req_num: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
-    pub(super) block_pos: usize,
+    pub(super) info: usize,
     pub(super) stack_offset: usize,
 }
 
@@ -138,7 +138,7 @@ impl FnInitInfo {
             arg_num: info.pos_num(),
             pos_num: info.reqopt_num(),
             req_num: info.req_num(),
-            block_pos: info.block_pos(),
+            info: info.info(),
             stack_offset,
         }
     }
@@ -387,7 +387,7 @@ pub(super) enum TraceIr {
         pos_num: usize,
         reqopt_num: usize,
         req_num: usize,
-        block_pos: usize,
+        info: usize,
         stack_offset: usize,
     },
     /// initialize_block
@@ -396,7 +396,7 @@ pub(super) enum TraceIr {
         pos_num: usize,
         reqopt_num: usize,
         req_num: usize,
-        block_pos: usize,
+        info: usize,
         stack_offset: usize,
     },
     //                0       4       8       12      16
@@ -732,7 +732,7 @@ impl TraceIr {
                     pos_num: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
-                    block_pos: pc.u16(2) as usize,
+                    info: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
                 },
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
@@ -741,7 +741,7 @@ impl TraceIr {
                     pos_num: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
-                    block_pos: pc.u16(2) as usize,
+                    info: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
                 },
                 173 => Self::AliasMethod {

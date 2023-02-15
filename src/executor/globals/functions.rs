@@ -806,13 +806,13 @@ impl ISeqInfo {
         self.args.reqopt_num
     }
 
-    /// get a position of a block argument.
-    pub(crate) fn block_pos(&self) -> usize {
-        if self.args.block_param.is_some() {
-            self.args.pos_num + 1
+    /// bit 0:rest(yes=1 no =0) bit 1:block
+    pub(crate) fn info(&self) -> usize {
+        (if self.args.block_param.is_some() {
+            2
         } else {
             0
-        }
+        }) + (self.args.pos_num - self.args.reqopt_num)
     }
 
     /// get a block argument name.

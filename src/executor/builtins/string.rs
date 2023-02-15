@@ -555,11 +555,11 @@ extern "C" fn ljust(
     globals.check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
-        arg.expect_string(globals)?.to_string()
+        arg.expect_string(globals)?
     } else {
         " ".to_string()
     };
-    if padding.len() == 0 {
+    if padding.is_empty() {
         globals.err_zero_width_padding();
         return None;
     };
@@ -594,11 +594,11 @@ extern "C" fn rjust(
     globals.check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
-        arg.expect_string(globals)?.to_string()
+        arg.expect_string(globals)?
     } else {
         " ".to_string()
     };
-    if padding.len() == 0 {
+    if padding.is_empty() {
         globals.err_zero_width_padding();
         return None;
     };

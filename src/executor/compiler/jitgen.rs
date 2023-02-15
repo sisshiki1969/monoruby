@@ -379,8 +379,8 @@ impl std::fmt::Debug for StackSlotInfo {
             .enumerate()
             .flat_map(|(i, mode)| match mode {
                 LinkMode::None => None,
-                LinkMode::XmmR(x) => Some(format!("%{i}:R({:?}) ", x)),
-                LinkMode::XmmRW(x) => Some(format!("%{i}:RW({:?}) ", x)),
+                LinkMode::XmmR(x) => Some(format!("%{i}:R({x:?}) ")),
+                LinkMode::XmmRW(x) => Some(format!("%{i}:RW({x:?}) ")),
             })
             .collect();
         write!(f, "[{s}]")
