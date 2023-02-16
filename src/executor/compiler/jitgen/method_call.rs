@@ -33,6 +33,7 @@ impl Codegen {
             method_info,
             name,
             None,
+            None,
             ret,
             pc + 1,
             has_splat,
@@ -130,6 +131,7 @@ impl Codegen {
             method_info,
             name,
             Some(args),
+            Some(args + 1),
             ret,
             pc + 1,
             has_splat,
@@ -143,6 +145,7 @@ impl Codegen {
         method_info: MethodInfo,
         name: IdentId,
         block: Option<SlotId>,
+        kw: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
         has_splat: bool,
@@ -153,12 +156,22 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
+                self.gen_call_not_cached(ctx, method_info, name, block, kw, ret, pc, has_splat);
             } else {
-                self.gen_call_cached(fnstore, ctx, method_info, block, ret, cached, pc, has_splat);
+                self.gen_call_cached(
+                    fnstore,
+                    ctx,
+                    method_info,
+                    block,
+                    kw,
+                    ret,
+                    cached,
+                    pc,
+                    has_splat,
+                );
             }
         } else {
-            self.gen_call_not_cached(ctx, method_info, name, block, ret, pc, has_splat);
+            self.gen_call_not_cached(ctx, method_info, name, block, kw, ret, pc, has_splat);
         }
     }
 
@@ -171,6 +184,7 @@ impl Codegen {
         ctx: &BBContext,
         method_info: MethodInfo,
         block: Option<SlotId>,
+        kw: Option<SlotId>,
         ret: SlotId,
         cached: InlineCached,
         pc: BcPc,
@@ -195,6 +209,7 @@ impl Codegen {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(block.is_none());
+                assert!(kw.is_none());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -209,13 +224,15 @@ impl Codegen {
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
                 assert!(block.is_none());
+                assert!(kw.is_none());
                 self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
+                //assert!(kw.is_none());
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, method_info, ret, block, pc, has_splat);
+                self.method_call_cached(ctx, method_info, ret, block, kw, pc, has_splat);
             }
         };
     }
@@ -229,6 +246,7 @@ impl Codegen {
         method_info: MethodInfo,
         name: IdentId,
         block: Option<SlotId>,
+        kw: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
         has_splat: bool,
@@ -274,7 +292,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat);
+        self.set_self_and_args(method_info, block, kw, has_splat);
 
         monoasm!(self.jit,
             // set meta.
@@ -527,6 +545,7 @@ impl Codegen {
         method_info: MethodInfo,
         ret: SlotId,
         block: Option<SlotId>,
+        kw: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -535,7 +554,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat);
+        self.set_self_and_args(method_info, block, kw, has_splat);
         // argument registers:
         //   rdi: args len
         monoasm!(self.jit,
@@ -599,6 +618,7 @@ impl Codegen {
             //   r13: pc
             //
             movq rax, rsi;
+            xorq rcx, rcx;
         };
         self.call_rax();
         self.xmm_restore(&xmm_using);
@@ -629,6 +649,7 @@ impl Codegen {
         &mut self,
         method_info: MethodInfo,
         block: Option<SlotId>,
+        kw: Option<SlotId>,
         has_splat: bool,
     ) {
         let MethodInfo {
@@ -642,18 +663,22 @@ impl Codegen {
         );
         self.jit_set_arguments(args, len, has_splat);
         // set block
-        match block {
-            Some(block) => {
-                self.load_rax(block);
-                monoasm!(self.jit,
-                    movq [rsp - (16 + LBP_BLOCK)], rax;
-                );
-            }
-            None => {
-                monoasm!(self.jit,
-                    movq [rsp - (16 + LBP_BLOCK)], 0;
-                );
-            }
+        if let Some(block) = block {
+            self.load_rax(block);
+            monoasm!(self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], rax;
+            );
+        } else {
+            monoasm!(self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+            );
+        }
+        if let Some(kw) = kw {
+            self.load_rcx(kw);
+        } else {
+            monoasm!(self.jit,
+                xorq rcx, rcx;
+            );
         }
     }
 

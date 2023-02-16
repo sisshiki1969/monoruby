@@ -1431,6 +1431,31 @@ mod test {
         );
     }
 
+    #[ignore]
+    #[test]
+    fn test_keyword() {
+        run_test_with_prelude(
+            r#"
+        f(1,2)
+        "#,
+            r#"
+        def f(x,y,z=10,*r,a:1,b:2,c:3)
+          [x, y, z, r, a, b, c]
+        end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+        f(1,2,3,c:10,a:20)
+        "#,
+            r#"
+        def f(x,y,z=10,*r,a:1,b:2,c:3)
+          [x, y, z, r, a, b, c]
+        end
+        "#,
+        );
+    }
+
     #[test]
     fn test_splat() {
         run_test_with_prelude(

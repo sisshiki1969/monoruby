@@ -102,27 +102,17 @@ impl Codegen {
             // set keyword arguments
             let exit = self.jit.label();
             monoasm! { self.jit,
-                //movq rax, [rcx - 8];
-                //cmpq rax, (NIL_VALUE);
-                //je   exit;
-                //lea  rsi, [rsp - (16 + LBP_ARG0)];
-                //subq rsp, 4096;
-                //pushq rdi;
-                //pushq rcx;
-                //movq rdi, r12;
-                //movq rdx, rax;
-                //movq rcx, [r13 + 8];
-                //movq rax, (runtime::distibute_keyword_arguments);
-                //call rax;
-                //popq rcx;
-                //popq rdi;
-                //addq rsp, 4096;
+            // rdx <- keyword hash
+                movq rdx, [rcx - 8];
             exit:
                 subq rcx, 16;
             };
         } else {
             monoasm! { self.jit,
+                // set block
                 movq [rsp - (16 + LBP_BLOCK)], 0;
+                // rdx <- keyword hash
+                xorq rdx, rdx;
             };
         }
         self.set_arguments(has_splat);
@@ -139,6 +129,8 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
+            // set kwyword hash
+            movq rcx, rdx;
         };
         self.call_rax();
         monoasm! { self.jit,
@@ -236,6 +228,7 @@ impl Codegen {
             //   r13: pc
             //
             movq rax, r9;
+            xorq rcx, rcx;
         };
         self.call_rax();
         monoasm! { self.jit,

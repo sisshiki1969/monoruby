@@ -420,25 +420,27 @@ impl Codegen {
     /// - *esi*: :3
     ///
     /// ### registers destroyed
-    /// - rax, r8
+    /// - rax
     ///
     fn fetch_and_dispatch(&mut self) {
         let l1 = self.jit.label();
+        let l2 = self.jit.label();
         monoasm! { self.jit,
-            movq r8, (self.dispatch.as_ptr());
+            movq r15, (self.dispatch.as_ptr());
             addq r13, 16;
             movzxw rax, [r13 - 10]; // rax <- :0
-            movzxw r15, [r13 - 12];  // r15 <- :1
             // dispatch
             testq rax, 0x80;
             jeq l1;
+            movq rax, [r15 + rax * 8];
             movsxw rsi, [r13 - 16];    // rsi <- :3
             movzxw rdi, [r13 - 14];    // rdi <- :2
-            movq rax, [r8 + rax * 8];
-            jmp rax;
+            jmp l2;
         l1:
+            movq rax, [r15 + rax * 8];
             movsxl rdi, [r13 - 16];  // rdi <- :2:3
-            movq rax, [r8 + rax * 8];
+        l2:
+            movzxw r15, [r13 - 12];  // r15 <- :1
             jmp rax;
         };
     }
@@ -1197,6 +1199,7 @@ impl Codegen {
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdi, rdi;
+            xorq rcx, rcx;
         };
         self.call_rax();
         monoasm! { self.jit,

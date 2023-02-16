@@ -7,6 +7,7 @@ impl Codegen {
             movq rbp, rsp;
             // save len in rdx.
             movq rdx, rdi;
+            movq r15, rcx;
         );
         match pc.get_ir(fnstore) {
             TraceIr::InitMethod(fn_info) => {
@@ -32,9 +33,9 @@ impl Codegen {
 
     fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
         let FnInitInfo {
-            reg_num,
             reqopt_num,
             req_num,
+            key_num,
             ..
         } = *fn_info;
         let err_label = self.jit.label();
@@ -49,7 +50,6 @@ impl Codegen {
 
         // rdx: number of args passed from caller
         let has_rest_param = fn_info.has_rest_param();
-        let pos_num = fn_info.pos_num();
 
         if reqopt_num > 0 {
             if reqopt_num == req_num && !has_rest_param {
@@ -96,7 +96,7 @@ impl Codegen {
                     call rax;
                     addq rsp, 1024;
                     jmp  fill_temp;
-                        };
+                    };
                 } else if is_block {
                     monoasm! { self.jit, jmp  fill_temp; }
                 } else {
@@ -161,7 +161,6 @@ impl Codegen {
                 movq rax, (make_rest_array);
                 call rax;
                 addq rsp, 1024;
-                //jmp  fill_temp;
             };
         } else if !is_block {
             monoasm! { self.jit,
@@ -170,21 +169,41 @@ impl Codegen {
             }
         }
 
+        if key_num != 0 {
+            monoasm! { self.jit,
+                // set keyword parameters
+                movq rdi, r12;
+                lea  rsi, [r14 - (fn_info.kw_pos() as i32 * 8 + LBP_ARG0)];
+                movq rdx, r15;
+                movq rcx, [r14 - (LBP_META)];
+                movq rax, (runtime::distibute_keyword_arguments);
+                call rax;
+            }
+        }
+
+        if fn_info.has_block_param() {
+            monoasm! { self.jit,
+                movq rax, [r14 - (LBP_BLOCK)];
+                movq [r14 - (fn_info.block_pos() as i32 * 8 + LBP_ARG0)], rax;
+            }
+        }
+
         // fill nil to temporary registers.
-        let clear_len = reg_num - pos_num;
+        let temp_pos = fn_info.tmp_pos();
+        let clear_len = fn_info.reg_num - temp_pos;
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((pos_num + i) as i32 * 8 + LBP_ARG0)], rax;
+                    movq [r14 - ((temp_pos + i) as i32 * 8 + LBP_ARG0)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((pos_num + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
+                    movq [r14 - ((temp_pos + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
                 );
             }
         }

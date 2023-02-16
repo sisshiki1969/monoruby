@@ -71,6 +71,8 @@ impl Codegen {
         // rdx: number of args passed from caller
         // destroy
         // r15, caller-save registers
+            subq rsp, 1016;
+            pushq rcx;
             movzxw r15, [r13 - 14];
             negq r15;
             lea  r15, [r14 + r15 * 8 - (LBP_ARG0)];
@@ -98,10 +100,10 @@ impl Codegen {
           // This is necessary because *make_rest_array* may destroy values under the sp
           // when the number of arguments passed > the number of registers.
           // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
-          subq rsp, 1024;
+          //subq rsp, 1024;
           movq rax, (make_rest_array);
           call rax;
-          addq rsp, 1024;
+          //addq rsp, 1024;
           subq r15, 8;
           jmp  fill_temp;
         }
@@ -156,6 +158,8 @@ impl Codegen {
         let l1 = self.jit.label();
         let skip = self.jit.label();
         monoasm! { self.jit,
+            popq rdx;
+            addq rsp, 1016;
             // set keyword parameters
             movzxw rax, [r13 - 6];
             testq rax, rax;

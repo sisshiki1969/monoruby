@@ -173,6 +173,21 @@ impl FnInitInfo {
     pub(super) fn pos_num(&self) -> usize {
         self.reqopt_num + if self.has_rest_param() { 1 } else { 0 }
     }
+
+    pub(super) fn tmp_pos(&self) -> usize {
+        self.reqopt_num
+            + if self.has_rest_param() { 1 } else { 0 }
+            + self.key_num
+            + if self.has_block_param() { 1 } else { 0 }
+    }
+
+    pub(super) fn kw_pos(&self) -> usize {
+        self.pos_num()
+    }
+
+    pub(super) fn block_pos(&self) -> usize {
+        self.pos_num() + self.key_num
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

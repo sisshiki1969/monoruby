@@ -648,6 +648,7 @@ macro_rules! load_store {
             ///
             /// store $reg to *reg*
             ///
+            #[allow(dead_code)]
             fn [<store_ $reg>](&mut self, reg: SlotId) {
                 monoasm!(self.jit,
                     movq [r14 - (conv(reg))], $reg;
@@ -657,6 +658,7 @@ macro_rules! load_store {
             ///
             /// load *reg* to $reg
             ///
+            #[allow(dead_code)]
             fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!(self.jit,
                     movq $reg, [r14 - (conv(reg))];
@@ -670,6 +672,7 @@ impl Codegen {
     load_store!(rax);
     load_store!(rdi);
     load_store!(rsi);
+    load_store!(rcx);
 
     ///
     /// move xmm(*src*) to xmm(*dst*).

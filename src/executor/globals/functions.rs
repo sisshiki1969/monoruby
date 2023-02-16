@@ -236,7 +236,7 @@ fn handle_args(
             }
             ParamKind::Keyword(name, init) => {
                 args_names.push(Some(name.clone()));
-                let name = IdentId::get_ident_id_from_string(dbg!(name));
+                let name = IdentId::get_ident_id_from_string(name);
                 keyword_args.push((name, init));
             }
             ParamKind::Block(name) => {
