@@ -190,42 +190,16 @@ impl IrContext {
                     }
                 }
 
-                BcIr::InitMethod(info) => {
-                    let FnInitInfo {
-                        reg_num,
-                        arg_num,
-                        pos_num,
-                        req_num,
-                        info,
-                        stack_offset,
-                    } = info;
-                    Bc::from_with_num(
-                        enc_www(170, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
-                        *req_num as u16,
-                        *arg_num as u16,
-                        *info as u16,
-                    )
+                BcIr::InitMethod(fn_info) => {
+                    Bc::from_fn_info(enc_www_fn_info(170, fn_info), fn_info)
                 }
                 BcIr::ExpandArray(src, dst, len) => {
                     let op1 = info.get_index(src);
                     let op2 = info.get_index(dst);
                     Bc::from(enc_www(171, op1.0, op2.0, *len))
                 }
-                BcIr::InitBlock(info) => {
-                    let FnInitInfo {
-                        reg_num,
-                        arg_num,
-                        pos_num,
-                        req_num,
-                        info,
-                        stack_offset,
-                    } = info;
-                    Bc::from_with_num(
-                        enc_www(172, *reg_num as u16, *pos_num as u16, *stack_offset as u16),
-                        *req_num as u16,
-                        *arg_num as u16,
-                        *info as u16,
-                    )
+                BcIr::InitBlock(fn_info) => {
+                    Bc::from_fn_info(enc_www_fn_info(172, fn_info), fn_info)
                 }
                 BcIr::AliasMethod { new, old } => {
                     let op1 = info.get_index(new);
@@ -344,6 +318,21 @@ fn enc_ww(opcode: u16, op1: u16, op2: u16) -> u64 {
 
 fn enc_www(opcode: u16, op1: u16, op2: u16, op3: u16) -> u64 {
     ((opcode as u64) << 48) + ((op1 as u64) << 32) + ((op2 as u64) << 16) + (op3 as u64)
+}
+
+fn enc_www_fn_info(opcode: u16, fn_info: &FnInitInfo) -> u64 {
+    let FnInitInfo {
+        reg_num,
+        reqopt_num,
+        stack_offset,
+        ..
+    } = fn_info;
+    enc_www(
+        opcode,
+        *reg_num as u16,
+        *reqopt_num as u16,
+        *stack_offset as u16,
+    )
 }
 
 fn enc_wsww(opcode: u16, op1: u16, op2: i16, op3: u16) -> u64 {

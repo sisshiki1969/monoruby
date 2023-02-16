@@ -33,8 +33,8 @@ pub struct ArgumentsInfo {
     pub reqopt_num: usize,
     // required + optional + rest
     pub pos_num: usize,
-    pub positional_args_names: Vec<Option<String>>,
-    pub keyword_args: HashMap<IdentId, (usize, Option<Box<Node>>)>,
+    pub args_names: Vec<Option<String>>,
+    pub keyword_args: Vec<(IdentId, Option<Box<Node>>)>,
     pub block_param: Option<String>,
 }
 
@@ -200,47 +200,44 @@ fn handle_args(
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
 ) -> Result<(ArgumentsInfo, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
-    let mut positional_args_names = vec![];
-    let mut keyword_args = HashMap::default();
+    let mut args_names = vec![];
+    let mut keyword_args = vec![];
     let mut destruct_args = vec![];
     let mut expand = vec![];
     let mut optional = vec![];
     let mut required_num = 0;
+    let mut optional_num = 0;
     let mut rest = 0;
-    let mut keyword_num = 0;
     let mut block_param = None;
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
-                positional_args_names.push(Some(name));
+                args_names.push(Some(name));
                 required_num += 1;
             }
             ParamKind::Destruct(names) => {
-                expand.push((
-                    positional_args_names.len(),
-                    destruct_args.len(),
-                    names.len(),
-                ));
-                positional_args_names.push(None);
+                expand.push((args_names.len(), destruct_args.len(), names.len()));
+                args_names.push(None);
                 required_num += 1;
                 names.into_iter().for_each(|(name, _)| {
                     destruct_args.push(Some(name));
                 });
             }
             ParamKind::Optional(name, box initializer) => {
-                let local = BcLocal(positional_args_names.len() as u16);
-                positional_args_names.push(Some(name));
+                let local = BcLocal(args_names.len() as u16);
+                args_names.push(Some(name));
+                optional_num += 1;
                 optional.push(OptionalInfo { local, initializer });
             }
             ParamKind::Rest(name) => {
-                positional_args_names.push(Some(name));
+                args_names.push(Some(name));
                 assert_eq!(0, rest);
                 rest = 1;
             }
             ParamKind::Keyword(name, init) => {
-                let name = IdentId::get_ident_id_from_string(name);
-                keyword_args.insert(name, (positional_args_names.len() + keyword_num, init));
-                keyword_num += 1;
+                args_names.push(Some(name.clone()));
+                let name = IdentId::get_ident_id_from_string(dbg!(name));
+                keyword_args.push((name, init));
             }
             ParamKind::Block(name) => {
                 block_param = Some(name);
@@ -254,19 +251,20 @@ fn handle_args(
             }
         }
     }
-    let reqopt_num = positional_args_names.len() - rest;
+
+    let reqopt_num = required_num + optional_num;
     let expand: Vec<_> = expand
         .into_iter()
         .map(|(src, dst, len)| ExpandInfo {
             src,
-            dst: positional_args_names.len() + dst,
+            dst: args_names.len() + dst,
             len,
         })
         .collect();
-    positional_args_names.append(&mut destruct_args);
+    args_names.append(&mut destruct_args);
     Ok((
         ArgumentsInfo {
-            positional_args_names,
+            args_names,
             keyword_args,
             pos_num: reqopt_num + rest,
             reqopt_num,
@@ -612,13 +610,12 @@ impl FuncInfo {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} pos_num:{:?} bc:{:?} meta:{:?}",
+            "{:?} name:{} bc:{:?} meta:{:?}",
             info.id,
             match &self.name {
                 Some(name) => name,
                 None => "<ANONYMOUS>",
             },
-            info.args.reqopt_num,
             BcPcBase::new(info),
             self.data.meta,
         );
@@ -718,11 +715,8 @@ impl ISeqInfo {
             sourceinfo,
             is_block,
         };
-        args.positional_args_names.into_iter().for_each(|name| {
+        args.args_names.into_iter().for_each(|name| {
             info.add_local(name);
-        });
-        args.keyword_args.into_iter().for_each(|(name, _)| {
-            info.add_local(IdentId::get_name(name));
         });
         if let Some(name) = args.block_param {
             info.add_local(name);
@@ -791,9 +785,9 @@ impl ISeqInfo {
         self.locals.len()
     }
 
-    /// get a number of required arguments.
-    pub(crate) fn pos_num(&self) -> usize {
-        self.args.pos_num
+    /// get a number of keyword arguments.
+    pub(crate) fn key_num(&self) -> usize {
+        self.args.keyword_args.len()
     }
 
     /// get a number of required arguments.
@@ -801,7 +795,7 @@ impl ISeqInfo {
         self.args.required_num
     }
 
-    /// get a number of positional arguments.
+    /// get a number of required + optional arguments.
     pub(crate) fn reqopt_num(&self) -> usize {
         self.args.reqopt_num
     }

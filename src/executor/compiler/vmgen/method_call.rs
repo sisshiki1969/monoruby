@@ -102,21 +102,21 @@ impl Codegen {
             // set keyword arguments
             let exit = self.jit.label();
             monoasm! { self.jit,
-                movq rax, [rcx - 8];
-                cmpq rax, (NIL_VALUE);
-                je   exit;
-                lea  rsi, [rsp - (16 + LBP_ARG0)];
-                subq rsp, 4096;
-                pushq rdi;
-                pushq rcx;
-                movq rdi, r12;
-                movq rdx, rax;
-                movq rcx, [r13 + 8];
-                movq rax, (runtime::distibute_keyword_arguments);
-                call rax;
-                popq rcx;
-                popq rdi;
-                addq rsp, 4096;
+                //movq rax, [rcx - 8];
+                //cmpq rax, (NIL_VALUE);
+                //je   exit;
+                //lea  rsi, [rsp - (16 + LBP_ARG0)];
+                //subq rsp, 4096;
+                //pushq rdi;
+                //pushq rcx;
+                //movq rdi, r12;
+                //movq rdx, rax;
+                //movq rcx, [r13 + 8];
+                //movq rax, (runtime::distibute_keyword_arguments);
+                //call rax;
+                //popq rcx;
+                //popq rdi;
+                //addq rsp, 4096;
             exit:
                 subq rcx, 16;
             };

@@ -118,15 +118,34 @@ pub(super) enum BcIr {
     LoopEnd,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub(super) struct FnInitInfo {
-    pub(super) reg_num: usize,
-    pub(super) arg_num: usize,
-    pub(super) pos_num: usize,
-    pub(super) req_num: usize,
+#[derive(Clone, PartialEq, Default)]
+pub struct FnInitInfo {
+    pub reg_num: usize,
+    pub req_num: usize,
+    pub reqopt_num: usize,
+    pub key_num: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
-    pub(super) info: usize,
-    pub(super) stack_offset: usize,
+    pub info: usize,
+    pub stack_offset: usize,
+}
+
+impl std::fmt::Debug for FnInitInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let FnInitInfo {
+            reg_num,
+            req_num,
+            reqopt_num,
+            key_num,
+            stack_offset,
+            ..
+        } = *self;
+        write!(f,
+                    "reg:{reg_num} req:{req_num} opt:{} rest:{} key:{key_num} block:{} stack_offset:{stack_offset}",
+                    reqopt_num - req_num,
+                    self.has_rest_param(),
+                    self.has_block_param(),
+                )
+    }
 }
 
 impl FnInitInfo {
@@ -135,12 +154,24 @@ impl FnInitInfo {
         let stack_offset = (reg_num * 8 + LBP_ARG0 as usize + 15) >> 4;
         FnInitInfo {
             reg_num,
-            arg_num: info.pos_num(),
-            pos_num: info.reqopt_num(),
             req_num: info.req_num(),
+            reqopt_num: info.reqopt_num(),
+            key_num: info.key_num(),
             info: info.info(),
             stack_offset,
         }
+    }
+
+    pub(super) fn has_rest_param(&self) -> bool {
+        (self.info & 0b1) != 0
+    }
+
+    pub(super) fn has_block_param(&self) -> bool {
+        (self.info & 0b10) != 0
+    }
+
+    pub(super) fn pos_num(&self) -> usize {
+        self.reqopt_num + if self.has_rest_param() { 1 } else { 0 }
     }
 }
 
@@ -164,6 +195,16 @@ impl Bc {
             op1,
             op2: Bc2::from(((num2 as u64) << 32) + ((num1 as u64) << 16) + (num0 as u64)),
         }
+    }
+
+    pub(crate) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
+        let FnInitInfo {
+            key_num,
+            req_num,
+            info,
+            ..
+        } = fn_info;
+        Bc::from_with_num(op1, *req_num as u16, *key_num as u16, *info as u16)
     }
 
     pub(crate) fn from_with_value(op1: u64, val: Value) -> Self {
@@ -382,23 +423,9 @@ pub(super) enum TraceIr {
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
     /// initialize_method
-    InitMethod {
-        reg_num: usize,
-        pos_num: usize,
-        reqopt_num: usize,
-        req_num: usize,
-        info: usize,
-        stack_offset: usize,
-    },
+    InitMethod(FnInitInfo),
     /// initialize_block
-    InitBlock {
-        reg_num: usize,
-        pos_num: usize,
-        reqopt_num: usize,
-        req_num: usize,
-        info: usize,
-        stack_offset: usize,
-    },
+    InitBlock(FnInitInfo),
     //                0       4       8       12      16
     //                +-------+-------+-------+-------+
     // MethodCall     |   |ret|identid| class |version|
@@ -727,23 +754,23 @@ impl TraceIr {
                     OpMode::RI(SlotId::new(op2), op3 as i16),
                     true,
                 ),
-                170 => Self::InitMethod {
+                170 => Self::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
-                    pos_num: pc.u16(1) as usize,
+                    key_num: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     info: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
-                },
+                }),
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
-                172 => Self::InitBlock {
+                172 => Self::InitBlock(FnInitInfo {
                     reg_num: op1 as usize,
-                    pos_num: pc.u16(1) as usize,
+                    key_num: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     info: pc.u16(2) as usize,
                     stack_offset: op3 as usize,
-                },
+                }),
                 173 => Self::AliasMethod {
                     new: SlotId::new(op2),
                     old: SlotId::new(op3),

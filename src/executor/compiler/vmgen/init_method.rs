@@ -7,7 +7,7 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|rop|ofs||   |inf| |req|
+    /// | op|reg|rop|ofs||   |inf|key|req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
@@ -15,6 +15,7 @@ impl Codegen {
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
     /// - reqopt: a number of positional arguments (req + opt)
+    /// - key: a number of keyword arguments
     /// - inf:
     ///
     /// ### registers
@@ -65,7 +66,7 @@ impl Codegen {
         // [R13 - 14]: reqopt_num
         // [R13 - 12]: reg_num
         // [R13 - 8]: req_num
-        // [R13 - 6]:
+        // [R13 - 6]: key_num
         // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
         // rdx: number of args passed from caller
         // destroy
@@ -153,7 +154,20 @@ impl Codegen {
         let exit = self.jit.label();
         let l0 = self.jit.label();
         let l1 = self.jit.label();
+        let skip = self.jit.label();
         monoasm! { self.jit,
+            // set keyword parameters
+            movzxw rax, [r13 - 6];
+            testq rax, rax;
+            jz skip;
+            movq rdi, r12;
+            movq rsi, r15;
+            movq rcx, [r14 - (LBP_META)];
+            movq rax, (runtime::distibute_keyword_arguments);
+            call rax;
+            movq r15, rax;
+        skip:
+        // set block parameter
             movzxw rax, [r13 - 4];
             testq rax, 0b10;
             jz exit;

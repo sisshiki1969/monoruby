@@ -763,35 +763,11 @@ impl BcPc {
             }
         }
         let s = match self.get_ir(&globals.func) {
-            TraceIr::InitMethod {
-                reg_num,
-                pos_num: _,
-                reqopt_num,
-                req_num,
-                info,
-                stack_offset,
-            } => {
-                format!(
-                    "init_method reg:{reg_num} req:{req_num} opt: {} rest:{} block:{} stack_offset:{stack_offset}",
-                    reqopt_num - req_num,
-                    (info & 0b1) != 0,
-                    (info & 0b10) != 0,
-                )
+            TraceIr::InitMethod(info) => {
+                format!("init_method {info:?}")
             }
-            TraceIr::InitBlock {
-                reg_num,
-                pos_num: _,
-                reqopt_num,
-                req_num,
-                info,
-                stack_offset,
-            } => {
-                format!(
-                    "init_block reg:{reg_num} req:{req_num} opt: {} rest:{} block:{} stack_offset:{stack_offset}",
-                    reqopt_num - req_num,
-                    (info & 0b1) != 0,
-                    (info & 0b10) != 0,
-                )
+            TraceIr::InitBlock(info) => {
+                format!("init_block {info:?}")
             }
             TraceIr::CheckLocal(local, disp) => {
                 format!("check_local({:?}) =>:{:05}", local, i as i32 + 1 + disp)

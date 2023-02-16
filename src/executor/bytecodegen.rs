@@ -147,6 +147,18 @@ impl IrContext {
             ir.gen_store_expr(ctx, info, local, initializer)?;
             ir.apply_label(next);
         }
+        let kw_reg = info.reqopt_num() + if info.info() & 0b1 != 0 { 1 } else { 0 };
+        for (id, (_, initializer)) in info.args.keyword_args.clone().into_iter().enumerate() {
+            let local = BcLocal((kw_reg + id) as u16).into();
+            let next = ir.new_label();
+            ir.gen_check_local(local, next);
+            if let Some(box init) = initializer {
+                ir.gen_store_expr(ctx, info, local, init)?;
+            } else {
+                ir.gen_nil(info, Some(local));
+            }
+            ir.apply_label(next);
+        }
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
         ir.replace_init(info);
         assert_eq!(0, info.temp);

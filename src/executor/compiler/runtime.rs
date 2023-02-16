@@ -125,25 +125,24 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
 
 pub(super) extern "C" fn distibute_keyword_arguments(
     globals: &Globals,
-    reg: *mut Value,
+    reg: *mut Option<Value>,
     keyword: Value,
-    data: &FuncData,
-) {
-    let func_id = data.meta.func_id.unwrap();
+    meta: Meta,
+) -> *mut Option<Value> {
+    let func_id = meta.func_id.unwrap();
     match &globals.func[func_id].kind {
         FuncKind::ISeq(info) => {
-            let kw_arg = keyword.as_hash();
+            //let kw_arg = keyword.as_hash();
             let params = &info.args.keyword_args;
-            for (param_name, (id, _)) in params {
-                match kw_arg.get(Value::new_symbol(*param_name)) {
-                    Some(v) => unsafe {
-                        *reg.sub(dbg!(*id)) = dbg!(v);
-                    },
-                    _ => {}
+            unsafe {
+                let len = params.len();
+                for (id, (param_name, _)) in params.iter().enumerate() {
+                    *reg.sub(dbg!(id)) = None;
                 }
+                reg.sub(len)
             }
         }
-        _ => {}
+        _ => reg,
     }
 }
 

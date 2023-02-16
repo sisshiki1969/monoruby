@@ -9,30 +9,16 @@ impl Codegen {
             movq rdx, rdi;
         );
         match pc.get_ir(fnstore) {
-            TraceIr::InitMethod {
-                reg_num,
-                pos_num,
-                reqopt_num,
-                req_num,
-                info,
-                stack_offset,
-            } => {
-                self.setup_stack(stack_offset);
-                self.init_func(reg_num, pos_num, reqopt_num, req_num, info, pc, false);
+            TraceIr::InitMethod(fn_info) => {
+                self.setup_stack(fn_info.stack_offset);
+                self.init_func(&fn_info, pc, false);
             }
-            TraceIr::InitBlock {
-                reg_num,
-                pos_num,
-                reqopt_num,
-                req_num,
-                info,
-                stack_offset,
-            } => {
-                self.setup_stack(stack_offset);
-                if reqopt_num >= 2 {
-                    self.jit_expand_arg0(req_num);
+            TraceIr::InitBlock(fn_info) => {
+                self.setup_stack(fn_info.stack_offset);
+                if fn_info.reqopt_num >= 2 {
+                    self.jit_expand_arg0(fn_info.req_num);
                 }
-                self.init_func(reg_num, pos_num, reqopt_num, req_num, info, pc, true);
+                self.init_func(&fn_info, pc, true);
             }
             _ => unreachable!(),
         }
@@ -44,16 +30,13 @@ impl Codegen {
         );
     }
 
-    fn init_func(
-        &mut self,
-        reg_num: usize,
-        _pos_num: usize,
-        reqopt_num: usize,
-        req_num: usize,
-        info: usize,
-        pc: BcPc,
-        is_block: bool,
-    ) {
+    fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
+        let FnInitInfo {
+            reg_num,
+            reqopt_num,
+            req_num,
+            ..
+        } = *fn_info;
         let err_label = self.jit.label();
         self.jit.select_page(1);
         let err = self.wrong_argument;
@@ -65,8 +48,8 @@ impl Codegen {
         self.jit.select_page(0);
 
         // rdx: number of args passed from caller
-        let has_rest_param = (info & 0b1) != 0;
-        let pos_num = reqopt_num + if has_rest_param { 1 } else { 0 };
+        let has_rest_param = fn_info.has_rest_param();
+        let pos_num = fn_info.pos_num();
 
         if reqopt_num > 0 {
             if reqopt_num == req_num && !has_rest_param {
