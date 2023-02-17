@@ -1431,12 +1431,16 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_keyword() {
         run_test_with_prelude(
             r#"
-        f(1,2)
+        x = []
+        x << f(1,2)
+        x << f(1,2,3,c:10,a:20)
+        x << f(1,2,3,4,5,6,7,8)
+        x << f(1,2,3,4,5,6,7,8,b:50)
+        x
         "#,
             r#"
         def f(x,y,z=10,*r,a:1,b:2,c:3)
@@ -1446,11 +1450,19 @@ mod test {
         );
         run_test_with_prelude(
             r#"
-        f(1,2,3,c:10,a:20)
+        x = []
+        x << f(1,2) { |x| x * 14 }
+        x << f(1,2,3,c:10,a:20) { |x| x * 14 }
+        x << f(1,2,3,4,5,6,7,8) { |x| x * 14 }
+        x << f(1,2,3,4,5,6,7,8,b:50) { |x| x * 14 }
+        x
         "#,
             r#"
-        def f(x,y,z=10,*r,a:1,b:2,c:3)
-          [x, y, z, r, a, b, c]
+        def f(x,y,z=10,*r,a:1,b:2,c:3,&p)
+          [x, y, z, r, a, b, c, g(&p)]
+        end
+        def g
+          yield 3
         end
         "#,
         );

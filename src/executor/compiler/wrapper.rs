@@ -35,8 +35,9 @@ impl Codegen {
             jne vm_entry;
             movl rsi, [rsp - (8 + LBP_META_FUNCID)];
             movq rdx, [rsp - (8 + LBP_SELF)];
-            subq rsp, 1024;
+            subq rsp, 1016;
             pushq rdi;
+            pushq rcx;
             movq rdi, r12;
             movq rax, (exec_jit_compile);
             call rax;
@@ -44,8 +45,9 @@ impl Codegen {
             addq rdi, 5;
             subq rax, rdi;
             movl [rdi - 4], rax;
+            popq rcx;
             popq rdi;
-            addq rsp, 1024;
+            addq rsp, 1016;
             jmp entry;
         );
         codeptr
