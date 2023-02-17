@@ -4,7 +4,7 @@ end
 
 class RbConfig
   def self.ruby
-    "~/monoruby/target/release/monoruby"
+    `ruby -e 'print RbConfig.ruby'`
   end
 end
 
