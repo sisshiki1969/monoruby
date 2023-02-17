@@ -9,6 +9,8 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
+    globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
+    globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "gsub", gsub, -1);
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_, -1);
@@ -67,6 +69,29 @@ extern "C" fn mul(
 
     let res = Value::new_string_from_vec(lhs.repeat(count));
     Some(res)
+}
+
+///
+/// ### String#==
+///
+/// - self == other -> bool
+/// - self === other -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
+extern "C" fn eq(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let lhs = self_val.as_string();
+    let b = match arg[0].is_string() {
+        Some(rhs) => rhs == lhs,
+        None => false,
+    };
+    Some(Value::bool(b))
 }
 
 fn expect_char(globals: &mut Globals, chars: &mut std::str::Chars) -> Option<char> {
@@ -653,6 +678,14 @@ mod test {
         run_test(r##""abcde" * 5"##);
         run_test(r##""機動戦士" * 3"##);
         run_test_error(r##""機動戦士" * -1"##);
+    }
+
+    #[test]
+    fn string_eq() {
+        run_test(r##""abcde" == "abcde""##);
+        run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##);
+        run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDAM""##);
+        run_test(r##""機動戦士GUNDOM" == :abs"##);
     }
 
     #[test]
