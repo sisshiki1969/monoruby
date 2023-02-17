@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
     globals.define_builtin_func(OBJECT_CLASS, "system", system, 1);
     globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "abort", abort, -1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
@@ -590,6 +591,34 @@ extern "C" fn command(
             None
         }
     }
+}
+
+///
+/// Kernel.#abort
+///
+/// - abort -> ()
+/// - abort(message) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
+extern "C" fn abort(
+    _executor: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    if len == 1 {
+        match arg[0].is_string() {
+            Some(s) => eprintln!("{}", s),
+            None => {
+                globals.err_no_implicit_conversion(arg[0], STRING_CLASS);
+                return None;
+            }
+        }
+    }
+    std::process::exit(1);
 }
 
 #[cfg(test)]
