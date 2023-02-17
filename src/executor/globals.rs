@@ -1,4 +1,5 @@
 use fancy_regex::Regex;
+use rand::SeedableRng;
 use ruruby_parse::{
     BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind, Parser,
     SourceInfoRef,
@@ -77,6 +78,10 @@ pub struct Globals {
     stdout: BufWriter<Stdout>,
     /// library directries.
     pub lib_directories: Vec<String>,
+    /// standard PRNG
+    pub random: sfmt::SFMT,
+    /// random seed,
+    pub random_seed: <sfmt::SFMT as SeedableRng>::Seed,
     #[cfg(feature = "log-jit")]
     /// stats for deoptimization
     pub(crate) deopt_stats: HashMap<(FuncId, usize), usize>,
@@ -105,6 +110,10 @@ pub(in crate::executor) extern "C" fn execute_gc(globals: &Globals, executor: &E
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
         let main_object = Value::new_object(OBJECT_CLASS);
+        let mut random_seed = <sfmt::SFMT as SeedableRng>::Seed::default();
+        if let Err(err) = getrandom::getrandom(&mut random_seed) {
+            panic!("from_entropy failed: {}", err);
+        }
         let mut globals = Self {
             codegen: Codegen::new(no_jit, main_object),
             func: FnStore::new(),
@@ -117,6 +126,8 @@ impl Globals {
             no_jit,
             stdout: BufWriter::new(stdout()),
             lib_directories: vec![],
+            random: sfmt::SFMT::from_seed(random_seed),
+            random_seed,
             #[cfg(feature = "log-jit")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "log-jit")]

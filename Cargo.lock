@@ -835,6 +835,7 @@ dependencies = [
  "escape_string",
  "fancy-regex",
  "fxhash",
+ "getrandom",
  "hex",
  "indexmap",
  "libc",
@@ -846,6 +847,7 @@ dependencies = [
  "regex",
  "ruruby-parse",
  "rustyline",
+ "sfmt",
  "smallvec",
  "tempfile",
 ]
@@ -1374,6 +1376,16 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "sfmt"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e389a3c1536438f85612667cd992dfb7169f60784252342278458e90d37c7565"
+dependencies = [
+ "rand",
+ "rand_core",
 ]
 
 [[package]]

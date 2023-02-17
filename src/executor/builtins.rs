@@ -12,6 +12,7 @@ mod module;
 mod object;
 mod proc;
 mod process;
+mod random;
 mod range;
 mod regexp;
 mod string;
@@ -119,10 +120,13 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
     assert_eq!(IO_CLASS, io_class.class_id());
     let math_class = globals.define_module("Math").class_id();
+    let process_class = globals.define_module("Process").class_id();
     let file_class = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
         .class_id();
-    let process_class = globals.define_module("Process").class_id();
+    let random_class = globals
+        .define_class_by_str("Random", OBJECT_CLASS.get_obj(globals), OBJECT_CLASS)
+        .class_id();
 
     object::init(globals);
     integer::init(globals);
@@ -140,6 +144,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     file::init(globals, file_class);
     math::init(globals, math_class);
     process::init(globals, process_class);
+    random::init(globals, random_class);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
