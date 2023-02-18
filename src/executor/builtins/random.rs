@@ -1,6 +1,5 @@
 use crate::*;
 use num::BigInt;
-use rand::{Rng, SeedableRng};
 
 //
 // Random class
@@ -25,24 +24,16 @@ extern "C" fn srand(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
-    let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random_seed);
-    let mut new_seed = <sfmt::SFMT as SeedableRng>::Seed::default();
-    if len == 0 {
-        if let Err(err) = getrandom::getrandom(&mut new_seed) {
-            panic!("from_entropy failed: {}", err);
-        }
+    let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random.seed);
+    let new_seed = if len == 0 {
+        None
     } else {
         match arg[0].unpack() {
-            RV::Integer(i) => {
-                for (i, byte) in (i as i32).to_ne_bytes().iter().enumerate() {
-                    new_seed[i] = *byte;
-                }
-            }
+            RV::Integer(i) => Some(i),
             _ => unimplemented!(),
-        };
-    }
-    globals.random_seed = new_seed;
-    globals.random = sfmt::SFMT::from_seed(new_seed);
+        }
+    };
+    globals.random.init_with_seed(new_seed);
     Some(Value::new_bigint(old_seed))
 }
 
