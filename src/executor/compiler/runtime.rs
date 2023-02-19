@@ -42,7 +42,6 @@ pub(super) extern "C" fn get_classdef_data<'a>(
 pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {
     executor
         .cfp
-        .lfp()
         .block()
         .map(|bh| executor.get_block_data(globals, bh))
         .unwrap_or_default()

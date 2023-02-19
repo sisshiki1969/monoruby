@@ -101,6 +101,22 @@ impl CFP {
     }
 
     ///
+    /// Get *BlockHandler* of a current method / classdef.
+    ///
+    fn block(&self) -> Option<BlockHandler> {
+        unsafe {
+            let mut lfp = self.lfp();
+            loop {
+                if lfp.outer().is_null() {
+                    break;
+                }
+                lfp = lfp.outer().lfp();
+            }
+            lfp.block()
+        }
+    }
+
+    ///
     /// Get func_id of a current source position.
     ///
     fn get_source_pos(&self) -> FuncId {
