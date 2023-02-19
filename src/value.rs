@@ -627,6 +627,15 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_integer(&self, globals: &mut Globals) -> Option<i64> {
+        if let RV::Integer(i) = self.unpack() {
+            Some(i)
+        } else {
+            globals.err_no_implicit_conversion(*self, INTEGER_CLASS);
+            None
+        }
+    }
+
     pub(crate) fn as_bytes(&self) -> &[u8] {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         self.rvalue().as_bytes()

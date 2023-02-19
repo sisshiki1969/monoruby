@@ -1,4 +1,4 @@
-use num::BigInt;
+use num::{BigInt, Num};
 
 use crate::*;
 
@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "ljust", ljust, -1);
     globals.define_builtin_func(STRING_CLASS, "rjust", rjust, -1);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_i", to_i, -1);
 }
 
 ///
@@ -658,6 +659,43 @@ extern "C" fn empty(
     Some(Value::bool(self_val.as_bytes().is_empty()))
 }
 
+///
+/// ### String#to_i
+///
+/// - to_i(base = 10) -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
+extern "C" fn to_i(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    let s = self_val.as_string();
+    let radix = if len == 0 {
+        10
+    } else {
+        match arg[0].expect_integer(globals)? {
+            n if n < 2 || 36 < n => {
+                globals.err_argument(&format!("invalid radix {n}"));
+                return None;
+            }
+            n => n as u32,
+        }
+    };
+    let num = if let Ok(num) = i64::from_str_radix(&s, radix) {
+        Value::new_integer(num)
+    } else if let Ok(b) = BigInt::from_str_radix(&s, radix) {
+        Value::new_bigint(b)
+    } else {
+        Value::int32(0)
+    };
+    Some(num)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -830,5 +868,15 @@ mod test {
         run_test(r##""戦闘妖精".rjust 11,"123""##);
         run_test_error(r##""戦闘妖精".rjust"##);
         run_test_error(r##""戦闘妖精".rjust 8, """##);
+    }
+
+    #[test]
+    fn string_toi() {
+        run_test(r"'42581'.to_i");
+        run_test(r"'4a5f1'.to_i(16)");
+        run_test(r"'4258159248352010254587519982001542568633842205196875555'.to_i");
+        run_test(r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)");
+        run_test_error(r"'42581'.to_i(-10)");
+        run_test_error(r"'42581'.to_i(100)");
     }
 }

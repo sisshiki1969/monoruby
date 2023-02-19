@@ -297,25 +297,10 @@ mod test {
 
     #[test]
     fn env_fetch() {
-        run_test(
-            r##"
-            ENV["PWD"]
-        "##,
-        );
-        run_test(
-            r##"
-            ENV.fetch("PWD")
-        "##,
-        );
-        run_test(
-            r##"
-            ENV.fetch("XZCDEWS", "ABC")
-        "##,
-        );
-        run_test(
-            r##"
-            ENV.fetch("XZCDEWS") {|key| key + "先生"}
-        "##,
-        );
+        run_test(r##"ENV["PWD"]"##);
+        run_test(r##"ENV.fetch("PWD")"##);
+        run_test(r##"ENV.fetch("XZCDEWS", "ABC")"##);
+        run_test(r##"ENV.fetch("XZCDEWS") {|key| key + "先生"}"##);
+        run_test_error(r##"ENV[100]"##);
     }
 }

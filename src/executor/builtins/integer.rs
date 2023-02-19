@@ -9,7 +9,9 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
-    globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", tof, 0, InlineMethod::IntegerTof);
+    globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", to_f, 0, InlineMethod::IntegerTof);
+    globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
 }
 
 /// ### Integer#times
@@ -62,7 +64,7 @@ extern "C" fn chr(
     None
 }
 
-extern "C" fn tof(
+extern "C" fn to_f(
     _vm: &mut Executor,
     _globals: &mut Globals,
     self_val: Value,
@@ -76,6 +78,24 @@ extern "C" fn tof(
         _ => unimplemented!(),
     };
     Some(Value::new_float(f))
+}
+
+///
+/// ### Integer#to_i
+///
+/// - to_i -> self
+/// - to_int -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
+extern "C" fn to_i(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(self_val)
 }
 
 #[cfg(test)]
@@ -109,5 +129,14 @@ mod test {
         run_test("253.to_f");
         run_test("-25253.to_f");
         run_test("0.to_f");
+    }
+
+    #[test]
+    fn to_i() {
+        run_test("253.to_i");
+        run_test("-25253.to_i");
+        run_test(
+            "8364942539529902342420345356709767546464574458647864843346254643534645647575786.to_i",
+        );
     }
 }
