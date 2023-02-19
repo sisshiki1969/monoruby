@@ -5,7 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(RANGE_CLASS, "new", range_new, -1);
+    globals.define_builtin_class_func(RANGE_CLASS, "new", range_new, -1);
     globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);

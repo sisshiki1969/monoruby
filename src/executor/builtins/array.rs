@@ -5,7 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(ARRAY_CLASS, "new", new, -1);
+    globals.define_builtin_class_func(ARRAY_CLASS, "new", new, -1);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
@@ -76,7 +76,7 @@ extern "C" fn add(
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
-            globals.err_no_implict_conv(arg[0], ARRAY_CLASS);
+            globals.err_no_implicit_conversion(arg[0], ARRAY_CLASS);
             return None;
         }
     };

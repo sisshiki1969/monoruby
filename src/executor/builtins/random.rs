@@ -6,8 +6,8 @@ use num::BigInt;
 //
 
 pub(super) fn init(globals: &mut Globals, class: ClassId) {
-    globals.define_builtin_singleton_func(class, "srand", srand, -1);
-    globals.define_builtin_singleton_func(class, "rand", rand, 0);
+    globals.define_builtin_class_func(class, "srand", srand, -1);
+    globals.define_builtin_class_func(class, "rand", rand, 0);
 }
 
 /// ### Random.srand

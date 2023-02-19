@@ -63,7 +63,7 @@ impl Globals {
         func_id
     }
 
-    pub(crate) fn define_builtin_singleton_func(
+    pub(crate) fn define_builtin_class_func(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -71,6 +71,17 @@ impl Globals {
         arity: i32,
     ) -> FuncId {
         let class_id = self.get_metaclass(class_id).class_id();
+        self.define_builtin_func(class_id, name, address, arity)
+    }
+
+    pub(crate) fn define_builtin_singleton_func(
+        &mut self,
+        obj: Value,
+        name: &str,
+        address: BuiltinFn,
+        arity: i32,
+    ) -> FuncId {
+        let class_id = self.get_singleton(obj).class_id();
         self.define_builtin_func(class_id, name, address, arity)
     }
 

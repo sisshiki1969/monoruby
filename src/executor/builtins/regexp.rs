@@ -5,11 +5,11 @@ use crate::{value::rvalue::regexp::RegexpInfo, *};
 //
 
 pub(crate) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(REGEXP_CLASS, "new", regexp_new, 1);
-    globals.define_builtin_singleton_func(REGEXP_CLASS, "compile", regexp_new, 1);
-    globals.define_builtin_singleton_func(REGEXP_CLASS, "escape", regexp_escape, 1);
-    globals.define_builtin_singleton_func(REGEXP_CLASS, "quote", regexp_escape, 1);
-    globals.define_builtin_singleton_func(REGEXP_CLASS, "last_match", regexp_last_match, -1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape, 1);
+    globals.define_builtin_class_func(REGEXP_CLASS, "last_match", regexp_last_match, -1);
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
 }
 

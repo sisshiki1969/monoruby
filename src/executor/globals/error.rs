@@ -70,14 +70,13 @@ impl Globals {
     }
 
     ///
-    /// Set TypeError with message "no implicit conversion of *actual* into *expected*".
+    /// Set TypeError with message "no_implicit_conversion of {} into {}".
     ///
-    pub(crate) fn err_no_implict_conv(&mut self, actual: Value, expect: ClassId) {
-        let actual = actual.get_real_class_name(self);
+    pub(crate) fn err_no_implicit_conversion(&mut self, val: Value, target_class: ClassId) {
         self.set_error(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
-            actual,
-            expect.get_name(self),
+            val.get_real_class_name(self),
+            target_class.get_name(self),
         )));
     }
 
@@ -124,17 +123,6 @@ impl Globals {
         self.set_error(MonorubyErr::typeerr(format!(
             "{} is not a regexp nor a string",
             self.val_tos(val)
-        )));
-    }
-
-    ///
-    /// Set TypeError with message "no_implicit_conversion of {} into {}".
-    ///
-    pub(crate) fn err_no_implicit_conversion(&mut self, val: Value, target_class: ClassId) {
-        self.set_error(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into {}",
-            val.get_real_class_name(self),
-            target_class.get_name(self),
         )));
     }
 

@@ -6,7 +6,7 @@ use std::{fs::File, io::Write};
 //
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.define_builtin_singleton_func(class_id, "write", write, 2);
+    globals.define_builtin_class_func(class_id, "write", write, 2);
 }
 
 /// ### File.write
@@ -25,7 +25,7 @@ extern "C" fn write(
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
-            globals.err_no_implict_conv(arg[0], STRING_CLASS);
+            globals.err_no_implicit_conversion(arg[0], STRING_CLASS);
             return None;
         }
     };

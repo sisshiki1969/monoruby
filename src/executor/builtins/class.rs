@@ -5,7 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(CLASS_CLASS, "new", class_new, -1);
+    globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
     globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);

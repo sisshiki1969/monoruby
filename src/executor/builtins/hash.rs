@@ -1,11 +1,11 @@
 use crate::*;
 
 //
-// Array class
+// Hash class
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_singleton_func(HASH_CLASS, "new", new, -1);
+    globals.define_builtin_class_func(HASH_CLASS, "new", new, -1);
     globals.define_builtin_func(HASH_CLASS, "size", size, 0);
     globals.define_builtin_func(HASH_CLASS, "length", size, 0);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
@@ -20,6 +20,34 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "member?", include, 1);
     globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
+
+    let mut env_map = IndexMap::default();
+    std::env::vars().for_each(|(var, val)| {
+        env_map.insert(HashKey(Value::new_string(var)), Value::new_string(val));
+    });
+    #[cfg(windows)]
+    if let None = env_map.get(&Value::string("HOME")) {
+        let home_drive = env_map.get(&Value::string("HOMEDRIVE"));
+        let home_path = env_map.get(&Value::string("HOMEPATH"));
+        let user_profile = env_map.get(&Value::string("USERPROFILE"));
+        let home = if home_drive.is_some() && home_drive.is_some() {
+            home_drive.unwrap().as_string().unwrap().to_string()
+                + home_path.unwrap().as_string().unwrap()
+        } else if let Some(up) = user_profile {
+            up.as_string().unwrap().to_string()
+        } else {
+            "".to_string()
+        };
+        env_map.insert(
+            Value::string("HOME"),
+            Value::string(home.replace('\\', "/")),
+        );
+    };
+
+    let env = Value::new_hash(env_map);
+    globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
+    globals.define_builtin_singleton_func(env, "fetch", env_fetch, -1);
+    globals.define_builtin_singleton_func(env, "[]", env_index, 1);
 }
 
 /// ### Hash.new
@@ -177,6 +205,62 @@ extern "C" fn inspect(
     Some(Value::new_string(s))
 }
 
+// ENV object
+
+/// ###ENV.[]
+/// - self[key] -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
+extern "C" fn env_index(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let key = arg[0];
+    if key.is_string().is_none() {
+        globals.err_no_implicit_conversion(key, STRING_CLASS);
+        return None;
+    }
+    let val = self_val.as_hash().get(key).unwrap_or_default();
+    Some(val)
+}
+
+/// ### ENV.fetch
+/// - fetch(key) -> String
+/// - fetch(key, default) -> String
+/// - fetch(key) {|key| ... } -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
+extern "C" fn env_fetch(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block_handler: Option<BlockHandler>,
+) -> Option<Value> {
+    let env_map = self_val.as_hash();
+    let s = if let Some(bh) = block_handler {
+        globals.check_number_of_arguments(len, 1..=1)?;
+        match env_map.get(arg[0]) {
+            Some(s) => s,
+            None => vm.invoke_block(globals, bh, &[arg[0]])?,
+        }
+    } else if len == 1 {
+        env_map.get(arg[0]).unwrap()
+    } else {
+        globals.check_number_of_arguments(len, 1..=2)?;
+        match env_map.get(arg[0]) {
+            Some(s) => s,
+            None => arg[1],
+        }
+    };
+    Some(s)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -209,5 +293,29 @@ mod test {
         );
         run_test("{}");
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
+    }
+
+    #[test]
+    fn env_fetch() {
+        run_test(
+            r##"
+            ENV["PWD"]
+        "##,
+        );
+        run_test(
+            r##"
+            ENV.fetch("PWD")
+        "##,
+        );
+        run_test(
+            r##"
+            ENV.fetch("XZCDEWS", "ABC")
+        "##,
+        );
+        run_test(
+            r##"
+            ENV.fetch("XZCDEWS") {|key| key + "先生"}
+        "##,
+        );
     }
 }
