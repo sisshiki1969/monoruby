@@ -567,6 +567,13 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_range(&self) -> Option<&Range> {
+        match self.rvalue().kind() {
+            ObjKind::RANGE => Some(self.rvalue().as_range()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Option<ClassId> {
         match self.is_class_or_module() {
             Some(class) => Some(class),

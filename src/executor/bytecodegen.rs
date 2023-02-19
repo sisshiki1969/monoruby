@@ -1,5 +1,3 @@
-use crate::value::rvalue::regexp::RegexpInfo;
-
 use super::*;
 use num::BigInt;
 use paste::paste;

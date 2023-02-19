@@ -12,7 +12,7 @@ macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Executor,
+                vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -33,7 +33,7 @@ macro_rules! binop_values {
                     (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().$op(&rhs)),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     _ => {
-                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)

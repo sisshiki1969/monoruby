@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{executor::op::add_values, *};
 
 //
 // Array class
@@ -13,6 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
 }
 
 ///
@@ -161,6 +163,79 @@ extern "C" fn inject(
     Some(res)
 }
 
+///
+/// ### Array#join
+///
+/// - join(sep = $,) -> String
+/// TODO: support recursive join for Array class arguments.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
+extern "C" fn join(
+    _: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    let sep = if len == 0 {
+        "".to_string()
+    } else {
+        arg[0].expect_string(globals)?
+    };
+    let aref = self_val.as_array();
+    let mut res = String::new();
+    array_join(globals, &mut res, aref, &sep);
+    Some(Value::new_string(res))
+}
+
+fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str) {
+    for elem in &**aref {
+        let s = elem.to_s(globals);
+        if res.is_empty() {
+            *res = s;
+        } else {
+            *res += sep;
+            *res += &s;
+        }
+    }
+}
+
+///
+/// ### Array#sum
+///
+/// - sum(init=0) -> object
+/// - sum(init=0) {|e| expr } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
+extern "C" fn sum(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    block: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 0..=1)?;
+    let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
+    let aref = self_val.as_array();
+    match block {
+        None => {
+            for v in &**aref {
+                sum = add_values(vm, globals, sum, *v)?;
+            }
+        }
+        Some(bh) => {
+            for v in &**aref {
+                let rhs = vm.invoke_block(globals, bh, &[*v])?;
+                sum = add_values(vm, globals, sum, rhs)?;
+            }
+        }
+    }
+    Some(sum)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -235,6 +310,12 @@ mod test {
         a
         "##,
         );
+        run_test(
+            r##"
+        a = [ "a", "b", "c", "d", "e" ];
+        [a[0..1], a[0...1], a[0..-1], a[-2..-1], a[-2..4], a[0..10], a[10..11], a[2..1], a[-1..-2], a[5..10]]
+        "##,
+        );
     }
 
     #[test]
@@ -242,5 +323,19 @@ mod test {
         run_test(r##"[2, 3, 4, 5].inject(0) {|result, item| result + item }"##);
         run_test(r##"[2, 3, 4, 5].inject {|result, item| result + item }"##);
         run_test(r##"[2, 3, 4, 5].inject(5) {|result, item| result + item**2 }"##);
+    }
+
+    #[test]
+    fn join() {
+        run_test(r##"[2, 3, 4, 5].join"##);
+        run_test(r##"[2, 3, 4, 5].join("-")"##);
+    }
+
+    #[test]
+    fn sum() {
+        run_test(
+            r##"[[].sum, [].sum(0.0), [1, 2, 3].sum, [3, 5.5].sum, [2.5, 3.0].sum(0.0) {|e| e * e }, ["a", "b", "c"].sum("")]"##,
+        );
+        run_test_error("[Object.new].sum");
     }
 }

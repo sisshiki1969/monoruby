@@ -184,6 +184,9 @@ pub(super) extern "C" fn get_index(
             if let Some(idx) = index.try_fixnum() {
                 class_slot.idx = INTEGER_CLASS;
                 return base.as_array().get_index(idx);
+            } else if let Some(range) = index.is_range() {
+                class_slot.idx = RANGE_CLASS;
+                return base.as_array().get_index_range(globals, range);
             }
         }
         _ => {}
