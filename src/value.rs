@@ -560,6 +560,13 @@ impl Value {
         Module::new(*self)
     }
 
+    pub(crate) fn as_time(&self) -> &TimeInfo {
+        match self.rvalue().kind() {
+            ObjKind::TIME => self.rvalue().as_time(),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Option<ClassId> {
         match self.is_class_or_module() {
             Some(class) => Some(class),

@@ -44,7 +44,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
-    globals.define_builtin_func(OBJECT_CLASS, "system", system, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
     globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
     globals.define_builtin_func(OBJECT_CLASS, "abort", abort, -1);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
@@ -544,20 +544,26 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 /// ### Kernel.#system
 ///
 /// - system(command, options={}) -> bool | nil
+/// - system(program, *args, options={}) -> bool | nil
 /// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 extern "C" fn system(
     _executor: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     _: Value,
     arg: Arg,
-    _: usize,
+    len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     use std::process::Command;
     let input = arg[0].as_string();
-    let (program, args) = prepare_command_arg(input);
+    let (program, mut args) = prepare_command_arg(input);
+    if len > 1 {
+        for i in 1..len {
+            args.push(arg[i].expect_string(globals)?);
+        }
+    }
     Some(match Command::new(program).args(&args).status() {
         Ok(status) => Value::bool(status.success()),
         Err(_) => Value::nil(),

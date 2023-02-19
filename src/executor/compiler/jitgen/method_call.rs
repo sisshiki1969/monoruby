@@ -586,7 +586,7 @@ impl Codegen {
         monoasm! { self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (runtime::get_block_data);
+            movq rax, (runtime::get_yield_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
             testq rax, rax;

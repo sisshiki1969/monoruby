@@ -195,7 +195,7 @@ impl Codegen {
             pushq rsi;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (runtime::get_block_data);
+            movq rax, (runtime::get_yield_data);
             call rax;
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len

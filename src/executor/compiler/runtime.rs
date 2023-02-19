@@ -39,7 +39,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     globals.compile_on_demand(func_id)
 }
 
-pub(super) extern "C" fn get_block_data(executor: &Executor, globals: &mut Globals) -> BlockData {
+pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {
     executor
         .cfp
         .lfp()

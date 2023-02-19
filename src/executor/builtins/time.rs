@@ -9,9 +9,13 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(TIME_CLASS, "new", now, 0);
     globals.define_builtin_class_func(TIME_CLASS, "now", now, 0);
+    globals.define_builtin_func(TIME_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(TIME_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(TIME_CLASS, "strftime", strftime, 1);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
 }
 
+///
 /// ### Time.new
 /// - new -> Time
 /// - now -> Time
@@ -28,6 +32,69 @@ extern "C" fn now(
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInfo::Local(t);
     Some(Value::new_time(time_info))
+}
+
+///
+/// ### Time#inspect
+/// - inspect -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
+extern "C" fn inspect(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let time = self_val.as_time();
+    Some(Value::new_string(time.to_string()))
+}
+
+///
+/// ### Time#to_s
+/// - to_s -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
+extern "C" fn to_s(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let s = match self_val.as_time() {
+        TimeInfo::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
+        TimeInfo::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
+    }
+    .to_string();
+    Some(Value::new_string(s))
+}
+
+///
+/// ### Time#strftime
+/// - strftime(format) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
+extern "C" fn strftime(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    let mut fmt = arg[0].expect_string(globals)?;
+    fmt = fmt.replace("%N", "%f");
+    let s = match self_val.as_time() {
+        TimeInfo::Local(t) => t.format(&fmt).to_string(),
+        TimeInfo::UTC(t) => {
+            let fmt = fmt + " UTC";
+            t.format(&fmt).to_string()
+        }
+    };
+    Some(Value::new_string(s))
 }
 
 /// ### Time#-
@@ -80,8 +147,8 @@ impl std::ops::Sub<Self> for TimeInfo {
 impl std::fmt::Display for TimeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TimeInfo::Local(t) => write!(f, "{}", t.format("%F %T %z")),
-            TimeInfo::UTC(t) => write!(f, "{}", t.format("%F %T %z")),
+            TimeInfo::Local(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f %z")),
+            TimeInfo::UTC(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f UTC")),
         }
     }
 }
