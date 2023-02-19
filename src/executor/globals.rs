@@ -565,12 +565,9 @@ impl Globals {
                 .unwrap_or(&"<unnamed>".to_string()),
             match block {
                 Some(block) => {
-                    match block.try_fixnum() {
-                        Some(i) => {
-                            let i = i as u64;
-                            let func_id = u32::try_from(i >> 16).unwrap();
-                            let idx = i as u16;
-                            format!("BlockArgProxy {{ {:?}, {} }}", FuncId::new(func_id), idx)
+                    match block.try_proxy() {
+                        Some((func_id, idx)) => {
+                            format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
                         _ => unimplemented!(),
                     }

@@ -104,15 +104,20 @@ impl CFP {
     /// Get *BlockHandler* of a current method / classdef.
     ///
     fn block(&self) -> Option<BlockHandler> {
+        let mut idx = 0;
         unsafe {
             let mut lfp = self.lfp();
             loop {
                 if lfp.outer().is_null() {
                     break;
                 }
+                idx += 1;
                 lfp = lfp.outer().lfp();
             }
-            lfp.block()
+            lfp.block().map(|bh| match bh.0.try_fixnum() {
+                Some(i) => BlockHandler(Value::new_integer(i + idx)),
+                None => bh,
+            })
         }
     }
 
@@ -246,8 +251,13 @@ impl BlockHandler {
         Self(val)
     }
 
-    pub fn try_fixnum(&self) -> Option<i64> {
-        self.0.try_fixnum()
+    pub fn try_proxy(&self) -> Option<(FuncId, u16)> {
+        self.0.try_fixnum().map(|i| {
+            let i = i as u64;
+            let func_id = FuncId::new(u32::try_from(i >> 16).unwrap());
+            let idx = i as u16;
+            (func_id, idx)
+        })
     }
 
     pub(crate) fn as_proc(&self) -> &BlockData {
@@ -422,11 +432,10 @@ impl Executor {
         globals: &mut Globals,
         block_handler: BlockHandler,
     ) -> BlockData {
-        if let Some(bh) = block_handler.try_fixnum() {
-            let func_id = FuncId::new(u32::try_from((bh as u64) >> 16).unwrap());
+        if let Some((func_id, idx)) = block_handler.try_proxy() {
             let mut cfp = self.cfp;
             unsafe {
-                for _ in 0..bh as i16 as u16 {
+                for _ in 0..idx {
                     cfp = cfp.prev();
                 }
                 let func_data = globals.compile_on_demand(func_id) as _;

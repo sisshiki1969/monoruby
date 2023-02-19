@@ -23,7 +23,7 @@ pub fn run_test(code: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
-pub fn run_tests(code: &[&str]) {
+pub fn run_tests(code: &[String]) {
     let code = format!("[{}]", code.join(", "));
     let wrapped = format!(
         r##"
@@ -44,18 +44,20 @@ pub fn run_tests(code: &[&str]) {
 }
 
 pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
+    let mut test = vec![];
     for lhs in lhs {
         for rhs in rhs {
             for op in op {
-                run_tests(&[
-                    &format!("{lhs} {op} {rhs}"),
-                    &format!("{lhs} {op} (-{rhs})"),
-                    &format!("-{lhs} {op} {rhs}"),
-                    &format!("-{lhs} {op} (-{rhs})"),
+                test.extend_from_slice(&[
+                    format!("{lhs} {op} {rhs}"),
+                    format!("{lhs} {op} (-{rhs})"),
+                    format!("-{lhs} {op} {rhs}"),
+                    format!("-{lhs} {op} (-{rhs})"),
                 ]);
             }
         }
     }
+    run_tests(&test);
 }
 
 pub fn run_test_with_prelude(code: &str, prelude: &str) {
@@ -311,16 +313,18 @@ mod test {
             "234234645",
             "2352354645657876868978696835652452546462456245646",
         ];
+        let mut test = vec![];
         for lhs in lhs_integer {
             for rhs in rhs_integer {
                 for op in ["%"] {
-                    run_tests(&[
-                        &format!("{lhs} {op} {rhs}"),
-                        &format!("-{lhs} {op} (-{rhs})"),
+                    test.extend_from_slice(&[
+                        format!("{lhs} {op} {rhs}"),
+                        format!("-{lhs} {op} (-{rhs})"),
                     ]);
                 }
             }
         }
+        run_tests(&test);
         run_binop_tests(
             &lhs_integer,
             &["+", "-", "*", "/", "&", "|", "^"],
@@ -1209,9 +1213,10 @@ mod test {
     #[test]
     fn test_logical_ops() {
         let input = ["true", "false", "nil", "100", ":ab", "Object"];
+        let mut test = vec![];
         for lhs in input {
             for rhs in input {
-                run_test(&format!(
+                test.push(format!(
                     r##"[
                         {lhs} && {rhs},
                         {lhs} || {rhs},
@@ -1221,6 +1226,7 @@ mod test {
                 ));
             }
         }
+        run_tests(&test);
         run_test("if 4 == 4 and 3 < 1 then 0 else 42 end");
         run_test("if 4 != 4 or 3 < 1 then 0 else 42 end");
     }
@@ -1788,5 +1794,41 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn test_yield_in_block() {
+        run_test(
+            "
+        class C
+          def f
+            x = 0
+            7.times { x += yield }
+            x
+          end
+        end
+
+        a = 42
+        c = C.new
+
+        c.f { 100 }
+        ",
+        );
+        /*run_test(
+            "
+        class C
+          def f
+            x = 0
+            10.times { x += yield }
+            x
+          end
+        end
+
+        @a = 42
+        c = C.new
+
+        c.f { @a }
+        ",
+        );*/
     }
 }

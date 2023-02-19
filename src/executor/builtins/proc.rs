@@ -46,7 +46,7 @@ impl Executor {
         globals: &mut Globals,
         block_handler: BlockHandler,
     ) -> Option<Value> {
-        if let Some(_bh) = block_handler.try_fixnum() {
+        if let Some(_bh) = block_handler.try_proxy() {
             unsafe {
                 let cfp = self.cfp.prev();
                 let lfp = cfp.lfp();
