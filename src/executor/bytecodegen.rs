@@ -1811,16 +1811,6 @@ impl IrContext {
         use_value: bool,
     ) -> Result<()> {
         assert_eq!(1, param.len());
-        let counter = info.assign_local(&param[0]);
-        let break_pos = self.new_label();
-        self.loops.push((
-            LoopKind::For,
-            break_pos,
-            match use_value {
-                true => Some(info.next_reg().into()),
-                false => None,
-            },
-        ));
         let loc = iter.loc;
         if let NodeKind::Range {
             box start,
@@ -1829,6 +1819,16 @@ impl IrContext {
             ..
         } = iter.kind
         {
+            let counter = info.assign_local(&param[0]);
+            let break_pos = self.new_label();
+            self.loops.push((
+                LoopKind::For,
+                break_pos,
+                match use_value {
+                    true => Some(info.next_reg().into()),
+                    false => None,
+                },
+            ));
             // +------+
             // | iter | (when use_value)
             // +------+
@@ -1888,13 +1888,13 @@ impl IrContext {
 
             self.apply_label(loop_exit);
             info.pop(); // pop *end*
-        } else {
-            unimplemented!()
-        }
 
-        self.loops.pop().unwrap();
-        self.apply_label(break_pos);
-        self.push(BcIr::LoopEnd, loc);
+            self.loops.pop().unwrap();
+            self.apply_label(break_pos);
+            self.push(BcIr::LoopEnd, loc);
+        } else {
+            unimplemented!();
+        }
         Ok(())
     }
 
