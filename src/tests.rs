@@ -1811,10 +1811,10 @@ mod test {
         a = 42
         c = C.new
 
-        c.f { 100 }
+        c.f { a }
         ",
         );
-        /*run_test(
+        run_test(
             "
         class C
           def f
@@ -1829,6 +1829,6 @@ mod test {
 
         c.f { @a }
         ",
-        );*/
+        );
     }
 }

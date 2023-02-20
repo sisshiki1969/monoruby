@@ -577,7 +577,7 @@ impl Globals {
             if outer.is_null() {
                 "None".to_string()
             } else {
-                format!("{:?}", outer)
+                format!("{:?}", outer.lfp())
             },
             meta,
         );

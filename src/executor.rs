@@ -103,19 +103,31 @@ impl CFP {
     ///
     /// Get *BlockHandler* of a current method / classdef.
     ///
-    fn block(&self) -> Option<BlockHandler> {
-        let mut idx = 0;
+    fn get_block(&self) -> Option<BlockHandler> {
         unsafe {
             let mut lfp = self.lfp();
             loop {
                 if lfp.outer().is_null() {
                     break;
                 }
-                idx += 1;
                 lfp = lfp.outer().lfp();
             }
+
             lfp.block().map(|bh| match bh.0.try_fixnum() {
-                Some(i) => BlockHandler(Value::new_integer(i + idx)),
+                Some(mut i) => {
+                    let mut cfp = *self;
+                    loop {
+                        if cfp.lfp() == lfp {
+                            break;
+                        }
+                        if cfp.prev().is_null() {
+                            unreachable!()
+                        }
+                        i += 1;
+                        cfp = cfp.prev();
+                    }
+                    BlockHandler(Value::new_integer(i))
+                }
                 None => bh,
             })
         }

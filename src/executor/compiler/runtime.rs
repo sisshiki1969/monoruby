@@ -42,7 +42,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
 pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {
     executor
         .cfp
-        .block()
+        .get_block()
         .map(|bh| executor.get_block_data(globals, bh))
         .unwrap_or_default()
 }
@@ -479,7 +479,7 @@ pub unsafe extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut
     for i in 0..16 {
         eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
         let ret_addr = cfp.return_addr();
-        eprintln!("ret adr: {ret_addr:?} ");
+        eprintln!(" ret adr: {ret_addr:?} ");
         let prev_cfp = cfp.prev();
         globals.dump_frame_info(cfp.lfp());
         if prev_cfp.is_null() {
