@@ -30,12 +30,9 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     self_value: Module,
 ) -> &'a FuncData {
     let current_func = executor.cfp.method_func_id();
-    let mut lexical_context = globals.func[current_func]
-        .as_ruby_func()
-        .lexical_context
-        .clone();
+    let mut lexical_context = globals[current_func].as_ruby_func().lexical_context.clone();
     lexical_context.push(self_value);
-    globals.func[func_id].as_ruby_func_mut().lexical_context = lexical_context;
+    globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
     globals.compile_on_demand(func_id)
 }
 
@@ -132,7 +129,7 @@ pub(super) extern "C" fn distibute_keyword_arguments(
     let keyword = match keyword {
         Some(kw) if kw != Value::nil() => kw,
         _ => {
-            match &globals.func[func_id].kind {
+            match &globals[func_id].kind {
                 FuncKind::ISeq(info) => {
                     let params = &info.args.keyword_args;
                     let len = params.len();
@@ -148,7 +145,7 @@ pub(super) extern "C" fn distibute_keyword_arguments(
             return reg;
         }
     };
-    match &globals.func[func_id].kind {
+    match &globals[func_id].kind {
         FuncKind::ISeq(info) => {
             let kw_arg = keyword.as_hash();
             let params = &info.args.keyword_args;
@@ -382,10 +379,8 @@ pub(super) extern "C" fn define_method(
         visibility,
     } = executor.get_class_context();
     let current_func = executor.cfp.method_func_id();
-    globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
-        .as_ruby_func()
-        .lexical_context
-        .clone();
+    globals[func].as_ruby_func_mut().lexical_context =
+        globals[current_func].as_ruby_func().lexical_context.clone();
     globals.add_method(class_id, name, func, visibility);
     if module_function {
         globals.add_singleton_method(class_id, name, func, visibility);
@@ -401,10 +396,8 @@ pub(super) extern "C" fn singleton_define_method(
     obj: Value,
 ) {
     let current_func = executor.cfp.method_func_id();
-    globals.func[func].as_ruby_func_mut().lexical_context = globals.func[current_func]
-        .as_ruby_func()
-        .lexical_context
-        .clone();
+    globals[func].as_ruby_func_mut().lexical_context =
+        globals[current_func].as_ruby_func().lexical_context.clone();
     let class_id = globals.get_singleton(obj).class_id();
     globals.add_method(class_id, name, func, Visibility::Public);
     globals.class_version_inc();
@@ -460,7 +453,7 @@ pub(super) extern "C" fn get_error_location(
     meta: Meta,
     pc: BcPc,
 ) {
-    let func_info = &globals.func[meta.func_id()];
+    let func_info = &globals[meta.func_id()];
     let bc_base = func_info.data.pc;
     let normal_info = match &func_info.kind {
         FuncKind::ISeq(info) => info,

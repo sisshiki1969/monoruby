@@ -572,7 +572,7 @@ impl Globals {
     ) -> DestLabel {
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
-            let func = self.func[func_id].as_ruby_func();
+            let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
             eprintln!(
                 "==> start {} compile: {} {:?} self_class:{} start:[{:05}] bytecode:{:?}",

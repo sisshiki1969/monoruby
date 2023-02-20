@@ -293,7 +293,7 @@ pub struct ConstSiteInfo {
 pub struct ConstSiteId(pub u32);
 
 #[derive(Clone)]
-pub(crate) struct FnStore {
+pub struct FnStore {
     functions: Funcs,
     inline: HashMap<FuncId, InlineMethod>,
     /// const access site info.
@@ -473,7 +473,7 @@ pub const FUNCDATA_OFFSET_META: u64 = 8;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FuncInfo {
+pub struct FuncInfo {
     /// name of this function.
     name: Option<String>,
     /// arity of this function.

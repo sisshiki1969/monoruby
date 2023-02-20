@@ -411,7 +411,7 @@ impl Executor {
             let mut v: Vec<_> = globals.deopt_stats.iter().collect();
             v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
             for ((func_id, index), count) in v {
-                let name = globals.func[*func_id].as_ruby_func().name();
+                let name = globals[*func_id].as_ruby_func().name();
                 eprintln!(
                     "{:20}  {:5} [{:05}]  {:10}",
                     name,
@@ -862,12 +862,12 @@ impl BcPc {
                     prefix,
                     toplevel,
                     ..
-                } = globals.func[id].clone();
-                let mut const_name = if toplevel { "::" } else { "" }.to_string();
+                } = &globals.func[id];
+                let mut const_name = if *toplevel { "::" } else { "" }.to_string();
                 for c in prefix {
-                    const_name += &format!("{}::", IdentId::get_name(c));
+                    const_name += &format!("{}::", IdentId::get_name(*c));
                 }
-                const_name += &IdentId::get_name(name);
+                const_name += &IdentId::get_name(*name);
                 let op1 = format!("{:?} = const[{}]", reg, const_name);
                 format!(
                     "{:36} [{}]",
@@ -1488,7 +1488,7 @@ extern "C" fn exec_jit_compile(
     func_id: FuncId,
     self_value: Value,
 ) -> monoasm::CodePtr {
-    globals.func[func_id].data.meta.set_jit();
+    globals[func_id].data.meta.set_jit();
     let label = globals.jit_compile_ruby(func_id, self_value, None);
     globals.codegen.jit.get_label_address(label)
 }
@@ -1499,7 +1499,7 @@ extern "C" fn exec_jit_recompile(
     self_value: Value,
 ) -> monoasm::CodePtr {
     let codeptr = exec_jit_compile(globals, func_id, self_value);
-    let target = globals.func[func_id].data.codeptr.unwrap();
+    let target = globals[func_id].data.codeptr.unwrap();
     let offset = codeptr - target - 5;
     unsafe { *(target.as_ptr().add(1) as *mut i32) = offset as i32 };
     codeptr

@@ -56,10 +56,10 @@ impl Globals {
         let mut parent = if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
-            return self.search_constant(name, current_func);
+            return self.search_constant_checked(name, current_func);
         } else {
             let parent = prefix.remove(0);
-            self.search_constant(parent, current_func)?
+            self.search_constant_checked(parent, current_func)?
                 .expect_class_or_module(self)?
         };
         for constant in prefix {
@@ -87,7 +87,7 @@ impl Globals {
         }
     }
 
-    fn search_constant(&mut self, name: IdentId, current_func: FuncId) -> Option<Value> {
+    fn search_constant_checked(&mut self, name: IdentId, current_func: FuncId) -> Option<Value> {
         if let Some(v) = self.search_lexical_stack(name, current_func) {
             return Some(v);
         }
@@ -101,7 +101,7 @@ impl Globals {
     }
 
     fn search_superclass(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
-        let mut class_id = self.func[current_func]
+        let mut class_id = self[current_func]
             .as_ruby_func()
             .lexical_context
             .last()

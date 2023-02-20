@@ -457,8 +457,8 @@ extern "C" fn log_deoptimize(
     pc: BcPc,
     v: Option<Value>,
 ) {
-    let name = globals.func[func_id].as_ruby_func().name();
-    let bc_begin = globals.func[func_id].as_ruby_func().get_bytecode_address(0);
+    let name = globals[func_id].as_ruby_func().name();
+    let bc_begin = globals[func_id].as_ruby_func().get_bytecode_address(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
     if let TraceIr::LoopEnd = pc.get_ir(&globals.func) {

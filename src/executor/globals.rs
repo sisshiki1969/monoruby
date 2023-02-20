@@ -60,7 +60,7 @@ pub struct Globals {
     /// code generator.
     pub codegen: Codegen,
     /// function info.
-    pub(crate) func: FnStore,
+    pub func: FnStore,
     /// class table.
     class: ClassStore,
     /// globals variables.
@@ -89,6 +89,19 @@ pub struct Globals {
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
     pub(crate) dumped_bc: usize,
+}
+
+impl std::ops::Index<FuncId> for Globals {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.func[index]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for Globals {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.func[index]
+    }
 }
 
 impl alloc::GC<RValue> for Globals {
@@ -214,11 +227,7 @@ impl Globals {
     }
     pub(crate) fn current_source_path(&self, executor: &Executor) -> PathBuf {
         let source_func_id = executor.cfp.get_source_pos();
-        self.func[source_func_id]
-            .as_ruby_func()
-            .sourceinfo
-            .path
-            .clone()
+        self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 
     pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
@@ -271,13 +280,12 @@ impl Globals {
     ///
 
     pub(super) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
-        //let func = &mut globals.func[func_id];
-        if self.func[func_id].data.codeptr.is_none() {
-            let kind = self.func[func_id].kind.clone();
+        if self[func_id].data.codeptr.is_none() {
+            let kind = self[func_id].kind.clone();
             let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);
-            self.func[func_id].data.codeptr = Some(codeptr);
+            self[func_id].data.codeptr = Some(codeptr);
         }
-        &self.func[func_id].data
+        &self[func_id].data
     }
 
     pub(super) fn class_version_inc(&mut self) {
@@ -472,10 +480,10 @@ impl Globals {
     }
 
     pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
-        let arity = self.func[func_id].arity();
-        if arity != -1 && (arity as usize) != args_len {
-            self.error = Some(MonorubyErr::wrong_arguments(arity as usize, args_len));
-            return None;
+        let arity = self[func_id].arity();
+        if arity != -1 {
+            let arity = arity as usize;
+            self.check_number_of_arguments(args_len, arity..=arity)?;
         }
         Some(())
     }
@@ -524,7 +532,7 @@ impl Globals {
                 )
             })
             .collect();
-        let func = self.func[func_id].as_ruby_func();
+        let func = self[func_id].as_ruby_func();
         for (i, text) in dump {
             sourcemap
                 .iter()
@@ -560,9 +568,7 @@ impl Globals {
         let block = lfp.block();
         eprintln!(
             "    name:[{}] block:{} outer:{} {:?}",
-            self.func[func_id]
-                .name()
-                .unwrap_or(&"<unnamed>".to_string()),
+            self[func_id].name().unwrap_or(&"<unnamed>".to_string()),
             match block {
                 Some(block) => {
                     match block.try_proxy() {
