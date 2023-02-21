@@ -108,7 +108,7 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand, optional) = handle_args(info.params, &sourceinfo)?;
+        let (args, expand, optional) = handle_args(vec![], info.params, &sourceinfo)?;
         Ok(self.add_iseq(
             None, name, args, expand, optional, *info.body, sourceinfo, false,
         ))
@@ -117,10 +117,11 @@ impl Funcs {
     fn add_block(
         &mut self,
         outer: (FuncId, Vec<HashMap<String, u16>>),
+        optional_params: Vec<String>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand, optional) = handle_args(info.params, &sourceinfo)?;
+        let (args, expand, optional) = handle_args(optional_params, info.params, &sourceinfo)?;
         Ok(self.add_iseq(
             Some(outer),
             None,
@@ -197,6 +198,7 @@ impl Funcs {
 }
 
 fn handle_args(
+    optional_params: Vec<String>,
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
 ) -> Result<(ArgumentsInfo, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
@@ -209,6 +211,10 @@ fn handle_args(
     let mut optional_num = 0;
     let mut rest = 0;
     let mut block_param = None;
+    for name in optional_params {
+        args_names.push(Some(name));
+        required_num += 1;
+    }
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
@@ -373,10 +379,12 @@ impl FnStore {
     pub(crate) fn add_block(
         &mut self,
         outer: (FuncId, Vec<HashMap<String, u16>>),
+        optional_params: Vec<String>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_block(outer, info, sourceinfo)
+        self.functions
+            .add_block(outer, optional_params, info, sourceinfo)
     }
 
     pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {

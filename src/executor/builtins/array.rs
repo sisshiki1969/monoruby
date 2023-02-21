@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
 }
 
 ///
@@ -236,6 +237,33 @@ extern "C" fn sum(
     Some(sum)
 }
 
+///
+/// ### Array#each
+///
+/// - each {|item| .... } -> self
+/// - [NOT SUPPORTED] each -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
+extern "C" fn each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    block: Option<BlockHandler>,
+) -> Option<Value> {
+    let block_handler = if let Some(block) = block {
+        block
+    } else {
+        globals.err_no_block_given();
+        return None;
+    };
+    for i in &**self_val.as_array() {
+        vm.invoke_block(globals, block_handler, &[*i])?;
+    }
+    Some(self_val)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -337,5 +365,18 @@ mod test {
             r##"[[].sum, [].sum(0.0), [1, 2, 3].sum, [3, 5.5].sum, [2.5, 3.0].sum(0.0) {|e| e * e }, ["a", "b", "c"].sum("")]"##,
         );
         run_test_error("[Object.new].sum");
+    }
+
+    #[test]
+    fn each() {
+        run_test(
+            r##"
+        x = 100
+        [2, 3, 4, 5].each do |y|
+          x += y
+        end
+        x
+        "##,
+        );
     }
 }

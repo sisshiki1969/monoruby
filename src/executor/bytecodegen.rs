@@ -1564,7 +1564,6 @@ impl IrContext {
             None => RecvKind::SelfValue,
         };
 
-        //assert!(arglist.kw_args.is_empty());
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
@@ -1576,14 +1575,7 @@ impl IrContext {
             if let Some(box block) = arglist.block {
                 match block.kind {
                     NodeKind::Lambda(block) => {
-                        let outer_locals = info.get_locals();
-                        let func_id = ctx.add_block(
-                            (info.id(), outer_locals),
-                            block,
-                            info.sourceinfo.clone(),
-                        )?;
-                        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-                        self.gen_literal(info, None, Value::new_integer(block_handler));
+                        self.handle_block(ctx, info, vec![], block)?;
                     }
                     NodeKind::LocalVar(proc_local) => {
                         if Some(&proc_local) == info.block_param_name() {
@@ -1653,6 +1645,54 @@ impl IrContext {
         Ok(())
     }
 
+    fn gen_each(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        param: Vec<String>,
+        iter: Node,
+        block: BlockInfo,
+        ret: Option<BcReg>,
+        use_mode: UseMode,
+        loc: Loc,
+    ) -> Result<()> {
+        assert_eq!(1, param.len());
+        let _ = info.assign_local(&param[0]);
+        let method = IdentId::EACH;
+        let recv_kind = if iter.kind == NodeKind::SelfValue {
+            RecvKind::SelfValue
+        } else if let Some(local) = info.is_refer_local(&iter) {
+            RecvKind::Local(local.into())
+        } else {
+            self.push_expr(ctx, info, iter)?;
+            RecvKind::Temp
+        };
+
+        let old_temp = info.temp;
+        let arg = info.next_reg();
+        self.handle_block(ctx, info, param, block)?;
+        self.gen_nil(info, None);
+        info.temp = old_temp;
+
+        let recv = match recv_kind {
+            RecvKind::SelfValue => BcReg::Self_,
+            RecvKind::Local(reg) => reg,
+            RecvKind::Temp => info.pop().into(),
+        };
+        let ret = if ret.is_some() {
+            ret
+        } else if use_mode.use_val() {
+            Some(info.push().into())
+        } else {
+            None
+        };
+        self.gen_call(recv, method, ret, arg.into(), 0, true, false, loc);
+        if use_mode.is_ret() {
+            self.gen_ret(info, None);
+        }
+        Ok(())
+    }
+
     fn gen_yield(
         &mut self,
         ctx: &mut FnStore,
@@ -1685,6 +1725,25 @@ impl IrContext {
         if is_ret {
             self.gen_ret(info, None);
         }
+        Ok(())
+    }
+
+    fn handle_block(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        optional_param: Vec<String>,
+        block: BlockInfo,
+    ) -> Result<()> {
+        let outer_locals = info.get_locals();
+        let func_id = ctx.add_block(
+            (info.id(), outer_locals),
+            optional_param,
+            block,
+            info.sourceinfo.clone(),
+        )?;
+        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+        self.gen_literal(info, None, Value::new_integer(block_handler));
         Ok(())
     }
 
@@ -1893,7 +1952,12 @@ impl IrContext {
             self.apply_label(break_pos);
             self.push(BcIr::LoopEnd, loc);
         } else {
-            unimplemented!();
+            let use_mode = if use_value {
+                UseMode::Use
+            } else {
+                UseMode::NotUse
+            };
+            self.gen_each(ctx, info, param, iter, body, None, use_mode, loc)?;
         }
         Ok(())
     }
