@@ -918,7 +918,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {
-        if let NodeKind::LocalVar(name) = &node.kind {
+        if let NodeKind::LocalVar(0, name) = &node.kind {
             Some(self.assign_local(name))
         } else {
             None
@@ -926,7 +926,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn is_refer_local(&mut self, node: &Node) -> Option<BcLocal> {
-        if let NodeKind::LocalVar(name) = &node.kind {
+        if let NodeKind::LocalVar(0, name) = &node.kind {
             Some(self.refer_local(name))
         } else {
             None

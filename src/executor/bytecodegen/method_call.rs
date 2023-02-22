@@ -40,7 +40,7 @@ impl IrContext {
                     NodeKind::Lambda(block) => {
                         self.handle_block(ctx, info, vec![], block)?;
                     }
-                    NodeKind::LocalVar(proc_local) => {
+                    NodeKind::LocalVar(0, proc_local) => {
                         if Some(&proc_local) == info.block_param_name() {
                             let proc_temp = info.push().into();
                             self.push(BcIr::BlockArgProxy(proc_temp), loc);

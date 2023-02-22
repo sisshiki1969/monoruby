@@ -517,7 +517,8 @@ impl IrContext {
                 let name = IdentId::get_ident_id(name);
                 LvalueKind::GlobalVar(name)
             }
-            NodeKind::DynamicLocalVar(outer, ident) => {
+            NodeKind::LocalVar(0, _) => LvalueKind::Other,
+            NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
                 let dst = BcLocal(info.refer_dynamic_local(outer, ident)).into();
                 LvalueKind::DynamicVar { outer, dst }
@@ -543,7 +544,6 @@ impl IrContext {
                 let method = IdentId::get_ident_id(&format!("{method}="));
                 LvalueKind::Send { recv, method }
             }
-            NodeKind::LocalVar(_) => LvalueKind::Other,
             NodeKind::SpecialVar(id) => {
                 // 0 => $&
                 // 1 => $'
@@ -811,12 +811,12 @@ impl IrContext {
                     return self.gen_mul_assign(ctx, info, mlhs, mrhs, use_mode);
                 }
             }
-            NodeKind::LocalVar(ident) => {
+            NodeKind::LocalVar(0, ident) => {
                 let local = info.refer_local(&ident);
                 self.handle_mode(info, use_mode, local.into());
                 return Ok(());
             }
-            NodeKind::DynamicLocalVar(outer, ident) => {
+            NodeKind::LocalVar(outer, ident) => {
                 let ret = info.push().into();
                 let src = BcLocal(info.refer_dynamic_local(outer, &ident)).into();
                 self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
@@ -1261,7 +1261,7 @@ impl IrContext {
                     self.gen_mov(dst, temp);
                 }
             }
-            NodeKind::LocalVar(ident) => {
+            NodeKind::LocalVar(0, ident) => {
                 let local2 = info.refer_local(&ident);
                 self.gen_mov(dst, local2.into());
             }
