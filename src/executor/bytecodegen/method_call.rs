@@ -1,3 +1,5 @@
+use ruruby_parse::{ParamKind, RescueEntry};
+
 use super::*;
 
 impl IrContext {
@@ -112,15 +114,29 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        param: Vec<String>,
+        param: Vec<(usize, String)>,
         iter: Node,
-        block: BlockInfo,
+        mut block: BlockInfo,
         ret: Option<BcReg>,
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
         assert_eq!(1, param.len());
-        let _ = info.assign_local(&param[0]);
+        // collect assignments for local variables.
+        let mut names = vec![];
+        level_down(&mut names, &mut block.body, 0);
+        let mut optional_params = vec![];
+        for (outer, name) in param {
+            let r = if outer == 0 {
+                info.assign_local(&name)
+            } else {
+                info.refer_dynamic_local(outer, &name)
+            };
+            optional_params.push((outer + 1, r, name));
+        }
+        for name in names {
+            info.assign_local(&name);
+        }
         let method = IdentId::EACH;
         let recv_kind = if iter.kind == NodeKind::SelfValue {
             RecvKind::SelfValue
@@ -133,7 +149,7 @@ impl IrContext {
 
         let old_temp = info.temp;
         let arg = info.next_reg();
-        self.handle_block(ctx, info, param, block)?;
+        self.handle_block(ctx, info, optional_params, block)?;
         self.gen_nil(info, None);
         info.temp = old_temp;
 
@@ -214,7 +230,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        optional_params: Vec<String>,
+        optional_params: Vec<(usize, BcLocal, String)>,
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = info.get_locals();
@@ -237,5 +253,207 @@ impl IrContext {
         loc: Loc,
     ) {
         self.gen_call(receiver, method, None, val, 1, false, false, loc);
+    }
+}
+
+fn level_down(names: &mut Vec<String>, node: &mut Node, level: usize) {
+    match &mut node.kind {
+        NodeKind::LocalVar(l, _) => {
+            if *l >= level {
+                *l += 1;
+            }
+        }
+        NodeKind::MulAssign(n1, n2) => {
+            n1.into_iter().for_each(|n| {
+                if level == 0 {
+                    if let NodeKind::LocalVar(0, name) = &n.kind {
+                        names.push(name.clone())
+                    }
+                }
+                level_down(names, n, level);
+            });
+            n2.into_iter().for_each(|n| level_down(names, n, level));
+        }
+        NodeKind::Lambda(BlockInfo { params, body, .. }) => {
+            level_down(names, body, level + 1);
+            for p in params {
+                match &mut p.kind {
+                    ParamKind::Optional(_, n) => {
+                        level_down(names, n, level);
+                    }
+                    ParamKind::Keyword(_, Some(n)) => {
+                        level_down(names, n, level);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        NodeKind::SelfValue
+        | NodeKind::Nil
+        | NodeKind::Integer(_)
+        | NodeKind::Bignum(_)
+        | NodeKind::Float(_)
+        | NodeKind::Imaginary(_)
+        | NodeKind::Bool(_)
+        | NodeKind::String(_)
+        | NodeKind::Symbol(_)
+        | NodeKind::Ident(_)
+        | NodeKind::InstanceVar(_)
+        | NodeKind::GlobalVar(_)
+        | NodeKind::SpecialVar(_)
+        | NodeKind::ClassVar(_)
+        | NodeKind::MethodDef(..)
+        | NodeKind::SingletonMethodDef(..)
+        | NodeKind::ClassDef { .. }
+        | NodeKind::SingletonClassDef { .. } => {}
+        NodeKind::CompStmt(nodes)
+        | NodeKind::InterporatedString(nodes)
+        | NodeKind::Array(nodes, ..)
+        | NodeKind::RegExp(nodes, ..) => {
+            nodes.into_iter().for_each(|n| level_down(names, n, level));
+        }
+        NodeKind::Command(n)
+        | NodeKind::UnOp(_, n)
+        | NodeKind::Splat(n)
+        | NodeKind::Break(n)
+        | NodeKind::Next(n)
+        | NodeKind::Return(n)
+        | NodeKind::Defined(n) => {
+            level_down(names, n, level);
+        }
+        NodeKind::Const { parent, .. } => {
+            if let Some(n) = parent {
+                level_down(names, n, level);
+            }
+        }
+        NodeKind::BinOp(_, box n1, box n2)
+        | NodeKind::AssignOp(_, box n1, box n2)
+        | NodeKind::Range {
+            start: box n1,
+            end: box n2,
+            ..
+        }
+        | NodeKind::While {
+            cond: box n1,
+            body: box n2,
+            ..
+        }
+        | NodeKind::AliasMethod(box n1, box n2) => {
+            level_down(names, n1, level);
+            level_down(names, n2, level);
+        }
+        NodeKind::If {
+            cond: n1,
+            then_: n2,
+            else_: n3,
+        } => {
+            level_down(names, n1, level);
+            level_down(names, n2, level);
+            level_down(names, n3, level);
+        }
+        NodeKind::Hash(pairs, ..) => pairs.into_iter().for_each(|(n1, n2)| {
+            level_down(names, n1, level);
+            level_down(names, n2, level);
+        }),
+        NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
+            level_down_arglist(names, arglist, level);
+        }
+        NodeKind::MethodCall {
+            receiver, arglist, ..
+        } => {
+            level_down(names, receiver, level);
+            level_down_arglist(names, arglist, level);
+        }
+        NodeKind::Index { base, index } => {
+            level_down(names, base, level);
+            index.into_iter().for_each(|n| level_down(names, n, level));
+        }
+        NodeKind::For { param, iter, body } => {
+            for (outer, name) in param {
+                if level == *outer {
+                    names.push(name.clone());
+                }
+                if *outer >= level {
+                    *outer += 1;
+                }
+            }
+            level_down(names, iter, level);
+            let BlockInfo { params, body, .. } = body;
+            level_down(names, body, level);
+            for p in params {
+                match &mut p.kind {
+                    ParamKind::Optional(_, n) => {
+                        level_down(names, n, level);
+                    }
+                    ParamKind::Keyword(_, Some(n)) => {
+                        level_down(names, n, level);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        NodeKind::Case { cond, when_, else_ } => {
+            if let Some(n) = cond {
+                level_down(names, n, level);
+            }
+            level_down(names, else_, level);
+            for CaseBranch { when, body } in when_ {
+                when.into_iter().for_each(|n| level_down(names, n, level));
+                level_down(names, body, level);
+            }
+        }
+        NodeKind::Super(args) => {
+            if let Some(arglist) = args {
+                level_down_arglist(names, arglist, level);
+            }
+        }
+        NodeKind::Begin {
+            body,
+            rescue,
+            else_,
+            ensure,
+        } => {
+            level_down(names, body, level);
+            for RescueEntry {
+                exception_list,
+                assign,
+                body,
+            } in rescue
+            {
+                exception_list
+                    .into_iter()
+                    .for_each(|n| level_down(names, n, level));
+                if let Some(n) = assign {
+                    level_down(names, n, level);
+                }
+                level_down(names, body, level);
+            }
+            if let Some(n) = else_ {
+                level_down(names, n, level);
+            }
+            if let Some(n) = ensure {
+                level_down(names, n, level);
+            }
+        }
+    }
+}
+
+fn level_down_arglist(names: &mut Vec<String>, arglist: &mut ArgList, level: usize) {
+    let ArgList {
+        args,
+        kw_args,
+        hash_splat,
+        block,
+        ..
+    } = arglist;
+    args.into_iter().for_each(|n| level_down(names, n, level));
+    kw_args
+        .into_iter()
+        .for_each(|(_, n)| level_down(names, n, level));
+    hash_splat
+        .into_iter()
+        .for_each(|n| level_down(names, n, level));
+    if let Some(n) = block {
+        level_down(names, n, level);
     }
 }

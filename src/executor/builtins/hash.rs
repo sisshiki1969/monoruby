@@ -247,7 +247,10 @@ extern "C" fn env_fetch(
         globals.check_number_of_arguments(len, 1..=1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
-            None => vm.invoke_block(globals, bh, &[arg[0]])?,
+            None => {
+                let data = vm.get_block_data(globals, bh);
+                vm.invoke_block(globals, data, &[arg[0]])?
+            }
         }
     } else if len == 1 {
         env_map.get(arg[0]).unwrap()

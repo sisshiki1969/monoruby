@@ -136,10 +136,20 @@ impl IrContext {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
         ir.gen_dummy_init(info.is_block);
+        for (outer, dst, src) in info.for_param.clone() {
+            ir.push(
+                BcIr::StoreDynVar {
+                    dst: dst.into(),
+                    outer,
+                    src: BcReg::Local(BcLocal(src as u16)),
+                },
+                Loc::default(),
+            );
+        }
         for ExpandInfo { src, dst, len } in &info.expand {
             ir.gen_expand_array(*src, *dst, *len);
         }
-        for OptionalInfo { local, initializer } in std::mem::take(&mut info.optional) {
+        for OptionalInfo { local, initializer } in info.optional.clone() {
             let local = local.into();
             let next = ir.new_label();
             ir.gen_check_local(local, next);
@@ -520,7 +530,7 @@ impl IrContext {
             NodeKind::LocalVar(0, _) => LvalueKind::Other,
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
-                let dst = BcLocal(info.refer_dynamic_local(outer, ident)).into();
+                let dst = info.refer_dynamic_local(outer, ident).into();
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {
@@ -818,7 +828,7 @@ impl IrContext {
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = info.push().into();
-                let src = BcLocal(info.refer_dynamic_local(outer, &ident)).into();
+                let src = info.refer_dynamic_local(outer, &ident).into();
                 self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
             }
             NodeKind::Const {
@@ -1633,7 +1643,7 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        param: Vec<String>,
+        param: Vec<(usize, String)>,
         iter: Node,
         body: BlockInfo,
         use_value: bool,
@@ -1647,7 +1657,7 @@ impl IrContext {
             ..
         } = iter.kind
         {
-            let counter = info.assign_local(&param[0]);
+            let counter = info.assign_local(&param[0].1);
             let break_pos = self.new_label();
             self.loops.push((
                 LoopKind::For,

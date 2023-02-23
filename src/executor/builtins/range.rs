@@ -9,6 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "begin", begin, 0);
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
+    globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
 }
 
 /// ### Range.new
@@ -72,6 +73,53 @@ extern "C" fn exclude_end(
     Some(Value::bool(self_val.as_range().exclude_end()))
 }
 
+///
+/// ### Range#each
+///
+/// - each {|item| .... } -> self
+/// - [NOT SUPPORTED] each -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
+extern "C" fn each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _arg: Arg,
+    _len: usize,
+    block: Option<BlockHandler>,
+) -> Option<Value> {
+    let block_handler = if let Some(block) = block {
+        block
+    } else {
+        globals.err_no_block_given();
+        return None;
+    };
+    let range = self_val.as_range();
+    if range.start.is_fixnum() && range.end.is_fixnum() {
+        let start = range.start.as_fixnum();
+        let mut end = range.end.as_fixnum();
+        if !range.exclude_end() {
+            end += 1
+        }
+
+        let data = vm.get_block_data(globals, block_handler);
+        for i in start..end {
+            let args = [Value::fixnum(i)];
+            (globals.codegen.block_invoker)(
+                vm,
+                globals,
+                &data as _,
+                Value::nil(),
+                args.as_ptr(),
+                args.len(),
+            )?;
+        }
+    } else {
+        unimplemented!()
+    }
+    Some(self_val)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -86,5 +134,23 @@ mod test {
         );
         run_test("(1..5).exclude_end?");
         run_test("(1...5).exclude_end?");
+        run_test(
+            r#"
+        a = 0
+        (1...5).each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
+        run_test(
+            r#"
+        a = 0
+        (1..5).each do |x|
+            a += x
+        end
+        a
+        "#,
+        );
     }
 }

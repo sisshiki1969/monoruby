@@ -120,7 +120,8 @@ impl RegexpInfo {
 
             let mut res = given.to_string();
             let matched = Value::new_string_from_str(matched_str);
-            let result = vm.invoke_block(globals, block_handler, &[matched])?;
+            let data = vm.get_block_data(globals, block_handler);
+            let result = vm.invoke_block(globals, data, &[matched])?;
             let s = result.to_s(globals);
             res.replace_range(start..end, &s);
             Some((res, true))
@@ -173,6 +174,7 @@ impl RegexpInfo {
         ) -> Option<(String, bool)> {
             let mut range = vec![];
             let mut i = 0;
+            let data = vm.get_block_data(globals, block_handler);
             loop {
                 let (start, end, matched_str) = match re.captures_from_pos(given, i) {
                     Ok(None) => break,
@@ -188,7 +190,7 @@ impl RegexpInfo {
                     }
                 };
                 let matched = Value::new_string_from_str(matched_str);
-                let result: Value = vm.invoke_block(globals, block_handler, &[matched])?;
+                let result: Value = vm.invoke_block(globals, data.clone(), &[matched])?;
                 let replace = result.to_s(globals);
                 range.push((start, end, replace));
             }
@@ -229,7 +231,8 @@ impl RegexpInfo {
                 vm.get_captures(&captures, given);
                 if let Some(block_handler) = block {
                     let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
-                    vm.invoke_block(globals, block_handler, &[matched])
+                    let data = vm.get_block_data(globals, block_handler);
+                    vm.invoke_block(globals, data, &[matched])
                 } else {
                     let mut v = vec![];
                     for i in 0..captures.len() {

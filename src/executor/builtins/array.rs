@@ -158,8 +158,9 @@ extern "C" fn inject(
     } else {
         arg[0]
     };
+    let data = vm.get_block_data(globals, bh);
     for elem in iter {
-        res = vm.invoke_block(globals, bh, &vec![res, *elem])?;
+        res = vm.invoke_block(globals, data.clone(), &vec![res, *elem])?;
     }
     Some(res)
 }
@@ -228,8 +229,9 @@ extern "C" fn sum(
             }
         }
         Some(bh) => {
+            let data = vm.get_block_data(globals, bh);
             for v in &**aref {
-                let rhs = vm.invoke_block(globals, bh, &[*v])?;
+                let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
                 sum = add_values(vm, globals, sum, rhs)?;
             }
         }
@@ -258,8 +260,9 @@ extern "C" fn each(
         globals.err_no_block_given();
         return None;
     };
+    let data = vm.get_block_data(globals, block_handler);
     for i in &**self_val.as_array() {
-        vm.invoke_block(globals, block_handler, &[*i])?;
+        vm.invoke_block(globals, data.clone(), &[*i])?;
     }
     Some(self_val)
 }

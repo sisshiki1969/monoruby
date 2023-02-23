@@ -1831,4 +1831,25 @@ mod test {
         ",
         );
     }
+
+    #[test]
+    fn test_for_each() {
+        run_test(
+            r#"
+        a = 0
+        for i in [0,1,2,3,4]
+            1.times do
+                for j in [5,6,7,8]
+                    for k in [10,11,12]
+                        1.times do
+                            a += i + j + k
+                        end
+                    end
+                end
+            end
+        end
+        [i,a]
+        "#,
+        );
+    }
 }

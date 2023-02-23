@@ -92,6 +92,7 @@ impl Funcs {
             ArgumentsInfo::default(),
             vec![],
             vec![],
+            vec![],
             Node::new_nil(Loc(0, 0)),
             SourceInfoRef::default(),
             false,
@@ -108,26 +109,28 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand, optional) = handle_args(vec![], info.params, &sourceinfo)?;
+        let (args, expand, optional, for_param) = handle_args(vec![], info.params, &sourceinfo)?;
         Ok(self.add_iseq(
-            None, name, args, expand, optional, *info.body, sourceinfo, false,
+            None, name, args, expand, optional, for_param, *info.body, sourceinfo, false,
         ))
     }
 
     fn add_block(
         &mut self,
         outer: (FuncId, Vec<HashMap<String, u16>>),
-        optional_params: Vec<String>,
+        for_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let (args, expand, optional) = handle_args(optional_params, info.params, &sourceinfo)?;
+        let (args, expand, optional, for_param) =
+            handle_args(for_params, info.params, &sourceinfo)?;
         Ok(self.add_iseq(
             Some(outer),
             None,
             args,
             expand,
             optional,
+            for_param,
             *info.body,
             sourceinfo,
             false,
@@ -146,6 +149,7 @@ impl Funcs {
             ArgumentsInfo::default(),
             vec![],
             vec![],
+            vec![],
             body,
             sourceinfo,
             true,
@@ -159,6 +163,7 @@ impl Funcs {
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
+        for_param: Vec<(usize, BcLocal, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
@@ -171,6 +176,7 @@ impl Funcs {
             args,
             expand,
             optional,
+            for_param,
             body,
             sourceinfo,
             is_classdef,
@@ -198,10 +204,15 @@ impl Funcs {
 }
 
 fn handle_args(
-    optional_params: Vec<String>,
+    for_params: Vec<(usize, BcLocal, String)>,
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
-) -> Result<(ArgumentsInfo, Vec<ExpandInfo>, Vec<OptionalInfo>)> {
+) -> Result<(
+    ArgumentsInfo,
+    Vec<ExpandInfo>,
+    Vec<OptionalInfo>,
+    Vec<(usize, BcLocal, usize)>,
+)> {
     let mut args_names = vec![];
     let mut keyword_args = vec![];
     let mut destruct_args = vec![];
@@ -211,8 +222,10 @@ fn handle_args(
     let mut optional_num = 0;
     let mut rest = 0;
     let mut block_param = None;
-    for name in optional_params {
-        args_names.push(Some(name));
+    let mut for_param = vec![];
+    for (outer, reg, _name) in for_params {
+        for_param.push((outer, reg, args_names.len()));
+        //args_names.push(Some(name));
         required_num += 1;
     }
     for param in params {
@@ -279,6 +292,7 @@ fn handle_args(
         },
         expand,
         optional,
+        for_param,
     ))
 }
 
@@ -379,7 +393,7 @@ impl FnStore {
     pub(crate) fn add_block(
         &mut self,
         outer: (FuncId, Vec<HashMap<String, u16>>),
-        optional_params: Vec<String>,
+        optional_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -400,6 +414,7 @@ impl FnStore {
             None,
             Some("/main".to_string()),
             ArgumentsInfo::default(),
+            vec![],
             vec![],
             vec![],
             ast,
@@ -505,6 +520,7 @@ impl FuncInfo {
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
+        for_param: Vec<(usize, BcLocal, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_classdef: bool,
@@ -517,6 +533,7 @@ impl FuncInfo {
                 args,
                 expand,
                 optional,
+                for_param,
                 body,
                 sourceinfo,
             )
@@ -527,6 +544,7 @@ impl FuncInfo {
                 args,
                 expand,
                 optional,
+                for_param,
                 body,
                 sourceinfo,
             )
@@ -618,7 +636,7 @@ impl FuncInfo {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} bc:{:?} meta:{:?}",
+            "{:?} name:{} bc:{:?} meta:{:?} {:?}",
             info.id,
             match &self.name {
                 Some(name) => name,
@@ -626,6 +644,7 @@ impl FuncInfo {
             },
             BcPcBase::new(info),
             self.data.meta,
+            self.kind
         );
         let bb_info = info.get_bb_info();
         for (i, pc) in info.bytecode().iter().enumerate() {
@@ -657,6 +676,8 @@ pub(crate) struct ISeqInfo {
     pub(crate) expand: Vec<ExpandInfo>,
     /// optional parameters initializer
     pub(crate) optional: Vec<OptionalInfo>,
+    /// for parameter info. (outer, dst_reg, src_reg)
+    pub(crate) for_param: Vec<(usize, BcLocal, usize)>,
     /// local variables.
     locals: HashMap<String, u16>,
     /// outer local variables.
@@ -678,10 +699,10 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id: {}, name: {:?}. pos_num: {:?} }}",
+            "RubyFuncInfo {{ id: {}, name: {:?}. locals: {:?} }}",
             self.id().get(),
             self.name,
-            self.args.reqopt_num
+            self.locals
         )
     }
 }
@@ -701,6 +722,7 @@ impl ISeqInfo {
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
+        for_param: Vec<(usize, BcLocal, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
         is_block: bool,
@@ -713,6 +735,7 @@ impl ISeqInfo {
             args: args.clone(),
             expand,
             optional,
+            for_param,
             locals: HashMap::default(),
             outer_locals,
             literals: vec![],
@@ -739,11 +762,12 @@ impl ISeqInfo {
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
+        for_param: Vec<(usize, BcLocal, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         Self::new(
-            id, outer.1, name, args, expand, optional, body, sourceinfo, true,
+            id, outer.1, name, args, expand, optional, for_param, body, sourceinfo, true,
         )
     }
 
@@ -753,6 +777,7 @@ impl ISeqInfo {
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
+        for_param: Vec<(usize, BcLocal, usize)>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
@@ -763,6 +788,7 @@ impl ISeqInfo {
             args,
             expand,
             optional,
+            for_param,
             body,
             sourceinfo,
             false,
@@ -902,8 +928,11 @@ impl ISeqInfo {
         }
     }
 
-    pub(crate) fn refer_dynamic_local(&self, outer: usize, ident: &str) -> u16 {
-        *self.outer_locals[outer - 1].get(ident).unwrap()
+    pub(crate) fn refer_dynamic_local(&self, outer: usize, ident: &str) -> BcLocal {
+        BcLocal(*self.outer_locals[outer - 1].get(ident).expect(&format!(
+            "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
+            self.outer_locals, self.locals
+        )))
     }
 
     /// Add a variable identifier without checking duplicates.

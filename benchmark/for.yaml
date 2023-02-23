@@ -1,0 +1,10 @@
+prelude: |
+  a = 0..100000
+benchmark:
+  block_flat: |
+    for x in 0..100000
+    end
+  block_each: |
+    for x in a
+    end
+loop_count: 30

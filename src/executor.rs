@@ -561,10 +561,9 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
+        data: BlockData,
         args: &[Value],
     ) -> Option<Value> {
-        let data = self.get_block_data(globals, block_handler);
         (globals.codegen.block_invoker)(
             self,
             globals,

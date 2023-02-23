@@ -32,8 +32,9 @@ extern "C" fn times(
         None => unimplemented!(),
     };
     if let Some(block) = block {
+        let data = vm.get_block_data(globals, block);
         for i in 0..count {
-            vm.invoke_block(globals, block, &[Value::new_integer(i)])?;
+            vm.invoke_block(globals, data.clone(), &[Value::new_integer(i)])?;
         }
     } else {
         unimplemented!("needs block.")
