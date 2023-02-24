@@ -509,6 +509,7 @@ extern "C" fn require_relative(
     path.pop();
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
     path.extend(&feature);
+    path.set_extension("rb");
     let (file_body, path) = globals.load_lib(&path)?;
     executor.eval_script(globals, file_body, &path)?;
     Some(Value::bool(true))

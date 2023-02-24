@@ -401,8 +401,6 @@ impl Globals {
     ///
     /// Check whether a method *name* for object *obj* exists.
     ///
-    /// This fn checks whole superclass chain.
-    ///
     pub(in crate::executor) fn check_method(
         &mut self,
         obj: Value,
@@ -415,8 +413,6 @@ impl Globals {
     ///
     /// Check whether a method *name* for object *obj* exists.
     ///
-    /// This fn checks whole superclass chain.
-    ///
     pub(super) fn check_method_entry(
         &mut self,
         obj: Value,
@@ -428,8 +424,6 @@ impl Globals {
 
     ///
     /// Check whether a method *name* of class *class_id* exists.
-    ///
-    /// This fn checks whole superclass chain.
     ///
     fn check_method_for_class(
         &mut self,
@@ -457,6 +451,11 @@ impl Globals {
         entry
     }
 
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    /// This fn checks whole superclass chain everytime called.
+    ///
     fn check_method_main(
         &mut self,
         mut class_id: ClassId,

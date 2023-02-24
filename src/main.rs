@@ -56,7 +56,10 @@ fn main() {
                     #[cfg(debug_assertions)]
                     eprintln!("=> {:?}", _val)
                 }
-                Err(err) => err.show_error_message_and_loc(),
+                Err(err) => {
+                    err.show_error_message_and_loc();
+                    std::process::exit(1);
+                }
             }
         }
         return;
@@ -66,7 +69,7 @@ fn main() {
     let mut code = String::new();
     let path = match args.file {
         Some(file_name) => {
-            let path = std::path::PathBuf::from(&file_name);
+            let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
             let mut file = File::open(file_name).unwrap();
             file.read_to_string(&mut code).unwrap();
             path
@@ -85,11 +88,15 @@ fn main() {
         Ok(fid) => {
             match executor.eval(&mut globals, fid) {
                 Ok(_val) => {}
-                Err(err) => err.show_error_message_and_loc(),
+                Err(err) => {
+                    err.show_error_message_and_loc();
+                    std::process::exit(1);
+                }
             };
         }
         Err(err) => {
             err.show_error_message_and_loc();
+            std::process::exit(1);
         }
     };
 }
