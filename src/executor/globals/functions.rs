@@ -1,4 +1,4 @@
-use ruruby_parse::FormalParam;
+use ruruby_parse::{ArgList, CaseBranch, FormalParam, RescueEntry};
 
 use super::*;
 use std::pin::Pin;
@@ -959,6 +959,208 @@ impl ISeqInfo {
             Some(self.refer_local(name))
         } else {
             None
+        }
+    }
+
+    pub(crate) fn level_down(&mut self, node: &mut Node, level: usize) {
+        match &mut node.kind {
+            NodeKind::LocalVar(l, _) => {
+                if *l >= level {
+                    *l += 1;
+                }
+            }
+            NodeKind::MulAssign(n1, n2) => {
+                n1.into_iter().for_each(|n| {
+                    if level == 0 {
+                        if let NodeKind::LocalVar(0, name) = &n.kind {
+                            self.assign_local(&name);
+                        }
+                    }
+                    self.level_down(n, level);
+                });
+                n2.into_iter().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::Lambda(BlockInfo { params, body, .. }) => {
+                self.level_down(body, level + 1);
+                for p in params {
+                    match &mut p.kind {
+                        ParamKind::Optional(_, n) => {
+                            self.level_down(n, level);
+                        }
+                        ParamKind::Keyword(_, Some(n)) => {
+                            self.level_down(n, level);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NodeKind::SelfValue
+            | NodeKind::Nil
+            | NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
+            | NodeKind::Bool(_)
+            | NodeKind::String(_)
+            | NodeKind::Symbol(_)
+            | NodeKind::Ident(_)
+            | NodeKind::InstanceVar(_)
+            | NodeKind::GlobalVar(_)
+            | NodeKind::SpecialVar(_)
+            | NodeKind::ClassVar(_)
+            | NodeKind::MethodDef(..)
+            | NodeKind::SingletonMethodDef(..)
+            | NodeKind::ClassDef { .. }
+            | NodeKind::SingletonClassDef { .. } => {}
+            NodeKind::CompStmt(nodes)
+            | NodeKind::InterporatedString(nodes)
+            | NodeKind::Array(nodes, ..)
+            | NodeKind::RegExp(nodes, ..) => {
+                nodes.into_iter().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::Command(n)
+            | NodeKind::UnOp(_, n)
+            | NodeKind::Splat(n)
+            | NodeKind::Break(n)
+            | NodeKind::Next(n)
+            | NodeKind::Return(n)
+            | NodeKind::Defined(n) => {
+                self.level_down(n, level);
+            }
+            NodeKind::Const { parent, .. } => {
+                if let Some(n) = parent {
+                    self.level_down(n, level);
+                }
+            }
+            NodeKind::BinOp(_, box n1, box n2)
+            | NodeKind::AssignOp(_, box n1, box n2)
+            | NodeKind::Range {
+                start: box n1,
+                end: box n2,
+                ..
+            }
+            | NodeKind::While {
+                cond: box n1,
+                body: box n2,
+                ..
+            }
+            | NodeKind::AliasMethod(box n1, box n2) => {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+            }
+            NodeKind::If {
+                cond: n1,
+                then_: n2,
+                else_: n3,
+            } => {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+                self.level_down(n3, level);
+            }
+            NodeKind::Hash(pairs, ..) => pairs.into_iter().for_each(|(n1, n2)| {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+            }),
+            NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
+                self.level_down_arglist(arglist, level);
+            }
+            NodeKind::MethodCall {
+                receiver, arglist, ..
+            } => {
+                self.level_down(receiver, level);
+                self.level_down_arglist(arglist, level);
+            }
+            NodeKind::Index { base, index } => {
+                self.level_down(base, level);
+                index.into_iter().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::For { param, iter, body } => {
+                for (outer, name) in param {
+                    if level == *outer {
+                        self.assign_local(name);
+                    }
+                    if *outer >= level {
+                        *outer += 1;
+                    }
+                }
+                self.level_down(iter, level);
+                let BlockInfo { params, body, .. } = body;
+                self.level_down(body, level);
+                for p in params {
+                    match &mut p.kind {
+                        ParamKind::Optional(_, n) => {
+                            self.level_down(n, level);
+                        }
+                        ParamKind::Keyword(_, Some(n)) => {
+                            self.level_down(n, level);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NodeKind::Case { cond, when_, else_ } => {
+                if let Some(n) = cond {
+                    self.level_down(n, level);
+                }
+                self.level_down(else_, level);
+                for CaseBranch { when, body } in when_ {
+                    when.into_iter().for_each(|n| self.level_down(n, level));
+                    self.level_down(body, level);
+                }
+            }
+            NodeKind::Super(args) => {
+                if let Some(arglist) = args {
+                    self.level_down_arglist(arglist, level);
+                }
+            }
+            NodeKind::Begin {
+                body,
+                rescue,
+                else_,
+                ensure,
+            } => {
+                self.level_down(body, level);
+                for RescueEntry {
+                    exception_list,
+                    assign,
+                    body,
+                } in rescue
+                {
+                    exception_list
+                        .into_iter()
+                        .for_each(|n| self.level_down(n, level));
+                    if let Some(n) = assign {
+                        self.level_down(n, level);
+                    }
+                    self.level_down(body, level);
+                }
+                if let Some(n) = else_ {
+                    self.level_down(n, level);
+                }
+                if let Some(n) = ensure {
+                    self.level_down(n, level);
+                }
+            }
+        }
+    }
+
+    fn level_down_arglist(&mut self, arglist: &mut ArgList, level: usize) {
+        let ArgList {
+            args,
+            kw_args,
+            hash_splat,
+            block,
+            ..
+        } = arglist;
+        args.into_iter().for_each(|n| self.level_down(n, level));
+        kw_args
+            .into_iter()
+            .for_each(|(_, n)| self.level_down(n, level));
+        hash_splat
+            .into_iter()
+            .for_each(|n| self.level_down(n, level));
+        if let Some(n) = block {
+            self.level_down(n, level);
         }
     }
 
