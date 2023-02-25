@@ -1,3 +1,5 @@
+#![feature(result_flattening)]
+
 use std::fs::File;
 use std::io::Read;
 
@@ -65,7 +67,6 @@ fn main() {
         return;
     }
 
-    let mut executor = Executor::init(&mut globals);
     let mut code = String::new();
     let path = match args.file {
         Some(file_name) => {
@@ -78,25 +79,13 @@ fn main() {
             if finish_flag {
                 return;
             }
-            let path = std::path::PathBuf::from("-");
             let mut stdin = std::io::stdin();
             stdin.read_to_string(&mut code).unwrap();
-            path
+            std::path::PathBuf::from("-")
         }
     };
-    match globals.compile_script(code, path) {
-        Ok(fid) => {
-            match executor.eval(&mut globals, fid) {
-                Ok(_val) => {}
-                Err(err) => {
-                    err.show_error_message_and_loc();
-                    std::process::exit(1);
-                }
-            };
-        }
-        Err(err) => {
-            err.show_error_message_and_loc();
-            std::process::exit(1);
-        }
+    if let Err(err) = globals.compile_and_run(&code, &path) {
+        err.show_error_message_and_loc();
+        std::process::exit(1);
     };
 }

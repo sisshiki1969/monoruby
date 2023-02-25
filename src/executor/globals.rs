@@ -184,7 +184,11 @@ impl Globals {
         }
     }
 
-    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
+    pub(super) fn compile_script(
+        &mut self,
+        code: String,
+        path: impl Into<PathBuf>,
+    ) -> Result<FuncId> {
         match Parser::parse_program(code, path.into()) {
             Ok(res) => self.func.compile_script(res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
