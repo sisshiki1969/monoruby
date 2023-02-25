@@ -79,8 +79,7 @@ fn main() {
             if finish_flag {
                 return;
             }
-            let mut stdin = std::io::stdin();
-            stdin.read_to_string(&mut code).unwrap();
+            std::io::stdin().read_to_string(&mut code).unwrap();
             std::path::PathBuf::from("-")
         }
     };

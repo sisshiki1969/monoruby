@@ -87,7 +87,7 @@ extern "C" fn eq(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let lhs = self_val.as_string();
+    let lhs = self_val.as_str();
     let b = match arg[0].is_string() {
         Some(rhs) => rhs == lhs,
         None => false,
@@ -212,8 +212,8 @@ extern "C" fn rem(
     };
     let mut arg_no = 0;
     let mut format_str = String::new();
-    let self_str = self_val.as_string();
-    let mut chars = self_str.chars();
+    let self_str = self_val.as_str();
+    let mut chars = self_str.as_ref().chars();
     let mut ch = match chars.next() {
         Some(ch) => ch,
         None => {
@@ -420,12 +420,12 @@ fn sub_main(
             globals.check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = arg[1].expect_string(globals)?;
-            RegexpInfo::replace_one(vm, globals, arg[0], &given, &replace)
+            RegexpInner::replace_one(vm, globals, arg[0], &given, &replace)
         }
         Some(block) => {
             globals.check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInfo::replace_one_block(vm, globals, arg[0], &given, block)
+            RegexpInner::replace_one_block(vm, globals, arg[0], &given, block)
         }
     }
 }
@@ -485,12 +485,12 @@ fn gsub_main(
             globals.check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = args[1].expect_string(globals)?;
-            RegexpInfo::replace_all(vm, globals, args[0], &given, &replace)
+            RegexpInner::replace_all(vm, globals, args[0], &given, &replace)
         }
         Some(block) => {
             globals.check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInfo::replace_all_block(vm, globals, args[0], &given, block)
+            RegexpInner::replace_all_block(vm, globals, args[0], &given, block)
         }
     }
 }
@@ -522,7 +522,7 @@ extern "C" fn string_match(
     let given = self_val.expect_string(globals)?;
     let re = arg[0].expect_regexp_or_string(globals)?;
 
-    RegexpInfo::match_one(vm, globals, &re, &given, block, pos)
+    RegexpInner::match_one(vm, globals, &re, &given, block, pos)
 }
 
 /// ### String#to_s
@@ -553,7 +553,7 @@ extern "C" fn length(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let length = self_val.as_string().chars().count();
+    let length = self_val.as_str().chars().count();
     Some(Value::new_integer(length as i64))
 }
 
@@ -589,11 +589,11 @@ extern "C" fn ljust(
         globals.err_zero_width_padding();
         return None;
     };
-    let lhs = self_val.as_string();
+    let lhs = self_val.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Some(Value::new_string(lhs));
+        return Some(Value::new_string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
     Some(Value::new_string(format!(
@@ -628,11 +628,11 @@ extern "C" fn rjust(
         globals.err_zero_width_padding();
         return None;
     };
-    let lhs = self_val.as_string();
+    let lhs = self_val.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Some(Value::new_string(lhs));
+        return Some(Value::new_string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
     Some(Value::new_string(format!(
@@ -674,7 +674,7 @@ extern "C" fn to_i(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
-    let s = self_val.as_string();
+    let s = self_val.as_str();
     let radix = if len == 0 {
         10
     } else {

@@ -1,17 +1,20 @@
 use crate::*;
 use num::BigInt;
-use smallvec::SmallVec;
 use std::mem::ManuallyDrop;
 
 pub use self::array::*;
 pub use self::hash::*;
+pub use self::io::IoInner;
 pub use self::module::*;
-pub use self::regexp::RegexpInfo;
+pub use self::regexp::RegexpInner;
+pub use self::string::StringInner;
 
 mod array;
 mod hash;
+mod io;
 mod module;
 mod regexp;
+mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 
@@ -42,10 +45,7 @@ impl std::fmt::Debug for RValue {
                     3 => format!("OBJECT({:?})", self.kind.object),
                     4 => format!("BIGNUM({:?})", self.kind.bignum),
                     5 => format!("FLOAT({:?})", self.kind.float),
-                    6 => format!(
-                        "STRING({:?})",
-                        String::from_utf8_lossy(self.kind.string.0.as_ref())
-                    ),
+                    6 => format!("STRING({:?})", self.kind.string.as_str()),
                     7 => format!("TIME({:?})", self.kind.time),
                     8 => format!("ARRAY({:?})", self.kind.array),
                     9 => format!("RANGE({:?})", self.kind.range),
@@ -493,7 +493,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_regexp(regexp: RegexpInfo) -> Self {
+    pub(super) fn new_regexp(regexp: RegexpInner) -> Self {
         RValue {
             flags: RVFlag::new(REGEXP_CLASS, ObjKind::REGEXP),
             kind: ObjKind::regexp(regexp),
@@ -501,7 +501,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_io(io: IoInfo) -> Self {
+    pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
             flags: RVFlag::new(IO_CLASS, ObjKind::IO),
             kind: ObjKind::io(io),
@@ -510,15 +510,15 @@ impl RValue {
     }
 
     pub(super) fn new_io_stdin() -> Self {
-        Self::new_io(IoInfo::stdin())
+        Self::new_io(IoInner::stdin())
     }
 
     pub(super) fn new_io_stdout() -> Self {
-        Self::new_io(IoInfo::stdout())
+        Self::new_io(IoInner::stdout())
     }
 
     pub(super) fn new_io_stderr() -> Self {
-        Self::new_io(IoInfo::stderr())
+        Self::new_io(IoInner::stderr())
     }
 
     pub(super) fn new_splat(ary: ArrayInner) -> Self {
@@ -622,11 +622,15 @@ impl RValue {
     }
 
     pub(super) fn as_bytes(&self) -> &[u8] {
-        unsafe { self.kind.string.0.as_ref() }
+        unsafe { self.kind.string.as_bytes() }
     }
 
     pub(super) fn as_string(&self) -> String {
-        unsafe { String::from_utf8_lossy(&self.kind.string.0).to_string() }
+        unsafe { self.kind.string.to_string() }
+    }
+
+    pub(super) fn as_str(&self) -> std::borrow::Cow<'_, str> {
+        unsafe { self.kind.string.as_str() }
     }
 
     /*pub(crate) fn as_string_mut(&mut self) -> &mut InnerVec {
@@ -653,11 +657,11 @@ impl RValue {
         unsafe { &mut self.kind.hash }
     }
 
-    pub(super) fn as_regex(&self) -> &RegexpInfo {
+    pub(super) fn as_regex(&self) -> &RegexpInner {
         unsafe { &self.kind.regexp }
     }
 
-    pub(super) fn as_io(&self) -> &IoInfo {
+    pub(super) fn as_io(&self) -> &IoInner {
         unsafe { &self.kind.io }
     }
 
@@ -739,8 +743,8 @@ pub union ObjKind {
     range: ManuallyDrop<Range>,
     proc: ManuallyDrop<BlockData>,
     hash: ManuallyDrop<HashInfo>,
-    regexp: ManuallyDrop<RegexpInfo>,
-    io: ManuallyDrop<IoInfo>,
+    regexp: ManuallyDrop<RegexpInner>,
+    io: ManuallyDrop<IoInner>,
 }
 
 #[allow(dead_code)]
@@ -761,10 +765,6 @@ impl ObjKind {
     pub const REGEXP: u8 = 13;
     pub const IO: u8 = 14;
 }
-
-#[derive(Clone)]
-#[repr(transparent)]
-struct StringInner(SmallVec<[u8; STRING_INLINE_CAP]>);
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 #[repr(C)]
@@ -815,13 +815,13 @@ impl ObjKind {
 
     fn bytes(slice: &[u8]) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner(SmallVec::from_slice(slice))),
+            string: ManuallyDrop::new(StringInner::from_slice(slice)),
         }
     }
 
     fn bytes_from_vec(vec: Vec<u8>) -> Self {
         Self {
-            string: ManuallyDrop::new(StringInner(SmallVec::from_vec(vec))),
+            string: ManuallyDrop::new(StringInner::from_vec(vec)),
         }
     }
 
@@ -847,13 +847,13 @@ impl ObjKind {
         }
     }
 
-    fn regexp(regexp: RegexpInfo) -> Self {
+    fn regexp(regexp: RegexpInner) -> Self {
         Self {
             regexp: ManuallyDrop::new(regexp),
         }
     }
 
-    fn io(io: IoInfo) -> Self {
+    fn io(io: IoInner) -> Self {
         Self {
             io: ManuallyDrop::new(io),
         }
@@ -869,50 +869,5 @@ impl ObjKind {
         Self {
             proc: ManuallyDrop::new(block_data),
         }
-    }
-}
-
-#[derive(Debug)]
-pub enum IoInfo {
-    Stdin(std::io::Stdin),
-    Stdout(std::io::Stdout),
-    Stderr(std::io::Stderr),
-    Io {},
-}
-
-impl std::clone::Clone for IoInfo {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Stdin(_) => Self::Stdin(std::io::stdin()),
-            Self::Stdout(_) => Self::Stdout(std::io::stdout()),
-            Self::Stderr(_) => Self::Stderr(std::io::stderr()),
-            Self::Io {} => Self::Io {},
-        }
-    }
-}
-
-impl std::fmt::Display for IoInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let s = match self {
-            Self::Stdin(_) => "<STDIN>",
-            Self::Stdout(_) => "<STDOUT>",
-            Self::Stderr(_) => "<STDERR>",
-            Self::Io {} => "fd 0",
-        };
-        write!(f, "#<IO:{}>", s)
-    }
-}
-
-impl IoInfo {
-    fn stdin() -> Self {
-        Self::Stdin(std::io::stdin())
-    }
-
-    fn stdout() -> Self {
-        Self::Stdout(std::io::stdout())
-    }
-
-    fn stderr() -> Self {
-        Self::Stderr(std::io::stderr())
     }
 }

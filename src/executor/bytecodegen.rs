@@ -1368,7 +1368,7 @@ impl IrContext {
                 ))
             }
         };
-        let re = match RegexpInfo::new(string) {
+        let re = match RegexpInner::new(string) {
             Ok(re) => re,
             Err(err) => return Err(MonorubyErr::syntax(err, loc, info.sourceinfo.clone())),
         };
