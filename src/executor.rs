@@ -373,13 +373,10 @@ impl Executor {
         let mut executor = Self::default();
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../startup/startup.rb").to_string();
-        match executor.eval_script(globals, code, path) {
-            Some(_) => {}
-            None => {
-                let err = globals.take_error().unwrap();
-                err.show_error_message_and_all_loc();
-                panic!("error occurred in startup.");
-            }
+        if executor.eval_script(globals, code, path).is_none() {
+            let err = globals.take_error().unwrap();
+            err.show_error_message_and_all_loc();
+            panic!("error occurred in startup.");
         };
         executor
     }
@@ -467,15 +464,12 @@ impl Executor {
         code: String,
         path: &std::path::Path,
     ) -> Option<Value> {
-        let fid = match globals.compile_script(code, path) {
-            Ok(fid) => fid,
-            Err(err) => {
-                globals.set_error(err);
-                return None;
-            }
-        };
-        match self.eval(globals, fid) {
-            Ok(val) => Some(val),
+        match globals
+            .compile_script(code, path)
+            .map(|fid| self.eval(globals, fid))
+            .flatten()
+        {
+            Ok(v) => Some(v),
             Err(err) => {
                 globals.set_error(err);
                 None

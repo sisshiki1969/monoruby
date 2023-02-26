@@ -4,6 +4,7 @@
 #![feature(once_cell)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
+#![feature(result_flattening)]
 mod alloc;
 mod executor;
 mod id_table;
@@ -18,6 +19,6 @@ use id_table::*;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 use value::*;
 
-pub use value::rvalue::RegexpInfo;
+pub use value::rvalue::RegexpInner;
 
 pub const STRING_INLINE_CAP: usize = 39;

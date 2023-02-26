@@ -3,9 +3,9 @@ use fancy_regex::{Captures, Match, Regex};
 use std::rc::Rc;
 
 #[derive(Clone, Debug)]
-pub struct RegexpInfo(Rc<Regex>);
+pub struct RegexpInner(Rc<Regex>);
 
-impl PartialEq for RegexpInfo {
+impl PartialEq for RegexpInner {
     fn eq(&self, other: &Self) -> bool {
         if Rc::ptr_eq(&self.0, &other.0) {
             return true;
@@ -14,18 +14,18 @@ impl PartialEq for RegexpInfo {
     }
 }
 
-impl std::ops::Deref for RegexpInfo {
+impl std::ops::Deref for RegexpInner {
     type Target = Regex;
     fn deref(&self) -> &Regex {
         &self.0
     }
 }
 
-impl RegexpInfo {
+impl RegexpInner {
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub(crate) fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Option<Self> {
         let string = regex::escape(escaped_str);
-        RegexpInfo::from_string(globals, string)
+        RegexpInner::from_string(globals, string)
     }
 
     /// Create `RegexpInfo` from `reg_str`.
@@ -37,12 +37,12 @@ impl RegexpInfo {
             reg_str.replace_range(mat.range(), r"\z");
         };
         match globals.regexp_cache.get(&reg_str) {
-            Some(re) => Some(RegexpInfo(re.clone())),
+            Some(re) => Some(RegexpInner(re.clone())),
             None => match Regex::new(&reg_str) {
                 Ok(regexp) => {
                     let regex = Rc::new(regexp);
                     globals.regexp_cache.insert(reg_str, regex.clone());
-                    Some(RegexpInfo(regex))
+                    Some(RegexpInner(regex))
                 }
                 Err(err) => {
                     globals.err_regex(err.to_string());
@@ -60,7 +60,7 @@ impl RegexpInfo {
         match Regex::new(&reg_str) {
             Ok(regexp) => {
                 let regex = Rc::new(regexp);
-                Ok(RegexpInfo(regex))
+                Ok(RegexpInner(regex))
             }
             Err(err) => Err(err.to_string()),
         }
@@ -69,7 +69,7 @@ impl RegexpInfo {
 
 // Utility methods
 
-impl RegexpInfo {
+impl RegexpInner {
     /// Replaces the leftmost-first match with `replace`.
     pub(crate) fn replace_one(
         vm: &mut Executor,
@@ -101,7 +101,7 @@ impl RegexpInfo {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
-            re: &RegexpInfo,
+            re: &RegexpInner,
             given: &str,
             block_handler: BlockHandler,
         ) -> Option<(String, bool)> {
@@ -168,7 +168,7 @@ impl RegexpInfo {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
-            re: &RegexpInfo,
+            re: &RegexpInner,
             given: &str,
             block_handler: BlockHandler,
         ) -> Option<(String, bool)> {
@@ -323,7 +323,7 @@ impl RegexpInfo {
     }*/
 }
 
-impl RegexpInfo {
+impl RegexpInner {
     /// Replace all matches for `self` in `given` string with `replace`.
     ///
     /// ### return

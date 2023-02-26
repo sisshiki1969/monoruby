@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::alloc::{Allocator, GC};
 use crate::*;
 use num::{BigInt, ToPrimitive};
@@ -297,7 +299,7 @@ impl Value {
         RValue::new_hash_with_class(map, class_id).pack()
     }
 
-    pub(crate) fn new_regexp(regexp: RegexpInfo) -> Self {
+    pub(crate) fn new_regexp(regexp: RegexpInner) -> Self {
         RValue::new_regexp(regexp).pack()
     }
 
@@ -520,7 +522,7 @@ impl Value {
         self.rvalue_mut().as_hash_mut()
     }
 
-    pub(crate) fn is_regex(&self) -> Option<&RegexpInfo> {
+    pub(crate) fn is_regex(&self) -> Option<&RegexpInner> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
             ObjKind::REGEXP => Some(rv.as_regex()),
@@ -630,11 +632,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Option<RegexpInfo> {
+    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Option<RegexpInner> {
         if let Some(re) = self.is_regex() {
             Some(re.clone())
         } else if let Some(string) = self.is_string() {
-            RegexpInfo::from_string(globals, string)
+            RegexpInner::from_string(globals, string)
         } else {
             globals.err_is_not_regexp_nor_string(*self);
             None
@@ -668,6 +670,11 @@ impl Value {
         self.rvalue().as_string()
     }
 
+    pub(crate) fn as_str(&self) -> Cow<'_, str> {
+        assert_eq!(ObjKind::BYTES, self.rvalue().kind());
+        self.rvalue().as_str()
+    }
+
     pub(crate) fn replace_string(&mut self, replace: String) {
         assert_eq!(ObjKind::BYTES, self.rvalue().kind());
         *self.rvalue_mut() = RValue::new_string(replace);
@@ -678,7 +685,7 @@ impl Value {
         self.rvalue().as_range()
     }
 
-    pub(crate) fn as_io(&self) -> &IoInfo {
+    pub(crate) fn as_io(&self) -> &IoInner {
         assert_eq!(ObjKind::IO, self.rvalue().kind());
         self.rvalue().as_io()
     }
