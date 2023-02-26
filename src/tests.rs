@@ -200,6 +200,17 @@ mod test {
         run_test("a = 42.0 > 52.0; if a then 1.1 else 2.2 end");
         run_test("4..173");
         run_test("4...173");
+        run_test("!true");
+        run_test("!false");
+        run_test("!!false");
+        run_test("!nil");
+        run_test("a = !nil; a");
+        run_test("!!nil");
+        run_test("!100");
+        run_test("!!100");
+        run_test("!7.55");
+        run_test("!:a");
+        run_test(r#"!"g""#);
     }
 
     #[test]

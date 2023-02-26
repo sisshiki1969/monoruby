@@ -136,8 +136,13 @@ impl IrContext {
                     let op3 = info.get_index(src);
                     Bc::from(enc_www(151, op1.0, op2, op3.0))
                 }
-                BcIr::Neg(dst, src) => {
-                    let op1 = info.get_index(dst);
+                BcIr::Not { ret, src } => {
+                    let op1 = info.get_index(ret);
+                    let op2 = info.get_index(src);
+                    Bc::from(enc_ww(128, op1.0, op2.0))
+                }
+                BcIr::Neg { ret, src } => {
+                    let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);
                     Bc::from_with_class_and_version(
                         enc_ww(129, op1.0, op2.0),

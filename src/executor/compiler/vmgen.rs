@@ -185,6 +185,7 @@ impl Codegen {
         self.dispatch[32] = self.vm_method_call(true, true);
         self.dispatch[33] = self.vm_method_call(true, false);
 
+        self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
         self.dispatch[132] = self.vm_index();
@@ -980,10 +981,22 @@ impl Codegen {
         label
     }
 
+    fn vm_not(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        self.not_rdi_to_rax();
+        monoasm! { self.jit,
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
-        self.vm_get_rdi(); // rdi <- lhs addr
+        self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
         self.guard_rdi_fixnum(generic);
         monoasm! { self.jit,
@@ -1233,9 +1246,8 @@ impl Codegen {
 
     fn vm_check_local(&mut self, branch: DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
-            movq r15, [r15];
             testq r15, r15;
             jne  branch;
         };
@@ -1245,9 +1257,8 @@ impl Codegen {
 
     fn vm_condbr(&mut self, branch: DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
-            movq r15, [r15];
             orq r15, 0x10;
             cmpq r15, (FALSE_VALUE);
             jne branch;
@@ -1258,9 +1269,8 @@ impl Codegen {
 
     fn vm_condnotbr(&mut self, branch: DestLabel) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
-            movq r15, [r15];
             orq r15, 0x10;
             cmpq r15, (FALSE_VALUE);
             jeq branch;

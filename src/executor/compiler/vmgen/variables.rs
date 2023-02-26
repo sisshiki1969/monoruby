@@ -35,10 +35,10 @@ impl Codegen {
     pub(super) fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
-            movq rcx, [r15];  // val: Value
+            movq rcx, r15;  // val: Value
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
             addq [rip + const_version], 1;
@@ -78,12 +78,12 @@ impl Codegen {
     //
     pub(super) fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
             movq rdi, r12; //&mut Globals
             movq rsi, [r14 - (LBP_SELF)];  // base: Value
-            movq rcx, [r15];     // val: Value
+            movq rcx, r15;     // val: Value
             lea r8, [r13 - 8]; // &mut ClassId
             lea r9, [r13 - 4]; // &mut IvarId
             movq rax, (set_instance_var_with_cache);
@@ -124,11 +124,11 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_store_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         monoasm! { self.jit,
             movl rsi, rdi;  // name: IdentId
             movq rdi, r12;  // &mut Globals
-            movq rdx, [r15];  // base: Value
+            movq rdx, r15;  // base: Value
             movq rax, (runtime::set_global_var);
             call rax;
         };

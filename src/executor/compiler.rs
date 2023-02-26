@@ -561,6 +561,21 @@ impl Codegen {
             call rax;
         );
     }
+
+    /// Check whether *rdi*(Value) is true or not, and store boolean result (Value) to *rax*.
+    ///
+    /// #### destoroy
+    /// - rdi
+    fn not_rdi_to_rax(&mut self) {
+        monoasm! { self.jit,
+            orq  rdi, 0x10;
+            xorq rax, rax;
+            cmpq rdi, (FALSE_VALUE);
+            seteq rax;
+            shlq rax, 3;
+            orq rax, (FALSE_VALUE);
+        };
+    }
 }
 
 impl Globals {

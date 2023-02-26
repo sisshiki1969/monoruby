@@ -922,8 +922,12 @@ impl BcPc {
                 )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
-            TraceIr::Neg(dst, src) => {
-                let op1 = format!("{:?} = neg {:?}", dst, src);
+            TraceIr::Neg { ret, src } => {
+                let op1 = format!("{:?} = -{:?}", ret, src);
+                format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
+            }
+            TraceIr::Not { ret, src } => {
+                let op1 = format!("{:?} = !{:?}", ret, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
             }
             TraceIr::BinOp {

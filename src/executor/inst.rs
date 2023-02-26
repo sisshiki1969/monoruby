@@ -62,9 +62,16 @@ pub(super) enum BcIr {
         /// source register of the current frame.
         src: BcReg,
     },
-    LoadIvar(BcReg, IdentId),             // ret, id  - %ret = @id
-    StoreIvar(BcReg, IdentId),            // src, id  - @id = %src
-    Neg(BcReg, BcReg),                    // ret, src
+    LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
+    StoreIvar(BcReg, IdentId), // src, id  - @id = %src
+    Neg {
+        ret: BcReg,
+        src: BcReg,
+    },
+    Not {
+        ret: BcReg,
+        src: BcReg,
+    },
     BinOp(BinOpK, BcReg, BinopMode),      // kind, ret, (lhs, rhs)
     Cmp(CmpKind, BcReg, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
     Mov(BcReg, BcReg),                    // dst, offset
@@ -414,7 +421,14 @@ pub(super) enum TraceIr {
     /// nil(%reg)
     Nil(SlotId),
     /// negate(%ret, %src)
-    Neg(SlotId, SlotId),
+    Neg {
+        ret: SlotId,
+        src: SlotId,
+    },
+    Not {
+        ret: SlotId,
+        src: SlotId,
+    },
     /// binop(kind, %ret, %lhs, %rhs)
     BinOp {
         kind: BinOpK,
@@ -704,7 +718,14 @@ impl TraceIr {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
-                129 => Self::Neg(SlotId::new(op1), SlotId::new(op2)),
+                128 => Self::Not {
+                    ret: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                129 => Self::Neg {
+                    ret: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
                 130 => Self::MethodArgs(MethodInfo::new(
                     SlotId::new(op1),
                     SlotId::new(op2),

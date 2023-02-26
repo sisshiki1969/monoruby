@@ -222,10 +222,14 @@ impl LoopAnalysis {
                 | TraceIr::StoreGvar { src, .. } => {
                     reg_info.use_non_float(src);
                 }
-                TraceIr::Neg(dst, src) => {
+                TraceIr::Neg { ret, src } => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(src, is_float, pc.classid1());
-                    reg_info.def_as(dst, is_float);
+                    reg_info.def_as(ret, is_float);
+                }
+                TraceIr::Not { ret, src } => {
+                    reg_info.use_non_float(src);
+                    reg_info.def_as(ret, false);
                 }
                 TraceIr::FloatBinOp { ret, mode, .. } => {
                     match mode {

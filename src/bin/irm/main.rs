@@ -49,7 +49,7 @@ fn main() {
                 };
                 let main_fid = match globals.compile_script_with_binding(
                     buf.clone(),
-                    std::path::Path::new("irm:{script_line:03}"),
+                    std::path::Path::new(&format!("(irm):{script_line}")),
                     context.clone(),
                 ) {
                     Ok((fid, collector)) => {

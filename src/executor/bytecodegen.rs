@@ -596,14 +596,24 @@ impl IrContext {
     fn gen_neg(&mut self, info: &mut ISeqInfo, local: Option<BcReg>, loc: Loc) {
         match local {
             Some(local) => {
-                self.push(BcIr::Neg(local, local), loc);
+                self.push(
+                    BcIr::Neg {
+                        ret: local,
+                        src: local,
+                    },
+                    loc,
+                );
             }
             None => {
                 let src = info.pop().into();
-                let dst = info.push().into();
-                self.push(BcIr::Neg(dst, src), loc);
+                let ret = info.push().into();
+                self.push(BcIr::Neg { ret, src }, loc);
             }
         };
+    }
+
+    fn gen_not(&mut self, ret: BcReg, src: BcReg, loc: Loc) {
+        self.push(BcIr::Not { ret, src }, loc);
     }
 
     fn handle_mode(&mut self, info: &mut ISeqInfo, use_mode: UseMode, src: BcReg) {
@@ -767,20 +777,39 @@ impl IrContext {
                 box base,
                 mut index,
             } => {
-                assert_eq!(1, index.len());
+                if index.len() != 1 {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("unsupported index. {}", index.len()),
+                        loc,
+                        info.sourceinfo.clone(),
+                    ));
+                };
                 self.gen_index(ctx, info, None, base, index.remove(0), loc)?;
             }
-            NodeKind::UnOp(op, box rhs) => {
-                assert!(op == UnOp::Neg);
-                match rhs.kind {
-                    //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
-                    NodeKind::Float(f) => self.gen_float(info, None, -f),
-                    _ => {
-                        self.push_expr(ctx, info, rhs)?;
-                        self.gen_neg(info, None, loc);
-                    }
-                };
-            }
+            NodeKind::UnOp(op, box rhs) => match op {
+                UnOp::Neg => {
+                    match rhs.kind {
+                        //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
+                        NodeKind::Float(f) => self.gen_float(info, None, -f),
+                        _ => {
+                            self.push_expr(ctx, info, rhs)?;
+                            self.gen_neg(info, None, loc);
+                        }
+                    };
+                }
+                UnOp::Not => {
+                    let src = self.push_expr(ctx, info, rhs)?;
+                    let ret = info.push().into();
+                    self.gen_not(ret, src, loc);
+                }
+                _ => {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("unsupported unop. {:?}", op),
+                        loc,
+                        info.sourceinfo.clone(),
+                    ))
+                }
+            },
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = info.is_refer_local(&lhs) {
                     self.gen_binop(ctx, info, op, lhs, rhs, Some(local.into()), loc)?;
@@ -1235,20 +1264,38 @@ impl IrContext {
                 box base,
                 mut index,
             } => {
-                assert_eq!(1, index.len());
+                if index.len() != 1 {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("unsupported index. {}", index.len()),
+                        loc,
+                        info.sourceinfo.clone(),
+                    ));
+                };
                 self.gen_index(ctx, info, Some(dst), base, index.remove(0), loc)?;
             }
-            NodeKind::UnOp(op, box rhs) => {
-                assert!(op == UnOp::Neg);
-                match rhs.kind {
-                    NodeKind::Integer(i) => self.gen_integer(info, Some(dst), -i),
-                    NodeKind::Float(f) => self.gen_float(info, Some(dst), -f),
-                    _ => {
-                        self.gen_store_expr(ctx, info, dst, rhs)?;
-                        self.gen_neg(info, Some(dst), loc);
-                    }
-                };
-            }
+            NodeKind::UnOp(op, box rhs) => match op {
+                UnOp::Neg => {
+                    match rhs.kind {
+                        NodeKind::Integer(i) => self.gen_integer(info, Some(dst), -i),
+                        NodeKind::Float(f) => self.gen_float(info, Some(dst), -f),
+                        _ => {
+                            self.gen_store_expr(ctx, info, dst, rhs)?;
+                            self.gen_neg(info, Some(dst), loc);
+                        }
+                    };
+                }
+                UnOp::Not => {
+                    self.gen_store_expr(ctx, info, dst, rhs)?;
+                    self.gen_not(dst, dst, loc);
+                }
+                _ => {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("unsupported unop. {:?}", op),
+                        loc,
+                        info.sourceinfo.clone(),
+                    ))
+                }
+            },
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(ctx, info, op, lhs, rhs, Some(dst), loc)?;
             }

@@ -1144,10 +1144,20 @@ impl Codegen {
                         movq [r14 - (conv(ret))], (NIL_VALUE);
                     );
                 }
-                TraceIr::Neg(dst, src) => {
+                TraceIr::Not { ret, src } => {
+                    ctx.dealloc_xmm(ret);
+                    monoasm!(self.jit,
+                        movq rdi, [r14 - (conv(src))];
+                    );
+                    self.not_rdi_to_rax();
+                    monoasm!(self.jit,
+                        movq [r14 - (conv(ret))], rax;
+                    );
+                }
+                TraceIr::Neg { ret, src } => {
                     if pc.is_float1() {
                         let fsrc = self.xmm_read_assume_float(&mut ctx, src, pc);
-                        let fdst = ctx.xmm_write(dst);
+                        let fdst = ctx.xmm_write(ret);
                         let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         self.xmm_mov(fsrc, fdst);
                         monoasm!(self.jit,
@@ -1158,14 +1168,14 @@ impl Codegen {
                             self.recompile_and_deopt(&mut ctx, position, pc);
                         }
                         self.write_back_slot(&mut ctx, src);
-                        ctx.dealloc_xmm(dst);
+                        ctx.dealloc_xmm(ret);
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
                         self.load_rdi(src);
                         self.call_unop(neg_value as _);
                         self.xmm_restore(&xmm_using);
                         self.handle_error(pc);
-                        self.store_rax(dst);
+                        self.store_rax(ret);
                     }
                 }
                 TraceIr::IntegerBinOp {
