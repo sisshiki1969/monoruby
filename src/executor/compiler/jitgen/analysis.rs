@@ -209,7 +209,7 @@ impl LoopAnalysis {
                     };
                     reg_info.def_as(dst, is_float);
                 }
-                TraceIr::BlockArgProxy(dst)
+                TraceIr::BlockArgProxy(dst, _)
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
                 | TraceIr::LoadGvar { dst, .. }

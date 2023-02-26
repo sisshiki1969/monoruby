@@ -65,9 +65,9 @@ impl IrContext {
                     let op2 = dst - idx as i32 - 1;
                     Bc::from(enc_wl(20, op1.0, op2 as u32))
                 }
-                BcIr::BlockArgProxy(dst) => {
+                BcIr::BlockArgProxy(dst, outer) => {
                     let op1 = info.get_index(dst);
-                    Bc::from(enc_wl(21, op1.0, 0))
+                    Bc::from(enc_wl(21, op1.0, *outer as u32))
                 }
                 BcIr::LoadGvar { ret, name } => {
                     let op1 = info.get_index(ret);

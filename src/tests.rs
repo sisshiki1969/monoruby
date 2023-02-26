@@ -1852,4 +1852,36 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_nested_blockargproxy() {
+        run_test(
+            r#"
+        $x = 0
+        
+        def e
+          10.times do
+            $x += yield
+          end
+        end
+
+        def f(&q)
+          10.times do
+            e(&q)
+          end
+        end
+
+        def g(&p)
+          10.times do
+            10.times do
+              f(&p)
+            end
+          end
+        end
+
+        g { 42 }
+        $x
+        "#,
+        );
+    }
 }

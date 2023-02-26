@@ -951,15 +951,26 @@ impl Codegen {
 
     //
     // +---+---+---+---++---+---+---+---+
-    // | op|dst|       ||               |
+    // | op|dst| outer ||               |
     // +---+---+---+---++---+---+---+---+
     //
     fn vm_block_arg_proxy(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let panic = self.entry_panic;
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movq rax, [r14 - (LBP_BLOCK)];
+            lea  rax, [r14 - (LBP_OUTER)];
+            testq rdi, rdi;
+            jz   loop_exit;
+        loop_:
+            movq rax, [rax];
+            subl rdi, 1;
+            jnz  loop_;
+        loop_exit:
+            lea  rax, [rax + (LBP_OUTER)];
+            movq rax, [rax - (LBP_BLOCK)];
             testq rax, 0b1;
             jeq panic;
             addq rax, 0b10;

@@ -10,4 +10,15 @@ benchmark:
     end
 
     m{}
+
+  vm_yield_nested: |
+    def m
+      1.times do
+        30_000_000.times do
+          yield
+        end
+      end
+    end
+
+    m{}
 loop_count: 1

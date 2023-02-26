@@ -45,7 +45,7 @@ pub(super) enum BcIr {
         ret: BcReg,
         id: u32,
     },
-    BlockArgProxy(BcReg),
+    BlockArgProxy(BcReg, usize),
     LoadDynVar {
         /// return register of the current frame.
         ret: BcReg,
@@ -396,7 +396,7 @@ pub(super) enum TraceIr {
     StoreConst(SlotId, IdentId),
     LoadDynVar(SlotId, DynVar),
     StoreDynVar(DynVar, SlotId),
-    BlockArgProxy(SlotId),
+    BlockArgProxy(SlotId, usize),
     LoadIvar(SlotId, IdentId, ClassId, IvarId), // ret, id  - %ret = @id
     StoreIvar(SlotId, IdentId, ClassId, IvarId), // src, id  - @id = %src
     LoadGvar {
@@ -635,7 +635,7 @@ impl TraceIr {
                     func_id: FuncId::new((pc.op2.0 >> 32) as u32),
                 },
                 20 => Self::CheckLocal(SlotId::new(op1), op2 as i32),
-                21 => Self::BlockArgProxy(SlotId::new(op1)),
+                21 => Self::BlockArgProxy(SlotId::new(op1), op2 as usize),
                 22 => Self::SingletonClassDef {
                     ret: SlotId::new(op1),
                     base: SlotId::new(op2 as u16),

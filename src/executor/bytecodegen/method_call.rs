@@ -43,10 +43,20 @@ impl IrContext {
                     NodeKind::LocalVar(0, proc_local) => {
                         if Some(&proc_local) == info.block_param_name() {
                             let proc_temp = info.push().into();
-                            self.push(BcIr::BlockArgProxy(proc_temp), loc);
+                            self.push(BcIr::BlockArgProxy(proc_temp, 0), loc);
                         } else {
                             let local = info.refer_local(&proc_local).into();
                             self.gen_temp_mov(info, local);
+                        }
+                    }
+                    NodeKind::LocalVar(outer, proc_local) => {
+                        if Some(&proc_local) == info.outer_block_param_name(outer) {
+                            let proc_temp = info.push().into();
+                            self.push(BcIr::BlockArgProxy(proc_temp, outer), loc);
+                        } else {
+                            let src = info.refer_dynamic_local(outer, &proc_local).into();
+                            let ret = info.push().into();
+                            self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
                         }
                     }
                     _ => {
@@ -131,10 +141,6 @@ impl IrContext {
             optional_params.push((outer + 1, r, name));
         }
         info.level_down(&mut block.body, 0);
-        /*for name in names {
-            info.assign_local(&name);
-        }*/
-        let method = IdentId::EACH;
         let recv_kind = if iter.kind == NodeKind::SelfValue {
             RecvKind::SelfValue
         } else if let Some(local) = info.is_refer_local(&iter) {
@@ -162,7 +168,7 @@ impl IrContext {
         } else {
             None
         };
-        self.gen_call(recv, method, ret, arg.into(), 0, true, false, loc);
+        self.gen_call(recv, IdentId::EACH, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
         }

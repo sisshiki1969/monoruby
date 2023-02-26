@@ -117,7 +117,7 @@ impl Funcs {
 
     fn add_block(
         &mut self,
-        outer: (FuncId, Vec<HashMap<String, u16>>),
+        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         for_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
@@ -158,7 +158,7 @@ impl Funcs {
 
     fn add_iseq(
         &mut self,
-        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
+        outer: Option<(FuncId, Vec<(HashMap<String, u16>, Option<String>)>)>,
         name: Option<String>,
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
@@ -392,7 +392,7 @@ impl FnStore {
 
     pub(crate) fn add_block(
         &mut self,
-        outer: (FuncId, Vec<HashMap<String, u16>>),
+        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         optional_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
@@ -516,7 +516,7 @@ impl FuncInfo {
     fn new_iseq(
         name: Option<String>,
         func_id: Option<FuncId>,
-        outer: Option<(FuncId, Vec<HashMap<String, u16>>)>,
+        outer: Option<(FuncId, Vec<(HashMap<String, u16>, Option<String>)>)>,
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
         optional: Vec<OptionalInfo>,
@@ -680,8 +680,8 @@ pub(crate) struct ISeqInfo {
     pub(crate) for_param: Vec<(usize, BcLocal, usize)>,
     /// local variables.
     locals: HashMap<String, u16>,
-    /// outer local variables.
-    outer_locals: Vec<HashMap<String, u16>>,
+    /// outer local variables. (dynamic_locals, block_param)
+    outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
     /// literal values. (for GC)
     pub literals: Vec<Value>,
     /// The current register id.
@@ -717,7 +717,7 @@ impl alloc::GC<RValue> for ISeqInfo {
 impl ISeqInfo {
     pub(crate) fn new(
         id: Option<FuncId>,
-        outer_locals: Vec<HashMap<String, u16>>,
+        outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
         name: Option<String>,
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
@@ -757,7 +757,7 @@ impl ISeqInfo {
 
     pub(crate) fn new_block(
         id: Option<FuncId>,
-        outer: (FuncId, Vec<HashMap<String, u16>>),
+        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         name: Option<String>,
         args: ArgumentsInfo,
         expand: Vec<ExpandInfo>,
@@ -848,6 +848,11 @@ impl ISeqInfo {
         self.args.block_param.as_ref()
     }
 
+    /// get a outer block argument name.
+    pub(crate) fn outer_block_param_name(&self, outer: usize) -> Option<&String> {
+        self.outer_locals[outer - 1].1.as_ref()
+    }
+
     /// get name.
     #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
     pub(crate) fn name(&self) -> String {
@@ -885,8 +890,8 @@ impl ISeqInfo {
         self.bytecode().as_ptr()
     }
 
-    pub(crate) fn get_locals(&self) -> Vec<HashMap<String, u16>> {
-        let mut locals = vec![self.locals.clone()];
+    pub(crate) fn get_locals(&self) -> Vec<(HashMap<String, u16>, Option<String>)> {
+        let mut locals = vec![(self.locals.clone(), self.block_param_name().cloned())];
         locals.extend_from_slice(&self.outer_locals);
         locals
     }
@@ -929,7 +934,7 @@ impl ISeqInfo {
     }
 
     pub(crate) fn refer_dynamic_local(&self, outer: usize, ident: &str) -> BcLocal {
-        BcLocal(*self.outer_locals[outer - 1].get(ident).expect(&format!(
+        BcLocal(*self.outer_locals[outer - 1].0.get(ident).expect(&format!(
             "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
             self.outer_locals, self.locals
         )))

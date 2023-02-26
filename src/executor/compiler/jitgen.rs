@@ -1029,11 +1029,28 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, src);
                     self.jit_store_constant(&ctx, id, src);
                 }
-                TraceIr::BlockArgProxy(dst) => {
+                TraceIr::BlockArgProxy(dst, outer) => {
                     ctx.dealloc_xmm(dst);
                     let panic = self.entry_panic;
+                    if outer == 0 {
+                        monoasm! { self.jit,
+                            movq rax, r14;
+                        };
+                    } else {
+                        monoasm!(self.jit,
+                            movq rax, [r14 - (LBP_OUTER)];
+                        );
+                        for _ in 0..outer - 1 {
+                            monoasm!(self.jit,
+                                movq rax, [rax];
+                            );
+                        }
+                        monoasm!(self.jit,
+                            lea rax, [rax + (LBP_OUTER)];
+                        );
+                    }
                     monoasm! { self.jit,
-                        movq rax, [r14 - (LBP_BLOCK)];
+                        movq rax, [rax - (LBP_BLOCK)];
                         testq rax, 0b1;
                         jeq panic;
                         addq rax, 0b10;

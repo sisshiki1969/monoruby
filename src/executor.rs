@@ -126,7 +126,7 @@ impl CFP {
                         i += 1;
                         cfp = cfp.prev();
                     }
-                    BlockHandler(Value::new_integer(i))
+                    BlockHandler::new(Value::new_integer(i))
                 }
                 None => bh,
             })
@@ -880,8 +880,8 @@ impl BcPc {
             TraceIr::StoreConst(reg, id) => {
                 format!("const[{}] = {:?}", IdentId::get_name(id), reg)
             }
-            TraceIr::BlockArgProxy(dst) => {
-                format!("{:?} = block_arg", dst)
+            TraceIr::BlockArgProxy(dst, outer) => {
+                format!("{:?} = block_arg({outer})", dst)
             }
             TraceIr::LoadDynVar(ret, src) => {
                 format!("{:?} = {:?}", ret, src)
