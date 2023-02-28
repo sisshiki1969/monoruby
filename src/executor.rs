@@ -1,4 +1,5 @@
 use super::*;
+use ruruby_parse::Node;
 
 mod builtins;
 mod bytecodegen;
@@ -1542,4 +1543,52 @@ mod test {
         assert_eq!(8, std::mem::size_of::<BcPc>());
         assert_eq!(8, std::mem::size_of::<Meta>());
     }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct ArgumentsInfo {
+    required_num: usize,
+    // required + optional
+    reqopt_num: usize,
+    // required + optional + rest
+    pos_num: usize,
+    args_names: Vec<Option<String>>,
+    keyword_args: Vec<(IdentId, Option<Box<Node>>)>,
+    block_param: Option<String>,
+    /// argument expansion info
+    expand_info: Vec<ExpandInfo>,
+    /// optional parameters initializer
+    optional_info: Vec<OptionalInfo>,
+    /// for parameter info.
+    for_param_info: Vec<ForParamInfo>,
+}
+
+impl ArgumentsInfo {
+    fn arity(&self) -> i32 {
+        if self.reqopt_num == self.required_num && self.reqopt_num == self.pos_num {
+            self.reqopt_num as i32
+        } else {
+            -1
+        }
+    }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct ExpandInfo {
+    src: usize,
+    dst: usize,
+    len: usize,
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct OptionalInfo {
+    local: BcLocal,
+    initializer: Node,
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct ForParamInfo {
+    dst_outer: usize,
+    dst_reg: BcLocal,
+    src_reg: usize,
 }

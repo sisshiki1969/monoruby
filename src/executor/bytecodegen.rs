@@ -135,21 +135,26 @@ impl IrContext {
     pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<()> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_dummy_init(info.is_block);
-        for (outer, dst, src) in info.for_param.clone() {
+        ir.gen_dummy_init(info.is_lambda);
+        for ForParamInfo {
+            dst_outer,
+            dst_reg,
+            src_reg,
+        } in info.args.for_param_info.clone()
+        {
             ir.push(
                 BcIr::StoreDynVar {
-                    dst: dst.into(),
-                    outer,
-                    src: BcReg::Local(BcLocal(src as u16)),
+                    dst: dst_reg.into(),
+                    outer: dst_outer,
+                    src: BcReg::Local(BcLocal(src_reg as u16)),
                 },
                 Loc::default(),
             );
         }
-        for ExpandInfo { src, dst, len } in &info.expand {
+        for ExpandInfo { src, dst, len } in &info.args.expand_info {
             ir.gen_expand_array(*src, *dst, *len);
         }
-        for OptionalInfo { local, initializer } in info.optional.clone() {
+        for OptionalInfo { local, initializer } in info.args.optional_info.clone() {
             let local = local.into();
             let next = ir.new_label();
             ir.gen_check_local(local, next);
@@ -1561,7 +1566,7 @@ impl IrContext {
     fn replace_init(&mut self, info: &ISeqInfo) {
         let fninfo = FnInitInfo::new(info);
         self.ir[0] = (
-            if info.is_block {
+            if info.is_lambda {
                 BcIr::InitBlock(fninfo)
             } else {
                 BcIr::InitMethod(fninfo)
