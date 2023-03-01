@@ -42,13 +42,7 @@ impl std::ops::IndexMut<FuncId> for Funcs {
     }
 }
 
-impl alloc::GC<RValue> for Funcs {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.iter().for_each(|info| info.mark(alloc))
-    }
-}
-
-impl Funcs {
+impl std::default::Default for Funcs {
     fn default() -> Self {
         Self(vec![FuncInfo::new_method_iseq(
             None,
@@ -58,7 +52,15 @@ impl Funcs {
             SourceInfoRef::default(),
         )])
     }
+}
 
+impl alloc::GC<RValue> for Funcs {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.0.iter().for_each(|info| info.mark(alloc))
+    }
+}
+
+impl Funcs {
     fn next_func_id(&self) -> FuncId {
         FuncId::new(self.0.len() as u32)
     }
@@ -251,10 +253,34 @@ pub struct ConstSiteInfo {
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSiteInfo {
+    /// Name of method.
+    pub name: IdentId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct CallSiteId(u32);
+
+impl std::convert::From<u32> for CallSiteId {
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl CallSiteId {
+    pub fn get(&self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct FnStore {
     functions: Funcs,
     inline: HashMap<FuncId, InlineMethod>,
+    /// call site info.
+    callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
 }
@@ -285,6 +311,19 @@ impl std::ops::IndexMut<ConstSiteId> for FnStore {
     }
 }
 
+impl std::ops::Index<CallSiteId> for FnStore {
+    type Output = CallSiteInfo;
+    fn index(&self, index: CallSiteId) -> &CallSiteInfo {
+        &self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<CallSiteId> for FnStore {
+    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
+}
+
 impl alloc::GC<RValue> for FnStore {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
@@ -297,6 +336,7 @@ impl FnStore {
             functions: Funcs::default(),
             inline: HashMap::default(),
             constsite_info: vec![],
+            callsite_info: vec![],
         }
     }
 
@@ -384,6 +424,12 @@ impl FnStore {
 
     pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
         self.inline.insert(func_id, inline_id);
+    }
+
+    pub fn add_callsite(&mut self, name: IdentId) -> CallSiteId {
+        let id = self.callsite_info.len();
+        self.callsite_info.push(CallSiteInfo { name });
+        CallSiteId(id as u32)
     }
 }
 

@@ -574,7 +574,7 @@ impl IrContext {
         Ok(lhs)
     }
 
-    fn gen_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
+    fn gen_assign(&mut self, ctx: &mut FnStore, src: BcReg, lhs: LvalueKind, loc: Loc) {
         match lhs {
             LvalueKind::Const(name) => {
                 self.push(BcIr::StoreConst(src, name), loc);
@@ -592,7 +592,8 @@ impl IrContext {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Send { recv, method } => {
-                self.gen_method_assign(method, recv, src, loc);
+                let callid = ctx.add_callsite(method);
+                self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::Other => unreachable!(),
         }
@@ -828,7 +829,7 @@ impl IrContext {
                 // Evaluate rvalue.
                 let src = self.gen_binop(ctx, info, op, lhs, rhs, None, loc)?;
                 // Assign rvalue to lvalue.
-                self.gen_assign(src, lhs_kind, lhs_loc);
+                self.gen_assign(ctx, src, lhs_kind, lhs_loc);
                 info.temp = temp;
                 self.handle_mode(info, use_mode, src);
                 return Ok(());
@@ -847,7 +848,7 @@ impl IrContext {
                     let temp = info.temp;
                     let lhs = self.eval_lvalue(ctx, info, &lhs)?;
                     let src = self.gen_expr_reg(ctx, info, rhs)?;
-                    self.gen_assign(src, lhs, loc);
+                    self.gen_assign(ctx, src, lhs, loc);
                     info.temp = temp;
                     self.handle_mode(info, use_mode, src);
                     return Ok(());
@@ -1314,7 +1315,7 @@ impl IrContext {
                         let temp = info.temp;
                         let lhs = self.eval_lvalue(ctx, info, &lhs)?;
                         self.gen_store_expr(ctx, info, dst, rhs)?;
-                        self.gen_assign(dst, lhs, loc);
+                        self.gen_assign(ctx, dst, lhs, loc);
                         info.temp = temp;
                     }
                 } else {
@@ -1674,7 +1675,7 @@ impl IrContext {
                 self.gen_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.gen_assign(src, kind, loc);
+                self.gen_assign(ctx, src, kind, loc);
             }
             temp_reg += 1;
         }

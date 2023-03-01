@@ -6,7 +6,7 @@ impl Codegen {
     /// ~~~text
     /// MethodCall
     /// +---+---+---+---++---+---+---+---+
-    /// | op|ret| name  || class |version|
+    /// | op|ret|callid || class |version|
     /// +---+---+---+---++---+---+---+---+
     /// MethodArgs
     /// +---+---+---+---++---+---+---+---+
@@ -15,7 +15,7 @@ impl Codegen {
     ///
     /// operands
     /// ret:  return register
-    /// name: method name
+    /// id:   call site id
     /// rcv:  receiver register
     /// arg:  the start of argument registers
     /// len:  the number of argument registers
@@ -60,7 +60,7 @@ impl Codegen {
         }
         // rsp + 24:[%ret]
         // rsp + 16:[pc]
-        // rsp + 08:[method_name:IdentId]
+        // rsp + 08:[callid:CallSiteId]
         // rsp + 00:[recv:Value]
 
         self.execute_gc();
@@ -148,7 +148,7 @@ impl Codegen {
         monoasm!(self.jit,
         slowpath:
             movq rdi, r12;
-            movq rsi, [rsp + 8];  // rsi: IdentId
+            movq rsi, [rsp + 8];  // rsi: CallSiteId
             movzxw rdx, [r13];  // rdx: len
             movq rcx, [rsp]; // rcx: receiver:Value
             movzxw r8, [r13 +  4];

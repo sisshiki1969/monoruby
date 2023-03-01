@@ -79,8 +79,8 @@ pub(super) enum BcIr {
     Br(usize),
     CondBr(BcReg, usize, bool, BrKind),
     Ret(BcReg),
-    MethodCall(Option<BcReg>, IdentId, bool), // (ret, id, has_splat)
-    MethodCallBlock(Option<BcReg>, IdentId, bool), // (ret, id, has_splat)
+    MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
+    MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,
@@ -466,7 +466,7 @@ pub(super) enum TraceIr {
     /// func call(%ret, name)
     MethodCall {
         ret: SlotId,
-        name: IdentId,
+        callid: CallSiteId,
         _class: ClassId,
         has_splat: bool,
         _version: u32,
@@ -474,7 +474,7 @@ pub(super) enum TraceIr {
     },
     MethodCallBlock {
         ret: SlotId,
-        name: IdentId,
+        callid: CallSiteId,
         _class: ClassId,
         has_splat: bool,
         _version: u32,
@@ -691,7 +691,7 @@ impl TraceIr {
                     }
                     Self::MethodCall {
                         ret: SlotId::new(op1),
-                        name: IdentId::from(op2),
+                        callid: op2.into(),
                         _class,
                         has_splat,
                         _version,
@@ -706,7 +706,7 @@ impl TraceIr {
                     };
                     Self::MethodCallBlock {
                         ret: SlotId::new(op1),
-                        name: IdentId::from(op2),
+                        callid: op2.into(),
                         _class,
                         has_splat: opcode == 32,
                         _version,

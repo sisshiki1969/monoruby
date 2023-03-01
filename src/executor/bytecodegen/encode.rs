@@ -85,24 +85,24 @@ impl IrContext {
                     let op1 = info.get_index(ret);
                     Bc::from(enc_wl(28, op1.0, *id))
                 }
-                BcIr::MethodCall(ret, name, has_splat) => {
+                BcIr::MethodCall(ret, callid, has_splat) => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
                     Bc::from_with_class_and_version(
-                        enc_wl(if *has_splat { 30 } else { 31 }, op1.0, name.get()),
+                        enc_wl(if *has_splat { 30 } else { 31 }, op1.0, callid.get()),
                         ClassId::new(0),
                         -1i32 as u32,
                     )
                 }
-                BcIr::MethodCallBlock(ret, name, has_splat) => {
+                BcIr::MethodCallBlock(ret, callid, has_splat) => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
                     Bc::from_with_class_and_version(
-                        enc_wl(if *has_splat { 32 } else { 33 }, op1.0, name.get()),
+                        enc_wl(if *has_splat { 32 } else { 33 }, op1.0, callid.get()),
                         ClassId::new(0),
                         -1i32 as u32,
                     )

@@ -15,7 +15,7 @@ impl Codegen {
         ctx: &mut BBContext,
         method_info: MethodInfo,
         ret: SlotId,
-        name: IdentId,
+        callid: CallSiteId,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -31,7 +31,7 @@ impl Codegen {
             fnstore,
             ctx,
             method_info,
-            name,
+            callid,
             None,
             None,
             ret,
@@ -112,7 +112,7 @@ impl Codegen {
         ctx: &mut BBContext,
         mut method_info: MethodInfo,
         ret: SlotId,
-        name: IdentId,
+        callid: CallSiteId,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -129,7 +129,7 @@ impl Codegen {
             fnstore,
             ctx,
             method_info,
-            name,
+            callid,
             Some(args),
             Some(args + 1),
             ret,
@@ -143,7 +143,7 @@ impl Codegen {
         fnstore: &FnStore,
         ctx: &BBContext,
         method_info: MethodInfo,
-        name: IdentId,
+        callid: CallSiteId,
         block: Option<SlotId>,
         kw: Option<SlotId>,
         ret: SlotId,
@@ -156,7 +156,7 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(ctx, method_info, name, block, kw, ret, pc, has_splat);
+                self.gen_call_not_cached(ctx, method_info, callid, block, kw, ret, pc, has_splat);
             } else {
                 self.gen_call_cached(
                     fnstore,
@@ -171,7 +171,7 @@ impl Codegen {
                 );
             }
         } else {
-            self.gen_call_not_cached(ctx, method_info, name, block, kw, ret, pc, has_splat);
+            self.gen_call_not_cached(ctx, method_info, callid, block, kw, ret, pc, has_splat);
         }
     }
 
@@ -244,7 +244,7 @@ impl Codegen {
         &mut self,
         ctx: &BBContext,
         method_info: MethodInfo,
-        name: IdentId,
+        callid: CallSiteId,
         block: Option<SlotId>,
         kw: Option<SlotId>,
         ret: SlotId,
@@ -320,7 +320,7 @@ impl Codegen {
         monoasm!(self.jit,
         slow_path:
             movq rdi, r12;
-            movq rsi, (u32::from(name)); // IdentId
+            movq rsi, (callid.get()); // CallSiteId
             movq rdx, (len as usize); // args_len: usize
             movq rcx, [r14 - (conv(recv))]; // receiver: Value
             movw r8, (recv.0);

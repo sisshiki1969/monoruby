@@ -1331,7 +1331,7 @@ impl Codegen {
                 }
                 TraceIr::MethodCall {
                     ret,
-                    name,
+                    callid,
                     has_splat,
                     info,
                     ..
@@ -1339,11 +1339,11 @@ impl Codegen {
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                     }
-                    self.gen_method_call(fnstore, &mut ctx, info, ret, name, pc, has_splat);
+                    self.gen_method_call(fnstore, &mut ctx, info, ret, callid, pc, has_splat);
                 }
                 TraceIr::MethodCallBlock {
                     ret,
-                    name,
+                    callid,
                     has_splat,
                     info,
                     ..
@@ -1352,7 +1352,7 @@ impl Codegen {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                     }
                     self.gen_method_call_with_block(
-                        fnstore, &mut ctx, info, ret, name, pc, has_splat,
+                        fnstore, &mut ctx, info, ret, callid, pc, has_splat,
                     );
                 }
                 TraceIr::InlineCall {

@@ -1027,12 +1027,13 @@ impl BcPc {
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
                 ret,
-                name,
+                callid,
                 _class,
                 has_splat,
                 info,
                 ..
             } => {
+                let name = globals.func[callid].name;
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
@@ -1078,12 +1079,13 @@ impl BcPc {
             }
             TraceIr::MethodCallBlock {
                 ret,
-                name,
+                callid,
                 _class,
                 has_splat,
                 info,
                 ..
             } => {
+                let name = globals.func[callid].name;
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;

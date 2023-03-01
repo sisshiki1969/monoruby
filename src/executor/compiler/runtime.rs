@@ -11,12 +11,13 @@ use super::*;
 ///
 pub(super) extern "C" fn find_method(
     globals: &mut Globals,
-    func_name: IdentId,
+    callid: CallSiteId,
     args_len: usize,
     receiver: Value,
     // register id of *self*
     recv_reg: u16,
 ) -> Option<std::ptr::NonNull<FuncData>> {
+    let func_name = globals.func[callid].name;
     let func_id = globals.find_method(receiver, func_name, recv_reg == 0)?;
     globals.check_arg(func_id, args_len)?;
     let func_data = globals.compile_on_demand(func_id);
@@ -119,7 +120,7 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
     unsafe { *src = Value::new_splat(*src) };
 }
 
-pub(super) extern "C" fn distibute_keyword_arguments(
+pub(super) extern "C" fn distribute_keyword_arguments(
     globals: &Globals,
     reg: *mut Option<Value>,
     keyword: Option<Value>,

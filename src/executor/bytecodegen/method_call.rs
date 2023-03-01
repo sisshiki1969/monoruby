@@ -102,9 +102,10 @@ impl IrContext {
         } else {
             None
         };
+        let callid = ctx.add_callsite(method);
         self.gen_call(
             recv,
-            method,
+            callid,
             ret,
             arg.into(),
             len,
@@ -168,7 +169,8 @@ impl IrContext {
         } else {
             None
         };
-        self.gen_call(recv, IdentId::EACH, ret, arg.into(), 0, true, false, loc);
+        let callid = ctx.add_callsite(IdentId::EACH);
+        self.gen_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
         }
@@ -213,7 +215,7 @@ impl IrContext {
     fn gen_call(
         &mut self,
         recv: BcReg,
-        method: IdentId,
+        callid: CallSiteId,
         ret: Option<BcReg>,
         arg: BcReg,
         len: usize,
@@ -222,9 +224,9 @@ impl IrContext {
         loc: Loc,
     ) {
         if has_block_or_kw {
-            self.push(BcIr::MethodCallBlock(ret, method, has_splat), loc)
+            self.push(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
         } else {
-            self.push(BcIr::MethodCall(ret, method, has_splat), loc)
+            self.push(BcIr::MethodCall(ret, callid, has_splat), loc)
         };
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
     }
@@ -250,11 +252,11 @@ impl IrContext {
 
     pub(super) fn gen_method_assign(
         &mut self,
-        method: IdentId,
+        callid: CallSiteId,
         receiver: BcReg,
         val: BcReg,
         loc: Loc,
     ) {
-        self.gen_call(receiver, method, None, val, 1, false, false, loc);
+        self.gen_call(receiver, callid, None, val, 1, false, false, loc);
     }
 }
