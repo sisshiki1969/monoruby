@@ -122,43 +122,29 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
 
 pub(super) extern "C" fn distribute_keyword_arguments(
     globals: &Globals,
-    reg: *mut Option<Value>,
-    keyword: Option<Value>,
+    dst_reg: *mut Option<Value>,
+    callid: CallSiteId,
     meta: Meta,
+    executor: &Executor,
 ) -> *mut Option<Value> {
     let func_id = meta.func_id.unwrap();
-    let keyword = match keyword {
-        Some(kw) if kw != Value::nil() => kw,
-        _ => {
-            match &globals[func_id].kind {
-                FuncKind::ISeq(info) => {
-                    let params = &info.args.keyword_args;
-                    let len = params.len();
-                    unsafe {
-                        for (id, _) in params.iter().enumerate() {
-                            *reg.sub(id) = None;
-                        }
-                        return reg.sub(len);
-                    }
-                }
-                _ => {}
-            };
-            return reg;
-        }
-    };
     match &globals[func_id].kind {
         FuncKind::ISeq(info) => {
-            let kw_arg = keyword.as_hash();
+            let kw_arg = &globals.func[callid].kw_args;
+            let kw_pos = globals.func[callid].kw_pos as usize;
             let params = &info.args.keyword_args;
             unsafe {
+                let src_lfp = executor.cfp.prev().lfp();
                 let len = params.len();
                 for (id, (param_name, _)) in params.iter().enumerate() {
-                    *reg.sub(id) = kw_arg.get(Value::new_symbol(*param_name));
+                    *dst_reg.sub(id) = kw_arg
+                        .get(param_name)
+                        .map(|id| src_lfp.register(kw_pos + id));
                 }
-                reg.sub(len)
+                dst_reg.sub(len)
             }
         }
-        _ => reg,
+        _ => dst_reg,
     }
 }
 

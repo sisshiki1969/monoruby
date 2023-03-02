@@ -30,11 +30,10 @@ impl IrContext {
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
-        let mut has_block_or_kw = false;
+        let with_block = arglist.block.is_some();
         let old_temp = info.temp;
-        let arg = info.next_reg();
-        if arglist.block.is_some() || !arglist.kw_args.is_empty() {
-            has_block_or_kw = true;
+        let arg = info.next_reg().into();
+        if with_block {
             if let Some(box block) = arglist.block {
                 match block.kind {
                     NodeKind::Lambda(block) => {
@@ -69,25 +68,18 @@ impl IrContext {
             } else {
                 self.gen_nil(info, None);
             }
-
-            if arglist.kw_args.is_empty() {
-                self.gen_nil(info, None);
-            } else {
-                let len = arglist.kw_args.len();
-                let old_reg = info.temp;
-                let args = info.next_reg();
-                for (name, node) in arglist.kw_args {
-                    self.gen_symbol(info, None, name);
-                    self.push_expr(ctx, info, node)?;
-                }
-                info.temp = old_reg;
-                self.emit_hash(args.into(), args.into(), len, loc);
-                info.push();
-            }
         }
         let args = arglist.args;
         let len = args.len();
         self.gen_args(ctx, info, args)?;
+
+        let mut kw_args = HashMap::default();
+        let kw_pos = info.next_reg().0;
+        for (id, (name, node)) in arglist.kw_args.iter().enumerate() {
+            self.push_expr(ctx, info, node.clone())?;
+            kw_args.insert(IdentId::get_ident_id(name), id);
+        }
+
         info.temp = old_temp;
 
         let recv = match recv_kind {
@@ -102,17 +94,8 @@ impl IrContext {
         } else {
             None
         };
-        let callid = ctx.add_callsite(method);
-        self.gen_call(
-            recv,
-            callid,
-            ret,
-            arg.into(),
-            len,
-            has_block_or_kw,
-            has_splat,
-            loc,
-        );
+        let callid = ctx.add_callsite(method, kw_args, kw_pos);
+        self.gen_call(recv, callid, ret, arg, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
         }
@@ -169,7 +152,7 @@ impl IrContext {
         } else {
             None
         };
-        let callid = ctx.add_callsite(IdentId::EACH);
+        let callid = ctx.add_callsite(IdentId::EACH, HashMap::default(), 0);
         self.gen_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
@@ -219,11 +202,11 @@ impl IrContext {
         ret: Option<BcReg>,
         arg: BcReg,
         len: usize,
-        has_block_or_kw: bool,
+        with_block: bool,
         has_splat: bool,
         loc: Loc,
     ) {
-        if has_block_or_kw {
+        if with_block {
             self.push(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
         } else {
             self.push(BcIr::MethodCall(ret, callid, has_splat), loc)

@@ -257,6 +257,9 @@ pub struct ConstSiteId(pub u32);
 pub struct CallSiteInfo {
     /// Name of method.
     pub name: IdentId,
+    /// Postion of keyword arguments. (No. of temp register)
+    pub kw_pos: u16,
+    pub kw_args: HashMap<IdentId, usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -426,9 +429,18 @@ impl FnStore {
         self.inline.insert(func_id, inline_id);
     }
 
-    pub fn add_callsite(&mut self, name: IdentId) -> CallSiteId {
+    pub fn add_callsite(
+        &mut self,
+        name: IdentId,
+        kw_args: HashMap<IdentId, usize>,
+        kw_pos: u16,
+    ) -> CallSiteId {
         let id = self.callsite_info.len();
-        self.callsite_info.push(CallSiteInfo { name });
+        self.callsite_info.push(CallSiteInfo {
+            name,
+            kw_args,
+            kw_pos,
+        });
         CallSiteId(id as u32)
     }
 }
@@ -436,14 +448,18 @@ impl FnStore {
 impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
+        let old_callid = self.callsite_info.len();
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
         IrContext::compile_func(&mut info, self)?;
-        //ir.ir_to_bytecode(&mut info, self);
-
         let regs = info.total_reg_num();
         std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
         self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
         self[func_id].data.set_reg_num(regs as i64);
+        let temp_start = self[func_id].as_ruby_func().local_num() as u16 + 1;
+        let new_callid = self.callsite_info.len();
+        for callid in old_callid..new_callid {
+            self[CallSiteId::from(callid as u32)].kw_pos += temp_start;
+        }
         Ok(())
     }
 }
@@ -794,6 +810,11 @@ impl ISeqInfo {
     /// get a number of required + optional arguments.
     pub(crate) fn reqopt_num(&self) -> usize {
         self.args.reqopt_num
+    }
+
+    /// get a number of required + optional + rest arguments.
+    pub(crate) fn pos_num(&self) -> usize {
+        self.args.pos_num
     }
 
     /// bit 0:rest(yes=1 no =0) bit 1:block

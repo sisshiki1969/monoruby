@@ -161,7 +161,7 @@ impl IrContext {
             ir.gen_store_expr(ctx, info, local, initializer)?;
             ir.apply_label(next);
         }
-        let kw_reg = info.reqopt_num() + if info.info() & 0b1 != 0 { 1 } else { 0 };
+        let kw_reg = info.pos_num();
         for (id, (_, initializer)) in info.args.keyword_args.clone().into_iter().enumerate() {
             let local = BcLocal((kw_reg + id) as u16).into();
             let next = ir.new_label();
@@ -592,7 +592,7 @@ impl IrContext {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = ctx.add_callsite(method);
+                let callid = ctx.add_callsite(method, HashMap::default(), 0);
                 self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::Other => unreachable!(),

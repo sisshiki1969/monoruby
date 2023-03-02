@@ -36,7 +36,7 @@ stack frame structure
 ### argument register
 
 - rdi: number of args
-- rcx: keyword argument (Value)
+- rcx: CallSiteId
 
 ### global registers (callee save)
 

@@ -167,6 +167,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, r15;
             movq rcx, [r14 - (LBP_META)];
+            movq r8, rbx;
             movq rax, (runtime::distribute_keyword_arguments);
             call rax;
             movq r15, rax;

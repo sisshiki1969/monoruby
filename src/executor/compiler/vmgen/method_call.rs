@@ -25,7 +25,7 @@ impl Codegen {
     /// version:  class version
     /// func data: the data of the function
     /// ~~~
-    pub(super) fn vm_method_call(&mut self, has_block_or_kw: bool, has_splat: bool) -> CodePtr {
+    pub(super) fn vm_method_call(&mut self, with_block: bool, has_splat: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let slowpath = self.jit.label();
@@ -93,26 +93,17 @@ impl Codegen {
         };
         self.vm_get_addr_rcx(); // rcx <- *args
 
-        if has_block_or_kw {
+        if with_block {
             // set block
             monoasm! { self.jit,
                 movq rax, [rcx];
                 movq [rsp - (16 + LBP_BLOCK)], rax;
-            };
-            // set keyword arguments
-            let exit = self.jit.label();
-            monoasm! { self.jit,
-            // rdx <- keyword hash
-                movq rdx, [rcx - 8];
-            exit:
-                subq rcx, 16;
+                subq rcx, 8;
             };
         } else {
             monoasm! { self.jit,
                 // set block
                 movq [rsp - (16 + LBP_BLOCK)], 0;
-                // rdx <- keyword hash
-                xorq rdx, rdx;
             };
         }
         self.set_arguments(has_splat);
@@ -129,8 +120,8 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            // set kwyword hash
-            movq rcx, rdx;
+            // set callsite info
+            movq rcx, [rsp + 8];
         };
         self.call_rax();
         monoasm! { self.jit,

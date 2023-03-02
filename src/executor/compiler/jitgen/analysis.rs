@@ -344,7 +344,7 @@ impl LoopAnalysis {
                         recv, args, len, ..
                     } = info;
                     reg_info.use_non_float(recv);
-                    for i in 0..len + 2 {
+                    for i in 0..len + 1 {
                         reg_info.use_non_float(args + i);
                     }
                     // unlink all local variables.

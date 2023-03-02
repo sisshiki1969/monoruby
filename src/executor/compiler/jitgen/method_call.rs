@@ -33,7 +33,6 @@ impl Codegen {
             method_info,
             callid,
             None,
-            None,
             ret,
             pc + 1,
             has_splat,
@@ -120,18 +119,17 @@ impl Codegen {
             args, len, recv, ..
         } = method_info;
         self.write_back_slot(ctx, recv);
-        self.write_back_range(ctx, args, len + 2);
+        self.write_back_range(ctx, args, len + 1);
         ctx.dealloc_xmm(ret);
         // We must write back and unlink all local vars since they may be accessed from block.
         self.gen_write_back_locals(ctx);
-        method_info.args = args + 2;
+        method_info.args = args + 1;
         self.gen_call(
             fnstore,
             ctx,
             method_info,
             callid,
             Some(args),
-            Some(args + 1),
             ret,
             pc + 1,
             has_splat,
@@ -145,7 +143,6 @@ impl Codegen {
         method_info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
-        kw: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
         has_splat: bool,
@@ -156,14 +153,14 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(ctx, method_info, callid, block, kw, ret, pc, has_splat);
+                self.gen_call_not_cached(ctx, method_info, callid, block, ret, pc, has_splat);
             } else {
                 self.gen_call_cached(
                     fnstore,
                     ctx,
+                    callid,
                     method_info,
                     block,
-                    kw,
                     ret,
                     cached,
                     pc,
@@ -171,7 +168,7 @@ impl Codegen {
                 );
             }
         } else {
-            self.gen_call_not_cached(ctx, method_info, callid, block, kw, ret, pc, has_splat);
+            self.gen_call_not_cached(ctx, method_info, callid, block, ret, pc, has_splat);
         }
     }
 
@@ -182,9 +179,9 @@ impl Codegen {
         &mut self,
         fnstore: &FnStore,
         ctx: &BBContext,
+        callid: CallSiteId,
         method_info: MethodInfo,
         block: Option<SlotId>,
-        kw: Option<SlotId>,
         ret: SlotId,
         cached: InlineCached,
         pc: BcPc,
@@ -209,7 +206,7 @@ impl Codegen {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(block.is_none());
-                assert!(kw.is_none());
+                assert!(fnstore[callid].kw_args.is_empty());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -224,15 +221,14 @@ impl Codegen {
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
                 assert!(block.is_none());
-                assert!(kw.is_none());
+                assert!(fnstore[callid].kw_args.is_empty());
                 self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
-                //assert!(kw.is_none());
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, method_info, ret, block, kw, pc, has_splat);
+                self.method_call_cached(ctx, callid, method_info, ret, block, pc, has_splat);
             }
         };
     }
@@ -246,7 +242,6 @@ impl Codegen {
         method_info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
-        kw: Option<SlotId>,
         ret: SlotId,
         pc: BcPc,
         has_splat: bool,
@@ -292,7 +287,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, kw, has_splat);
+        self.set_self_and_args(method_info, block, has_splat);
 
         monoasm!(self.jit,
             // set meta.
@@ -303,6 +298,8 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
+            // set CallSiteId
+            movl rcx, (callid.get());
         );
         self.call_rax();
         self.xmm_restore(&xmm_using);
@@ -542,10 +539,10 @@ impl Codegen {
     fn method_call_cached(
         &mut self,
         ctx: &BBContext,
+        callid: CallSiteId,
         method_info: MethodInfo,
         ret: SlotId,
         block: Option<SlotId>,
-        kw: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -554,7 +551,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, kw, has_splat);
+        self.set_self_and_args(method_info, block, has_splat);
         // argument registers:
         //   rdi: args len
         monoasm!(self.jit,
@@ -563,6 +560,8 @@ impl Codegen {
             movq [rsp - (16 + LBP_META)], rax;
             // set pc.
             movq r13, (func_data.pc.get_u64());
+            // set CallSiteId
+            movl rcx, (callid.get());
         );
         self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
@@ -649,7 +648,6 @@ impl Codegen {
         &mut self,
         method_info: MethodInfo,
         block: Option<SlotId>,
-        kw: Option<SlotId>,
         has_splat: bool,
     ) {
         let MethodInfo {
@@ -671,13 +669,6 @@ impl Codegen {
         } else {
             monoasm!(self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], 0;
-            );
-        }
-        if let Some(kw) = kw {
-            self.load_rcx(kw);
-        } else {
-            monoasm!(self.jit,
-                xorq rcx, rcx;
             );
         }
     }

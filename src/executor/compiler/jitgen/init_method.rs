@@ -176,6 +176,7 @@ impl Codegen {
                 lea  rsi, [r14 - (fn_info.kw_pos() as i32 * 8 + LBP_ARG0)];
                 movq rdx, r15;
                 movq rcx, [r14 - (LBP_META)];
+                movq r8, rbx;
                 movq rax, (runtime::distribute_keyword_arguments);
                 call rax;
             }
