@@ -257,7 +257,7 @@ pub struct ConstSiteId(pub u32);
 pub struct CallSiteInfo {
     /// Name of method.
     pub name: IdentId,
-    /// Postion of keyword arguments. (No. of temp register)
+    /// Postion of keyword arguments.
     pub kw_pos: u16,
     pub kw_args: HashMap<IdentId, usize>,
 }

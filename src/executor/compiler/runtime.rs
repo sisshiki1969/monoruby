@@ -148,6 +148,36 @@ pub(super) extern "C" fn distribute_keyword_arguments(
     }
 }
 
+/*pub(super) extern "C" fn distribute_keyword_args2(
+    globals: &Globals,
+    callid: CallSiteId,
+    caller_reg: *const Value,
+    callee_func_id: FuncId,
+    callee_reg: *mut Option<Value>,
+) -> *mut Option<Value> {
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => {
+            let CallSiteInfo {
+                name: _,
+                kw_pos,
+                kw_args,
+            } = &globals.func[callid];
+            let params = &info.args.keyword_args;
+            let callee_kw_pos = info.args.pos_num;
+            unsafe {
+                let len = params.len();
+                for (id, (param_name, _)) in params.iter().enumerate() {
+                    *callee_reg.sub(callee_kw_pos + id) = kw_args
+                        .get(param_name)
+                        .map(|id| *caller_reg.sub(*kw_pos as usize + id));
+                }
+                callee_reg.sub(len)
+            }
+        }
+        _ => callee_reg,
+    }
+}*/
+
 #[repr(C)]
 pub(super) struct ClassIdSlot {
     base: ClassId,

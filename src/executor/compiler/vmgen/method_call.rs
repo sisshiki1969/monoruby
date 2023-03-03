@@ -32,7 +32,7 @@ impl Codegen {
         let exec = self.jit.label();
         let vm_return = self.vm_return;
         let class_version = self.class_version;
-        //
+        //      -16    -12    -8     -4
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
         //      +------+------+------+------+
@@ -41,6 +41,7 @@ impl Codegen {
         //
         // rdi: IdentId
         // r15: %ret
+        // [r13 - 16]: CallSiteId
         // [r13 -  8]: class_id
         // [r13 -  4]: class_version
         // [r13 +  0]; len
@@ -81,8 +82,6 @@ impl Codegen {
         monoasm! { self.jit,
             // set meta
             movq rdi, [r13 + 8];
-            //testq rdi, rdi;
-            //jz   slowpath;
             movq rdi, [rdi + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rdi;
             movzxw rcx, [r13 + 2]; // rcx <- args
@@ -91,22 +90,7 @@ impl Codegen {
             movq rax, [rsp];
             movq [rsp - (16 + LBP_SELF)], rax;
         };
-        self.vm_get_addr_rcx(); // rcx <- *args
-
-        if with_block {
-            // set block
-            monoasm! { self.jit,
-                movq rax, [rcx];
-                movq [rsp - (16 + LBP_BLOCK)], rax;
-                subq rcx, 8;
-            };
-        } else {
-            monoasm! { self.jit,
-                // set block
-                movq [rsp - (16 + LBP_BLOCK)], 0;
-            };
-        }
-        self.set_arguments(has_splat);
+        self.set_frame(with_block, has_splat);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -195,20 +179,12 @@ impl Codegen {
             jz  no_block;
             pushq r15;
             pushq r13; // push pc
-            // r9 <- CodePtr
-            movq r9, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
             // set meta
             movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rsi;
-            // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
-            // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         self.set_block_self_outer();
-        self.vm_get_addr_rcx(); // rcx <- *args
-
-        self.set_arguments(true);
+        self.set_frame(false, true);
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -218,7 +194,11 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, r9;
+            // set codeptr
+            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            // set pc
+            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            // set callsite info
             xorq rcx, rcx;
         };
         self.call_rax();
@@ -231,6 +211,24 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
+    }
+
+    fn set_frame(&mut self, with_block: bool, has_splat: bool) {
+        self.vm_get_addr_rcx(); // rcx <- *args
+        if with_block {
+            // set block
+            monoasm! { self.jit,
+                movq rax, [rcx];
+                movq [rsp - (16 + LBP_BLOCK)], rax;
+                subq rcx, 8;
+            };
+        } else {
+            monoasm! { self.jit,
+                // set block
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+            };
+        }
+        self.set_arguments(has_splat);
     }
 
     /// Set arguments
@@ -258,35 +256,40 @@ impl Codegen {
             testq rdi, rdi;
             jeq  loop_exit;
             movl r15, rdi;
+            // rsi <- destination address
             lea  rsi, [rsp - (16 + LBP_ARG0)];
+            // TODO: this possibly cause problem.
+            subq rsp, 4096;
         loop_:
+            // rax <- source value
             movq rax, [rcx];
         }
         if has_splat {
             monoasm! { self.jit,
+                // check whether the source value is SPLAT.
                 testq rax, 0b111;
                 jne  no_splat;
                 cmpw [rax + 2], (ObjKind::SPLAT);
                 jne  no_splat;
-                // TODO: this possibly cause problem.
-                subq rsp, 4096;
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
                 pushq rcx;
+                // rdi <- source value
+                // rsi <- destination address
                 movq rdi, rax;
                 movq rax, (expand_splat);
                 call rax;
+                // rax <- length
                 popq rcx;
                 popq rdx;
                 popq rsi;
                 popq rdi;
-                addq rsp, 4096;
                 lea  rdi, [rdi + rax * 1 - 1];
                 shlq rax, 3;
                 subq rsi, rax;
                 jmp next;
-            no_splat:
+                no_splat:
             }
         }
         monoasm! { self.jit,
@@ -296,7 +299,14 @@ impl Codegen {
             subq rcx, 8;
             subl r15, 1;
             jne  loop_;
+            addq rsp, 4096;
         loop_exit:
+            //movq rdi, r12;
+            //movl rsi, [r13 - 16];
+            //subq rsp, 4096;
+            //movq rax, (runtime::distribute_keyword_args2);
+            //call rax;
+            //addq rsp, 4096;
         };
     }
 }
