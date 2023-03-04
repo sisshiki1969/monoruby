@@ -27,7 +27,7 @@ impl Codegen {
     pub(super) fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        self.vm_init_func(false);
+        //self.vm_init_func(false);
         self.fetch_and_dispatch();
         label
     }
@@ -35,8 +35,8 @@ impl Codegen {
     pub(super) fn vm_init_block(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        self.expand_arg0();
-        self.vm_init_func(true);
+        //self.expand_arg0();
+        //self.vm_init_func(true);
         self.fetch_and_dispatch();
         label
     }
@@ -53,13 +53,13 @@ impl Codegen {
         };
     }
 
-    fn vm_init_func(&mut self, is_block: bool) {
+    /*fn vm_init_func(&mut self, is_block: bool) {
         let fill_req = self.jit.label();
         let fill_opt = self.jit.label();
         let set_rest_empty = self.jit.label();
         let fill_temp = self.jit.label();
         let err = self.wrong_argument;
-        monoasm! { self.jit,
+        /*monoasm! { self.jit,
         // in
         // r15: reg_num
         // rdi: reqopt_num
@@ -151,27 +151,18 @@ impl Codegen {
             call rax;
             subq r15, 8;
         fill_temp:
-        }
+        }*/
         let set_block = self.jit.label();
         let exit = self.jit.label();
         let l0 = self.jit.label();
         let l1 = self.jit.label();
-        let skip = self.jit.label();
         monoasm! { self.jit,
-            popq rdx;
+        /*    popq rdx;
             addq rsp, 1016;
             // set keyword parameters
             movzxw rax, [r13 - 6];
-            testq rax, rax;
-            jz skip;
-            movq rdi, r12;
-            movq rsi, r15;
-            movq rcx, [r14 - (LBP_META)];
-            movq r8, rbx;
-            movq rax, (runtime::distribute_keyword_arguments);
-            call rax;
-            movq r15, rax;
-        skip:
+            shlq rax, 3;
+            subq r15, rax;
         // set block parameter
             movzxw rax, [r13 - 4];
             testq rax, 0b10;
@@ -195,7 +186,7 @@ impl Codegen {
             movq [r15], (NIL_VALUE);
             subq r15, 8;
             jmp  l0;
-        l1:
+        l1:*/
         };
         //self.fill(2 /* rdx */, NIL_VALUE);
     }
@@ -251,5 +242,5 @@ impl Codegen {
             popq rdi;
         l1:
         }
-    }
+    }*/
 }

@@ -291,9 +291,23 @@ impl Codegen {
 
         monoasm!(self.jit,
             // set meta.
-            movq r13, [r13 + 8];
-            movq rax, [r13 + (FUNCDATA_OFFSET_META)];
+            movq rax, [r13 + 8];
+            movq rax, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rax;
+            movq rcx, rax;
+
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            subq rsp, 4096;
+            movq rdi, r12; // &Globals
+            movl rsi, (callid.get()); // CallSiteId
+            lea  rdx, [r14 - (LBP_SELF)];
+            movq rax, (runtime::handle_arguments);
+            call rax;
+            movq rdi, rax;
+            addq rsp, 4096;
+
+            movq r13, [r13 + 8];
             // set codeptr
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
@@ -555,6 +569,18 @@ impl Codegen {
         // argument registers:
         //   rdi: args len
         monoasm!(self.jit,
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            subq rsp, 4096;
+            movq rdi, r12; // &Globals
+            movl rsi, (callid.get()); // CallSiteId
+            lea  rdx, [r14 - (LBP_SELF)];
+            movl rcx, (func_data.meta.func_id().get());
+            movq rax, (runtime::handle_arguments);
+            call rax;
+            movq rdi, rax;
+            addq rsp, 4096;
+
             // set meta.
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;

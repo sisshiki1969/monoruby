@@ -12,14 +12,14 @@ impl Codegen {
         match pc.get_ir(fnstore) {
             TraceIr::InitMethod(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
-                self.init_func(&fn_info, pc, false);
+                //self.init_func(&fn_info, pc, false);
             }
             TraceIr::InitBlock(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
-                if fn_info.reqopt_num >= 2 {
+                /*if fn_info.reqopt_num >= 2 {
                     self.jit_expand_arg0(fn_info.req_num);
                 }
-                self.init_func(&fn_info, pc, true);
+                self.init_func(&fn_info, pc, true);*/
             }
             _ => unreachable!(),
         }

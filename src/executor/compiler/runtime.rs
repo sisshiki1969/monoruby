@@ -148,35 +148,162 @@ pub(super) extern "C" fn distribute_keyword_arguments(
     }
 }
 
-/*pub(super) extern "C" fn distribute_keyword_args2(
+pub(super) extern "C" fn handle_arguments(
     globals: &Globals,
     callid: CallSiteId,
     caller_reg: *const Value,
     callee_func_id: FuncId,
     callee_reg: *mut Option<Value>,
-) -> *mut Option<Value> {
+    mut arg_num: usize,
+) -> usize {
     match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => {
+        FuncKind::ISeq(info) => unsafe {
+            let req_num = info.args.required_num;
+            let reqopt_num = info.args.reqopt_num;
+            let pos_num = info.args.pos_num;
+            let reg_num = info.total_reg_num();
+            let local_num = info.local_num();
+            let is_rest = pos_num != reqopt_num;
+            if info.is_block_style && arg_num == 1 && req_num > 1 {
+                let v = (*callee_reg.sub(1)).unwrap();
+                if v.is_array().is_some() {
+                    let ptr = callee_reg.sub(1) as _;
+                    arg_num = block_expand_array(v, ptr, req_num);
+                }
+            }
+            // required + optional + rest
+            if arg_num >= reqopt_num {
+                if is_rest {
+                    let len = arg_num - reqopt_num;
+                    let ptr = callee_reg.sub(arg_num);
+                    let v = std::slice::from_raw_parts(ptr, len)
+                        .iter()
+                        .rev()
+                        .map(|v| v.unwrap())
+                        .collect();
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
+                }
+            } else if arg_num >= req_num {
+                let len = reqopt_num - arg_num;
+                let ptr = callee_reg.sub(reqopt_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(None);
+                if is_rest {
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                }
+            } else {
+                let len = req_num - arg_num;
+                let ptr = callee_reg.sub(req_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+                let len = reqopt_num - req_num;
+                let ptr = callee_reg.sub(reqopt_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(None);
+                if is_rest {
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                }
+            }
+            // keyword
             let CallSiteInfo {
                 name: _,
                 kw_pos,
                 kw_args,
             } = &globals.func[callid];
             let params = &info.args.keyword_args;
-            let callee_kw_pos = info.args.pos_num;
-            unsafe {
-                let len = params.len();
-                for (id, (param_name, _)) in params.iter().enumerate() {
-                    *callee_reg.sub(callee_kw_pos + id) = kw_args
-                        .get(param_name)
-                        .map(|id| *caller_reg.sub(*kw_pos as usize + id));
-                }
-                callee_reg.sub(len)
+            let callee_kw_pos = info.args.pos_num + 1;
+            for (id, (param_name, _)) in params.iter().enumerate() {
+                *callee_reg.sub(callee_kw_pos + id) = kw_args
+                    .get(param_name)
+                    .map(|id| *caller_reg.sub(*kw_pos as usize + id));
             }
-        }
-        _ => callee_reg,
+            // block
+            let callee_block_pos = callee_kw_pos + info.args.keyword_args.len();
+            if info.args.block_param.is_some() {
+                let block = (*callee_reg
+                    .add(LBP_SELF as usize / 8)
+                    .sub(LBP_BLOCK as usize / 8))
+                .unwrap_or_default();
+                *callee_reg.sub(callee_block_pos) = Some(block);
+            }
+            // temp
+            let len = reg_num - 1 - local_num;
+            let ptr = callee_reg.sub(reg_num - 1);
+            std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+        },
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
-}*/
+    arg_num
+}
+
+pub(super) extern "C" fn handle_invoker_arguments(
+    globals: &Globals,
+    callee_meta: Meta,
+    callee_reg: *mut Option<Value>,
+    mut arg_num: usize,
+) -> usize {
+    let callee_func_id = callee_meta.func_id();
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => unsafe {
+            let req_num = info.args.required_num;
+            let reqopt_num = info.args.reqopt_num;
+            let pos_num = info.args.pos_num;
+            let reg_num = info.total_reg_num();
+            let local_num = info.local_num();
+            let is_rest = pos_num != reqopt_num;
+            if info.is_block_style && arg_num == 1 && req_num > 1 {
+                let v = (*callee_reg.sub(1)).unwrap();
+                if v.is_array().is_some() {
+                    let ptr = callee_reg.sub(1) as _;
+                    arg_num = block_expand_array(v, ptr, req_num);
+                }
+            }
+            // required + optional + rest
+            if arg_num >= reqopt_num {
+                if is_rest {
+                    let len = arg_num - reqopt_num;
+                    let ptr = callee_reg.sub(arg_num);
+                    let v = std::slice::from_raw_parts(ptr, len)
+                        .iter()
+                        .rev()
+                        .map(|v| v.unwrap())
+                        .collect();
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
+                }
+            } else if arg_num >= req_num {
+                let len = reqopt_num - arg_num;
+                let ptr = callee_reg.sub(reqopt_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(None);
+                if is_rest {
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                }
+            } else {
+                let len = req_num - arg_num;
+                let ptr = callee_reg.sub(req_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+                let len = reqopt_num - req_num;
+                let ptr = callee_reg.sub(reqopt_num);
+                std::slice::from_raw_parts_mut(ptr, len).fill(None);
+                if is_rest {
+                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                }
+            }
+            // block
+            let callee_kw_pos = info.args.pos_num + 1;
+            let callee_block_pos = callee_kw_pos + info.args.keyword_args.len();
+            if info.args.block_param.is_some() {
+                let block = (*callee_reg
+                    .add(LBP_SELF as usize / 8)
+                    .sub(LBP_BLOCK as usize / 8))
+                .unwrap_or_default();
+                *callee_reg.sub(callee_block_pos) = Some(block);
+            }
+            // temp
+            let len = reg_num - 1 - local_num;
+            let ptr = callee_reg.sub(reg_num - 1);
+            std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+        },
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+    }
+    arg_num
+}
 
 #[repr(C)]
 pub(super) struct ClassIdSlot {

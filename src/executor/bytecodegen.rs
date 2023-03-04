@@ -135,7 +135,7 @@ impl IrContext {
     pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<()> {
         let mut ir = IrContext::new();
         let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_dummy_init(info.is_lambda);
+        ir.gen_dummy_init(info.is_block_style);
         for ForParamInfo {
             dst_outer,
             dst_reg,
@@ -1567,7 +1567,7 @@ impl IrContext {
     fn replace_init(&mut self, info: &ISeqInfo) {
         let fninfo = FnInitInfo::new(info);
         self.ir[0] = (
-            if info.is_lambda {
+            if info.is_block_style {
                 BcIr::InitBlock(fninfo)
             } else {
                 BcIr::InitMethod(fninfo)

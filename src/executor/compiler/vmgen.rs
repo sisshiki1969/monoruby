@@ -353,6 +353,18 @@ impl Codegen {
     fn gen_invoker_epilogue(&mut self) {
         monoasm! { self.jit,
             movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+
+            movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
+            lea  rdx, [rsp - (16 + LBP_SELF)];
+            subq rsp, 4088;
+            pushq rax;
+            movq rcx, rdi;
+            movq rdi, r12; // &Globals
+            movq rax, (runtime::handle_invoker_arguments);
+            call rax;
+            movq rdi, rax;
+            popq rax;
+            addq rsp, 4088;
         }
         self.push_frame();
         self.set_lfp();

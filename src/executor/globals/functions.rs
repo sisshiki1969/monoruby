@@ -696,7 +696,7 @@ pub(crate) struct ISeqInfo {
     /// AST.
     pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
-    pub(crate) is_lambda: bool,
+    pub(crate) is_block_style: bool,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -742,7 +742,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             ast: Some(body),
             sourceinfo,
-            is_lambda: is_block,
+            is_block_style: is_block,
         };
         args.args_names.into_iter().for_each(|name| {
             info.add_local(name);

@@ -84,14 +84,26 @@ impl Codegen {
             movq rdi, [r13 + 8];
             movq rdi, [rdi + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rdi;
-            movzxw rcx, [r13 + 2]; // rcx <- args
             movzxw rdi, [r13 + 0];  // rdi <- len
+            movzxw rcx, [r13 + 2]; // rcx <- args
             // set self (= receiver)
             movq rax, [rsp];
             movq [rsp - (16 + LBP_SELF)], rax;
         };
         self.set_frame(with_block, has_splat);
         monoasm! { self.jit,
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            movl rcx, [rsp - (16 + LBP_META)];
+            subq rsp, 4096;
+            //pushq rdi;
+            movq rdi, r12; // &Globals
+            movl rsi, [r13 - 16]; // CallSiteId
+            lea  rdx, [r14 - (LBP_SELF)];
+            movq rax, (runtime::handle_arguments);
+            call rax;
+            movq rdi, rax;
+            addq rsp, 4096;
             // argument registers:
             //   rdi: args len
             //
@@ -186,6 +198,19 @@ impl Codegen {
         self.set_block_self_outer();
         self.set_frame(false, true);
         monoasm! { self.jit,
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            movl rcx, [rsp - (16 + LBP_META)];
+            subq rsp, 4096;
+            //pushq rdi;
+            movq rdi, r12; // &Globals
+            movl rsi, [r13 - 16]; // CallSiteId
+            movq r13, rdx;
+            lea  rdx, [r14 - (LBP_SELF)];
+            movq rax, (runtime::handle_arguments);
+            call rax;
+            movq rdi, rax;
+            addq rsp, 4096;
             // argument registers:
             //   rdi: args len
             //
@@ -195,9 +220,9 @@ impl Codegen {
             //   r13: pc
             //
             // set codeptr
-            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
             // set callsite info
             xorq rcx, rcx;
         };
@@ -213,6 +238,23 @@ impl Codegen {
         label
     }
 
+    /// Set frame (BLOCK, arguments)
+    ///
+    /// ### in
+    ///
+    /// - rdi: arg len
+    /// - rcx: %args
+    ///
+    /// ### out
+    ///
+    /// - rdi: arg len
+    ///
+    /// ### destroy
+    ///
+    /// - rax
+    /// - rcx
+    /// - rsi
+    /// - r15
     fn set_frame(&mut self, with_block: bool, has_splat: bool) {
         self.vm_get_addr_rcx(); // rcx <- *args
         if with_block {
@@ -245,6 +287,7 @@ impl Codegen {
     /// ### destroy
     ///
     /// - rax
+    /// - rcx
     /// - rsi
     /// - r15
     fn set_arguments(&mut self, has_splat: bool) {
@@ -301,12 +344,6 @@ impl Codegen {
             jne  loop_;
             addq rsp, 4096;
         loop_exit:
-            //movq rdi, r12;
-            //movl rsi, [r13 - 16];
-            //subq rsp, 4096;
-            //movq rax, (runtime::distribute_keyword_args2);
-            //call rax;
-            //addq rsp, 4096;
         };
     }
 }
