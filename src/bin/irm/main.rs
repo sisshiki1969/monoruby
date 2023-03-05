@@ -1,5 +1,5 @@
 use rustyline::error::ReadlineError;
-use rustyline::Editor;
+use rustyline::DefaultEditor;
 
 use monoruby::*;
 
@@ -25,7 +25,7 @@ fn main() {
     use clap::Parser;
     let args = CommandLineArgs::parse();
 
-    let mut rl = Editor::<()>::new().unwrap();
+    let mut rl = DefaultEditor::new().unwrap();
     let mut globals = Globals::new(args.warning, args.no_jit);
 
     let mut cont_mode = false;
@@ -58,7 +58,7 @@ fn main() {
                     }
                     Err(err) => {
                         if err.is_eof() {
-                            rl.add_history_entry(code.as_str());
+                            rl.add_history_entry(code.as_str()).unwrap();
                             cont_mode = true;
                         } else {
                             err.show_error_message_and_all_loc();
@@ -67,7 +67,7 @@ fn main() {
                         continue;
                     }
                 };
-                rl.add_history_entry(code.as_str());
+                rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
                 match interp.eval(&mut globals, main_fid) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),

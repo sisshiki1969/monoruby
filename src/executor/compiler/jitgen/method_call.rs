@@ -228,7 +228,16 @@ impl Codegen {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, callid, method_info, ret, block, pc, has_splat);
+                self.method_call_cached(
+                    ctx,
+                    fnstore,
+                    callid,
+                    method_info,
+                    ret,
+                    block,
+                    pc,
+                    has_splat,
+                );
             }
         };
     }
@@ -302,7 +311,7 @@ impl Codegen {
             movq rdi, r12; // &Globals
             movl rsi, (callid.get()); // CallSiteId
             lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::handle_arguments);
+            movq rax, (runtime::vm_handle_arguments);
             call rax;
             movq rdi, rax;
             addq rsp, 4096;
@@ -553,6 +562,7 @@ impl Codegen {
     fn method_call_cached(
         &mut self,
         ctx: &BBContext,
+        fnstore: &FnStore,
         callid: CallSiteId,
         method_info: MethodInfo,
         ret: SlotId,
@@ -568,26 +578,53 @@ impl Codegen {
         self.set_self_and_args(method_info, block, has_splat);
         // argument registers:
         //   rdi: args len
+        let callee_func_id = func_data.meta.func_id();
+        match &fnstore[callee_func_id].kind {
+            FuncKind::ISeq(info) => {
+                if !info.is_block_style
+                    && info.pos_num() == info.req_num()
+                    && info.key_num() == 0
+                    && info.block_param_name().is_none()
+                {
+                    // We must check args_num == req_num
+                    let reg_num = info.total_reg_num() - 1;
+                    let arguments_num = info.args.args_names.len();
+                    let len = reg_num - arguments_num;
+                    let temp_start = info.total_reg_num() - len;
+                    if len != 0 {
+                        monoasm!(self.jit,
+                            movq rax, (NIL_VALUE);
+                        );
+                        for ofs in temp_start..temp_start + len {
+                            monoasm!(self.jit,
+                                movq [rsp - ((16 + LBP_SELF + ofs as i64 * 8) as i32)], rax;
+                            );
+                        }
+                    }
+                } else {
+                    monoasm!(self.jit,
+                        lea  r8, [rsp - (16 + LBP_SELF)];
+                        movq r9, rdi;
+                        subq rsp, 4096;
+                        movq rdi, r12; // &Globals
+                        movl rsi, (callid.get()); // CallSiteId
+                        lea  rdx, [r14 - (LBP_SELF)];
+                        movl rcx, (func_data.meta.func_id().get());
+                        movq rax, (runtime::vm_handle_arguments);
+                        call rax;
+                        movq rdi, rax;
+                        addq rsp, 4096;
+                    );
+                }
+            }
+            _ => {}
+        }
         monoasm!(self.jit,
-            lea  r8, [rsp - (16 + LBP_SELF)];
-            movq r9, rdi;
-            subq rsp, 4096;
-            movq rdi, r12; // &Globals
-            movl rsi, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (LBP_SELF)];
-            movl rcx, (func_data.meta.func_id().get());
-            movq rax, (runtime::handle_arguments);
-            call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
-
             // set meta.
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
             // set pc.
             movq r13, (func_data.pc.get_u64());
-            // set CallSiteId
-            movl rcx, (callid.get());
         );
         self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
@@ -603,6 +640,7 @@ impl Codegen {
         args: SlotId,
         len: u16,
         ret: SlotId,
+        callid: CallSiteId,
         pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
@@ -620,20 +658,28 @@ impl Codegen {
 
         self.set_block_self_outer();
         monoasm! { self.jit,
-            // rsi <- CodePtr
-            movq rsi, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            // r13 <- &FuncData
+            movq r13, rdx;
             // set meta
-            movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
-            movq [rsp -(16 + LBP_META)], rdi;
-            // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            movq rdi, [r13 + (FUNCDATA_OFFSET_META)];
+            movq [rsp - (16 + LBP_META)], rdi;
             // set block
             movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq rdi, (len);
         };
         // set arguments
         self.jit_set_arguments(args, len, true);
         monoasm! { self.jit,
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            movl rcx, [rsp - (16 + LBP_META)];
+            subq rsp, 4096;
+            movq rdi, r12; // &Globals
+            movl rsi, (callid.get()); // CallSiteId
+            lea  rdx, [r14 - (LBP_SELF)];
+            movq rax, (runtime::vm_handle_arguments);
+            call rax;
+            movq rdi, rax;
+            addq rsp, 4096;
             // argument registers:
             //   rdi: args len
             //
@@ -642,8 +688,9 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
-            movq rax, rsi;
-            xorq rcx, rcx;
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            // set pc
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
         };
         self.call_rax();
         self.xmm_restore(&xmm_using);
@@ -683,7 +730,6 @@ impl Codegen {
         self.load_rax(recv);
         monoasm!(self.jit,
             movq [rsp - (16 + LBP_SELF)], rax;
-            movq rdi, (len);
         );
         self.jit_set_arguments(args, len, has_splat);
         // set block
@@ -701,15 +747,21 @@ impl Codegen {
 
     /// Set arguments.
     ///
-    /// ### save
+    /// ### out
     ///
     /// - rdi: the number of arguments
+    ///
+    /// ### save
+    ///
     /// - rsi
     ///
     /// ### destroy
     ///
     /// - caller save registers
     fn jit_set_arguments(&mut self, args: SlotId, len: u16, has_splat: bool) {
+        monoasm!(self.jit,
+            movq rdi, (len);
+        );
         // set arguments
         if len != 0 {
             let splat = self.splat;

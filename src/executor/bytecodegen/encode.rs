@@ -241,13 +241,18 @@ impl IrContext {
                     let op2 = info.get_index(&BcReg::from(*arg));
                     Bc::from(enc_www(179, op1.0, op2.0, *len as u16))
                 }
-                BcIr::Yield { ret, args, len } => {
+                BcIr::Yield {
+                    ret,
+                    args,
+                    len,
+                    callid,
+                } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => info.get_index(ret),
                     };
                     let op2 = info.get_index(args);
-                    Bc::from(enc_www(152, op1.0, op2.0, *len as u16))
+                    Bc::from_with_callid(enc_www(152, op1.0, op2.0, *len as u16), *callid)
                 }
                 BcIr::MethodArgs(recv, args, len) => {
                     let op1 = info.get_index(recv);

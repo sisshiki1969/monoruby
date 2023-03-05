@@ -1361,10 +1361,15 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, info.recv);
                     self.gen_inlinable(&mut ctx, &info, &method, ret, pc);
                 }
-                TraceIr::Yield { ret, args, len } => {
+                TraceIr::Yield {
+                    ret,
+                    args,
+                    len,
+                    callid,
+                } => {
                     ctx.dealloc_xmm(ret);
                     self.write_back_range(&mut ctx, args, len);
-                    self.gen_yield(&ctx, args, len, ret, pc);
+                    self.gen_yield(&ctx, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {

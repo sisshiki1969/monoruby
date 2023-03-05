@@ -31,56 +31,10 @@ impl IrContext {
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
-        let old_temp = info.temp;
         let arg = info.next_reg().into();
-        if with_block {
-            if let Some(box block) = arglist.block {
-                match block.kind {
-                    NodeKind::Lambda(block) => {
-                        self.handle_block(ctx, info, vec![], block)?;
-                    }
-                    NodeKind::LocalVar(0, proc_local) => {
-                        if Some(&proc_local) == info.block_param_name() {
-                            let proc_temp = info.push().into();
-                            self.push(BcIr::BlockArgProxy(proc_temp, 0), loc);
-                        } else {
-                            let local = info.refer_local(&proc_local).into();
-                            self.gen_temp_mov(info, local);
-                        }
-                    }
-                    NodeKind::LocalVar(outer, proc_local) => {
-                        if Some(&proc_local) == info.outer_block_param_name(outer) {
-                            let proc_temp = info.push().into();
-                            self.push(BcIr::BlockArgProxy(proc_temp, outer), loc);
-                        } else {
-                            let src = info.refer_dynamic_local(outer, &proc_local).into();
-                            let ret = info.push().into();
-                            self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
-                        }
-                    }
-                    _ => {
-                        return Err(MonorubyErr::unsupported_block_param(
-                            &block,
-                            info.sourceinfo.clone(),
-                        ))
-                    }
-                }
-            } else {
-                self.gen_nil(info, None);
-            }
-        }
-        let args = arglist.args;
-        let len = args.len();
-        self.gen_args(ctx, info, args)?;
+        let len = arglist.args.len();
 
-        let mut kw_args = HashMap::default();
-        let kw_pos = info.next_reg().0;
-        for (id, (name, node)) in arglist.kw_args.iter().enumerate() {
-            self.push_expr(ctx, info, node.clone())?;
-            kw_args.insert(IdentId::get_ident_id(name), id);
-        }
-
-        info.temp = old_temp;
+        let callid = self.handle_arguments(ctx, info, arglist, method, loc)?;
 
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
@@ -94,7 +48,6 @@ impl IrContext {
         } else {
             None
         };
-        let callid = ctx.add_callsite(method, kw_args, kw_pos);
         self.gen_call(recv, callid, ret, arg, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
@@ -169,28 +122,100 @@ impl IrContext {
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
-        assert!(arglist.kw_args.is_empty());
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
         assert!(arglist.block.is_none());
-        let old_temp = info.temp;
+
         let arg = info.next_reg();
-        let args = arglist.args;
-        let len = args.len();
-        self.gen_args(ctx, info, args)?;
-        info.temp = old_temp;
+        let len = arglist.args.len();
+
+        let callid =
+            self.handle_arguments(ctx, info, arglist, IdentId::get_ident_id("<block>"), loc)?;
 
         self.push(
             BcIr::Yield {
                 ret,
                 args: arg.into(),
                 len,
+                callid,
             },
             loc,
         );
 
         if is_ret {
             self.gen_ret(info, None);
+        }
+        Ok(())
+    }
+
+    fn handle_arguments(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        arglist: ArgList,
+        method: IdentId,
+        loc: Loc,
+    ) -> Result<CallSiteId> {
+        let with_block = arglist.block.is_some();
+        let old_temp = info.temp;
+        if with_block {
+            self.handle_block_param(ctx, info, arglist.block, loc)?;
+        }
+        let args = arglist.args;
+        self.gen_args(ctx, info, args)?;
+
+        let mut kw_args = HashMap::default();
+        let kw_pos = info.next_reg().0;
+        for (id, (name, node)) in arglist.kw_args.iter().enumerate() {
+            self.push_expr(ctx, info, node.clone())?;
+            kw_args.insert(IdentId::get_ident_id(name), id);
+        }
+
+        info.temp = old_temp;
+        let callid = ctx.add_callsite(method, kw_args, kw_pos);
+        Ok(callid)
+    }
+
+    fn handle_block_param(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        block: Option<Box<Node>>,
+        loc: Loc,
+    ) -> Result<()> {
+        if let Some(box block) = block {
+            match block.kind {
+                NodeKind::Lambda(block) => {
+                    self.handle_block(ctx, info, vec![], block)?;
+                }
+                NodeKind::LocalVar(0, proc_local) => {
+                    if Some(&proc_local) == info.block_param_name() {
+                        let proc_temp = info.push().into();
+                        self.push(BcIr::BlockArgProxy(proc_temp, 0), loc);
+                    } else {
+                        let local = info.refer_local(&proc_local).into();
+                        self.gen_temp_mov(info, local);
+                    }
+                }
+                NodeKind::LocalVar(outer, proc_local) => {
+                    if Some(&proc_local) == info.outer_block_param_name(outer) {
+                        let proc_temp = info.push().into();
+                        self.push(BcIr::BlockArgProxy(proc_temp, outer), loc);
+                    } else {
+                        let src = info.refer_dynamic_local(outer, &proc_local).into();
+                        let ret = info.push().into();
+                        self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    }
+                }
+                _ => {
+                    return Err(MonorubyErr::unsupported_block_param(
+                        &block,
+                        info.sourceinfo.clone(),
+                    ))
+                }
+            }
+        } else {
+            self.gen_nil(info, None);
         }
         Ok(())
     }

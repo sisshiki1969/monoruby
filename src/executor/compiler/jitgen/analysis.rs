@@ -319,7 +319,7 @@ impl LoopAnalysis {
                     //reg_info.use_as(src, false, NIL_CLASS);
                     reg_info.def_as(src, false);
                 }
-                TraceIr::Yield { ret, args, len } => {
+                TraceIr::Yield { ret, args, len, .. } => {
                     for i in 0..len {
                         reg_info.use_non_float(args + i);
                     }

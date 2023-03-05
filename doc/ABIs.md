@@ -43,4 +43,4 @@ stack frame structure
 - rbx: &mut Executer ([rbx] points to cfp)
 - r12: &mut Globals
 - r13: pc (current bytecode address, dummy for JIT-ed code)
-- r14: lfp (local frame pointer, points to the address of _self_)
+- r14: lfp (local frame pointer)

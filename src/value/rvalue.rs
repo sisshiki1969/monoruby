@@ -32,7 +32,11 @@ pub struct RValue {
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let flag = unsafe { self.flags.flag };
-        assert_eq!(1, flag.flag & 0b1);
+        if flag.flag & 0b1 != 1 {
+            unreachable!("broken RValue: {:016x} flag:{:?}", self.id(), unsafe {
+                self.flags.flag
+            });
+        };
         write!(
             f,
             "RValue {{ class:{:?} {} {:016x} }}",
@@ -174,7 +178,7 @@ impl alloc::GC<RValue> for RValue {
             }
             ObjKind::REGEXP => {}
             ObjKind::IO => {}
-            _ => unreachable!("mark"),
+            _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
 }
@@ -696,7 +700,7 @@ union RVFlag {
     next: Option<std::ptr::NonNull<RValue>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct Flag {
     flag: u16,

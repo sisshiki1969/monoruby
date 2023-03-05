@@ -337,8 +337,7 @@ impl Codegen {
             // set meta
             movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rdi;
-            // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
+            movq r13, rdx;
         };
         if invoke_block {
             self.set_block_self_outer()
@@ -352,23 +351,24 @@ impl Codegen {
 
     fn gen_invoker_epilogue(&mut self) {
         monoasm! { self.jit,
-            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
 
             movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
-            subq rsp, 4088;
-            pushq rax;
-            movq rcx, rdi;
+            subq rsp, 4096;
+            movq rcx, rdi; // arg_num
             movq rdi, r12; // &Globals
             movq rax, (runtime::handle_invoker_arguments);
             call rax;
             movq rdi, rax;
-            popq rax;
-            addq rsp, 4088;
+            addq rsp, 4096;
         }
         self.push_frame();
         self.set_lfp();
         monoasm! { self.jit,
+            // set codeptr
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            // set pc
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rdi;

@@ -120,35 +120,7 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
     unsafe { *src = Value::new_splat(*src) };
 }
 
-pub(super) extern "C" fn distribute_keyword_arguments(
-    globals: &Globals,
-    dst_reg: *mut Option<Value>,
-    callid: CallSiteId,
-    meta: Meta,
-    executor: &Executor,
-) -> *mut Option<Value> {
-    let func_id = meta.func_id.unwrap();
-    match &globals[func_id].kind {
-        FuncKind::ISeq(info) => {
-            let kw_arg = &globals.func[callid].kw_args;
-            let kw_pos = globals.func[callid].kw_pos as usize;
-            let params = &info.args.keyword_args;
-            unsafe {
-                let src_lfp = executor.cfp.prev().lfp();
-                let len = params.len();
-                for (id, (param_name, _)) in params.iter().enumerate() {
-                    *dst_reg.sub(id) = kw_arg
-                        .get(param_name)
-                        .map(|id| src_lfp.register(kw_pos + id));
-                }
-                dst_reg.sub(len)
-            }
-        }
-        _ => dst_reg,
-    }
-}
-
-pub(super) extern "C" fn handle_arguments(
+pub(super) extern "C" fn vm_handle_arguments(
     globals: &Globals,
     callid: CallSiteId,
     caller_reg: *const Value,
@@ -158,49 +130,10 @@ pub(super) extern "C" fn handle_arguments(
 ) -> usize {
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => unsafe {
-            let req_num = info.args.required_num;
-            let reqopt_num = info.args.reqopt_num;
-            let pos_num = info.args.pos_num;
-            let reg_num = info.total_reg_num();
-            let local_num = info.local_num();
-            let is_rest = pos_num != reqopt_num;
-            if info.is_block_style && arg_num == 1 && req_num > 1 {
-                let v = (*callee_reg.sub(1)).unwrap();
-                if v.is_array().is_some() {
-                    let ptr = callee_reg.sub(1) as _;
-                    arg_num = block_expand_array(v, ptr, req_num);
-                }
-            }
+            // expand array for block
+            arg_num = expand_array_for_block(info, arg_num, callee_reg);
             // required + optional + rest
-            if arg_num >= reqopt_num {
-                if is_rest {
-                    let len = arg_num - reqopt_num;
-                    let ptr = callee_reg.sub(arg_num);
-                    let v = std::slice::from_raw_parts(ptr, len)
-                        .iter()
-                        .rev()
-                        .map(|v| v.unwrap())
-                        .collect();
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
-                }
-            } else if arg_num >= req_num {
-                let len = reqopt_num - arg_num;
-                let ptr = callee_reg.sub(reqopt_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(None);
-                if is_rest {
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
-                }
-            } else {
-                let len = req_num - arg_num;
-                let ptr = callee_reg.sub(req_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
-                let len = reqopt_num - req_num;
-                let ptr = callee_reg.sub(reqopt_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(None);
-                if is_rest {
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
-                }
-            }
+            handle_req_opt_rest(info, arg_num, callee_reg);
             // keyword
             let CallSiteInfo {
                 name: _,
@@ -223,14 +156,85 @@ pub(super) extern "C" fn handle_arguments(
                 .unwrap_or_default();
                 *callee_reg.sub(callee_block_pos) = Some(block);
             }
-            // temp
-            let len = reg_num - 1 - local_num;
-            let ptr = callee_reg.sub(reg_num - 1);
-            std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+            // other
+            clear_temp(info, callee_reg);
         },
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
     arg_num
+}
+
+/// deconstruct array for block
+fn expand_array_for_block(
+    info: &ISeqInfo,
+    arg_num: usize,
+    callee_reg: *mut Option<Value>,
+) -> usize {
+    let req_num = info.args.required_num;
+    let reqopt_num = info.args.reqopt_num;
+    if info.is_block_style && arg_num == 1 && reqopt_num > 1 {
+        unsafe {
+            let v = (*callee_reg.sub(1)).unwrap();
+            if v.is_array().is_some() {
+                let ptr = callee_reg.sub(1) as _;
+                return block_expand_array(v, ptr, req_num);
+            }
+        }
+    }
+    arg_num
+}
+
+fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<Value>) {
+    let req_num = info.args.required_num;
+    let reqopt_num = info.args.reqopt_num;
+    let pos_num = info.args.pos_num;
+    let is_rest = pos_num != reqopt_num;
+    unsafe {
+        if arg_num >= reqopt_num {
+            if is_rest {
+                let len = arg_num - reqopt_num;
+                let ptr = callee_reg.sub(arg_num);
+                let v = std::slice::from_raw_parts(ptr, len)
+                    .iter()
+                    .rev()
+                    .map(|v| v.unwrap())
+                    .collect();
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
+            }
+        } else if arg_num >= req_num {
+            let len = dbg!(reqopt_num - arg_num);
+            let ptr = callee_reg.sub(dbg!(reqopt_num));
+            fill(ptr, len, None);
+            if is_rest {
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+            }
+        } else {
+            let len = req_num - arg_num;
+            let ptr = callee_reg.sub(req_num);
+            fill(ptr, len, Some(Value::nil()));
+            let len = reqopt_num - req_num;
+            let ptr = callee_reg.sub(reqopt_num);
+            fill(ptr, len, None);
+            if is_rest {
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+            }
+        }
+    }
+}
+
+/// Clear registers other than arguments.
+fn clear_temp(info: &ISeqInfo, callee_reg: *mut Option<Value>) {
+    let reg_num = info.total_reg_num() - 1;
+    let arguments_num = info.args.args_names.len();
+    let len = reg_num - arguments_num;
+    let ptr = unsafe { callee_reg.sub(reg_num) };
+    fill(ptr, len, Some(Value::nil()));
+}
+
+fn fill(ptr: *mut Option<Value>, len: usize, val: Option<Value>) {
+    unsafe {
+        std::slice::from_raw_parts_mut(ptr, len).fill(val);
+    }
 }
 
 pub(super) extern "C" fn handle_invoker_arguments(
@@ -242,51 +246,23 @@ pub(super) extern "C" fn handle_invoker_arguments(
     let callee_func_id = callee_meta.func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => unsafe {
-            let req_num = info.args.required_num;
-            let reqopt_num = info.args.reqopt_num;
-            let pos_num = info.args.pos_num;
-            let reg_num = info.total_reg_num();
-            let local_num = info.local_num();
-            let is_rest = pos_num != reqopt_num;
-            if info.is_block_style && arg_num == 1 && req_num > 1 {
-                let v = (*callee_reg.sub(1)).unwrap();
-                if v.is_array().is_some() {
-                    let ptr = callee_reg.sub(1) as _;
-                    arg_num = block_expand_array(v, ptr, req_num);
-                }
-            }
+            // expand array for block
+            arg_num = expand_array_for_block(info, arg_num, callee_reg);
+
             // required + optional + rest
-            if arg_num >= reqopt_num {
-                if is_rest {
-                    let len = arg_num - reqopt_num;
-                    let ptr = callee_reg.sub(arg_num);
-                    let v = std::slice::from_raw_parts(ptr, len)
-                        .iter()
-                        .rev()
-                        .map(|v| v.unwrap())
-                        .collect();
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
-                }
-            } else if arg_num >= req_num {
-                let len = reqopt_num - arg_num;
-                let ptr = callee_reg.sub(reqopt_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(None);
-                if is_rest {
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
-                }
-            } else {
-                let len = req_num - arg_num;
-                let ptr = callee_reg.sub(req_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
-                let len = reqopt_num - req_num;
-                let ptr = callee_reg.sub(reqopt_num);
-                std::slice::from_raw_parts_mut(ptr, len).fill(None);
-                if is_rest {
-                    *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
-                }
+            handle_req_opt_rest(info, arg_num, callee_reg);
+            // keyword
+            /*let CallSiteInfo {
+                name: _,
+                kw_pos,
+                kw_args,
+            } = &globals.func[callid];*/
+            let params = &info.args.keyword_args;
+            let callee_kw_pos = info.args.pos_num + 1;
+            for (id, _) in params.iter().enumerate() {
+                *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
             }
             // block
-            let callee_kw_pos = info.args.pos_num + 1;
             let callee_block_pos = callee_kw_pos + info.args.keyword_args.len();
             if info.args.block_param.is_some() {
                 let block = (*callee_reg
@@ -295,10 +271,8 @@ pub(super) extern "C" fn handle_invoker_arguments(
                 .unwrap_or_default();
                 *callee_reg.sub(callee_block_pos) = Some(block);
             }
-            // temp
-            let len = reg_num - 1 - local_num;
-            let ptr = callee_reg.sub(reg_num - 1);
-            std::slice::from_raw_parts_mut(ptr, len).fill(Some(Value::nil()));
+            // other
+            clear_temp(info, callee_reg);
         },
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }

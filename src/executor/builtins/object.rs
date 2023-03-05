@@ -230,7 +230,6 @@ extern "C" fn assert(
         expected.inspect(globals),
         actual.inspect(globals)
     );
-    eprintln!("expected:{:?} actual:{:?}", expected, actual);
     assert!(Value::eq(expected, actual));
     Some(Value::nil())
 }

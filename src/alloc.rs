@@ -101,7 +101,6 @@ impl<T: GCBox> Allocator<T> {
         }
     }
 
-    #[cfg(not(feature = "gc-stress"))]
     pub(crate) fn alloc_flag(&self) -> bool {
         if let Some(flag) = self.alloc_flag {
             unsafe { *flag != 0 }
@@ -220,17 +219,18 @@ impl<T: GCBox> Allocator<T> {
         gcbox
     }
 
-    #[allow(unused)]
+    /*#[allow(unused)]
     pub fn gc_mark_only(&mut self, root: &impl GC<T>) {
         self.clear_mark();
         root.mark(self);
         self.print_mark();
-    }
+    }*/
 
     #[allow(unused)]
     pub fn check_gc(&mut self, root: &impl GCRoot<T>) {
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
-        if !cfg!(feature = "gc-stress") && !self.alloc_flag() && self.malloc_threshold >= malloced {
+        #[cfg(not(feature = "gc-stress"))]
+        if !self.alloc_flag() && self.malloc_threshold >= malloced {
             return;
         }
         #[cfg(feature = "gc-debug")]
@@ -371,6 +371,7 @@ impl<T: GCBox> Allocator<T> {
 }
 
 // For debug
+#[cfg(feature = "gc-debug")]
 impl<T: GCBox> Allocator<T> {
     fn check_ptr(&self, ptr: *mut T) {
         let page_ptr = PageRef::from_inner(ptr);
@@ -398,7 +399,7 @@ impl<T: GCBox> Allocator<T> {
         c
     }
 
-    fn print_bits(&self, bitmap: &[u64; SIZE - 1]) {
+    /*fn print_bits(&self, bitmap: &[u64; SIZE - 1]) {
         let mut i = 0;
         bitmap.iter().for_each(|m| {
             eprint!("{:016x} ", m.reverse_bits());
@@ -407,9 +408,9 @@ impl<T: GCBox> Allocator<T> {
             }
             i += 1;
         });
-    }
+    }*/
 
-    pub(crate) fn print_mark(&self) {
+    /*pub(crate) fn print_mark(&self) {
         self.pages.iter().for_each(|pinfo| {
             self.print_bits(pinfo.mark_bits());
             eprintln!("\n");
@@ -429,7 +430,7 @@ impl<T: GCBox> Allocator<T> {
             "free list:{} allocated:{}  used in current page:{}",
             self.free_list_count, self.allocated, self.used_in_current
         );
-    }
+    }*/
 }
 
 ///

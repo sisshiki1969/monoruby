@@ -168,7 +168,7 @@ fn handle_args(
             dst_reg,
             src_reg: args_names.len(),
         });
-        //args_names.push(Some(name));
+        args_names.push(None);
         required_num += 1;
     }
     for param in params {
@@ -202,6 +202,7 @@ fn handle_args(
                 keyword_args.push((name, init));
             }
             ParamKind::Block(name) => {
+                args_names.push(Some(name.clone()));
                 block_param = Some(name);
             }
             _ => {
@@ -455,7 +456,7 @@ impl FnStore {
         std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
         self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
         self[func_id].data.set_reg_num(regs as i64);
-        let temp_start = self[func_id].as_ruby_func().local_num() as u16 + 1;
+        let temp_start = self[func_id].as_ruby_func().non_temp_num as u16 + 1;
         let new_callid = self.callsite_info.len();
         for callid in old_callid..new_callid {
             self[CallSiteId::from(callid as u32)].kw_pos += temp_start;
@@ -489,6 +490,7 @@ impl std::default::Default for FuncKind {
 
 pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
 pub const FUNCDATA_OFFSET_META: u64 = 8;
+pub const FUNCDATA_OFFSET_REGNUM: u64 = 12;
 pub const FUNCDATA_OFFSET_PC: u64 = 16;
 
 #[derive(Debug, Clone, Default)]
@@ -690,6 +692,8 @@ pub(crate) struct ISeqInfo {
     pub literals: Vec<Value>,
     /// The current register id.
     pub temp: u16,
+    /// The number of non-temporary registers.
+    non_temp_num: u16,
     /// The number of temporary registers.
     temp_num: u16,
     pub lexical_context: Vec<Module>,
@@ -703,10 +707,13 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id: {}, name: {:?}. locals: {:?} }}",
+            "RubyFuncInfo {{ id: {}, name: {:?}. locals: {:?} args: {} non_temp: {} temp: {}}}",
             self.id().get(),
             self.name,
-            self.locals
+            self.locals,
+            self.args.args_names.len(),
+            self.non_temp_num,
+            self.temp_num
         )
     }
 }
@@ -738,6 +745,7 @@ impl ISeqInfo {
             outer_locals,
             literals: vec![],
             temp: 0,
+            non_temp_num: 0,
             temp_num: 0,
             lexical_context: vec![],
             ast: Some(body),
@@ -747,9 +755,6 @@ impl ISeqInfo {
         args.args_names.into_iter().for_each(|name| {
             info.add_local(name);
         });
-        if let Some(name) = args.block_param {
-            info.add_local(name);
-        }
         info
     }
 
@@ -789,12 +794,12 @@ impl ISeqInfo {
 
     /// get a number of registers.
     pub(crate) fn total_reg_num(&self) -> usize {
-        1 + self.locals.len() + self.temp_num as usize
+        1 + (self.non_temp_num + self.temp_num) as usize
     }
 
-    /// get a number of local vars.
+    /// get a number of non-temp registers.
     pub(crate) fn local_num(&self) -> usize {
-        self.locals.len()
+        self.non_temp_num as usize
     }
 
     /// get a number of keyword arguments.
@@ -925,12 +930,11 @@ impl ISeqInfo {
 
     /// Add a variable identifier without checking duplicates.
     fn add_local(&mut self, ident: impl Into<Option<String>>) -> BcLocal {
-        let ident = match ident.into() {
-            Some(ident) => ident,
-            None => "/".to_string(),
+        let local = self.non_temp_num;
+        if let Some(ident) = ident.into() {
+            assert!(self.locals.insert(ident, local).is_none());
         };
-        let local = self.locals.len() as u16;
-        assert!(self.locals.insert(ident, local).is_none());
+        self.non_temp_num += 1;
         BcLocal(local)
     }
 
@@ -1207,7 +1211,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn get_index(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,
-            BcReg::Temp(i) => 1 + self.locals.len() as u16 + i.0,
+            BcReg::Temp(i) => 1 + self.non_temp_num as u16 + i.0,
             BcReg::Local(i) => 1 + i.0,
         };
         SlotId(id)

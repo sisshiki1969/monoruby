@@ -320,8 +320,9 @@ impl Codegen {
 
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
+            movq r13, rdx;
             // set meta func_id
-            movq rax, [rdx + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
+            movq rax, [r13 + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
             movq [rsp - (16 + LBP_META)], rax;
             // set block
             movq [rsp - (16 + LBP_BLOCK)], 0;
@@ -329,9 +330,20 @@ impl Codegen {
             movq [rsp - (16 + BP_PREV_CFP)], 0;
             lea  rax, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rax;
-            // set pc
-            movq r13, [rdx + (FUNCDATA_OFFSET_PC)];
-        }
+        };
+        let l1 = self.jit.label();
+        let l2 = self.jit.label();
+        monoasm! { self.jit,
+            lea  rax, [rsp - (16 + LBP_ARG0)];
+            movzxw rdi, [r13 + (FUNCDATA_OFFSET_REGNUM)];
+        l1:
+            subq rdi, 1;
+            je   l2;
+            movq [rax], (NIL_VALUE);
+            subq rax, 8;
+            jmp  l1;
+        l2:
+        };
         self.set_lfp();
         monoasm! {self.jit,
             movq [rbx + 8], r14;
@@ -356,7 +368,9 @@ impl Codegen {
             // set self
             movq rax, (main_object.get());
             movq [rsp - (16 + LBP_SELF)], rax;
-            movq rax, [rdx + (FUNCDATA_OFFSET_CODEPTR)];
+            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
+            // set pc
+            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
             xorq rdi, rdi;
             call rax;
             // pop frame
@@ -395,7 +409,12 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, rbx;
             movq rax, (execute_gc);
+        }
+        #[cfg(not(feature = "gc-off"))]
+        monoasm! { self.jit,
             call rax;
+        }
+        monoasm! { self.jit,
             jmp exit;
         };
         self.jit.select_page(0);

@@ -226,4 +226,4 @@ ary = [-3148,
 -14250,
 39684]
 
-quicksort(ary, 0, 199)
+puts quicksort(ary, 0, 199).inspect

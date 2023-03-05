@@ -23,13 +23,15 @@ emit-bc = []
 emit-tir = []
 log-jit = []
 gc-debug = []
+gc-stress = []
+gc-off = []
 
 [profile.dev]
 opt-level = 1
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
-rustyline = "10.0.0"
+rustyline = "11.0.0"
 paste = "1.0.7"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }

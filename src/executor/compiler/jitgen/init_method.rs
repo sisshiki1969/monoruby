@@ -7,19 +7,13 @@ impl Codegen {
             movq rbp, rsp;
             // save len in rdx.
             movq rdx, rdi;
-            movq r15, rcx;
         );
         match pc.get_ir(fnstore) {
             TraceIr::InitMethod(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
-                //self.init_func(&fn_info, pc, false);
             }
             TraceIr::InitBlock(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
-                /*if fn_info.reqopt_num >= 2 {
-                    self.jit_expand_arg0(fn_info.req_num);
-                }
-                self.init_func(&fn_info, pc, true);*/
             }
             _ => unreachable!(),
         }
@@ -31,7 +25,7 @@ impl Codegen {
         );
     }
 
-    fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
+    /*fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
         let FnInitInfo {
             reqopt_num,
             req_num,
@@ -243,5 +237,5 @@ impl Codegen {
             jne  l0;
         l1:
         };
-    }
+    }*/
 }

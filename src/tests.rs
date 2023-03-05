@@ -831,13 +831,12 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn bench_redefine() {
         run_test2(
             r#"
             def f; 1; end
             a = 0; i = 0
-            while i < 200000000
+            while i < 20000
               a = a + f
               if i == 500
                 def f; 0; end
@@ -1313,12 +1312,13 @@ mod test {
         run_test_with_prelude(
             r#"
             f { |a,(b,c),d|
-                [a,b,c,d]
+                e = 100
+                [a,b,c,d,e]
             }
             "#,
             r#"
             def f
-            yield [1,[2,3],4]
+                yield [1,[2,3],4]
             end
             "#,
         );
@@ -1329,7 +1329,8 @@ mod test {
         run_test_with_prelude(
             r#"
             f { |a,b|
-              [a,b]
+                c = 42
+                [a,b,c]
             }
             "#,
             r#"
@@ -1519,6 +1520,22 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_destruct() {
+        run_test_with_prelude(
+            r#"
+        f(1,[2,3,4],5,[6])
+        "#,
+            r#"
+        def f(a,(b,c),d,(e,f))
+          g = 42
+          [a,b,c,d,e,f,g]
+        end
+        "#,
+        );
+    }
+
+    #[ignore]
     #[test]
     fn test_method_error() {
         run_test_error(

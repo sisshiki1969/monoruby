@@ -85,6 +85,7 @@ pub(super) enum BcIr {
         ret: Option<BcReg>,
         args: BcReg,
         len: usize,
+        callid: CallSiteId,
     },
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
@@ -176,25 +177,6 @@ impl FnInitInfo {
     pub(super) fn has_block_param(&self) -> bool {
         (self.info & 0b10) != 0
     }
-
-    pub(super) fn pos_num(&self) -> usize {
-        self.reqopt_num + if self.has_rest_param() { 1 } else { 0 }
-    }
-
-    pub(super) fn tmp_pos(&self) -> usize {
-        self.reqopt_num
-            + if self.has_rest_param() { 1 } else { 0 }
-            + self.key_num
-            + if self.has_block_param() { 1 } else { 0 }
-    }
-
-    pub(super) fn kw_pos(&self) -> usize {
-        self.pos_num()
-    }
-
-    pub(super) fn block_pos(&self) -> usize {
-        self.pos_num() + self.key_num
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -227,6 +209,13 @@ impl Bc {
             ..
         } = fn_info;
         Bc::from_with_num(op1, *req_num as u16, *key_num as u16, *info as u16)
+    }
+
+    pub(crate) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(callid.get() as u64),
+        }
     }
 
     pub(crate) fn from_with_value(op1: u64, val: Value) -> Self {
@@ -491,6 +480,7 @@ pub(super) enum TraceIr {
         ret: SlotId,
         args: SlotId,
         len: u16,
+        callid: CallSiteId,
     },
     /// func call 2nd opecode(%recv, %args, len)
     MethodArgs(MethodInfo),
@@ -777,6 +767,7 @@ impl TraceIr {
                     ret: SlotId::new(op1),
                     args: SlotId::new(op2),
                     len: op3,
+                    callid: CallSiteId::from(pc.op2.0 as u32),
                 },
                 154..=161 => Self::Cmp(
                     CmpKind::from(opcode - 154),

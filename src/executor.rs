@@ -164,6 +164,29 @@ impl std::default::Default for LFP {
     }
 }
 
+impl alloc::GC<RValue> for LFP {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        unsafe {
+            let meta = self.meta();
+            #[cfg(feature = "gc-debug")]
+            eprintln!("{:?}", meta.func_id);
+            for r in 0..meta.reg_num() as usize {
+                let v = self.register(r);
+                #[cfg(feature = "gc-debug")]
+                eprintln!("{:?}", v);
+                v.mark(alloc);
+            }
+            if let Some(v) = self.block() {
+                v.0.mark(alloc)
+            };
+            let outer = self.outer();
+            if !outer.is_null() {
+                outer.lfp().mark(alloc);
+            }
+        }
+    }
+}
+
 impl LFP {
     unsafe fn cfp(&self) -> CFP {
         CFP(self.0.sub(BP_PREV_CFP as usize) as _)
@@ -252,6 +275,12 @@ impl std::default::Default for BlockData {
             outer_lfp: LFP::default(),
             func_data: std::ptr::null(),
         }
+    }
+}
+
+impl alloc::GC<RValue> for BlockData {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.outer_lfp.mark(alloc)
     }
 }
 
@@ -350,16 +379,7 @@ impl alloc::GC<RValue> for Executor {
         let mut cfp = self.cfp;
         unsafe {
             loop {
-                let lfp = cfp.lfp();
-                let meta = lfp.meta();
-                for r in 0..meta.reg_num() as usize {
-                    let v = lfp.register(r);
-                    v.mark(alloc);
-                }
-                if let Some(v) = lfp.block() {
-                    v.0.mark(alloc)
-                };
-
+                cfp.lfp().mark(alloc);
                 cfp = cfp.prev();
                 if cfp.is_null() {
                     break;
@@ -1114,7 +1134,12 @@ impl BcPc {
                 };
                 format!("{:36} [{}]", op1, _class.get_name(globals))
             }
-            TraceIr::Yield { ret, args, len } => {
+            TraceIr::Yield {
+                ret,
+                args,
+                len,
+                callid: _,
+            } => {
                 if len == 0 {
                     format!("{} = yield", ret.ret_str())
                 } else {
@@ -1554,6 +1579,7 @@ struct ArgumentsInfo {
     reqopt_num: usize,
     // required + optional + rest
     pos_num: usize,
+    // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
     args_names: Vec<Option<String>>,
     keyword_args: Vec<(IdentId, Option<Box<Node>>)>,
     block_param: Option<String>,

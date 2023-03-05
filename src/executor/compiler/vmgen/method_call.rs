@@ -96,11 +96,10 @@ impl Codegen {
             movq r9, rdi;
             movl rcx, [rsp - (16 + LBP_META)];
             subq rsp, 4096;
-            //pushq rdi;
             movq rdi, r12; // &Globals
             movl rsi, [r13 - 16]; // CallSiteId
             lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::handle_arguments);
+            movq rax, (runtime::vm_handle_arguments);
             call rax;
             movq rdi, rax;
             addq rsp, 4096;
@@ -116,8 +115,6 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];    // r13: BcPc
-            // set callsite info
-            movq rcx, [rsp + 8];
         };
         self.call_rax();
         monoasm! { self.jit,
@@ -204,10 +201,10 @@ impl Codegen {
             subq rsp, 4096;
             //pushq rdi;
             movq rdi, r12; // &Globals
-            movl rsi, [r13 - 16]; // CallSiteId
+            movl rsi, [r13 - 8]; // CallSiteId
             movq r13, rdx;
             lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::handle_arguments);
+            movq rax, (runtime::vm_handle_arguments);
             call rax;
             movq rdi, rax;
             addq rsp, 4096;
@@ -223,8 +220,6 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
-            // set callsite info
-            xorq rcx, rcx;
         };
         self.call_rax();
         monoasm! { self.jit,
