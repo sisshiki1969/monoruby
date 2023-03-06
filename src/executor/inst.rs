@@ -131,7 +131,7 @@ pub struct FnInitInfo {
     pub reg_num: usize,
     pub req_num: usize,
     pub reqopt_num: usize,
-    pub key_num: usize,
+    pub block_pos: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
     pub info: usize,
     pub stack_offset: usize,
@@ -143,16 +143,21 @@ impl std::fmt::Debug for FnInitInfo {
             reg_num,
             req_num,
             reqopt_num,
-            key_num,
+            block_pos,
             stack_offset,
             ..
         } = *self;
-        write!(f,
-                    "reg:{reg_num} req:{req_num} opt:{} rest:{} key:{key_num} block:{} stack_offset:{stack_offset}",
-                    reqopt_num - req_num,
-                    self.has_rest_param(),
-                    self.has_block_param(),
-                )
+        write!(
+            f,
+            "reg:{reg_num} req:{req_num} opt:{} rest:{} block:{:?} stack_offset:{stack_offset}",
+            reqopt_num - req_num,
+            self.has_rest_param(),
+            if block_pos == 0 {
+                None
+            } else {
+                Some(block_pos)
+            }
+        )
     }
 }
 
@@ -164,7 +169,7 @@ impl FnInitInfo {
             reg_num,
             req_num: info.req_num(),
             reqopt_num: info.reqopt_num(),
-            key_num: info.key_num(),
+            block_pos: info.block_pos(),
             info: info.info(),
             stack_offset,
         }
@@ -203,12 +208,12 @@ impl Bc {
 
     pub(crate) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
         let FnInitInfo {
-            key_num,
+            block_pos,
             req_num,
             info,
             ..
         } = fn_info;
-        Bc::from_with_num(op1, *req_num as u16, *key_num as u16, *info as u16)
+        Bc::from_with_num(op1, *req_num as u16, *block_pos as u16, *info as u16)
     }
 
     pub(crate) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
@@ -783,7 +788,7 @@ impl TraceIr {
                 ),
                 170 => Self::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
-                    key_num: pc.u16(1) as usize,
+                    block_pos: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     info: pc.u16(2) as usize,
@@ -792,7 +797,7 @@ impl TraceIr {
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 172 => Self::InitBlock(FnInitInfo {
                     reg_num: op1 as usize,
-                    key_num: pc.u16(1) as usize,
+                    block_pos: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
                     info: pc.u16(2) as usize,

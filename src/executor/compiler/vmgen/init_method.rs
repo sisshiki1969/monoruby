@@ -7,7 +7,7 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|rop|ofs||   |inf|key|req|
+    /// | op|reg|rop|ofs||   |inf|blk|req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
@@ -15,7 +15,7 @@ impl Codegen {
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
     /// - reqopt: req + optional arguments
-    /// - key: a number of keyword arguments
+    /// - blk: a position of block argument (if not exists, 0.)
     /// - inf:
     ///
     /// ### registers
@@ -65,7 +65,7 @@ impl Codegen {
             // [R13 - 14]: reqopt_num
             // [R13 - 12]: reg_num
             // [R13 - 8]: req_num
-            // [R13 - 6]: key_num
+            // [R13 - 6]: block_pos
             // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
             // destroy
             // r15, caller-save registers
@@ -84,22 +84,22 @@ impl Codegen {
             l1:
             }
         }
-        /*let set_block = self.jit.label();
+        let set_block = self.jit.label();
         let exit = self.jit.label();
         monoasm! { self.jit,
         // set block parameter
-            movzxw rax, [r13 - 4];
-            testq rax, 0b10;
+            movzxw rax, [r13 - 6];
+            testq rax, rax;
             jz exit;
             movq rdi, [r14 - (LBP_BLOCK)];
             testq rdi, rdi;
             jnz set_block;
             movq rdi, (NIL_VALUE);
         set_block:
-            movq [r15], rdi;
-            subq r15, 8;
+            negq rax;
+            movq [r14 + rax * 8 - (LBP_SELF)], rdi;
         exit:
-        };*/
+        };
         //self.fill(2 /* rdx */, NIL_VALUE);
     }
 

@@ -807,6 +807,15 @@ impl ISeqInfo {
         self.args.keyword_args.len()
     }
 
+    /// get a position of keyword arguments.
+    pub(crate) fn block_pos(&self) -> usize {
+        if self.args.block_param.is_some() {
+            self.args.pos_num + self.key_num() + 1
+        } else {
+            0
+        }
+    }
+
     /// get a number of required arguments.
     pub(crate) fn req_num(&self) -> usize {
         self.args.required_num

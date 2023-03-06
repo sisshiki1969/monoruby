@@ -580,11 +580,7 @@ impl Codegen {
         let callee_func_id = func_data.meta.func_id();
         match &fnstore[callee_func_id].kind {
             FuncKind::ISeq(info) => {
-                if !info.is_block_style
-                    && info.pos_num() == info.req_num()
-                    && info.key_num() == 0
-                    && info.block_param_name().is_none()
-                {
+                if !info.is_block_style && info.pos_num() == info.req_num() && info.key_num() == 0 {
                     // We must check args_num == req_num
                     let reg_num = info.total_reg_num() - 1;
                     let arguments_num = info.args.args_names.len();

@@ -147,15 +147,6 @@ pub(super) extern "C" fn vm_handle_arguments(
                     .get(param_name)
                     .map(|id| *caller_reg.sub(*kw_pos as usize + id));
             }
-            // block
-            let callee_block_pos = callee_kw_pos + info.args.keyword_args.len();
-            if info.args.block_param.is_some() {
-                let block = (*callee_reg
-                    .add(LBP_SELF as usize / 8)
-                    .sub(LBP_BLOCK as usize / 8))
-                .unwrap_or_default();
-                *callee_reg.sub(callee_block_pos) = Some(block);
-            }
             // other
             clear_temp(info, callee_reg);
         },
@@ -261,15 +252,6 @@ pub(super) extern "C" fn handle_invoker_arguments(
             let callee_kw_pos = info.args.pos_num + 1;
             for (id, _) in params.iter().enumerate() {
                 *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
-            }
-            // block
-            let callee_block_pos = callee_kw_pos + info.args.keyword_args.len();
-            if info.args.block_param.is_some() {
-                let block = (*callee_reg
-                    .add(LBP_SELF as usize / 8)
-                    .sub(LBP_BLOCK as usize / 8))
-                .unwrap_or_default();
-                *callee_reg.sub(callee_block_pos) = Some(block);
             }
             // other
             clear_temp(info, callee_reg);

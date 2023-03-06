@@ -26,12 +26,13 @@ impl Codegen {
     }
 
     fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
+        let FnInitInfo {
+            reqopt_num,
+            req_num,
+            block_pos,
+            ..
+        } = *fn_info;
         if !is_block {
-            let FnInitInfo {
-                reqopt_num,
-                req_num,
-                ..
-            } = *fn_info;
             let err = self.jit.label();
             self.jit.select_page(1);
             let argument_err = self.wrong_argument;
@@ -65,12 +66,12 @@ impl Codegen {
             };
         }
 
-        /*if fn_info.has_block_param() {
+        if fn_info.has_block_param() {
             monoasm! { self.jit,
                 movq rax, [r14 - (LBP_BLOCK)];
-                movq [r14 - (fn_info.block_pos() as i32 * 8 + LBP_ARG0)], rax;
+                movq [r14 - (block_pos as i32 * 8 + LBP_ARG0)], rax;
             }
-        }*/
+        }
 
         // fill nil to temporary registers.
         /*let temp_pos = fn_info.tmp_pos();
