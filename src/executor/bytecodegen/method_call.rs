@@ -123,7 +123,14 @@ impl IrContext {
         loc: Loc,
     ) -> Result<()> {
         assert!(arglist.hash_splat.is_empty());
-        assert!(!arglist.delegate);
+        // TODO: We must check this in parser
+        if arglist.delegate {
+            return Err(MonorubyErr::syntax(
+                format!("Delegate argument should not be given"),
+                loc,
+                info.sourceinfo.clone(),
+            ));
+        }
         // yield does not accept block.
         if arglist.block.is_some() {
             return Err(MonorubyErr::syntax(
