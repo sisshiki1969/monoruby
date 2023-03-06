@@ -124,7 +124,14 @@ impl IrContext {
     ) -> Result<()> {
         assert!(arglist.hash_splat.is_empty());
         assert!(!arglist.delegate);
-        assert!(arglist.block.is_none());
+        // yield does not accept block.
+        if arglist.block.is_some() {
+            return Err(MonorubyErr::syntax(
+                format!("Block argument should not be given"),
+                loc,
+                info.sourceinfo.clone(),
+            ));
+        }
 
         let arg = info.next_reg();
         let len = arglist.args.len();
