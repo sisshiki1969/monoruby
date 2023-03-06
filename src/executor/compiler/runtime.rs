@@ -129,26 +129,44 @@ pub(super) extern "C" fn vm_handle_arguments(
     mut arg_num: usize,
 ) -> usize {
     match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => unsafe {
+        FuncKind::ISeq(info) => {
             // expand array for block
             arg_num = expand_array_for_block(info, arg_num, callee_reg);
             // required + optional + rest
             handle_req_opt_rest(info, arg_num, callee_reg);
             // keyword
-            let CallSiteInfo {
+            handle_keyword(info, &globals.func[callid], caller_reg, callee_reg);
+        }
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+    }
+    arg_num
+}
+
+pub(super) extern "C" fn handle_invoker_arguments(
+    globals: &Globals,
+    callee_meta: Meta,
+    callee_reg: *mut Option<Value>,
+    mut arg_num: usize,
+) -> usize {
+    let callee_func_id = callee_meta.func_id();
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => unsafe {
+            // expand array for block
+            arg_num = expand_array_for_block(info, arg_num, callee_reg);
+
+            // required + optional + rest
+            handle_req_opt_rest(info, arg_num, callee_reg);
+            // keyword
+            /*let CallSiteInfo {
                 name: _,
                 kw_pos,
                 kw_args,
-            } = &globals.func[callid];
+            } = &globals.func[callid];*/
             let params = &info.args.keyword_args;
             let callee_kw_pos = info.args.pos_num + 1;
-            for (id, (param_name, _)) in params.iter().enumerate() {
-                *callee_reg.sub(callee_kw_pos + id) = kw_args
-                    .get(param_name)
-                    .map(|id| *caller_reg.sub(*kw_pos as usize + id));
+            for (id, _) in params.iter().enumerate() {
+                *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
             }
-            // other
-            clear_temp(info, callee_reg);
         },
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -213,52 +231,31 @@ fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<
     }
 }
 
-/// Clear registers other than arguments.
-fn clear_temp(info: &ISeqInfo, callee_reg: *mut Option<Value>) {
-    let reg_num = info.total_reg_num() - 1;
-    let arguments_num = info.args.args_names.len();
-    let len = reg_num - arguments_num;
-    let ptr = unsafe { callee_reg.sub(reg_num) };
-    fill(ptr, len, Some(Value::nil()));
+fn handle_keyword(
+    info: &ISeqInfo,
+    callsite: &CallSiteInfo,
+    caller_reg: *const Value,
+    callee_reg: *mut Option<Value>,
+) {
+    let CallSiteInfo {
+        name: _,
+        kw_pos,
+        kw_args,
+    } = callsite;
+    let callee_kw_pos = info.args.pos_num + 1;
+    for (id, (param_name, _)) in info.args.keyword_args.iter().enumerate() {
+        unsafe {
+            *callee_reg.sub(callee_kw_pos + id) = kw_args
+                .get(param_name)
+                .map(|id| *caller_reg.sub(*kw_pos as usize + id));
+        }
+    }
 }
 
 fn fill(ptr: *mut Option<Value>, len: usize, val: Option<Value>) {
     unsafe {
         std::slice::from_raw_parts_mut(ptr, len).fill(val);
     }
-}
-
-pub(super) extern "C" fn handle_invoker_arguments(
-    globals: &Globals,
-    callee_meta: Meta,
-    callee_reg: *mut Option<Value>,
-    mut arg_num: usize,
-) -> usize {
-    let callee_func_id = callee_meta.func_id();
-    match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => unsafe {
-            // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_reg);
-
-            // required + optional + rest
-            handle_req_opt_rest(info, arg_num, callee_reg);
-            // keyword
-            /*let CallSiteInfo {
-                name: _,
-                kw_pos,
-                kw_args,
-            } = &globals.func[callid];*/
-            let params = &info.args.keyword_args;
-            let callee_kw_pos = info.args.pos_num + 1;
-            for (id, _) in params.iter().enumerate() {
-                *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
-            }
-            // other
-            clear_temp(info, callee_reg);
-        },
-        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
-    }
-    arg_num
 }
 
 #[repr(C)]

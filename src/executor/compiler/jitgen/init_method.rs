@@ -27,6 +27,8 @@ impl Codegen {
 
     fn init_func(&mut self, fn_info: &FnInitInfo, pc: BcPc, is_block: bool) {
         let FnInitInfo {
+            reg_num,
+            arg_num,
             reqopt_num,
             req_num,
             block_pos,
@@ -74,24 +76,23 @@ impl Codegen {
         }
 
         // fill nil to temporary registers.
-        /*let temp_pos = fn_info.tmp_pos();
-        let clear_len = fn_info.reg_num - temp_pos;
+        let clear_len = reg_num - arg_num;
         if clear_len > 2 {
             monoasm!(self.jit,
                 movq rax, (NIL_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((temp_pos + i) as i32 * 8 + LBP_ARG0)], rax;
+                    movq [r14 - ((arg_num + i) as i32 * 8 + LBP_ARG0)], rax;
                 );
             }
         } else {
             for i in 0..clear_len {
                 monoasm!(self.jit,
-                    movq [r14 - ((temp_pos + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
+                    movq [r14 - ((arg_num + i) as i32 * 8 + (LBP_ARG0))], (NIL_VALUE);
                 );
             }
-        }*/
+        }
     }
 
     /*fn jit_expand_arg0(&mut self, req_num: usize) {

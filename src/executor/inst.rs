@@ -129,6 +129,7 @@ pub(super) enum BcIr {
 #[derive(Clone, PartialEq, Default)]
 pub struct FnInitInfo {
     pub reg_num: usize,
+    pub arg_num: usize,
     pub req_num: usize,
     pub reqopt_num: usize,
     pub block_pos: usize,
@@ -141,6 +142,7 @@ impl std::fmt::Debug for FnInitInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let FnInitInfo {
             reg_num,
+            arg_num,
             req_num,
             reqopt_num,
             block_pos,
@@ -149,7 +151,7 @@ impl std::fmt::Debug for FnInitInfo {
         } = *self;
         write!(
             f,
-            "reg:{reg_num} req:{req_num} opt:{} rest:{} block:{:?} stack_offset:{stack_offset}",
+            "reg:{reg_num} arg:{arg_num} req:{req_num} opt:{} rest:{} block:{:?} stack_offset:{stack_offset}",
             reqopt_num - req_num,
             self.has_rest_param(),
             if block_pos == 0 {
@@ -164,9 +166,11 @@ impl std::fmt::Debug for FnInitInfo {
 impl FnInitInfo {
     pub(super) fn new(info: &ISeqInfo) -> Self {
         let reg_num = info.total_reg_num() - 1;
+        let arg_num = info.args.args_names.len();
         let stack_offset = (reg_num * 8 + LBP_ARG0 as usize + 15) >> 4;
         FnInitInfo {
             reg_num,
+            arg_num,
             req_num: info.req_num(),
             reqopt_num: info.reqopt_num(),
             block_pos: info.block_pos(),
@@ -199,21 +203,33 @@ impl Bc {
         }
     }
 
-    pub(crate) fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16) -> Self {
+    pub(crate) fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
         Self {
             op1,
-            op2: Bc2::from(((num2 as u64) << 32) + ((num1 as u64) << 16) + (num0 as u64)),
+            op2: Bc2::from(
+                ((num3 as u64) << 48)
+                    + ((num2 as u64) << 32)
+                    + ((num1 as u64) << 16)
+                    + (num0 as u64),
+            ),
         }
     }
 
     pub(crate) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
         let FnInitInfo {
+            arg_num,
             block_pos,
             req_num,
             info,
             ..
         } = fn_info;
-        Bc::from_with_num(op1, *req_num as u16, *block_pos as u16, *info as u16)
+        Bc::from_with_num(
+            op1,
+            *req_num as u16,
+            *block_pos as u16,
+            *info as u16,
+            *arg_num as u16,
+        )
     }
 
     pub(crate) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
@@ -788,6 +804,7 @@ impl TraceIr {
                 ),
                 170 => Self::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
+                    arg_num: pc.u16(3) as usize,
                     block_pos: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,
@@ -797,6 +814,7 @@ impl TraceIr {
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
                 172 => Self::InitBlock(FnInitInfo {
                     reg_num: op1 as usize,
+                    arg_num: pc.u16(3) as usize,
                     block_pos: pc.u16(1) as usize,
                     reqopt_num: op2 as usize,
                     req_num: pc.u16(0) as usize,

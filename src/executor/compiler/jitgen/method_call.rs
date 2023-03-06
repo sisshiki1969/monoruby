@@ -581,21 +581,6 @@ impl Codegen {
         match &fnstore[callee_func_id].kind {
             FuncKind::ISeq(info) => {
                 if !info.is_block_style && info.pos_num() == info.req_num() && info.key_num() == 0 {
-                    // We must check args_num == req_num
-                    let reg_num = info.total_reg_num() - 1;
-                    let arguments_num = info.args.args_names.len();
-                    let len = reg_num - arguments_num;
-                    let temp_start = info.total_reg_num() - len;
-                    if len != 0 {
-                        monoasm!(self.jit,
-                            movq rax, (NIL_VALUE);
-                        );
-                        for ofs in temp_start..temp_start + len {
-                            monoasm!(self.jit,
-                                movq [rsp - ((16 + LBP_SELF + ofs as i64 * 8) as i32)], rax;
-                            );
-                        }
-                    }
                 } else {
                     monoasm!(self.jit,
                         lea  r8, [rsp - (16 + LBP_SELF)];

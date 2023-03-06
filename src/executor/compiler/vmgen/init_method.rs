@@ -7,11 +7,12 @@ impl Codegen {
     /// ~~~text
     /// +6  +4  +2  +0   +14 +12 +10 +8
     /// +---+---+---+---++---+---+---+---+
-    /// | op|reg|rop|ofs||   |inf|blk|req|
+    /// | op|reg|rop|ofs||arg|inf|blk|req|
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     ///
     /// - reg: a number of resisters
+    /// - arg: a number of arguments.
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
     /// - reqopt: req + optional arguments
@@ -64,9 +65,10 @@ impl Codegen {
             // rdx: number of args passed from caller
             // [R13 - 14]: reqopt_num
             // [R13 - 12]: reg_num
-            // [R13 - 8]: req_num
-            // [R13 - 6]: block_pos
-            // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
+            // [R13 -  8]: req_num
+            // [R13 -  6]: block_pos
+            // [R13 -  4]: info      bit 0:rest(yes=1 no =0) bit 1:block
+            // [R13 -  2]: arg_num
             // destroy
             // r15, caller-save registers
                 // if passed < req, go err.
@@ -99,21 +101,24 @@ impl Codegen {
             negq rax;
             movq [r14 + rax * 8 - (LBP_SELF)], rdi;
         exit:
+            movzxw rdi, [r13 - 12]; // reg_num
+            movq  rax, rdi;         // reg_num
+            subw  rax, [r13 - 2];   // reg_num - arg_num
         };
-        //self.fill(2 /* rdx */, NIL_VALUE);
+        self.fill(NIL_VALUE);
     }
 
-    /// fill *val* to the slots from *ptr* to *ptr* + rax - 1
-    fn fill(&mut self, ptr: u64, val: u64) {
+    /// fill *val* to the slots from *rdi* .. *rdi* + *rax*
+    fn fill(&mut self, val: u64) {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
         monoasm! { self.jit,
             testq rax, rax;
             jz   l1;
-            negq R(ptr);
-            lea  R(ptr), [r14 + R(ptr) * 8 - (LBP_ARG0)];
+            negq rdi;
+            lea  rdi, [r14 + rdi * 8 - (LBP_ARG0)];
         l0:
-            movq [R(ptr) + rax * 8], (val);
+            movq [rdi + rax * 8], (val);
             subq rax, 1;
             jne  l0;
         l1:
