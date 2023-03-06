@@ -202,8 +202,8 @@ fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<
                 *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
             }
         } else if arg_num >= req_num {
-            let len = dbg!(reqopt_num - arg_num);
-            let ptr = callee_reg.sub(dbg!(reqopt_num));
+            let len = reqopt_num - arg_num;
+            let ptr = callee_reg.sub(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
                 *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));

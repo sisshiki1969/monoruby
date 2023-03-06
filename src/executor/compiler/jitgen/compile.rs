@@ -255,8 +255,7 @@ impl Codegen {
         monoasm! {self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
-            xorq rdi, rdi;
-            xorq rcx, rcx;
+            xorq rdx, rdx;
         }
         self.call_rax();
         monoasm! {self.jit,

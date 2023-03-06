@@ -316,13 +316,12 @@ impl Codegen {
             movq rdi, rax;
             addq rsp, 4096;
 
+            movq rdx, rdi;
             movq r13, [r13 + 8];
             // set codeptr
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
-            // set CallSiteId
-            movl rcx, (callid.get());
         );
         self.call_rax();
         self.xmm_restore(&xmm_using);
@@ -620,6 +619,7 @@ impl Codegen {
             _ => {}
         }
         monoasm!(self.jit,
+            movq rdx, rdi;
             // set meta.
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
@@ -681,13 +681,14 @@ impl Codegen {
             movq rdi, rax;
             addq rsp, 4096;
             // argument registers:
-            //   rdi: args len
+            //   rdx: args len
             //
             // global registers:
             //   rbx: &mut Interp
             //   r12: &mut Globals
             //   r13: pc
             //
+            movq rdx, rdi;
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];

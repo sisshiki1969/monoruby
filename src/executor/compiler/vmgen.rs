@@ -96,7 +96,7 @@ impl Codegen {
         // VM entry
         //
         // argument registers:
-        //   rdi: args len
+        //   rdx: args len
         //
         // global registers:
         //   rbx: &mut Interp
@@ -107,7 +107,7 @@ impl Codegen {
         entry:
             pushq rbp;
             movq rbp, rsp;
-            movq rdx, rdi;
+            //movq rdx, rdi;
         };
         let entry_fetch = self.jit.label();
         self.jit.bind_label(entry_fetch);
@@ -359,7 +359,8 @@ impl Codegen {
             movq rdi, r12; // &Globals
             movq rax, (runtime::handle_invoker_arguments);
             call rax;
-            movq rdi, rax;
+            // set arg len
+            movq rdx, rax;
             addq rsp, 4096;
         }
         self.push_frame();
@@ -1234,8 +1235,7 @@ impl Codegen {
         monoasm! { self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
-            xorq rdi, rdi;
-            xorq rcx, rcx;
+            xorq rdx, rdx;
         };
         self.call_rax();
         monoasm! { self.jit,

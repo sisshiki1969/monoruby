@@ -33,11 +33,12 @@ impl Codegen {
         next:
             subl [rip + counter], 1;
             jne vm_entry;
+            movq rdi, rdx;
             movl rsi, [rsp - (8 + LBP_META_FUNCID)];
             movq rdx, [rsp - (8 + LBP_SELF)];
-            subq rsp, 1016;
+            subq rsp, 1024;
+            // save arg len.
             pushq rdi;
-            pushq rcx;
             movq rdi, r12;
             movq rax, (exec_jit_compile);
             call rax;
@@ -45,9 +46,9 @@ impl Codegen {
             addq rdi, 5;
             subq rax, rdi;
             movl [rdi - 4], rax;
-            popq rcx;
-            popq rdi;
-            addq rsp, 1016;
+            // restore arg len to rdx.
+            popq rdx;
+            addq rsp, 1024;
             jmp entry;
         );
         codeptr
@@ -91,7 +92,7 @@ impl Codegen {
     /// +-------------------+ -0x10
     ///
     /// argument registers:
-    ///   rdi: number of args
+    ///   rdx: number of args
     ///
     /// global registers:
     ///   rbx: &mut Interp
@@ -105,8 +106,8 @@ impl Codegen {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movq r8, rdi;
-            movq rax, rdi;
+            movq r8, rdx;
+            movq rax, rdx;
         );
         self.calc_offset();
         monoasm!(self.jit,

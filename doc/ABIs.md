@@ -6,11 +6,11 @@ stack frame structure
        +-------------+
  +0x08 | return addr |
        +-------------+
-  0x00 |  prev rbp   | <- rbp・r14 
+  0x00 |  prev rbp   | <- rbp・r14
        +-------------+
  -0x08 |  prev cfp   |  control frame
        +-------------+
- -0x10 |     lfp     |  
+ -0x10 |     lfp     |
        +-------------+-----------------
  -0x18 |    outer    |
        +-------------+
@@ -35,8 +35,7 @@ stack frame structure
 
 ### argument register
 
-- rdi: number of args
-- rcx: CallSiteId
+- rdx: number of args
 
 ### global registers (callee save)
 

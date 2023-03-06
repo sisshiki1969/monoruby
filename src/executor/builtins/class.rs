@@ -50,7 +50,7 @@ extern "C" fn new(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let obj = allocate(vm, globals, self_val, arg, 0, None)?;
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
+    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, dbg!(len))?;
     Some(obj)
 }
 

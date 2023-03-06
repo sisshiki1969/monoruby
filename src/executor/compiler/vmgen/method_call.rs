@@ -111,6 +111,7 @@ impl Codegen {
             //   r12: &mut Globals
             //   r13: pc
             //
+            movq rdx, rdi;
             movq r13, [r13 + 8];
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
@@ -199,7 +200,6 @@ impl Codegen {
             movq r9, rdi;
             movl rcx, [rsp - (16 + LBP_META)];
             subq rsp, 4096;
-            //pushq rdi;
             movq rdi, r12; // &Globals
             movl rsi, [r13 - 8]; // CallSiteId
             movq r13, rdx;
@@ -209,13 +209,14 @@ impl Codegen {
             movq rdi, rax;
             addq rsp, 4096;
             // argument registers:
-            //   rdi: args len
+            //   rdx: args len
             //
             // global registers:
             //   rbx: &mut Interp
             //   r12: &mut Globals
             //   r13: pc
             //
+            movq rdx, rdi;
             // set codeptr
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc

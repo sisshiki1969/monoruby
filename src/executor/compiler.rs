@@ -322,7 +322,7 @@ impl Codegen {
             movq r12, rsi;  // rsi: &mut Globals
             movq r13, rdx;
             // set meta func_id
-            movq rax, [r13 + (FUNCDATA_OFFSET_META)];  // rdx: *const FuncData
+            movq rax, [r13 + (FUNCDATA_OFFSET_META)];  // r13: *const FuncData
             movq [rsp - (16 + LBP_META)], rax;
             // set block
             movq [rsp - (16 + LBP_BLOCK)], 0;
@@ -371,7 +371,8 @@ impl Codegen {
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
-            xorq rdi, rdi;
+            // set arg len
+            xorq rdx, rdx;
             call rax;
             // pop frame
             movq [rbx], 0;

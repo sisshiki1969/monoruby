@@ -1535,7 +1535,6 @@ mod test {
         );
     }
 
-    #[ignore]
     #[test]
     fn test_method_error() {
         run_test_error(

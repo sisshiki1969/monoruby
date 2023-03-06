@@ -14,7 +14,7 @@ impl Codegen {
     /// - reg: a number of resisters
     /// - ofs: stack pointer offset
     /// - req: a number of required arguments
-    /// - reqopt: a number of positional arguments (req + opt)
+    /// - reqopt: req + optional arguments
     /// - key: a number of keyword arguments
     /// - inf:
     ///
@@ -23,11 +23,12 @@ impl Codegen {
     /// - r15 <- reg
     /// - rdi <- pos
     /// - rsi <- ofs
+    /// - rdx <- passed args
     ///
     pub(super) fn vm_init_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        //self.vm_init_func(false);
+        self.vm_init_func(false);
         self.fetch_and_dispatch();
         label
     }
@@ -35,8 +36,7 @@ impl Codegen {
     pub(super) fn vm_init_block(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        //self.expand_arg0();
-        //self.vm_init_func(true);
+        self.vm_init_func(true);
         self.fetch_and_dispatch();
         label
     }
@@ -53,116 +53,40 @@ impl Codegen {
         };
     }
 
-    /*fn vm_init_func(&mut self, is_block: bool) {
-        let fill_req = self.jit.label();
-        let fill_opt = self.jit.label();
-        let set_rest_empty = self.jit.label();
-        let fill_temp = self.jit.label();
-        let err = self.wrong_argument;
-        /*monoasm! { self.jit,
-        // in
-        // r15: reg_num
-        // rdi: reqopt_num
-        // [R13 - 14]: reqopt_num
-        // [R13 - 12]: reg_num
-        // [R13 - 8]: req_num
-        // [R13 - 6]: key_num
-        // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
-        // rdx: number of args passed from caller
-        // destroy
-        // r15, caller-save registers
-            subq rsp, 1016;
-            pushq rcx;
-            movzxw r15, [r13 - 14];
-            negq r15;
-            lea  r15, [r14 + r15 * 8 - (LBP_ARG0)];
-            cmpw rdx, rdi;
-            // if passed == reqopt, required and optional param was done. goto rest param handling.
-            jeq  set_rest_empty;
-            // if passed < reqopt, we must fill nil to residual required/optional params.
-            jlt  fill_req;
-            // in the case of passed > reqopt
-            // does rest param exists?
-            movzxw rax, [r13 - 4];
-            testq rax, 0b1;
-        }
-        if is_block {
-            monoasm! { self.jit, jz fill_temp; }
-        } else {
-            // if passed_args > pos_num && no rest parameter then goto err
-            monoasm! { self.jit, jz err; }
-        }
-        monoasm! { self.jit,
-        // set rest parameter.
-          movl rsi, rdx;
-          subl rsi, rdi;
-          movq rdi, r15;
-          // This is necessary because *make_rest_array* may destroy values under the sp
-          // when the number of arguments passed > the number of registers.
-          // TODO: this workaround may cause an error if the number of excess arguments passed exceeds 128.
-          //subq rsp, 1024;
-          movq rax, (make_rest_array);
-          call rax;
-          //addq rsp, 1024;
-          subq r15, 8;
-          jmp  fill_temp;
-        }
-        monoasm! { self.jit,
-        fill_req:
-          cmpw rdx, [r13 - 8];
-        }
-        if is_block {
-            // fill nil to residual required arguments.
-            monoasm! { self.jit,
-            // if passed_args >= req then goto fill_opt
-                jge  fill_opt;
-                movzxw rcx, [r13 - 8];
-                movl rax, rcx;
-                subl rax, rdx;
-            }
-            self.fill(1 /* rcx */, NIL_VALUE);
-            monoasm! { self.jit,
-                movzxw rdx, [r13 - 8];
-            }
-        } else {
-            // if passed_args < req_num then raise error.
-            monoasm! { self.jit,
-                jlt  err;
-            }
-        }
-        monoasm! { self.jit,
-        fill_opt:
-        // fill zero to residual locals.
-        // rax = reqopt - max(passed_args, req_num)
-            movl rax, rdi;
-            subl rax, rdx;
-            movl rdx, rdi;
-        }
-        self.fill(2 /* rdx */, 0);
-        monoasm! { self.jit,
-        set_rest_empty:
-        // set rest parameter to empty Array.
-            movzxw rax, [r13 - 4];
-            testq rax, 0b1;
-            jz  fill_temp;
-            movq rdi, r15;
-            xorq rsi, rsi;
-            movq rax, (make_rest_array);
-            call rax;
-            subq r15, 8;
-        fill_temp:
-        }*/
-        let set_block = self.jit.label();
-        let exit = self.jit.label();
-        let l0 = self.jit.label();
+    fn vm_init_func(&mut self, is_block: bool) {
         let l1 = self.jit.label();
+        let err = self.wrong_argument;
+        if !is_block {
+            monoasm! { self.jit,
+            // in
+            // r15: reg_num
+            // rdi: reqopt_num
+            // rdx: number of args passed from caller
+            // [R13 - 14]: reqopt_num
+            // [R13 - 12]: reg_num
+            // [R13 - 8]: req_num
+            // [R13 - 6]: key_num
+            // [R13 - 4]: info      bit 0:rest(yes=1 no =0) bit 1:block
+            // destroy
+            // r15, caller-save registers
+                // if passed < req, go err.
+                cmpw rdx, [r13 - 8];
+                jeq  l1;
+                jlt  err;
+                cmpw rdx, rdi;
+                // if passed <= reqopt, pass.
+                jle l1;
+                // in the case of passed > reqopt
+                // if rest does not exists, go err.
+                movzxw rax, [r13 - 4];
+                testq rax, 0b1;
+                jz err;
+            l1:
+            }
+        }
+        /*let set_block = self.jit.label();
+        let exit = self.jit.label();
         monoasm! { self.jit,
-        /*    popq rdx;
-            addq rsp, 1016;
-            // set keyword parameters
-            movzxw rax, [r13 - 6];
-            shlq rax, 3;
-            subq r15, rax;
         // set block parameter
             movzxw rax, [r13 - 4];
             testq rax, 0b10;
@@ -175,19 +99,7 @@ impl Codegen {
             movq [r15], rdi;
             subq r15, 8;
         exit:
-            // fill nil to temporary registers.
-            // rax = [reg_num]
-            movzxw rax, [r13 - 12];
-            negq rax;
-            lea  rax, [r14 + rax * 8 - (LBP_ARG0)];
-        l0:
-            cmpq rax, r15;
-            je  l1;
-            movq [r15], (NIL_VALUE);
-            subq r15, 8;
-            jmp  l0;
-        l1:*/
-        };
+        };*/
         //self.fill(2 /* rdx */, NIL_VALUE);
     }
 
@@ -208,6 +120,7 @@ impl Codegen {
         };
     }
 
+    /*
     /// Expand arg0 if the number of args is 1 and arg0 is Array and pos_num > 1.
     ///
     /// in
