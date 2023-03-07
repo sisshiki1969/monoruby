@@ -586,6 +586,7 @@ impl Codegen {
     ///
     /// #### destoroy
     /// - rdi
+    ///
     fn not_rdi_to_rax(&mut self) {
         monoasm! { self.jit,
             orq  rdi, 0x10;
@@ -594,6 +595,98 @@ impl Codegen {
             seteq rax;
             shlq rax, 3;
             orq rax, (FALSE_VALUE);
+        };
+    }
+
+    ///
+    /// Handle req/opt/rest arguments
+    ///
+    /// #### in
+    /// - r13: pc
+    /// - rcx: &FuncData
+    /// - rsi: CallSiteId
+    ///  
+    fn handle_arguments(&mut self) {
+        monoasm! {self.jit,
+            lea  r8, [rsp - (16 + LBP_SELF)];
+            movq r9, rdi;
+            subq rsp, 4088;
+            pushq rdi;
+            movq rdi, r12; // &mut Globals
+            lea  rdx, [r14 - (LBP_SELF)];
+            movq rax, (runtime::vm_handle_arguments);
+            call rax;
+            popq rdi;
+            addq rsp, 4088;
+        }
+    }
+
+    ///
+    /// block args expansion
+    ///
+    /// #### in
+    /// - rdi: arg_num
+    /// - rsi: pc
+    ///
+    /// #### out
+    /// - rdi: arg_num
+    ///
+    /// #### destroy
+    /// - caller save registers (except rdx)
+    ///
+    fn block_arg_expand(&mut self) {
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            testq rsi, rsi;
+            je   l1;
+            // rax <- op
+            movzxb rax, [rsi + 6];
+            // method-style
+            //cmpb rax, (170u8 as i8);
+            //je   l1;
+            // block-style?
+            cmpb rax, (172u8 as i8);
+            jne  l1;
+            // reqopt > 1?
+            cmpw [rsi + 2], 1;
+            jle  l1;
+        }
+        self.single_arg_expand();
+        monoasm! { self.jit,
+        l1:
+        };
+    }
+
+    ///
+    /// Expand single Array argument.
+    ///
+    /// #### in/out
+    /// - rdi: arg_num
+    ///
+    /// #### destroy
+    /// - caller save registers
+    ///
+    fn single_arg_expand(&mut self) {
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            // arg_num == 1?
+            cmpl rdi, 1;
+            jne  l1;
+            // is val Array?
+            movq rax, [rsp - (16 + LBP_ARG0)];
+            testq rax, 0b111;
+            jnz  l1;
+            cmpl [rax + 4], (ARRAY_CLASS.0);
+            jne  l1;
+            movq rdi, rax;
+            movzxw rdx, [rsi + 8];  // rdx <- req
+            lea  rsi, [rsp - (16 + LBP_ARG0)]; // rsi <- dst
+            subq rsp, 1024;
+            movq rax, (block_expand_array); // extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize
+            call rax;
+            movq rdi, rax;
+            addq rsp, 1024;
+        l1:
         };
     }
 }

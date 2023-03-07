@@ -163,10 +163,20 @@ impl Globals {
             if range.start() == range.end() {
                 self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
             } else {
-                self.err_argument("wrong number of arguments (given {given}, expeted {range:?})");
+                self.err_wrong_number_of_arg_range(given, range);
             };
             None
         }
+    }
+
+    pub(crate) fn err_wrong_number_of_arg_range(
+        &mut self,
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) {
+        self.err_argument(&format!(
+            "wrong number of arguments (given {given}, expeted {range:?})"
+        ));
     }
 
     pub(crate) fn check_min_number_of_arguments(&mut self, given: usize, min: usize) -> Option<()> {

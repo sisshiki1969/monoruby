@@ -121,30 +121,7 @@ pub(super) extern "C" fn make_splat(src: *mut Value) {
 }
 
 pub(super) extern "C" fn vm_handle_arguments(
-    globals: &Globals,
-    callid: CallSiteId,
-    caller_reg: *const Value,
-    callee: &FuncData,
-    callee_reg: *mut Option<Value>,
-    mut arg_num: usize,
-) -> usize {
-    let callee_func_id = callee.meta.func_id();
-    match &globals[callee_func_id].kind {
-        FuncKind::ISeq(info) => {
-            // expand array for block
-            arg_num = expand_array_for_block(info, arg_num, callee_reg);
-            // required + optional + rest
-            handle_req_opt_rest(info, arg_num, callee_reg);
-            // keyword
-            handle_keyword(info, &globals.func[callid], caller_reg, callee_reg);
-        }
-        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
-    }
-    arg_num
-}
-
-pub(super) extern "C" fn vm_handle_arguments2(
-    globals: &Globals,
+    globals: &mut Globals,
     callid: CallSiteId,
     caller_reg: *const Value,
     callee: &FuncData,
@@ -155,7 +132,10 @@ pub(super) extern "C" fn vm_handle_arguments2(
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             // required + optional + rest
-            handle_req_opt_rest(info, arg_num, callee_reg);
+            if let Some((arg_num, range)) = handle_req_opt_rest(info, arg_num, callee_reg) {
+                globals.err_wrong_number_of_arg_range(arg_num, range);
+                return None;
+            };
             // keyword
             handle_keyword(info, &globals.func[callid], caller_reg, callee_reg);
         }
@@ -215,17 +195,21 @@ fn expand_array_for_block(
     arg_num
 }
 
+///
+/// if argument mismatch occurs, return Some((usize, usize..=usize)).
+///
 fn handle_req_opt_rest(
     info: &ISeqInfo,
     arg_num: usize,
     callee_reg: *mut Option<Value>,
-) -> Option<Value> {
+) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
     let req_num = info.args.required_num;
     let reqopt_num = info.args.reqopt_num;
     let pos_num = info.args.pos_num;
     let is_rest = pos_num != reqopt_num;
+    let is_block_style = info.is_block_style;
     unsafe {
-        if arg_num >= reqopt_num {
+        if arg_num > reqopt_num {
             if is_rest {
                 let len = arg_num - reqopt_num;
                 let ptr = callee_reg.sub(arg_num);
@@ -235,14 +219,8 @@ fn handle_req_opt_rest(
                     .map(|v| v.unwrap())
                     .collect();
                 *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
-            } else {
-                /*if !info.is_block_style{
-                let range = req_num..=reqopt_num;
-                globals.err_argument(&format!(
-                    "wrong number of arguments (given {arg_num}, expeted {:?})",
-                    range
-                ));
-                return None;}*/
+            } else if !is_block_style {
+                return Some((arg_num, req_num..=reqopt_num));
             }
         } else if arg_num >= req_num {
             let len = reqopt_num - arg_num;
@@ -252,6 +230,9 @@ fn handle_req_opt_rest(
                 *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
             }
         } else {
+            if !is_block_style {
+                return Some((arg_num, req_num..=reqopt_num));
+            }
             let len = req_num - arg_num;
             let ptr = callee_reg.sub(req_num);
             fill(ptr, len, Some(Value::nil()));
@@ -263,7 +244,7 @@ fn handle_req_opt_rest(
             }
         }
     }
-    Some(Value::nil())
+    None
 }
 
 fn handle_keyword(

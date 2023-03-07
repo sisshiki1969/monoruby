@@ -230,31 +230,35 @@ impl Codegen {
         self.set_method_outer();
         self.set_self_and_args(method_info, block, has_splat);
 
-        monoasm!(self.jit,
+        monoasm! {self.jit,
             // set meta.
-            movq rax, [r13 + 8];
-            movq rax, [rax + (FUNCDATA_OFFSET_META)];
+            movq r15, [r13 + 8];    // &FuncData
+            movq rax, [r15 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rax;
-            movq rcx, rax;  // &FuncData
+        }
 
-            lea  r8, [rsp - (16 + LBP_SELF)];
-            movq r9, rdi;
-            subq rsp, 4096;
-            movq rdi, r12; // &Globals
+        monoasm! { self.jit,
+            movq rsi, [r15 + (FUNCDATA_OFFSET_PC)];
+        }
+        self.block_arg_expand();
+
+        monoasm! {self.jit,
+            movq rcx, r15;
             movl rsi, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::vm_handle_arguments);
-            call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
-
-            movq rdx, rdi;
-            movq r13, [r13 + 8];
-            // set codeptr
-            movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
-            // set pc
-            movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
+        }
+        self.handle_arguments();
+        monoasm!(self.jit,
+            testq rax, rax;
+            jeq raise;
         );
+
+        monoasm! {self.jit,
+            movq rdx, rdi;
+            // set codeptr
+            movq rax, [r15 + (FUNCDATA_OFFSET_CODEPTR)];
+            // set pc
+            movq r13, [r15 + (FUNCDATA_OFFSET_PC)];
+        }
         self.call_rax();
         self.xmm_restore(&xmm_using);
         monoasm!(self.jit,
@@ -512,21 +516,17 @@ impl Codegen {
         let callee_func_id = func_data.meta.func_id();
         match &fnstore[callee_func_id].kind {
             FuncKind::ISeq(info) => {
-                if !info.is_block_style && info.pos_num() == info.req_num() && info.key_num() == 0 {
+                if info.is_block_style && info.reqopt_num() > 1 {
+                    self.single_arg_expand();
+                }
+                if info.pos_num() == info.req_num() && info.key_num() == 0 {
                 } else {
-                    monoasm!(self.jit,
-                        lea  r8, [rsp - (16 + LBP_SELF)];
-                        movq r9, rdi;
-                        subq rsp, 4096;
-                        movq rdi, r12; // &Globals
-                        movl rsi, (callid.get()); // CallSiteId
-                        lea  rdx, [r14 - (LBP_SELF)];
+                    monoasm! {self.jit,
                         movq rcx, (func_data as *const _ as u64);
-                        movq rax, (runtime::vm_handle_arguments);
-                        call rax;
-                        movq rdi, rax;
-                        addq rsp, 4096;
-                    );
+                        movl rsi, (callid.get());
+                    }
+                    self.handle_arguments();
+                    self.handle_error(pc);
                 }
             }
             _ => {}
@@ -581,18 +581,19 @@ impl Codegen {
         };
         // set arguments
         self.jit_set_arguments(args, len, true);
+
         monoasm! { self.jit,
-            lea  r8, [rsp - (16 + LBP_SELF)];
-            movq r9, rdi;
-            movq rcx, r13;
-            subq rsp, 4096;
-            movq rdi, r12; // &Globals
+            movq rsi, [r13 + (FUNCDATA_OFFSET_PC)];
+        }
+        self.block_arg_expand();
+
+        monoasm! { self.jit,
             movl rsi, (callid.get()); // CallSiteId
-            lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::vm_handle_arguments);
-            call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
+            movq rcx, r13;
+        }
+        self.handle_arguments();
+        self.handle_error(pc);
+        monoasm! { self.jit,
             // argument registers:
             //   rdx: args len
             //

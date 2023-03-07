@@ -227,9 +227,9 @@ impl Codegen {
         self.dispatch[167] = self.vm_geri();
         self.dispatch[168] = self.vm_teqri();
 
-        self.dispatch[170] = self.vm_init_method();
+        self.dispatch[170] = self.vm_init();
         self.dispatch[171] = self.vm_expand_array();
-        self.dispatch[172] = self.vm_init_block();
+        self.dispatch[172] = self.vm_init();
         self.dispatch[173] = self.vm_alias_method();
         self.dispatch[174] = self.vm_hash();
         self.dispatch[175] = ret;

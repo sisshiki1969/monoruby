@@ -26,18 +26,10 @@ impl Codegen {
     /// - rsi <- ofs
     /// - rdx <- passed args
     ///
-    pub(super) fn vm_init_method(&mut self) -> CodePtr {
+    pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.stack_setup();
-        self.vm_init_func(false);
-        self.fetch_and_dispatch();
-        label
-    }
-
-    pub(super) fn vm_init_block(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.stack_setup();
-        self.vm_init_func(true);
+        self.vm_init_func();
         self.fetch_and_dispatch();
         label
     }
@@ -54,38 +46,7 @@ impl Codegen {
         };
     }
 
-    fn vm_init_func(&mut self, is_block: bool) {
-        let l1 = self.jit.label();
-        let err = self.wrong_argument;
-        if !is_block {
-            monoasm! { self.jit,
-            // in
-            // r15: reg_num
-            // rdi: reqopt_num
-            // rdx: number of args passed from caller
-            // [R13 - 14]: reqopt_num
-            // [R13 - 12]: reg_num
-            // [R13 -  8]: req_num
-            // [R13 -  6]: block_pos
-            // [R13 -  4]: info      bit 0:rest(yes=1 no =0) bit 1:block
-            // [R13 -  2]: arg_num
-            // destroy
-            // r15, caller-save registers
-                // if passed < req, go err.
-                cmpw rdx, [r13 - 8];
-                jeq  l1;
-                jlt  err;
-                cmpw rdx, rdi;
-                // if passed <= reqopt, pass.
-                jle l1;
-                // in the case of passed > reqopt
-                // if rest does not exists, go err.
-                movzxw rax, [r13 - 4];
-                testq rax, 0b1;
-                jz err;
-            l1:
-            }
-        }
+    fn vm_init_func(&mut self) {
         let set_block = self.jit.label();
         let exit = self.jit.label();
         monoasm! { self.jit,
