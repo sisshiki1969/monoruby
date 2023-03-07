@@ -9,36 +9,6 @@ impl Codegen {
         f.sin()
     }
 
-    pub(super) fn gen_method_call(
-        &mut self,
-        fnstore: &FnStore,
-        ctx: &mut BBContext,
-        method_info: MethodInfo,
-        ret: SlotId,
-        callid: CallSiteId,
-        pc: BcPc,
-        has_splat: bool,
-    ) {
-        let MethodInfo {
-            args, len, recv, ..
-        } = method_info;
-        self.write_back_slot(ctx, recv);
-        self.write_back_range(ctx, args, len);
-        ctx.dealloc_xmm(ret);
-        // We must write back and unlink all local vars since they may be accessed by eval.
-        self.gen_write_back_locals(ctx);
-        self.gen_call(
-            fnstore,
-            ctx,
-            method_info,
-            callid,
-            None,
-            ret,
-            pc + 1,
-            has_splat,
-        );
-    }
-
     pub(super) fn gen_inlinable(
         &mut self,
         ctx: &mut BBContext,
@@ -105,42 +75,11 @@ impl Codegen {
         }
     }
 
-    pub(super) fn gen_method_call_with_block(
-        &mut self,
-        fnstore: &FnStore,
-        ctx: &mut BBContext,
-        mut method_info: MethodInfo,
-        ret: SlotId,
-        callid: CallSiteId,
-        pc: BcPc,
-        has_splat: bool,
-    ) {
-        let MethodInfo {
-            args, len, recv, ..
-        } = method_info;
-        self.write_back_slot(ctx, recv);
-        self.write_back_range(ctx, args, len + 1);
-        ctx.dealloc_xmm(ret);
-        // We must write back and unlink all local vars since they may be accessed from block.
-        self.gen_write_back_locals(ctx);
-        method_info.args = args + 1;
-        self.gen_call(
-            fnstore,
-            ctx,
-            method_info,
-            callid,
-            Some(args),
-            ret,
-            pc + 1,
-            has_splat,
-        );
-    }
-
-    fn gen_call(
+    pub(super) fn gen_call(
         &mut self,
         fnstore: &FnStore,
         ctx: &BBContext,
-        method_info: MethodInfo,
+        info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
         ret: SlotId,
@@ -149,26 +88,19 @@ impl Codegen {
     ) {
         let MethodInfo {
             func_data, recv, ..
-        } = method_info;
+        } = info;
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(ctx, method_info, callid, block, ret, pc, has_splat);
+                self.gen_call_not_cached(ctx, info, callid, block, ret, pc, has_splat);
             } else {
                 self.gen_call_cached(
-                    fnstore,
-                    ctx,
-                    callid,
-                    method_info,
-                    block,
-                    ret,
-                    cached,
-                    pc,
-                    has_splat,
+                    fnstore, ctx, callid, info, block, ret, cached, pc, has_splat,
                 );
             }
         } else {
-            self.gen_call_not_cached(ctx, method_info, callid, block, ret, pc, has_splat);
+            unreachable!();
+            //self.gen_call_not_cached(ctx, info, callid, block, ret, pc, has_splat);
         }
     }
 

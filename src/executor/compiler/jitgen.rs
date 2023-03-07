@@ -1164,18 +1164,19 @@ impl Codegen {
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
                     } else {
-                        if pc.classid1().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
-                        }
                         self.write_back_slot(&mut ctx, src);
                         ctx.dealloc_xmm(ret);
-                        let xmm_using = ctx.get_xmm_using();
-                        self.xmm_save(&xmm_using);
-                        self.load_rdi(src);
-                        self.call_unop(neg_value as _);
-                        self.xmm_restore(&xmm_using);
-                        self.handle_error(pc);
-                        self.store_rax(ret);
+                        if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&mut ctx, position, pc);
+                        } else {
+                            let xmm_using = ctx.get_xmm_using();
+                            self.xmm_save(&xmm_using);
+                            self.load_rdi(src);
+                            self.call_unop(neg_value as _);
+                            self.xmm_restore(&xmm_using);
+                            self.handle_error(pc);
+                            self.store_rax(ret);
+                        }
                     }
                 }
                 TraceIr::IntegerBinOp {
@@ -1209,13 +1210,14 @@ impl Codegen {
                 TraceIr::BinOp {
                     kind, ret, mode, ..
                 } => {
-                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                        self.recompile_and_deopt(&mut ctx, position, pc);
-                    }
                     self.writeback_binary(&mut ctx, &mode);
                     ctx.dealloc_xmm(ret);
-                    self.load_binary_args_with_mode(&mode);
-                    self.gen_generic_binop(&ctx, pc, kind, ret);
+                    if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                    } else {
+                        self.load_binary_args_with_mode(&mode);
+                        self.gen_generic_binop(&ctx, pc, kind, ret);
+                    }
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
                     if mode.is_float_op(&pc) {
@@ -1250,15 +1252,16 @@ impl Codegen {
                         self.handle_error(pc);
                         self.store_rax(ret);
                     } else {
-                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
-                            self.recompile_and_deopt(&mut ctx, position, pc);
-                        }
                         self.writeback_binary(&mut ctx, &mode);
                         ctx.dealloc_xmm(ret);
-                        self.load_binary_args_with_mode(&mode);
-                        self.generic_cmp(kind, &ctx);
-                        self.handle_error(pc);
-                        self.store_rax(ret);
+                        if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
+                            self.recompile_and_deopt(&mut ctx, position, pc);
+                        } else {
+                            self.load_binary_args_with_mode(&mode);
+                            self.generic_cmp(kind, &ctx);
+                            self.handle_error(pc);
+                            self.store_rax(ret);
+                        }
                     }
                 }
 
@@ -1336,24 +1339,59 @@ impl Codegen {
                     info,
                     ..
                 } => {
+                    let MethodInfo {
+                        args, len, recv, ..
+                    } = info;
+                    self.write_back_slot(&mut ctx, recv);
+                    self.write_back_range(&mut ctx, args, len);
+                    ctx.dealloc_xmm(ret);
+                    // We must write back and unlink all local vars since they may be accessed by eval.
+                    self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                    } else {
+                        self.gen_call(
+                            fnstore,
+                            &mut ctx,
+                            info,
+                            callid,
+                            None,
+                            ret,
+                            pc + 1,
+                            has_splat,
+                        );
                     }
-                    self.gen_method_call(fnstore, &mut ctx, info, ret, callid, pc, has_splat);
                 }
                 TraceIr::MethodCallBlock {
                     ret,
                     callid,
                     has_splat,
-                    info,
+                    mut info,
                     ..
                 } => {
+                    let MethodInfo {
+                        args, len, recv, ..
+                    } = info;
+                    self.write_back_slot(&mut ctx, recv);
+                    self.write_back_range(&mut ctx, args, len + 1);
+                    ctx.dealloc_xmm(ret);
+                    // We must write back and unlink all local vars since they may be accessed from block.
+                    self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                    } else {
+                        info.args = args + 1;
+                        self.gen_call(
+                            fnstore,
+                            &mut ctx,
+                            info,
+                            callid,
+                            Some(args),
+                            ret,
+                            pc + 1,
+                            has_splat,
+                        );
                     }
-                    self.gen_method_call_with_block(
-                        fnstore, &mut ctx, info, ret, callid, pc, has_splat,
-                    );
                 }
                 TraceIr::InlineCall {
                     ret, method, info, ..
