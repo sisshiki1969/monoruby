@@ -303,7 +303,7 @@ impl Codegen {
             movq rax, [r13 + 8];
             movq rax, [rax + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rax;
-            movq rcx, rax;
+            movq rcx, rax;  // &FuncData
 
             lea  r8, [rsp - (16 + LBP_SELF)];
             movq r9, rdi;
@@ -589,7 +589,7 @@ impl Codegen {
                         movq rdi, r12; // &Globals
                         movl rsi, (callid.get()); // CallSiteId
                         lea  rdx, [r14 - (LBP_SELF)];
-                        movl rcx, (func_data.meta.func_id().get());
+                        movq rcx, (func_data as *const _ as u64);
                         movq rax, (runtime::vm_handle_arguments);
                         call rax;
                         movq rdi, rax;
@@ -652,7 +652,7 @@ impl Codegen {
         monoasm! { self.jit,
             lea  r8, [rsp - (16 + LBP_SELF)];
             movq r9, rdi;
-            movl rcx, [rsp - (16 + LBP_META)];
+            movq rcx, r13;
             subq rsp, 4096;
             movq rdi, r12; // &Globals
             movl rsi, (callid.get()); // CallSiteId

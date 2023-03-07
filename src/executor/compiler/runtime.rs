@@ -124,10 +124,11 @@ pub(super) extern "C" fn vm_handle_arguments(
     globals: &Globals,
     callid: CallSiteId,
     caller_reg: *const Value,
-    callee_func_id: FuncId,
+    callee: &FuncData,
     callee_reg: *mut Option<Value>,
     mut arg_num: usize,
 ) -> usize {
+    let callee_func_id = callee.meta.func_id();
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             // expand array for block
@@ -140,6 +141,27 @@ pub(super) extern "C" fn vm_handle_arguments(
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
     arg_num
+}
+
+pub(super) extern "C" fn vm_handle_arguments2(
+    globals: &Globals,
+    callid: CallSiteId,
+    caller_reg: *const Value,
+    callee: &FuncData,
+    callee_reg: *mut Option<Value>,
+    arg_num: usize,
+) -> Option<Value> {
+    let callee_func_id = callee.meta.func_id();
+    match &globals[callee_func_id].kind {
+        FuncKind::ISeq(info) => {
+            // required + optional + rest
+            handle_req_opt_rest(info, arg_num, callee_reg);
+            // keyword
+            handle_keyword(info, &globals.func[callid], caller_reg, callee_reg);
+        }
+        _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
+    }
+    Some(Value::nil())
 }
 
 pub(super) extern "C" fn handle_invoker_arguments(
@@ -193,7 +215,11 @@ fn expand_array_for_block(
     arg_num
 }
 
-fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<Value>) {
+fn handle_req_opt_rest(
+    info: &ISeqInfo,
+    arg_num: usize,
+    callee_reg: *mut Option<Value>,
+) -> Option<Value> {
     let req_num = info.args.required_num;
     let reqopt_num = info.args.reqopt_num;
     let pos_num = info.args.pos_num;
@@ -209,6 +235,14 @@ fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<
                     .map(|v| v.unwrap())
                     .collect();
                 *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
+            } else {
+                /*if !info.is_block_style{
+                let range = req_num..=reqopt_num;
+                globals.err_argument(&format!(
+                    "wrong number of arguments (given {arg_num}, expeted {:?})",
+                    range
+                ));
+                return None;}*/
             }
         } else if arg_num >= req_num {
             let len = reqopt_num - arg_num;
@@ -229,6 +263,7 @@ fn handle_req_opt_rest(info: &ISeqInfo, arg_num: usize, callee_reg: *mut Option<
             }
         }
     }
+    Some(Value::nil())
 }
 
 fn handle_keyword(

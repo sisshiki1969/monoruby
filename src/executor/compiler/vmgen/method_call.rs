@@ -91,18 +91,23 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
         };
         self.set_frame(with_block, has_splat);
+        monoasm! {self.jit,
+            movq rsi, [r13 + 8];
+        }
+        self.block_arg_expand();
         monoasm! { self.jit,
             lea  r8, [rsp - (16 + LBP_SELF)];
             movq r9, rdi;
-            movl rcx, [rsp - (16 + LBP_META)];
-            subq rsp, 4096;
+            movq rcx, [r13 + 8];
+            subq rsp, 4088;
+            pushq rdi;
             movq rdi, r12; // &Globals
             movl rsi, [r13 - 16]; // CallSiteId
             lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::vm_handle_arguments);
+            movq rax, (runtime::vm_handle_arguments2);
             call rax;
-            movq rdi, rax;
-            addq rsp, 4096;
+            popq rdi;
+            addq rsp, 4088;
             // argument registers:
             //   rdi: args len
             //
@@ -195,16 +200,20 @@ impl Codegen {
         };
         self.set_block_self_outer();
         self.set_frame(false, true);
+        monoasm! {self.jit,
+            movq rsi, rdx;
+        }
+        self.block_arg_expand();
         monoasm! { self.jit,
             lea  r8, [rsp - (16 + LBP_SELF)];
             movq r9, rdi;
-            movl rcx, [rsp - (16 + LBP_META)];
             subq rsp, 4096;
             movq rdi, r12; // &Globals
             movl rsi, [r13 - 8]; // CallSiteId
+            movq rcx, rdx;
             movq r13, rdx;
             lea  rdx, [r14 - (LBP_SELF)];
-            movq rax, (runtime::vm_handle_arguments);
+            movq rax, (runtime::vm_handle_arguments2);
             call rax;
             movq rdi, rax;
             addq rsp, 4096;
@@ -232,6 +241,59 @@ impl Codegen {
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
+    }
+
+    ///
+    /// block args expansion
+    ///
+    /// #### in
+    /// - rdi: arg_num
+    /// - rsi: &FuncData
+    ///
+    /// #### out
+    /// - rdi: arg_num
+    ///
+    /// #### destroy
+    /// - caller save registers (except rdx)
+    ///
+    fn block_arg_expand(&mut self) {
+        let l1 = self.jit.label();
+        monoasm! { self.jit,
+            movq rsi, [rsi + (FUNCDATA_OFFSET_PC)];
+            testq rsi, rsi;
+            je   l1;
+            // rax <- op
+            movzxb rax, [rsi + 6];
+            // method-style
+            //cmpb rax, (170u8 as i8);
+            //je   l1;
+            // block-style?
+            cmpb rax, (172u8 as i8);
+            jne  l1;
+            // arg_num == 1?
+            cmpl rdi, 1;
+            jne  l1;
+            // reqopt > 1?
+            cmpw [rsi + 2], 1;
+            jle  l1;
+            // is val Array?
+            movq rdi, [rsp - (16 + LBP_ARG0)];
+            testq rdi, 0b111;
+            jnz  l1;
+            cmpl [rdi + 4], (ARRAY_CLASS.0);
+            jne  l1;
+            movzxw rax, [rsi + 8];  // rax <- req
+            lea  rsi, [rsp - (16 + LBP_ARG0)]; // rsi <- dst
+            subq rsp, 1016;
+            pushq rdx;
+            movq rdx, rax;  // rdx <- req
+            movq rax, (block_expand_array); // extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize
+            call rax;
+            popq rdx;
+            movq rdi, rax;
+            addq rsp, 1016;
+        l1:
+        };
     }
 
     /// Set frame (BLOCK, arguments)
