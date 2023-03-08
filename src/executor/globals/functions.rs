@@ -254,12 +254,16 @@ pub struct ConstSiteInfo {
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);
 
+/// Infomation for a call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallSiteInfo {
     /// Name of method.
     pub name: IdentId,
+    /// Number of positional arguments.
+    pub arg_num: usize,
     /// Postion of keyword arguments.
     pub kw_pos: u16,
+    /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
 }
 
@@ -433,12 +437,14 @@ impl FnStore {
     pub fn add_callsite(
         &mut self,
         name: IdentId,
+        arg_num: usize,
         kw_args: HashMap<IdentId, usize>,
         kw_pos: u16,
     ) -> CallSiteId {
         let id = self.callsite_info.len();
         self.callsite_info.push(CallSiteInfo {
             name,
+            arg_num,
             kw_args,
             kw_pos,
         });

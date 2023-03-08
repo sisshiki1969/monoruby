@@ -592,7 +592,7 @@ impl IrContext {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = ctx.add_callsite(method, HashMap::default(), 0);
+                let callid = ctx.add_callsite(method, 1, HashMap::default(), 0);
                 self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::Other => unreachable!(),

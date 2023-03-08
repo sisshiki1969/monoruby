@@ -254,9 +254,7 @@ fn handle_keyword(
     callee_reg: *mut Option<Value>,
 ) {
     let CallSiteInfo {
-        name: _,
-        kw_pos,
-        kw_args,
+        kw_pos, kw_args, ..
     } = callsite;
     let callee_kw_pos = info.args.pos_num + 1;
     for (id, (param_name, _)) in info.args.keyword_args.iter().enumerate() {

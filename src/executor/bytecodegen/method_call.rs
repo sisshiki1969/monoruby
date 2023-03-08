@@ -105,7 +105,7 @@ impl IrContext {
         } else {
             None
         };
-        let callid = ctx.add_callsite(IdentId::EACH, HashMap::default(), 0);
+        let callid = ctx.add_callsite(IdentId::EACH, 0, HashMap::default(), 0);
         self.gen_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
@@ -176,6 +176,7 @@ impl IrContext {
             self.handle_block_param(ctx, info, arglist.block, loc)?;
         }
         let args = arglist.args;
+        let arg_num = args.len();
         self.gen_args(ctx, info, args)?;
 
         let mut kw_args = HashMap::default();
@@ -186,7 +187,7 @@ impl IrContext {
         }
 
         info.temp = old_temp;
-        let callid = ctx.add_callsite(method, kw_args, kw_pos);
+        let callid = ctx.add_callsite(method, arg_num, kw_args, kw_pos);
         Ok(callid)
     }
 

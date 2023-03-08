@@ -516,7 +516,7 @@ impl Codegen {
         let callee_func_id = func_data.meta.func_id();
         match &fnstore[callee_func_id].kind {
             FuncKind::ISeq(info) => {
-                if info.is_block_style && info.reqopt_num() > 1 {
+                if info.is_block_style && info.reqopt_num() > 1 && fnstore[callid].arg_num == 1 {
                     self.single_arg_expand();
                 }
                 if info.pos_num() == info.req_num() && info.key_num() == 0 {
