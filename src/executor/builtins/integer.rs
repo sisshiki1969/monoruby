@@ -9,6 +9,7 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "step", step, -1);
     globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", to_f, 0, InlineMethod::IntegerTof);
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
@@ -40,6 +41,96 @@ extern "C" fn times(
         unimplemented!("needs block.")
     };
 
+    Some(self_val)
+}
+
+struct PosStep {
+    cur: i64,
+    limit: i64,
+    step: i64, // must be > 0
+}
+
+impl Iterator for PosStep {
+    type Item = Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cur > self.limit {
+            None
+        } else {
+            let v = Value::new_integer(self.cur);
+            self.cur += self.step;
+            Some(v)
+        }
+    }
+}
+
+struct NegStep {
+    cur: i64,
+    limit: i64,
+    step: i64, // must be < 0
+}
+
+impl Iterator for NegStep {
+    type Item = Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.limit > self.cur {
+            None
+        } else {
+            let v = Value::new_integer(self.cur);
+            self.cur += self.step;
+            Some(v)
+        }
+    }
+}
+
+/// ### Integer#step
+/// - step(limit, step = 1) {|n| ... } -> self[permalink][rdoc][edit]
+/// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator
+/// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator::ArithmeticSequence
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
+extern "C" fn step(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    args: Arg,
+    len: usize,
+    block: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let block = match block {
+        None => {
+            /*let id = IdentId::get_ident_id("step");
+            let val = vm.create_enumerator(id, self_val, args.into(vm))?;
+            return Ok(val);*/
+            unimplemented!()
+        }
+        Some(block) => block,
+    };
+    let cur = self_val.as_fixnum();
+    let limit = args[0].coerce_to_fixnum(globals)?;
+    let step = if len == 2 {
+        let step = args[1].coerce_to_fixnum(globals)?;
+        if step == 0 {
+            globals.err_argument("Step can not be 0.");
+            return None;
+        }
+        step
+    } else {
+        1
+    };
+
+    let data = vm.get_block_data(globals, block);
+    if step > 0 {
+        let iter = PosStep { cur, step, limit };
+        for i in iter {
+            vm.invoke_block(globals, data.clone(), &[i])?;
+        }
+    } else {
+        let iter = NegStep { cur, step, limit };
+        for i in iter {
+            vm.invoke_block(globals, data.clone(), &[i])?;
+        }
+    }
     Some(self_val)
 }
 
@@ -121,6 +212,28 @@ mod test {
           a -= b
         end
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn step() {
+        run_test(
+            r##"
+        a = 0
+        x = 0.step(10, 2) do |z|
+          b = 0
+          3.step(12, 3) do |y|
+            5.step(25, 5) do |x|
+              a += x
+              b += x + y
+            end
+            a += y
+          end
+          a += z
+          a -= b
+        end
+        [a, x]
         "##,
         );
     }
