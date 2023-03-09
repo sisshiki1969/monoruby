@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "nil?", nil, 0);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(
@@ -89,6 +90,23 @@ extern "C" fn is_a(
 ) -> Option<Value> {
     let class = arg[0].expect_class_or_module(globals)?;
     Some(Value::bool(self_val.is_kind_of(globals, class)))
+}
+
+///
+/// ### Kernel#nil?
+///
+/// - nil? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
+extern "C" fn nil(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    _: Arg,
+    _: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(Value::bool(self_val.is_nil()))
 }
 
 ///
@@ -733,6 +751,16 @@ mod test {
         c = C.new
         [c.is_a?(S), c.is_a?(C)]"#,
         );
+    }
+
+    #[test]
+    fn object_nil() {
+        run_test("4.nil?");
+        run_test("4.5.nil?");
+        run_test("nil.nil?");
+        run_test("true.nil?");
+        run_test("false.nil?");
+        run_test("[].nil?");
     }
 
     #[test]

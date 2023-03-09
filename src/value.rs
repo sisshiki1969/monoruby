@@ -132,6 +132,10 @@ impl Value {
         false
     }
 
+    pub fn is_nil(&self) -> bool {
+        self.get() == NIL_VALUE
+    }
+
     pub fn to_s(self, globals: &Globals) -> String {
         globals.val_tos(self)
     }
