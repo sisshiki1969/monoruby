@@ -101,6 +101,7 @@ impl<T: GCBox> Allocator<T> {
         }
     }
 
+    #[cfg(not(feature = "gc-stress"))]
     pub(crate) fn alloc_flag(&self) -> bool {
         if let Some(flag) = self.alloc_flag {
             unsafe { *flag != 0 }
