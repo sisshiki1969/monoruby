@@ -505,7 +505,7 @@ pub struct FuncInfo {
     name: Option<String>,
     /// arity of this function.
     /// -1 for variable numbers.
-    arity: i32,
+    //arity: i32,
     pub(in crate::executor) data: FuncData,
     pub(in crate::executor) kind: FuncKind,
 }
@@ -528,7 +528,7 @@ impl FuncInfo {
         let info = ISeqInfo::new_method(func_id, name.clone(), args, body, sourceinfo);
         Self {
             name,
-            arity: info.args.arity(),
+            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -548,7 +548,7 @@ impl FuncInfo {
         let info = ISeqInfo::new_block(func_id, outer, args, body, sourceinfo);
         Self {
             name: None,
-            arity: info.args.arity(),
+            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -573,7 +573,7 @@ impl FuncInfo {
         );
         Self {
             name,
-            arity: info.args.arity(),
+            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -587,7 +587,7 @@ impl FuncInfo {
         let reg_num = if arity == -1 { -1 } else { arity as i64 };
         Self {
             name: Some(name),
-            arity,
+            //arity,
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -602,7 +602,7 @@ impl FuncInfo {
     fn new_attr_reader(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
             name: Some(name),
-            arity: 0,
+            //arity: 0,
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -615,7 +615,7 @@ impl FuncInfo {
     fn new_attr_writer(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
             name: Some(name),
-            arity: 1,
+            //arity: 1,
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -629,9 +629,9 @@ impl FuncInfo {
         self.name.as_ref()
     }
 
-    pub(crate) fn arity(&self) -> i32 {
+    /*pub(crate) fn arity(&self) -> i32 {
         self.arity
-    }
+    }*/
 
     pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {

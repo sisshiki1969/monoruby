@@ -483,14 +483,14 @@ impl Globals {
         )
     }
 
-    pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
+    /*pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
         let arity = self[func_id].arity();
         if arity != -1 {
             let arity = arity as usize;
             self.check_number_of_arguments(args_len, arity..=arity)?;
         }
         Some(())
-    }
+    }*/
 }
 
 impl Globals {

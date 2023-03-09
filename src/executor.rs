@@ -563,9 +563,9 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        let len = args.len();
+        //let len = args.len();
         let func_id = globals.find_method(receiver, method, false)?;
-        globals.check_arg(func_id, len)?;
+        //globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
@@ -634,7 +634,7 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
-        globals.check_arg(func_id, len)?;
+        //globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
     }
@@ -1488,6 +1488,8 @@ impl Meta {
     }
 }
 
+type FuncDataPtr = std::ptr::NonNull<FuncData>;
+
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
 struct FuncData {
@@ -1502,6 +1504,10 @@ struct FuncData {
 impl FuncData {
     fn set_reg_num(&mut self, reg_num: i64) {
         self.meta.set_reg_num(reg_num);
+    }
+
+    fn as_ptr(&self) -> FuncDataPtr {
+        std::ptr::NonNull::new(self as *const _ as _).unwrap()
     }
 }
 
@@ -1591,7 +1597,7 @@ struct ArgumentsInfo {
     for_param_info: Vec<ForParamInfo>,
 }
 
-impl ArgumentsInfo {
+/*impl ArgumentsInfo {
     fn arity(&self) -> i32 {
         if self.reqopt_num == self.required_num && self.reqopt_num == self.pos_num {
             self.reqopt_num as i32
@@ -1599,7 +1605,7 @@ impl ArgumentsInfo {
             -1
         }
     }
-}
+}*/
 
 #[derive(Clone, Default, PartialEq)]
 struct ExpandInfo {

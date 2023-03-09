@@ -602,9 +602,11 @@ impl Codegen {
     /// Handle req/opt/rest arguments
     ///
     /// #### in
-    /// - r13: pc
     /// - rcx: &FuncData
     /// - rsi: CallSiteId
+    ///
+    /// #### out
+    /// - rax: Option<Value>
     ///  
     fn handle_arguments(&mut self) {
         monoasm! {self.jit,

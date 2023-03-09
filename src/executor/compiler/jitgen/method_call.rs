@@ -187,7 +187,7 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo { recv, len, .. } = method_info;
+        let MethodInfo { recv, .. } = method_info;
         // argument registers:
         //   rdi: args len
         //
@@ -276,9 +276,8 @@ impl Codegen {
         slow_path:
             movq rdi, r12;
             movq rsi, (callid.get()); // CallSiteId
-            movq rdx, (len as usize); // args_len: usize
-            movq rcx, [r14 - (conv(recv))]; // receiver: Value
-            movw r8, (recv.0);
+            movq rdx, [r14 - (conv(recv))]; // receiver: Value
+            movw rcx, (recv.0);
             movq rax, (runtime::find_method);
             call rax;
             // absolute address was returned to rax.
