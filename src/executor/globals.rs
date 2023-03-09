@@ -27,6 +27,7 @@ pub enum InlineMethod {
     MathSqrt,
     MathCos,
     MathSin,
+    ObjectNil,
 }
 
 struct Root<'a, 'b> {

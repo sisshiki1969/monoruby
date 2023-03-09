@@ -378,6 +378,10 @@ impl LoopAnalysis {
                             reg_info.use_as(args, true, FLOAT_CLASS);
                             reg_info.def_as(ret, true);
                         }
+                        InlineMethod::ObjectNil => {
+                            reg_info.use_non_float(recv);
+                            reg_info.def_as(ret, false);
+                        }
                     }
                 }
                 TraceIr::Ret(_ret) => {

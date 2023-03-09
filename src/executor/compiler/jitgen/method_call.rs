@@ -22,13 +22,13 @@ impl Codegen {
         let deopt = self.gen_side_deopt(pc, ctx);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
-        self.load_rdi(*recv);
-        if !recv.is_zero() {
-            self.guard_class(class, deopt);
-        }
         self.guard_version(version, deopt);
         match inline_id {
             InlineMethod::IntegerTof => {
+                self.load_rdi(*recv);
+                if !recv.is_zero() {
+                    self.guard_class(class, deopt);
+                }
                 let fret = ctx.xmm_write(ret);
                 monoasm!(self.jit,
                     sarq  rdi, 1;
@@ -36,6 +36,10 @@ impl Codegen {
                 );
             }
             InlineMethod::MathSqrt => {
+                self.load_rdi(*recv);
+                if !recv.is_zero() {
+                    self.guard_class(class, deopt);
+                }
                 let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
                 let fret = ctx.xmm_write(ret);
                 monoasm!(self.jit,
@@ -43,6 +47,10 @@ impl Codegen {
                 );
             }
             InlineMethod::MathCos => {
+                self.load_rdi(*recv);
+                if !recv.is_zero() {
+                    self.guard_class(class, deopt);
+                }
                 let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
                 let fret = ctx.xmm_write(ret);
                 let xmm_using = ctx.get_xmm_using();
@@ -58,6 +66,10 @@ impl Codegen {
                 );
             }
             InlineMethod::MathSin => {
+                self.load_rdi(*recv);
+                if !recv.is_zero() {
+                    self.guard_class(class, deopt);
+                }
                 let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
                 let fret = ctx.xmm_write(ret);
                 let xmm_using = ctx.get_xmm_using();
@@ -71,6 +83,19 @@ impl Codegen {
                 monoasm!(self.jit,
                     movq xmm(fret.enc()), xmm0;
                 );
+            }
+            InlineMethod::ObjectNil => {
+                self.load_rdi(*recv);
+                ctx.dealloc_xmm(ret);
+                let l1 = self.jit.label();
+                monoasm!(self.jit,
+                    movq rax, (FALSE_VALUE);
+                    cmpq rdi, (NIL_VALUE);
+                    jne  l1;
+                    movq rax, (TRUE_VALUE);
+                l1:
+                );
+                self.store_rax(ret);
             }
         }
     }

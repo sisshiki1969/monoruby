@@ -168,12 +168,8 @@ impl alloc::GC<RValue> for LFP {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         unsafe {
             let meta = self.meta();
-            #[cfg(feature = "gc-debug")]
-            eprintln!("{:?}", meta.func_id);
             for r in 0..meta.reg_num() as usize {
                 let v = self.register(r);
-                #[cfg(feature = "gc-debug")]
-                eprintln!("{:?}", v);
                 v.mark(alloc);
             }
             if let Some(v) = self.block() {
