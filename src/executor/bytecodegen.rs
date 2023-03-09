@@ -321,10 +321,10 @@ impl IrContext {
         loc: Loc,
     ) -> Result<()> {
         let len = nodes.len();
-        let src = self.gen_args(ctx, info, nodes)?.into();
+        let (src, _) = self.gen_args(ctx, info, nodes)?;
         info.popn(len);
         let ret = BcReg::get_reg(info, ret);
-        self.emit_array(ret, src, len, loc);
+        self.emit_array(ret, src.into(), len, loc);
         Ok(())
     }
 
@@ -592,7 +592,7 @@ impl IrContext {
                 self.push(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = ctx.add_callsite(method, 1, HashMap::default(), 0);
+                let callid = ctx.add_callsite(method, 1, HashMap::default(), 0, vec![]);
                 self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::Other => unreachable!(),
@@ -1529,17 +1529,19 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         args: Vec<Node>,
-    ) -> Result<BcTemp> {
+    ) -> Result<(BcTemp, Vec<usize>)> {
         let arg = info.next_reg();
-        for arg in args {
+        let mut splat_pos = vec![];
+        for (i, arg) in args.into_iter().enumerate() {
             if let NodeKind::Splat(box expr) = arg.kind {
-                let src = self.push_expr(ctx, info, expr)?;
-                self.push(BcIr::Splat(src), arg.loc);
+                self.push_expr(ctx, info, expr)?;
+                //self.push(BcIr::Splat(src), arg.loc);
+                splat_pos.push(i);
             } else {
                 self.push_expr(ctx, info, arg)?;
             }
         }
-        Ok(arg)
+        Ok((arg, splat_pos))
     }
 
     fn gen_dummy_init(&mut self, is_block: bool) {

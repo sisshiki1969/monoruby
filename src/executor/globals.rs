@@ -367,7 +367,7 @@ impl Globals {
             RV::Object(rvalue) => match rvalue.kind() {
                 ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class().class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY | ObjKind::SPLAT => self.array_tos(rvalue.as_array()),
+                ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => self.proc_tos(val),

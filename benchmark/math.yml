@@ -19,4 +19,11 @@ benchmark:
     Math.cos 3468.56
     Math.cos 3468.56
     Math.cos 3468.56
+  nil: |
+    10000.nil?
+    10000.nil?
+    10000.nil?
+    10000.nil?
+    10000.nil?
+    10000.nil?
 loop_count: 10000

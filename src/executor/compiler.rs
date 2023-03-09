@@ -602,6 +602,7 @@ impl Codegen {
     /// Handle req/opt/rest arguments
     ///
     /// #### in
+    /// - rdi: arg len
     /// - rcx: &FuncData
     /// - rsi: CallSiteId
     ///

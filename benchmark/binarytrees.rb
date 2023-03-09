@@ -27,5 +27,4 @@ min_depth.step(max_depth, 2) do |depth|
     temp_tree = bottom_up_tree(depth)
     check += item_check(*temp_tree)
   end
-  puts check
 end

@@ -1407,7 +1407,7 @@ impl Codegen {
                 } => {
                     ctx.dealloc_xmm(ret);
                     self.write_back_range(&mut ctx, args, len);
-                    self.gen_yield(&ctx, args, len, ret, callid, pc);
+                    self.gen_yield(&ctx, fnstore, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {

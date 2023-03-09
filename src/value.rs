@@ -319,13 +319,6 @@ impl Value {
         RValue::new_io_stderr().pack()
     }
 
-    pub(crate) fn new_splat(val: Value) -> Self {
-        match val.is_array() {
-            Some(ary) => RValue::new_splat(ary.clone()).pack(),
-            None => val,
-        }
-    }
-
     pub(crate) fn new_symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
@@ -511,14 +504,17 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_splat(&self) -> &ArrayInner {
-        assert_eq!(ObjKind::SPLAT, self.rvalue().kind());
-        self.rvalue().as_array()
-    }
-
     pub(crate) fn as_hash(&self) -> &HashInfo {
         assert_eq!(ObjKind::HASH, self.rvalue().kind());
         self.rvalue().as_hash()
+    }
+
+    pub(crate) fn is_hash(&self) -> Option<&HashInfo> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::HASH => Some(rv.as_hash()),
+            _ => None,
+        }
     }
 
     pub(crate) fn as_hash_mut(&mut self) -> &mut HashInfo {

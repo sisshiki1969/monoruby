@@ -77,10 +77,6 @@ impl IrContext {
                     let op1 = info.get_index(val);
                     Bc::from(enc_wl(26, op1.0, name.get()))
                 }
-                BcIr::Splat(src) => {
-                    let op1 = info.get_index(src);
-                    Bc::from(enc_wl(27, op1.0, 0))
-                }
                 BcIr::LoadSvar { ret, id } => {
                     let op1 = info.get_index(ret);
                     Bc::from(enc_wl(28, op1.0, *id))

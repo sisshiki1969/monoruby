@@ -117,7 +117,7 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(ctx, info, callid, block, ret, pc, has_splat);
+                self.gen_call_not_cached(fnstore, ctx, info, callid, block, ret, pc, has_splat);
             } else {
                 self.gen_call_cached(
                     fnstore, ctx, callid, info, block, ret, cached, pc, has_splat,
@@ -204,6 +204,7 @@ impl Codegen {
     ///
     fn gen_call_not_cached(
         &mut self,
+        fnstore: &FnStore,
         ctx: &BBContext,
         method_info: MethodInfo,
         callid: CallSiteId,
@@ -253,7 +254,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat);
+        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid].splat_pos);
 
         monoasm! {self.jit,
             // set meta.
@@ -534,7 +535,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat);
+        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid].splat_pos);
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
@@ -574,6 +575,7 @@ impl Codegen {
     pub(super) fn gen_yield(
         &mut self,
         ctx: &BBContext,
+        fnstore: &FnStore,
         args: SlotId,
         len: u16,
         ret: SlotId,
@@ -604,7 +606,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         // set arguments
-        self.jit_set_arguments(args, len, true);
+        self.jit_set_arguments(args, len, true, &fnstore[callid].splat_pos);
 
         monoasm! { self.jit,
             movq rsi, [r13 + (FUNCDATA_OFFSET_PC)];
@@ -661,6 +663,7 @@ impl Codegen {
         method_info: MethodInfo,
         block: Option<SlotId>,
         has_splat: bool,
+        splat_pos: &Vec<usize>,
     ) {
         let MethodInfo {
             recv, args, len, ..
@@ -670,7 +673,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq [rsp - (16 + LBP_SELF)], rax;
         );
-        self.jit_set_arguments(args, len, has_splat);
+        self.jit_set_arguments(args, len, has_splat, splat_pos);
         // set block
         if let Some(block) = block {
             self.load_rax(block);
@@ -697,7 +700,13 @@ impl Codegen {
     /// ### destroy
     ///
     /// - caller save registers
-    fn jit_set_arguments(&mut self, args: SlotId, len: u16, has_splat: bool) {
+    fn jit_set_arguments(
+        &mut self,
+        args: SlotId,
+        len: u16,
+        has_splat: bool,
+        splat_pos: &Vec<usize>,
+    ) {
         monoasm!(self.jit,
             movq rdi, (len);
         );
@@ -709,23 +718,17 @@ impl Codegen {
                     lea r8, [rsp - (16 + LBP_ARG0)];
                 );
                 for i in 0..len {
-                    let next = self.jit.label();
                     let reg = args + i;
                     self.load_rax(reg);
-                    let no_splat = self.jit.label();
-                    monoasm! {self.jit,
-                        testq rax, 0b111;
-                        jne  no_splat;
-                        cmpw [rax + 2], (ObjKind::SPLAT);
-                        jne  no_splat;
-                        call splat;
-                        jmp next;
-                    no_splat:
-                    }
-                    monoasm! {self.jit,
-                        movq [r8], rax;
-                        subq r8, 8;
-                    next:
+                    if splat_pos.contains(&(i as usize)) {
+                        monoasm! {self.jit,
+                            call splat;
+                        }
+                    } else {
+                        monoasm! {self.jit,
+                            movq [r8], rax;
+                            subq r8, 8;
+                        }
                     }
                 }
             } else {

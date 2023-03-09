@@ -89,6 +89,7 @@ impl Codegen {
             // set self (= receiver)
             movq rax, [rsp];
             movq [rsp - (16 + LBP_SELF)], rax;
+            movl r8, [r13 - 16]; // CallSiteId
         };
         self.set_frame(with_block, has_splat);
         monoasm! {self.jit,
@@ -194,6 +195,7 @@ impl Codegen {
             // set meta
             movq rsi, [r15 + (FUNCDATA_OFFSET_META)];
             movq [rsp -(16 + LBP_META)], rsi;
+            movl r8, [r13 - 8];    // CallSiteId
         };
         self.set_block_self_outer();
         self.set_frame(false, true);
@@ -243,6 +245,7 @@ impl Codegen {
     ///
     /// - rdi: arg len
     /// - rcx: %args
+    /// - r8:  CallSiteId
     ///
     /// ### out
     ///
@@ -278,6 +281,7 @@ impl Codegen {
     ///
     /// - rdi: arg len
     /// - rcx: the first argument address
+    /// - r8:  CallSiteId
     ///
     /// ### out
     ///
@@ -288,61 +292,45 @@ impl Codegen {
     /// - rax
     /// - rcx
     /// - rsi
-    /// - r15
+    /// - rdx
     fn set_arguments(&mut self, has_splat: bool) {
         let loop_ = self.jit.label();
-        let no_splat = self.jit.label();
-        let next = self.jit.label();
         let loop_exit = self.jit.label();
         monoasm! { self.jit,
             testq rdi, rdi;
             jeq  loop_exit;
+            // rdx <- len
             movl rdx, rdi;
             // rsi <- destination address
             lea  rsi, [rsp - (16 + LBP_ARG0)];
-            // TODO: this possibly cause problem.
-            subq rsp, 4096;
-        loop_:
-            // rax <- source value
-            movq rax, [rcx];
         }
         if has_splat {
             monoasm! { self.jit,
-                // check whether the source value is SPLAT.
-                testq rax, 0b111;
-                jne  no_splat;
-                cmpw [rax + 2], (ObjKind::SPLAT);
-                jne  no_splat;
-                pushq rdi;
-                pushq rsi;
-                pushq rdx;
-                pushq rcx;
-                // rdi <- source value
+                // TODO: this possibly cause problem.
+                subq rsp, 4096;
+                // rdi <- source address
+                movq rdi, rcx;
                 // rsi <- destination address
-                movq rdi, rax;
-                movq rax, (expand_splat);
+                // rdx <- len
+                movq rcx, r12;
+                movq rax, (vm_expand_splat);
                 call rax;
                 // rax <- length
-                popq rcx;
-                popq rdx;
-                popq rsi;
-                popq rdi;
-                lea  rdi, [rdi + rax * 1 - 1];
-                shlq rax, 3;
-                subq rsi, rax;
-                jmp next;
-                no_splat:
-            }
+                movq rdi, rax;
+                addq rsp, 4096;
+            };
+        } else {
+            monoasm! { self.jit,
+            loop_:
+                // rax <- source value
+                movq rax, [rcx];
+                movq [rsi], rax;
+                subq rsi, 8;
+                subq rcx, 8;
+                subl rdx, 1;
+                jne  loop_;
+            };
         }
-        monoasm! { self.jit,
-            movq [rsi], rax;
-            subq rsi, 8;
-        next:
-            subq rcx, 8;
-            subl rdx, 1;
-            jne  loop_;
-            addq rsp, 4096;
-        loop_exit:
-        };
+        self.jit.bind_label(loop_exit);
     }
 }

@@ -117,7 +117,6 @@ pub(super) enum BcIr {
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
-    Splat(BcReg),
     AliasMethod {
         new: BcReg,
         old: BcReg,

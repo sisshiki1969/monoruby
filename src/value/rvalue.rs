@@ -53,7 +53,7 @@ impl std::fmt::Debug for RValue {
                     7 => format!("TIME({:?})", self.kind.time),
                     8 => format!("ARRAY({:?})", self.kind.array),
                     9 => format!("RANGE({:?})", self.kind.range),
-                    10 => format!("SPLAT({:?})", self.kind.array),
+                    //10 => format!("SPLAT({:?})", self.kind.array),
                     11 => format!("PROC({:?})", self.kind.proc),
                     12 => format!("HASH({:?})", self.kind.hash),
                     13 => format!("REGEXP({:?})", self.kind.regexp),
@@ -161,7 +161,7 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::FLOAT => {}
             ObjKind::BYTES => {}
             ObjKind::TIME => {}
-            ObjKind::ARRAY | ObjKind::SPLAT => {
+            ObjKind::ARRAY => {
                 self.as_array().iter().for_each(|v| v.mark(alloc));
             }
             ObjKind::RANGE => {
@@ -351,9 +351,6 @@ impl RValue {
                     ObjKind::RANGE => ObjKind {
                         range: self.kind.range.clone(),
                     },
-                    ObjKind::SPLAT => ObjKind {
-                        array: self.kind.array.clone(),
-                    },
                     ObjKind::PROC => ObjKind {
                         proc: self.kind.proc.clone(),
                     },
@@ -523,14 +520,6 @@ impl RValue {
 
     pub(super) fn new_io_stderr() -> Self {
         Self::new_io(IoInner::stderr())
-    }
-
-    pub(super) fn new_splat(ary: ArrayInner) -> Self {
-        RValue {
-            flags: RVFlag::new(ARRAY_CLASS, ObjKind::SPLAT),
-            kind: ObjKind::array(ary),
-            var_table: None,
-        }
     }
 
     pub(super) fn new_time(time: TimeInfo) -> Self {
@@ -763,7 +752,7 @@ impl ObjKind {
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
-    pub const SPLAT: u8 = 10;
+    //pub const SPLAT: u8 = 10;
     pub const PROC: u8 = 11;
     pub const HASH: u8 = 12;
     pub const REGEXP: u8 = 13;

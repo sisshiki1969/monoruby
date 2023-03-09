@@ -265,6 +265,8 @@ pub struct CallSiteInfo {
     pub kw_pos: u16,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
+    /// Positions of splat arguments.
+    pub splat_pos: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,6 +442,7 @@ impl FnStore {
         arg_num: usize,
         kw_args: HashMap<IdentId, usize>,
         kw_pos: u16,
+        splat_pos: Vec<usize>,
     ) -> CallSiteId {
         let id = self.callsite_info.len();
         self.callsite_info.push(CallSiteInfo {
@@ -447,6 +450,7 @@ impl FnStore {
             arg_num,
             kw_args,
             kw_pos,
+            splat_pos,
         });
         CallSiteId(id as u32)
     }
