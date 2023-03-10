@@ -107,19 +107,6 @@ pub struct Codegen {
     div_by_zero: DestLabel,
     no_block: DestLabel,
     ///
-    /// expand splat argument.
-    ///
-    /// ### in
-    /// - r8:  destination address
-    /// - rdi: the number of arguments
-    /// ### out
-    /// - r8:  destination address
-    /// - rdi: the number of arguments
-    /// ### destroy
-    ///   callee save registers except *rsi*.
-    ///
-    splat: DestLabel,
-    ///
     /// Raise "wrong number of arguments" error.
     ///
     /// ### in
@@ -284,7 +271,6 @@ impl Codegen {
             vm_return,
             f64_to_val: entry_panic,
             heap_to_f64,
-            splat,
             div_by_zero,
             no_block,
             wrong_argument,

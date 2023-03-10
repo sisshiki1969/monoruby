@@ -434,20 +434,7 @@ pub(super) extern "C" fn neg_value(
 }
 
 pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
-    if let Some(ary) = src.is_array() {
-        let len = ary.len();
-        for i in 0..len {
-            unsafe { *dst.sub(i) = ary[i] };
-        }
-        len
-    } else if let Some(_) = src.is_range() {
-        unimplemented!()
-    } else if let Some(_) = src.is_hash() {
-        unimplemented!()
-    } else {
-        unsafe { *dst = src };
-        1
-    }
+    expand_splat_inner(src, dst)
 }
 
 pub extern "C" fn vm_expand_splat(
@@ -463,7 +450,7 @@ pub extern "C" fn vm_expand_splat(
         for i in 0..len {
             let v = *src.sub(i);
             if splat_pos.contains(&i) {
-                let ofs = expand_splat(v, dst);
+                let ofs = expand_splat_inner(v, dst);
                 dst_len += ofs;
                 dst = dst.sub(ofs);
             } else {
@@ -474,6 +461,23 @@ pub extern "C" fn vm_expand_splat(
         }
     }
     dst_len
+}
+
+fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
+    if let Some(ary) = src.is_array() {
+        let len = ary.len();
+        for i in 0..len {
+            unsafe { *dst.sub(i) = ary[i] };
+        }
+        len
+    } else if let Some(_) = src.is_range() {
+        unimplemented!()
+    } else if let Some(_) = src.is_hash() {
+        unimplemented!()
+    } else {
+        unsafe { *dst = src };
+        1
+    }
 }
 
 pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
