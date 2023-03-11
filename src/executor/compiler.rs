@@ -113,6 +113,7 @@ pub struct Codegen {
     /// - rdx: actual number of arguments
     /// - r13: pc (InitBlock/InitMethod)
     ///
+    #[allow(dead_code)]
     wrong_argument: DestLabel,
     dispatch: Vec<CodePtr>,
     pub(super) method_invoker: MethodInvoker,

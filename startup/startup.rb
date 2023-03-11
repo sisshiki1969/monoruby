@@ -3,9 +3,8 @@ class Math
 end
 
 class RbConfig
-  @ruby = `ruby -e 'print RbConfig.ruby'`
   def self.ruby
-    @ruby
+    @ruby ||= `ruby -e 'print RbConfig.ruby'`
   end
 end
 

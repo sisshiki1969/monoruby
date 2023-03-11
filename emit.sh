@@ -24,3 +24,6 @@ target/release/monoruby --no-jit benchmark/so_mandelbrot.rb > benchmark/mandel2.
 diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
+
+cargo run --release --features emit-asm -- benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
+cargo run --release --features emit-bc -- benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode
