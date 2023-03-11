@@ -166,22 +166,6 @@ impl IrContext {
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let with_block = arglist.block.is_some();
-        if !with_block && arglist.args.len() == 1 {
-            if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
-                let old_temp = info.temp;
-                let local = info.refer_local(ident).into();
-
-                let mut kw_args = HashMap::default();
-                let kw_pos = info.next_reg().0;
-                for (id, (name, node)) in arglist.kw_args.iter().enumerate() {
-                    self.push_expr(ctx, info, node.clone())?;
-                    kw_args.insert(IdentId::get_ident_id(name), id);
-                }
-                info.temp = old_temp;
-                let callid = ctx.add_callsite(method, 1, kw_args, kw_pos, vec![]);
-                return Ok((callid, local, 1));
-            }
-        }
         let args = info.next_reg().into();
         let old_temp = info.temp;
         if with_block {
