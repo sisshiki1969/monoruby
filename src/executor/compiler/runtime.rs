@@ -44,12 +44,18 @@ pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globa
 }
 
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
-    let mut v = if len == 0 {
+    let v = if len == 0 {
         vec![]
     } else {
-        unsafe { std::slice::from_raw_parts(src.sub(len - 1), len).to_vec() }
+        unsafe {
+            std::slice::from_raw_parts(src.sub(len - 1), len)
+                .iter()
+                .rev()
+                .cloned()
+                .collect()
+        }
     };
-    v.reverse();
+    //v.reverse();
     Value::new_array_from_vec(v)
 }
 
