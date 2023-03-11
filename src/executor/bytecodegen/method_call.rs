@@ -31,10 +31,8 @@ impl IrContext {
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
-        let arg = info.next_reg().into();
-        let len = arglist.args.len();
 
-        let callid = self.handle_arguments(ctx, info, arglist, method, loc)?;
+        let (callid, args, len) = self.handle_arguments(ctx, info, arglist, method, loc)?;
 
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
@@ -48,7 +46,7 @@ impl IrContext {
         } else {
             None
         };
-        self.gen_call(recv, callid, ret, arg, len, with_block, has_splat, loc);
+        self.gen_call(recv, callid, ret, args, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
             self.gen_ret(info, None);
         }
@@ -140,16 +138,13 @@ impl IrContext {
             ));
         }
 
-        let arg = info.next_reg();
-        let len = arglist.args.len();
-
-        let callid =
+        let (callid, args, len) =
             self.handle_arguments(ctx, info, arglist, IdentId::get_ident_id("<block>"), loc)?;
 
         self.push(
             BcIr::Yield {
                 ret,
-                args: arg.into(),
+                args,
                 len,
                 callid,
             },
@@ -169,26 +164,31 @@ impl IrContext {
         arglist: ArgList,
         method: IdentId,
         loc: Loc,
-    ) -> Result<CallSiteId> {
+    ) -> Result<(CallSiteId, BcReg, usize)> {
         let with_block = arglist.block.is_some();
+        let args = info.next_reg().into();
         let old_temp = info.temp;
         if with_block {
             self.handle_block_param(ctx, info, arglist.block, loc)?;
         }
-        let args = arglist.args;
-        let arg_num = args.len();
-        let (_, splat_pos) = self.gen_args(ctx, info, args)?;
+        let (args, arg_len, splat_pos) = if !with_block && arglist.args.len() == 1 && let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
+            let local = info.refer_local(ident).into();
+            (local, 1, vec![])
+        } else {
+            let (_, arg_len, splat_pos) = self.gen_args(ctx, info, arglist.args)?;
+            (args, arg_len, splat_pos)
+        };
 
         let mut kw_args = HashMap::default();
         let kw_pos = info.next_reg().0;
-        for (id, (name, node)) in arglist.kw_args.iter().enumerate() {
-            self.push_expr(ctx, info, node.clone())?;
-            kw_args.insert(IdentId::get_ident_id(name), id);
+        for (id, (name, node)) in arglist.kw_args.into_iter().enumerate() {
+            self.push_expr(ctx, info, node)?;
+            kw_args.insert(IdentId::get_ident_id_from_string(name), id);
         }
 
         info.temp = old_temp;
-        let callid = ctx.add_callsite(method, arg_num, kw_args, kw_pos, splat_pos);
-        Ok(callid)
+        let callid = ctx.add_callsite(method, arg_len, kw_args, kw_pos, splat_pos);
+        Ok((callid, args, arg_len))
     }
 
     fn handle_block_param(

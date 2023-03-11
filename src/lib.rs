@@ -5,6 +5,7 @@
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
 #![feature(result_flattening)]
+#![feature(let_chains)]
 mod alloc;
 mod executor;
 mod id_table;

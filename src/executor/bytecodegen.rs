@@ -320,11 +320,10 @@ impl IrContext {
         nodes: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
-        let len = nodes.len();
-        let (src, _) = self.gen_args(ctx, info, nodes)?;
+        let (src, len, _) = self.gen_args(ctx, info, nodes)?;
         info.popn(len);
         let ret = BcReg::get_reg(info, ret);
-        self.emit_array(ret, src.into(), len, loc);
+        self.emit_array(ret, src, len, loc);
         Ok(())
     }
 
@@ -1524,14 +1523,19 @@ impl IrContext {
         Ok(())
     }
 
+    ///
+    /// ### return
+    /// (start of reg: BcTemp, reg length: usize, splat position:Vec<usize>)
+    ///
     fn gen_args(
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         args: Vec<Node>,
-    ) -> Result<(BcTemp, Vec<usize>)> {
-        let arg = info.next_reg();
+    ) -> Result<(BcReg, usize, Vec<usize>)> {
+        let arg = info.next_reg().into();
         let mut splat_pos = vec![];
+        let len = args.len();
         for (i, arg) in args.into_iter().enumerate() {
             if let NodeKind::Splat(box expr) = arg.kind {
                 self.push_expr(ctx, info, expr)?;
@@ -1541,7 +1545,7 @@ impl IrContext {
                 self.push_expr(ctx, info, arg)?;
             }
         }
-        Ok((arg, splat_pos))
+        Ok((arg, len, splat_pos))
     }
 
     fn gen_dummy_init(&mut self, is_block: bool) {

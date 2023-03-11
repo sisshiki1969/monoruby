@@ -439,7 +439,7 @@ impl FnStore {
     pub fn add_callsite(
         &mut self,
         name: IdentId,
-        arg_num: usize,
+        arg_len: usize,
         kw_args: HashMap<IdentId, usize>,
         kw_pos: u16,
         splat_pos: Vec<usize>,
@@ -447,7 +447,7 @@ impl FnStore {
         let id = self.callsite_info.len();
         self.callsite_info.push(CallSiteInfo {
             name,
-            arg_num,
+            arg_num: arg_len,
             kw_args,
             kw_pos,
             splat_pos,
