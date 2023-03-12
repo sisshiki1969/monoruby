@@ -1911,4 +1911,17 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn test_nested_call_opt() {
+        run_test_with_prelude(
+            r#"
+            a = [1,2,3,4,5]
+            [f(100), f(*a)]
+        "#,
+            r#"
+            def f(*x); x; end
+        "#,
+        );
+    }
 }

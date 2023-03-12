@@ -161,27 +161,18 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        arglist: ArgList,
+        mut arglist: ArgList,
         method: IdentId,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
-        let with_block = arglist.block.is_some();
-        let args = info.next_reg().into();
         let old_temp = info.temp;
-        if with_block {
-            self.handle_block_param(ctx, info, arglist.block, loc)?;
-        }
-        let (args, arg_len, splat_pos) = if !with_block && arglist.args.len() == 1 && let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
-            let local = info.refer_local(ident).into();
-            (local, 1, vec![])
-        } else {
-            let (_, arg_len, splat_pos) = self.gen_args(ctx, info, arglist.args)?;
-            (args, arg_len, splat_pos)
-        };
+        let kw_args_list = std::mem::take(&mut arglist.kw_args);
+        let (args, arg_len, splat_pos) =
+            self.handle_positional_arguments(ctx, info, arglist, loc)?;
 
         let mut kw_args = HashMap::default();
         let kw_pos = info.next_reg().0;
-        for (id, (name, node)) in arglist.kw_args.into_iter().enumerate() {
+        for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
             self.push_expr(ctx, info, node)?;
             kw_args.insert(IdentId::get_ident_id_from_string(name), id);
         }
@@ -189,6 +180,36 @@ impl IrContext {
         info.temp = old_temp;
         let callid = ctx.add_callsite(method, arg_len, kw_args, kw_pos, splat_pos);
         Ok((callid, args, arg_len))
+    }
+
+    fn handle_positional_arguments(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        arglist: ArgList,
+        loc: Loc,
+    ) -> Result<(BcReg, usize, Vec<usize>)> {
+        let with_block = arglist.block.is_some();
+        let args = info.next_reg().into();
+        if with_block {
+            self.handle_block_param(ctx, info, arglist.block, loc)?;
+        } else {
+            if arglist.args.len() == 1 {
+                if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
+                    // in the case of "f(a)"
+                    let local = info.refer_local(ident).into();
+                    return Ok((local, 1, vec![]));
+                } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
+                    // in the case of "f(*a)"
+                    if let NodeKind::LocalVar(0, ident) = &node.kind {
+                        let local = info.refer_local(ident).into();
+                        return Ok((local, 1, vec![0]));
+                    }
+                }
+            }
+        }
+        let (_, arg_len, splat_pos) = self.gen_args(ctx, info, arglist.args)?;
+        Ok((args, arg_len, splat_pos))
     }
 
     fn handle_block_param(
