@@ -136,7 +136,7 @@ impl Codegen {
         let mut jit = JitMemory::new();
         let class_version = jit.const_i32(1);
         let const_version = jit.const_i64(1);
-        let alloc_flag = jit.const_i32(0);
+        let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let entry_panic = jit.label();
         let jit_return = jit.label();
         let vm_return = jit.label();

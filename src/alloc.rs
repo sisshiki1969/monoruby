@@ -101,15 +101,6 @@ impl<T: GCBox> Allocator<T> {
         }
     }
 
-    #[cfg(not(feature = "gc-stress"))]
-    pub(crate) fn alloc_flag(&self) -> bool {
-        if let Some(flag) = self.alloc_flag {
-            unsafe { *flag != 0 }
-        } else {
-            false
-        }
-    }
-
     ///
     /// Set address of allocation flag.
     ///
@@ -129,6 +120,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Unset allocation flag.
     ///
+    #[allow(unused)]
     fn unset_alloc_flag(&self) {
         if let Some(flag) = self.alloc_flag {
             unsafe { *flag = 0 }
@@ -227,18 +219,6 @@ impl<T: GCBox> Allocator<T> {
         self.print_mark();
     }*/
 
-    #[allow(unused)]
-    pub fn check_gc(&mut self, root: &impl GCRoot<T>) {
-        let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
-        #[cfg(not(feature = "gc-stress"))]
-        if !self.alloc_flag() && self.malloc_threshold >= malloced {
-            return;
-        }
-        #[cfg(feature = "gc-debug")]
-        dbg!(malloced);
-        self.gc(root);
-    }
-
     pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
             return;
@@ -266,6 +246,7 @@ impl<T: GCBox> Allocator<T> {
             assert_eq!(self.free_list_count, self.check_free_list());
             eprintln!("free list: {}", self.free_list_count);
         }
+        #[cfg(not(feature = "gc-stress"))]
         self.unset_alloc_flag();
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         self.malloc_threshold = malloced + MALLOC_THRESHOLD;

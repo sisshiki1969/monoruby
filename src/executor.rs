@@ -1617,3 +1617,28 @@ struct ForParamInfo {
     dst_reg: BcLocal,
     src_reg: usize,
 }
+
+struct Root<'a, 'b> {
+    globals: &'a Globals,
+    executor: &'b Executor,
+}
+
+impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.globals.mark(alloc);
+        self.executor.mark(alloc);
+    }
+}
+
+impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
+    fn startup_flag(&self) -> bool {
+        true
+    }
+}
+
+///
+/// Execute garbage collection.
+///
+extern "C" fn execute_gc(globals: &Globals, executor: &Executor) {
+    alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
+}

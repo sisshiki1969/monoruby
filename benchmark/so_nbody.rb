@@ -65,8 +65,7 @@ end
 def offset_momentum(bodies)
   px, py, pz = 0.0, 0.0, 0.0
 
-  for i in 0 ... bodies.size
-    b = bodies[i]
+  for b in bodies
     m = b.mass
     px += b.vx * m
     py += b.vy * m

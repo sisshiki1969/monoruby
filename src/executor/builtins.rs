@@ -185,4 +185,26 @@ impl Arg {
                 .collect()
         }
     }
+
+    pub fn iter(&self, len: usize) -> impl Iterator<Item = Value> {
+        unsafe {
+            let data = if len == 0 {
+                self.0
+            } else {
+                self.0.sub(len - 1)
+            };
+            std::slice::from_raw_parts(data, len).iter().rev().cloned()
+        }
+    }
+
+    pub fn rev(&self, len: usize) -> impl Iterator<Item = Value> {
+        unsafe {
+            let data = if len == 0 {
+                self.0
+            } else {
+                self.0.sub(len - 1)
+            };
+            std::slice::from_raw_parts(data, len).iter().cloned()
+        }
+    }
 }

@@ -132,8 +132,8 @@ extern "C" fn attr_reader(
     let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
+    for v in arg.iter(len) {
+        let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
     }
@@ -155,8 +155,8 @@ extern "C" fn attr_writer(
     let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
+    for v in arg.iter(len) {
+        let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
     }
@@ -178,8 +178,8 @@ extern "C" fn attr_accessor(
     let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
-    for i in 0..len {
-        let arg_name = arg[i].expect_symbol_or_string(globals)?;
+    for v in arg.iter(len) {
+        let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
@@ -206,12 +206,12 @@ extern "C" fn module_function(
     } else {
         let class_id = self_val.as_class().class_id();
         let visi = vm.context_visibility();
-        for i in 0..len {
-            let name = arg[i].expect_symbol_or_string(globals)?;
+        for v in arg.iter(len) {
+            let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals.find_method_for_class(class_id, name)?;
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
-        let res = Value::new_array_from_vec(arg.to_vec(len));
+        let res = Value::new_array_from_iter(arg.iter(len));
         Some(res)
     }
 }
@@ -230,9 +230,9 @@ extern "C" fn include(
 ) -> Option<Value> {
     globals.check_min_number_of_arguments(len, 1)?;
     let class = self_val.as_class();
-    for i in 0..len {
-        arg[i].expect_module(globals)?;
-        globals.include_module(class, arg[len - i - 1].as_class());
+    for v in arg.rev(len) {
+        v.expect_module(globals)?;
+        globals.include_module(class, v.as_class());
     }
     Some(self_val)
 }
@@ -308,11 +308,11 @@ fn change_visi(
             return Some(arg[0]);
         }
     }
-    for i in 0..len {
-        names.push(arg[i].expect_symbol_or_string(globals)?);
+    for v in arg.iter(len) {
+        names.push(v.expect_symbol_or_string(globals)?);
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
-    let res = Value::new_array_from_vec(arg.to_vec(len));
+    let res = Value::new_array_from_iter(arg.iter(len));
     Some(res)
 }
 

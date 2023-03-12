@@ -149,8 +149,8 @@ extern "C" fn puts(
         }
     }
     let mut collector = Vec::new();
-    for i in 0..len {
-        decompose(&mut collector, arg[i]);
+    for v in arg.iter(len) {
+        decompose(&mut collector, v);
     }
 
     for v in collector {
@@ -176,8 +176,8 @@ extern "C" fn print(
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    for i in 0..len {
-        globals.write_stdout(&arg[i].to_bytes(globals));
+    for v in arg.iter(len) {
+        globals.write_stdout(&v.to_bytes(globals));
     }
     Some(Value::nil())
 }
@@ -215,8 +215,8 @@ extern "C" fn p(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut buf = String::new();
-    for i in 0..len {
-        buf += &arg[i].inspect(globals);
+    for v in arg.iter(len) {
+        buf += &v.inspect(globals);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
@@ -224,10 +224,7 @@ extern "C" fn p(
         0 => Value::nil(),
         1 => arg[0],
         _ => {
-            let mut ary = ArrayInner::new();
-            for i in 0..len {
-                ary.push(arg[i]);
-            }
+            let ary = ArrayInner::from_iter(arg.iter(len));
             Value::new_array(ary)
         }
     })
@@ -578,8 +575,8 @@ extern "C" fn system(
     let input = arg[0].as_string();
     let (program, mut args) = prepare_command_arg(input);
     if len > 1 {
-        for i in 1..len {
-            args.push(arg[i].expect_string(globals)?);
+        for v in arg.iter(len) {
+            args.push(v.expect_string(globals)?);
         }
     }
     Some(match Command::new(program).args(&args).status() {
