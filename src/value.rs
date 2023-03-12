@@ -287,8 +287,16 @@ impl Value {
         RValue::new_array(ary).pack()
     }
 
+    pub(crate) fn new_empty_array() -> Self {
+        RValue::new_array(ArrayInner::new()).pack()
+    }
+
     pub(crate) fn new_array_from_vec(v: Vec<Value>) -> Self {
-        RValue::new_array(ArrayInner::new(v)).pack()
+        RValue::new_array(ArrayInner::from_vec(v)).pack()
+    }
+
+    pub(crate) fn new_array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
+        RValue::new_array(ArrayInner::from_iter(iter)).pack()
     }
 
     pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
@@ -712,8 +720,8 @@ impl Value {
             NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, ..) => {
-                let v = v.iter().map(|node| Self::from_ast(node, globals)).collect();
-                Value::new_array_from_vec(v)
+                let iter = v.iter().map(|node| Self::from_ast(node, globals));
+                Value::new_array_from_iter(iter)
             }
             NodeKind::Const {
                 toplevel,
@@ -760,8 +768,8 @@ impl Value {
             NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, true) => {
-                let v = v.iter().map(Self::from_ast2).collect();
-                Value::new_array_from_vec(v)
+                let iter = v.iter().map(Self::from_ast2);
+                Value::new_array_from_iter(iter)
             }
             NodeKind::Range {
                 box start,

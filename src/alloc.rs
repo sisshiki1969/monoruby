@@ -269,7 +269,7 @@ impl<T: GCBox> Allocator<T> {
         self.unset_alloc_flag();
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         self.malloc_threshold = malloced + MALLOC_THRESHOLD;
-        #[cfg(any(feature = "trace", feature = "gc-debug"))]
+        #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("#### GC End");
         }

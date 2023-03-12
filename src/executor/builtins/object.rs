@@ -224,11 +224,11 @@ extern "C" fn p(
         0 => Value::nil(),
         1 => arg[0],
         _ => {
-            let mut ary = vec![];
+            let mut ary = ArrayInner::new();
             for i in 0..len {
                 ary.push(arg[i]);
             }
-            Value::new_array_from_vec(ary)
+            Value::new_array(ary)
         }
     })
 }

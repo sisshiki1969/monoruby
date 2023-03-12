@@ -683,12 +683,7 @@ impl Executor {
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {
-        Value::new_array_from_vec(
-            self.sp_matches
-                .iter()
-                .map(|v| v.unwrap_or_default())
-                .collect(),
-        )
+        Value::new_array_from_iter(self.sp_matches.iter().map(|v| v.unwrap_or_default()))
     }
 }
 

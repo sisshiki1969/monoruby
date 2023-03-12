@@ -292,8 +292,8 @@ impl RValue {
                 },
                 ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
-                ObjKind::ARRAY => ObjKind::array(ArrayInner::new(
-                    self.as_array().iter().map(|v| v.deep_copy()).collect(),
+                ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
+                    self.as_array().iter().map(|v| v.deep_copy()),
                 )),
                 ObjKind::RANGE => {
                     let lhs = self.as_range();
@@ -473,7 +473,7 @@ impl RValue {
     pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::ARRAY),
-            kind: ObjKind::array(ArrayInner::new(v)),
+            kind: ObjKind::array(ArrayInner::from_vec(v)),
             var_table: None,
         }
     }

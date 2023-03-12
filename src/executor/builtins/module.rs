@@ -86,12 +86,11 @@ extern "C" fn constants(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class_id = self_val.as_class().class_id();
-    let v = globals
+    let iter = globals
         .get_constant_names(class_id)
         .into_iter()
-        .map(Value::new_symbol)
-        .collect();
-    Some(Value::new_array_from_vec(v))
+        .map(Value::new_symbol);
+    Some(Value::new_array_from_iter(iter))
 }
 
 /// ### Module#instance_methods
@@ -111,12 +110,11 @@ extern "C" fn instance_methods(
     _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class_id = self_val.as_class().class_id();
-    let v = globals
+    let iter = globals
         .get_method_names(class_id)
         .into_iter()
-        .map(Value::new_symbol)
-        .collect();
-    Some(Value::new_array_from_vec(v))
+        .map(Value::new_symbol);
+    Some(Value::new_array_from_iter(iter))
 }
 
 /// ### Module#attr_reader
@@ -131,15 +129,15 @@ extern "C" fn attr_reader(
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut res = vec![];
+    let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        res.push(Value::new_symbol(method_name));
+        ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array_from_vec(res))
+    Some(Value::new_array(ary))
 }
 
 /// ### Module#attr_writer
@@ -154,15 +152,15 @@ extern "C" fn attr_writer(
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut res = vec![];
+    let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        res.push(Value::new_symbol(method_name));
+        ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array_from_vec(res))
+    Some(Value::new_array(ary))
 }
 
 /// ### Module#attr_accessor
@@ -177,17 +175,17 @@ extern "C" fn attr_accessor(
     len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut res = vec![];
+    let mut ary = ArrayInner::new();
     let class_id = self_val.as_class().class_id();
     let visi = vm.context_visibility();
     for i in 0..len {
         let arg_name = arg[i].expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        res.push(Value::new_symbol(method_name));
+        ary.push(Value::new_symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        res.push(Value::new_symbol(method_name));
+        ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array_from_vec(res))
+    Some(Value::new_array(ary))
 }
 
 /// ### Module#module_function

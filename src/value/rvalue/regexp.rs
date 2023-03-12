@@ -234,13 +234,13 @@ impl RegexpInner {
                     let data = vm.get_block_data(globals, block_handler);
                     vm.invoke_block(globals, data, &[matched])
                 } else {
-                    let mut v = vec![];
+                    let mut ary = ArrayInner::new();
                     for i in 0..captures.len() {
-                        v.push(Value::new_string_from_str(
+                        ary.push(Value::new_string_from_str(
                             captures.get(i).unwrap().as_str(),
                         ));
                     }
-                    Some(Value::new_array_from_vec(v))
+                    Some(Value::new_array(ary))
                 }
             }
             Err(err) => {

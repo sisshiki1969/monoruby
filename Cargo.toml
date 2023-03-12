@@ -1,6 +1,6 @@
 [package]
 name = "monoruby"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["monochrome <sisshiki@mac.com>"]
 description = "another Ruby interpreter with JIT compiler."
 repository = "https://github.com/sisshiki1969/monoruby"
@@ -24,7 +24,6 @@ emit-tir = []
 log-jit = []
 gc-debug = []
 gc-stress = []
-gc-off = []
 
 [profile.dev]
 opt-level = 1

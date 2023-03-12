@@ -1,7 +1,9 @@
 use crate::*;
+use smallvec::smallvec;
+use smallvec::SmallVec;
 
 #[derive(Debug, Clone)]
-pub struct ArrayInner(Vec<Value>);
+pub struct ArrayInner(SmallVec<[Value; 4]>);
 
 impl std::ops::Deref for ArrayInner {
     type Target = [Value];
@@ -17,8 +19,16 @@ impl std::ops::DerefMut for ArrayInner {
 }
 
 impl ArrayInner {
-    pub fn new(v: Vec<Value>) -> Self {
-        ArrayInner(v)
+    pub fn new() -> Self {
+        ArrayInner(smallvec!())
+    }
+
+    pub fn from_vec(v: Vec<Value>) -> Self {
+        ArrayInner(SmallVec::from_vec(v))
+    }
+
+    pub fn from_iter(iter: impl Iterator<Item = Value>) -> Self {
+        ArrayInner(SmallVec::from_iter(iter))
     }
 
     /*pub fn clear(&mut self) {
@@ -100,7 +110,7 @@ impl ArrayInner {
         let start = if len < i_start {
             return Some(Value::nil());
         } else if len == i_start {
-            return Some(Value::new_array_from_vec(vec![]));
+            return Some(Value::new_empty_array());
         } else {
             i_start as usize
         };
@@ -116,8 +126,8 @@ impl ArrayInner {
             (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
         };
         if start >= end {
-            return Some(Value::new_array_from_vec(vec![]));
+            return Some(Value::new_empty_array());
         }
-        Some(Value::new_array_from_vec(self[start..end].to_vec()))
+        Some(Value::new_array_from_iter(self[start..end].iter().cloned()))
     }
 }

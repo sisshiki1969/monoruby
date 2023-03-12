@@ -44,19 +44,17 @@ pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globa
 }
 
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
-    let v = if len == 0 {
-        vec![]
+    if len == 0 {
+        Value::new_empty_array()
     } else {
-        unsafe {
+        let iter = unsafe {
             std::slice::from_raw_parts(src.sub(len - 1), len)
                 .iter()
                 .rev()
                 .cloned()
-                .collect()
-        }
-    };
-    //v.reverse();
-    Value::new_array_from_vec(v)
+        };
+        Value::new_array_from_iter(iter)
+    }
 }
 
 pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
@@ -217,12 +215,11 @@ fn handle_req_opt_rest(
             if is_rest {
                 let len = arg_num - reqopt_num;
                 let ptr = callee_reg.sub(arg_num);
-                let v = std::slice::from_raw_parts(ptr, len)
+                let iter = std::slice::from_raw_parts(ptr, len)
                     .iter()
                     .rev()
-                    .map(|v| v.unwrap())
-                    .collect();
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(v));
+                    .map(|v| v.unwrap());
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_iter(iter));
             } else if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
@@ -231,7 +228,7 @@ fn handle_req_opt_rest(
             let ptr = callee_reg.sub(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_empty_array());
             }
         } else {
             if !is_block_style {
@@ -244,7 +241,7 @@ fn handle_req_opt_rest(
             let ptr = callee_reg.sub(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_vec(vec![]));
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_empty_array());
             }
         }
     }

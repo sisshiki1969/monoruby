@@ -397,12 +397,7 @@ impl Codegen {
             movq rdi, r12;
             movq rsi, rbx;
             movq rax, (execute_gc);
-        }
-        #[cfg(not(feature = "gc-off"))]
-        monoasm! { self.jit,
             call rax;
-        }
-        monoasm! { self.jit,
             jmp exit;
         };
         self.jit.select_page(0);
