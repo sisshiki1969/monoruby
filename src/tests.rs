@@ -1484,6 +1484,16 @@ mod test {
         end
         "#,
         );
+        run_test_with_prelude(
+            r#"
+        [f(c:7), f(b:8, a:10), f]
+        "#,
+            r#"
+        def f(a:1,b:2,c:3)
+          [a, b, c]
+        end
+        "#,
+        );
     }
 
     #[test]

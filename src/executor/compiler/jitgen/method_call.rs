@@ -544,7 +544,32 @@ impl Codegen {
                 if info.is_block_style && info.reqopt_num() > 1 && fnstore[callid].arg_num == 1 {
                     self.single_arg_expand();
                 }
-                if info.pos_num() == info.req_num() && info.key_num() == 0 {
+                if info.pos_num() == info.req_num() {
+                    if info.key_num() != 0 {
+                        let CallSiteInfo {
+                            kw_pos, kw_args, ..
+                        } = &fnstore[callid];
+                        let callee_kw_pos = info.args.pos_num + 1;
+                        for (callee, (param_name, _)) in info.args.keyword_args.iter().enumerate() {
+                            let callee_ofs = (callee_kw_pos as i64 + callee as i64) * 8 + LBP_SELF;
+                            match kw_args.get(param_name) {
+                                Some(caller) => {
+                                    let caller_ofs =
+                                        (*kw_pos as i64 + *caller as i64) * 8 + LBP_SELF;
+                                    monoasm! {self.jit,
+                                        movq  rax, [r14 - (caller_ofs)];
+                                        movq  [rsp - (16 + callee_ofs)], rax;
+                                    }
+                                }
+                                None => {
+                                    monoasm! {self.jit,
+                                        movq  [rsp - (16 + callee_ofs)], 0;
+                                    }
+                                }
+                            }
+                        }
+                        // TODO: We must care about a rest keyword paramter.
+                    }
                 } else {
                     monoasm! {self.jit,
                         movq rcx, (func_data as *const _ as u64);
