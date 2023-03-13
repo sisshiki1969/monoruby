@@ -470,9 +470,9 @@ fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
             unsafe { *dst.sub(i) = ary[i] };
         }
         len
-    } else if let Some(_) = src.is_range() {
+    } else if let Some(_range) = src.is_range() {
         unimplemented!()
-    } else if let Some(_) = src.is_hash() {
+    } else if let Some(_hash) = src.is_hash() {
         unimplemented!()
     } else {
         unsafe { *dst = src };

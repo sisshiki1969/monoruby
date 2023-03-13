@@ -578,19 +578,21 @@ pub(super) extern "C" fn get_error_location(
     globals.push_error_location(loc, sourceinfo);
 }
 
-pub unsafe extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Globals) {
+pub extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Globals) {
     let mut cfp = executor.cfp;
     eprintln!("-----begin stacktrace");
-    for i in 0..16 {
-        eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
-        let ret_addr = cfp.return_addr();
-        eprintln!(" ret adr: {ret_addr:?} ");
-        let prev_cfp = cfp.prev();
-        globals.dump_frame_info(cfp.lfp());
-        if prev_cfp.is_null() {
-            break;
+    unsafe {
+        for i in 0..16 {
+            eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
+            let ret_addr = cfp.return_addr();
+            eprintln!(" ret adr: {ret_addr:?} ");
+            let prev_cfp = cfp.prev();
+            globals.dump_frame_info(cfp.lfp());
+            if prev_cfp.is_null() {
+                break;
+            }
+            cfp = prev_cfp;
         }
-        cfp = prev_cfp;
     }
     eprintln!("-----end stacktrace");
 }

@@ -257,9 +257,7 @@ extern "C" fn dump(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    unsafe {
-        crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
-    }
+    crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
     Some(Value::nil())
 }
 
@@ -607,7 +605,7 @@ extern "C" fn command(
     match Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
-            Some(Value::new_string_from_slice(&output.stdout))
+            Some(Value::new_string_from_vec(output.stdout))
         }
         Err(err) => {
             globals.err_runtime(format!("{}", err));

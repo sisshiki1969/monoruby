@@ -466,7 +466,7 @@ impl FnStore {
         std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
         self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
         self[func_id].data.set_reg_num(regs as i64);
-        let temp_start = self[func_id].as_ruby_func().non_temp_num as u16 + 1;
+        let temp_start = self[func_id].as_ruby_func().non_temp_num + 1;
         let new_callid = self.callsite_info.len();
         for callid in old_callid..new_callid {
             self[CallSiteId::from(callid as u32)].kw_pos += temp_start;
@@ -485,9 +485,8 @@ pub(crate) enum FuncKind {
 
 impl alloc::GC<RValue> for FuncKind {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        match self {
-            FuncKind::ISeq(info) => info.mark(alloc),
-            _ => {}
+        if let FuncKind::ISeq(info) = self {
+            info.mark(alloc)
         }
     }
 }
@@ -941,10 +940,17 @@ impl ISeqInfo {
     }
 
     pub(crate) fn refer_dynamic_local(&self, outer: usize, ident: &str) -> BcLocal {
-        BcLocal(*self.outer_locals[outer - 1].0.get(ident).expect(&format!(
-            "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
-            self.outer_locals, self.locals
-        )))
+        BcLocal(
+            *self.outer_locals[outer - 1]
+                .0
+                .get(ident)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
+                        self.outer_locals, self.locals
+                    )
+                }),
+        )
     }
 
     /// Add a variable identifier without checking duplicates.
@@ -981,7 +987,7 @@ impl ISeqInfo {
                 }
             }
             NodeKind::MulAssign(n1, n2) => {
-                n1.into_iter().for_each(|n| {
+                n1.iter_mut().for_each(|n| {
                     if level == 0 {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
                             self.assign_local(name);
@@ -989,7 +995,7 @@ impl ISeqInfo {
                     }
                     self.level_down(n, level);
                 });
-                n2.into_iter().for_each(|n| self.level_down(n, level));
+                n2.iter_mut().for_each(|n| self.level_down(n, level));
             }
             NodeKind::Lambda(BlockInfo { params, body, .. }) => {
                 self.level_down(body, level + 1);
@@ -1083,7 +1089,7 @@ impl ISeqInfo {
             }
             NodeKind::Index { base, index } => {
                 self.level_down(base, level);
-                index.into_iter().for_each(|n| self.level_down(n, level));
+                index.iter_mut().for_each(|n| self.level_down(n, level));
             }
             NodeKind::For { param, iter, body } => {
                 for (outer, name) in param {
@@ -1163,12 +1169,12 @@ impl ISeqInfo {
             block,
             ..
         } = arglist;
-        args.into_iter().for_each(|n| self.level_down(n, level));
+        args.iter_mut().for_each(|n| self.level_down(n, level));
         kw_args
-            .into_iter()
+            .iter_mut()
             .for_each(|(_, n)| self.level_down(n, level));
         hash_splat
-            .into_iter()
+            .iter_mut()
             .for_each(|n| self.level_down(n, level));
         if let Some(n) = block {
             self.level_down(n, level);
@@ -1230,7 +1236,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn get_index(&self, reg: &BcReg) -> SlotId {
         let id = match reg {
             BcReg::Self_ => 0,
-            BcReg::Temp(i) => 1 + self.non_temp_num as u16 + i.0,
+            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
             BcReg::Local(i) => 1 + i.0,
         };
         SlotId(id)

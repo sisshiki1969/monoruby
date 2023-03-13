@@ -24,6 +24,7 @@ pub struct RValue {
     /// flags. 8 bytes
     flags: RVFlag,
     /// instance variable table. 8 bytes
+    #[allow(clippy::box_collection)]
     var_table: Option<Box<Vec<Option<Value>>>>,
     /// object data. 48 bytes.
     pub kind: ObjKind,
@@ -290,7 +291,7 @@ impl RValue {
                 ObjKind::FLOAT => ObjKind {
                     float: self.as_float(),
                 },
-                ObjKind::BYTES => ObjKind::bytes(self.as_bytes()),
+                ObjKind::BYTES => ObjKind::bytes_from_slice(self.as_bytes()),
                 ObjKind::TIME => ObjKind::time(self.as_time().clone()),
                 ObjKind::ARRAY => ObjKind::array(ArrayInner::from_iter(
                     self.as_array().iter().map(|v| v.deep_copy()),
@@ -331,13 +332,13 @@ impl RValue {
                         class: self.kind.class.clone(),
                     },
                     ObjKind::OBJECT => ObjKind {
-                        object: self.kind.object.clone(),
+                        object: self.kind.object,
                     },
                     ObjKind::BIGNUM => ObjKind {
                         bignum: self.kind.bignum.clone(),
                     },
                     ObjKind::FLOAT => ObjKind {
-                        float: self.kind.float.clone(),
+                        float: self.kind.float,
                     },
                     ObjKind::BYTES => ObjKind {
                         string: self.kind.string.clone(),
@@ -446,6 +447,10 @@ impl RValue {
         Self::new_bytes(s.into_bytes())
     }
 
+    pub(super) fn new_string_from_inner(s: StringInner) -> Self {
+        Self::new_bytes_from_inner(s)
+    }
+
     pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
@@ -454,10 +459,18 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_bytes_from_inner(s: StringInner) -> Self {
+        RValue {
+            flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
+            kind: ObjKind::bytes(s),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
             flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
-            kind: ObjKind::bytes(slice),
+            kind: ObjKind::bytes_from_slice(slice),
             var_table: None,
         }
     }
@@ -806,7 +819,13 @@ impl ObjKind {
         Self { float }
     }
 
-    fn bytes(slice: &[u8]) -> Self {
+    fn bytes(s: StringInner) -> Self {
+        Self {
+            string: ManuallyDrop::new(s),
+        }
+    }
+
+    fn bytes_from_slice(slice: &[u8]) -> Self {
         Self {
             string: ManuallyDrop::new(StringInner::from_slice(slice)),
         }

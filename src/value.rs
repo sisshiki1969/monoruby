@@ -271,6 +271,10 @@ impl Value {
         RValue::new_string(s).pack()
     }
 
+    pub(crate) fn new_string_from_inner(s: StringInner) -> Self {
+        RValue::new_string_from_inner(s).pack()
+    }
+
     pub(crate) fn new_string_from_str(b: &str) -> Self {
         RValue::new_bytes_from_slice(b.as_bytes()).pack()
     }

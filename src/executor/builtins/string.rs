@@ -40,9 +40,9 @@ extern "C" fn add(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut b = self_val.as_bytes().to_vec();
+    let mut b = StringInner::from_slice(self_val.as_bytes());
     b.extend_from_slice(arg[0].as_bytes());
-    Some(Value::new_string_from_vec(b))
+    Some(Value::new_string_from_inner(b))
 }
 
 ///
@@ -59,7 +59,7 @@ extern "C" fn mul(
     _len: usize,
     _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let lhs = self_val.as_bytes();
+    let mut lhs = StringInner::from_slice(self_val.as_bytes());
     let count = match arg[0].coerce_to_fixnum(globals)? {
         i if i < 0 => {
             globals.err_negative_argument();
