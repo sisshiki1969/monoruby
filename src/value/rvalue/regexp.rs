@@ -213,11 +213,11 @@ impl RegexpInner {
         }
     }
 
-    pub(crate) fn match_one<'a>(
+    pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
         re: &Regex,
-        given: &'a str,
+        given: &str,
         block: Option<BlockHandler>,
         pos: usize,
     ) -> Option<Value> {

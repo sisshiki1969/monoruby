@@ -984,7 +984,7 @@ impl ISeqInfo {
                 n1.into_iter().for_each(|n| {
                     if level == 0 {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
-                            self.assign_local(&name);
+                            self.assign_local(name);
                         }
                     }
                     self.level_down(n, level);
@@ -1068,7 +1068,7 @@ impl ISeqInfo {
                 self.level_down(n2, level);
                 self.level_down(n3, level);
             }
-            NodeKind::Hash(pairs, ..) => pairs.into_iter().for_each(|(n1, n2)| {
+            NodeKind::Hash(pairs, ..) => pairs.iter_mut().for_each(|(n1, n2)| {
                 self.level_down(n1, level);
                 self.level_down(n2, level);
             }),

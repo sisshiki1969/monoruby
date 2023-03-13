@@ -483,8 +483,7 @@ impl Executor {
     ) -> Option<Value> {
         match globals
             .compile_script(code, path)
-            .map(|fid| self.eval(globals, fid))
-            .flatten()
+            .and_then(|fid| self.eval(globals, fid))
         {
             Ok(v) => Some(v),
             Err(err) => {

@@ -124,7 +124,7 @@ impl IrContext {
         // TODO: We must check this in parser
         if arglist.delegate {
             return Err(MonorubyErr::syntax(
-                format!("Delegate argument should not be given"),
+                "Delegate argument should not be given".to_string(),
                 loc,
                 info.sourceinfo.clone(),
             ));
@@ -132,7 +132,7 @@ impl IrContext {
         // yield does not accept block.
         if arglist.block.is_some() {
             return Err(MonorubyErr::syntax(
-                format!("Block argument should not be given"),
+                "Block argument should not be given".to_string(),
                 loc,
                 info.sourceinfo.clone(),
             ));
@@ -193,21 +193,20 @@ impl IrContext {
         let args = info.next_reg().into();
         if with_block {
             self.handle_block_param(ctx, info, arglist.block, loc)?;
-        } else {
-            if arglist.args.len() == 1 {
-                if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
-                    // in the case of "f(a)"
+        } else if arglist.args.len() == 1 {
+            if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
+                // in the case of "f(a)"
+                let local = info.refer_local(ident).into();
+                return Ok((local, 1, vec![]));
+            } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
+                // in the case of "f(*a)"
+                if let NodeKind::LocalVar(0, ident) = &node.kind {
                     let local = info.refer_local(ident).into();
-                    return Ok((local, 1, vec![]));
-                } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
-                    // in the case of "f(*a)"
-                    if let NodeKind::LocalVar(0, ident) = &node.kind {
-                        let local = info.refer_local(ident).into();
-                        return Ok((local, 1, vec![0]));
-                    }
+                    return Ok((local, 1, vec![0]));
                 }
             }
         }
+
         let (_, arg_len, splat_pos) = self.gen_args(ctx, info, arglist.args)?;
         Ok((args, arg_len, splat_pos))
     }

@@ -531,7 +531,7 @@ extern "C" fn require_relative(
 
 fn prepare_command_arg(input: String) -> (String, Vec<String>) {
     let mut args = vec![];
-    let include_meta = input.contains(&[
+    let include_meta = input.contains([
         '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
         '\"', '`', '\n',
     ]);

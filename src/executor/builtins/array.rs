@@ -160,7 +160,7 @@ extern "C" fn inject(
     };
     let data = vm.get_block_data(globals, bh);
     for elem in iter {
-        res = vm.invoke_block(globals, data.clone(), &vec![res, *elem])?;
+        res = vm.invoke_block(globals, data.clone(), &[res, *elem])?;
     }
     Some(res)
 }

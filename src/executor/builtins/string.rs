@@ -246,7 +246,7 @@ extern "C" fn rem(
         }
         // Width
         let mut width = 0usize;
-        while ('0'..='9').contains(&ch) {
+        while ch.is_ascii_digit() {
             width = width * 10 + ch as usize - '0' as usize;
             ch = expect_char(globals, &mut chars)?;
         }
@@ -254,7 +254,7 @@ extern "C" fn rem(
         let mut precision = 0usize;
         if ch == '.' {
             ch = expect_char(globals, &mut chars)?;
-            while ('0'..='9').contains(&ch) {
+            while ch.is_ascii_digit() {
                 precision = precision * 10 + ch as usize - '0' as usize;
                 ch = expect_char(globals, &mut chars)?;
             }

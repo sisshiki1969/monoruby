@@ -71,7 +71,7 @@ impl ArrayInner {
                 Some(v) => *v = src,
                 None => {
                     let idx = idx as usize;
-                    self.extend((self.len()..idx).into_iter().map(|_| Value::nil()));
+                    self.extend((self.len()..idx).map(|_| Value::nil()));
                     self.push(src);
                 }
             }

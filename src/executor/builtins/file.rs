@@ -104,7 +104,7 @@ extern "C" fn expand_path(
     )
     .join(res_path);
 
-    return Some(Value::new_string(conv_pathbuf(&res_path)));
+    Some(Value::new_string(conv_pathbuf(&res_path)))
 }
 
 ///
