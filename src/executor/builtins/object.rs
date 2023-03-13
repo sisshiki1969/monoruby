@@ -575,7 +575,9 @@ extern "C" fn system(
     let input = arg[0].as_string();
     let (program, mut args) = prepare_command_arg(input);
     if len > 1 {
-        for v in arg.iter(len) {
+        let iter = arg.iter(len);
+        //iter.take(1);
+        for v in iter.take(1) {
             args.push(v.expect_string(globals)?);
         }
     }
