@@ -1,7 +1,13 @@
-def bottom_up_tree(depth)
-  return [nil, nil] unless depth > 0
-  depth -= 1
-  [bottom_up_tree(depth), bottom_up_tree(depth)]
+class C
+  def f(x,y,a)
+    x+y+a
+  end
 end
 
-bottom_up_tree(20)
+class D < C
+  def f(x,y,a:0)
+    super x,y,a
+  end
+end
+
+puts D.new.f(42, 100, a:50)

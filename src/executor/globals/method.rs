@@ -142,19 +142,15 @@ impl Globals {
         new_name: IdentId,
         old_name: IdentId,
     ) -> Option<()> {
-        let entry = match self.check_method_entry(obj, old_name) {
+        let class_id = obj.class();
+        let entry = match self.check_method_for_class(class_id, old_name) {
             Some(func) => func,
             None => {
                 self.err_method_not_found(old_name, obj);
                 return None;
             }
         };
-        self.add_method(
-            obj.class(),
-            new_name,
-            entry.func_id.unwrap(),
-            entry.visibility,
-        );
+        self.add_method(obj.class(), new_name, entry.func_id(), entry.visibility);
         Some(())
     }
 
@@ -168,7 +164,7 @@ impl Globals {
         old_name: IdentId,
     ) -> Option<()> {
         let entry = self.find_method_entry_for_class(class_id, old_name)?;
-        self.add_method(class_id, new_name, entry.func_id.unwrap(), entry.visibility);
+        self.add_method(class_id, new_name, entry.func_id(), entry.visibility);
         Some(())
     }
 }

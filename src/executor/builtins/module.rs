@@ -208,7 +208,9 @@ extern "C" fn module_function(
         let visi = vm.context_visibility();
         for v in arg.iter(len) {
             let name = v.expect_symbol_or_string(globals)?;
-            let func_id = globals.find_method_for_class(class_id, name)?;
+            let func_id = globals
+                .find_method_entry_for_class(class_id, name)?
+                .func_id();
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
         let res = Value::new_array_from_iter(arg.iter(len));

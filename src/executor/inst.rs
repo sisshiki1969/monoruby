@@ -81,6 +81,8 @@ pub(super) enum BcIr {
     Ret(BcReg),
     MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
+    Super(Option<BcReg>, CallSiteId),
+    MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     Yield {
         ret: Option<BcReg>,
         args: BcReg,
@@ -89,7 +91,6 @@ pub(super) enum BcIr {
     },
     InitMethod(FnInitInfo),
     InitBlock(FnInitInfo),
-    MethodArgs(BcReg, BcReg, usize), // (recv, args, args_len)
     MethodDef {
         name: IdentId,
         func_id: FuncId,
@@ -489,6 +490,13 @@ pub(super) enum TraceIr {
         _version: u32,
         info: MethodInfo,
     },
+    Super {
+        ret: SlotId,
+        callid: CallSiteId,
+        _class: ClassId,
+        _version: u32,
+        info: MethodInfo,
+    },
     InlineCall {
         ret: SlotId,
         method: InlineMethod,
@@ -719,6 +727,20 @@ impl TraceIr {
                         callid: op2.into(),
                         _class,
                         has_splat: opcode == 32,
+                        _version,
+                        info,
+                    }
+                }
+                34 => {
+                    let (_class, _version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1, fnstore) {
+                        Self::MethodArgs(info) => info,
+                        _ => unreachable!(),
+                    };
+                    Self::Super {
+                        ret: SlotId::new(op1),
+                        callid: op2.into(),
+                        _class,
                         _version,
                         info,
                     }

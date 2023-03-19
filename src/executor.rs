@@ -558,9 +558,7 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        //let len = args.len();
         let func_id = globals.find_method(receiver, method, false)?;
-        //globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }
@@ -629,7 +627,6 @@ impl Executor {
         args: Arg,
         len: usize,
     ) -> Option<Value> {
-        //globals.check_arg(func_id, len)?;
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
     }
@@ -1043,7 +1040,7 @@ impl BcPc {
                 info,
                 ..
             } => {
-                let name = globals.func[callid].name;
+                let name = globals.func[callid].name.unwrap();
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
@@ -1060,6 +1057,17 @@ impl BcPc {
                         len,
                         if has_splat { "*" } else { "" }
                     )
+                };
+                format!("{:36} [{}]", op1, _class.get_name(globals))
+            }
+            TraceIr::Super {
+                ret, _class, info, ..
+            } => {
+                let MethodInfo { args, len, .. } = info;
+                let op1 = if len == 0 {
+                    format!("{} = super()", ret.ret_str())
+                } else {
+                    format!("{} = super({:?}; {})", ret.ret_str(), args, len)
                 };
                 format!("{:36} [{}]", op1, _class.get_name(globals))
             }
@@ -1095,7 +1103,7 @@ impl BcPc {
                 info,
                 ..
             } => {
-                let name = globals.func[callid].name;
+                let name = globals.func[callid].name.unwrap();
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;

@@ -16,7 +16,7 @@ pub(super) extern "C" fn find_method(
     // register id of *self*
     recv_reg: u16,
 ) -> Option<FuncDataPtr> {
-    let func_name = globals.func[callid].name;
+    let func_name = globals.func[callid].name.unwrap();
     let func_id = globals.find_method(receiver, func_name, recv_reg == 0)?;
     let func_data = globals.compile_on_demand(func_id);
     Some(func_data.as_ptr())
@@ -33,6 +33,18 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     lexical_context.push(self_value);
     globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
     globals.compile_on_demand(func_id)
+}
+
+pub(super) extern "C" fn get_super_data(
+    executor: &Executor,
+    globals: &mut Globals,
+    self_val: Value,
+) -> Option<FuncDataPtr> {
+    let func_id = executor.cfp.method_func_id();
+    let func_name = globals.func[func_id].name().unwrap();
+    let super_id = globals.find_super(self_val, func_name)?.func_id();
+    let func_data = globals.compile_on_demand(super_id);
+    Some(func_data.as_ptr())
 }
 
 pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {

@@ -31,9 +31,16 @@ pub enum InlineMethod {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct MethodTableEntry {
+pub struct MethodTableEntry {
+    owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
+}
+
+impl MethodTableEntry {
+    pub fn func_id(&self) -> FuncId {
+        self.func_id.unwrap()
+    }
 }
 
 ///
@@ -548,7 +555,10 @@ impl Globals {
         let block = lfp.block();
         eprintln!(
             "    name:[{}] block:{} outer:{} {:?}",
-            self[func_id].name().unwrap_or(&"<unnamed>".to_string()),
+            match self[func_id].name() {
+                Some(name) => IdentId::get_name(name),
+                None => "<unnamed>".to_string(),
+            },
             match block {
                 Some(block) => {
                     match block.try_proxy() {

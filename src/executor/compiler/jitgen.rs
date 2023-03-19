@@ -1393,6 +1393,23 @@ impl Codegen {
                         );
                     }
                 }
+                TraceIr::Super {
+                    ret, callid, info, ..
+                } => {
+                    let MethodInfo {
+                        args, len, recv, ..
+                    } = info;
+                    self.write_back_slot(&mut ctx, recv);
+                    self.write_back_range(&mut ctx, args, len);
+                    ctx.dealloc_xmm(ret);
+                    // We must write back and unlink all local vars since they may be accessed by eval.
+                    self.gen_write_back_locals(&mut ctx);
+                    if info.func_data.is_none() {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                    } else {
+                        self.gen_call(fnstore, &mut ctx, info, callid, None, ret, pc + 1, false);
+                    }
+                }
                 TraceIr::InlineCall {
                     ret, method, info, ..
                 } => {

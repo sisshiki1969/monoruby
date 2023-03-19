@@ -282,6 +282,7 @@ impl Globals {
         self.class[class_id].methods.insert(
             name,
             MethodTableEntry {
+                owner: class_id,
                 func_id: Some(func_id),
                 visibility,
             },
@@ -297,6 +298,7 @@ impl Globals {
         self.class[class_id].methods.insert(
             name,
             MethodTableEntry {
+                owner: class_id,
                 func_id: None,
                 visibility,
             },
@@ -317,6 +319,7 @@ impl Globals {
         self.class[singleton].methods.insert(
             name,
             MethodTableEntry {
+                owner: singleton,
                 func_id: Some(func_id),
                 visibility,
             },
@@ -334,7 +337,8 @@ impl Globals {
         func_name: IdentId,
         is_func_call: bool,
     ) -> Option<FuncId> {
-        match self.check_method_entry(obj, func_name) {
+        let class_id = obj.class();
+        match self.check_method_for_class(class_id, func_name) {
             Some(entry) => {
                 match entry.visibility {
                     Visibility::Private => {
@@ -351,7 +355,7 @@ impl Globals {
                     }
                     _ => {}
                 }
-                Some(entry.func_id.unwrap())
+                Some(entry.func_id())
             }
             None => {
                 self.err_method_not_found(func_name, obj);
@@ -365,26 +369,7 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub(in crate::executor) fn find_method_for_class(
-        &mut self,
-        class: ClassId,
-        func_name: IdentId,
-    ) -> Option<FuncId> {
-        match self.check_method_for_class(class, func_name) {
-            Some(entry) => Some(entry.func_id.unwrap()),
-            None => {
-                self.err_method_not_found_for_class(func_name, class);
-                None
-            }
-        }
-    }
-
-    ///
-    /// Find method *name* for object *obj*.
-    ///
-    /// If not found, return MethodNotFound error.
-    ///
-    pub(super) fn find_method_entry_for_class(
+    pub fn find_method_entry_for_class(
         &mut self,
         class: ClassId,
         func_name: IdentId,
@@ -398,6 +383,16 @@ impl Globals {
         }
     }
 
+    pub fn find_super(&mut self, self_val: Value, func_name: IdentId) -> Option<MethodTableEntry> {
+        match self.check_super(self_val, func_name) {
+            Some(entry) => Some(entry),
+            None => {
+                self.err_method_not_found(func_name, self_val);
+                None
+            }
+        }
+    }
+
     ///
     /// Check whether a method *name* for object *obj* exists.
     ///
@@ -406,26 +401,25 @@ impl Globals {
         obj: Value,
         name: IdentId,
     ) -> Option<FuncId> {
-        self.check_method_entry(obj, name)
-            .map(|e| e.func_id.unwrap())
-    }
-
-    ///
-    /// Check whether a method *name* for object *obj* exists.
-    ///
-    pub(super) fn check_method_entry(
-        &mut self,
-        obj: Value,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
         let class_id = obj.class();
         self.check_method_for_class(class_id, name)
+            .map(|e| e.func_id())
     }
 
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    fn check_method_for_class(
+    fn check_super(&mut self, self_val: Value, name: IdentId) -> Option<MethodTableEntry> {
+        let class_id = self_val.class();
+        let MethodTableEntry { owner, .. } = self.check_method_for_class(class_id, name)?;
+        let superclass = owner.get_obj(self).superclass_id()?;
+        self.check_method_for_class(superclass, name)
+    }
+
+    ///
+    /// Check whether a method *name* of class *class_id* exists.
+    ///
+    pub(super) fn check_method_for_class(
         &mut self,
         class_id: ClassId,
         name: IdentId,
@@ -433,7 +427,7 @@ impl Globals {
         #[cfg(feature = "log-jit")]
         {
             match self.method_cache_stats.get_mut(&(class_id, name)) {
-                Some(c) => *c = *c + 1,
+                Some(c) => *c += 1,
                 None => {
                     self.method_cache_stats.insert((class_id, name), 1);
                 }
@@ -445,7 +439,7 @@ impl Globals {
                 return entry.clone();
             }
         };
-        let entry = self.check_method_main(class_id, name);
+        let entry = self.search_method(class_id, name);
         self.global_method_cache
             .insert((name, class_id), (class_version, entry.clone()));
         entry
@@ -456,22 +450,19 @@ impl Globals {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    fn check_method_main(
-        &mut self,
-        mut class_id: ClassId,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    fn search_method(&mut self, mut class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let mut visi = None;
         loop {
             if let Some(entry) = self.get_method(class_id, name) {
                 if entry.func_id.is_some() {
+                    let visibility = if let Some(visi) = visi {
+                        visi
+                    } else {
+                        entry.visibility
+                    };
                     return Some(MethodTableEntry {
-                        func_id: entry.func_id,
-                        visibility: if let Some(visi) = visi {
-                            visi
-                        } else {
-                            entry.visibility
-                        },
+                        visibility,
+                        ..entry.clone()
                     });
                 } else if visi.is_none() {
                     visi = Some(entry.visibility);

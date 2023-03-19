@@ -26,10 +26,112 @@ impl Codegen {
     /// func data: the data of the function
     /// ~~~
     pub(super) fn vm_method_call(&mut self, with_block: bool, has_splat: bool) -> CodePtr {
+        let slow_path = self.jit.label();
+        let exec = self.jit.label();
+        let vm_return = self.vm_return;
+        let class_version = self.class_version;
+        //      -16    -12    -8     -4
+        //      +------+------+------+------+
+        //      | MethodCall  |class | ver  |
+        //      +------+------+------+------+
+        // r13->| MethodArgs  |  FuncData   |
+        //      +------+------+------+------+
+        //
+        // rdi: IdentId
+        // r15: %ret
+        // [r13 - 16]: CallSiteId
+        // [r13 -  8]: class_id
+        // [r13 -  4]: class_version
+        // [r13 +  0]; len
+        // [r13 +  2]; %args
+        // [r13 +  4]: %recv
+        // [r13 +  8]: FuncData
+
+        let label = self.vm_method_call_main(slow_path, exec, with_block, has_splat);
+
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        slow_path:
+            movq rdi, r12;
+            movq rsi, [rsp + 8];  // rsi: CallSiteId
+            movq rdx, [rsp]; // rcx: receiver:Value
+            movzxw rcx, [r13 +  4];
+            movq rax, (runtime::find_method);
+            call rax;   // rax <- Option<&FuncData>
+            testq rax, rax;
+            jeq vm_return;
+            movq [r13 + 8], rax;    // FuncData
+            movl [r13 - 8], r15;    // ClassId of receiver
+            movl rdi, [rip + class_version];
+            movl [r13 - 4], rdi;    // class_version
+            jmp exec;
+        );
+        self.jit.select_page(0);
+
+        label
+    }
+
+    /// Super
+    ///
+    /// ~~~text
+    /// Super
+    /// +---+---+---+---++---+---+---+---+
+    /// | op|ret|callid || class |version|
+    /// +---+---+---+---++---+---+---+---+
+    /// MethodArgs
+    /// +---+---+---+---++---+---+---+---+
+    /// | op| - |arg|len||   func data   |
+    /// +---+---+---+---++---+---+---+---+
+    ///
+    /// operands
+    /// ret:  return register
+    /// id:   call site id
+    /// arg:  the start of argument registers
+    /// len:  the number of argument registers
+    ///
+    /// inline method cache
+    /// class:    a class of the receiver
+    /// version:  class version
+    /// func data: the data of the function
+    /// ~~~
+    pub(super) fn vm_super(&mut self) -> CodePtr {
+        let slow_path = self.jit.label();
+        let exec = self.jit.label();
+        let vm_return = self.vm_return;
+        let class_version = self.class_version;
+
+        let label = self.vm_method_call_main(slow_path, exec, false, false);
+
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        slow_path:
+            movq rdi, rbx;
+            movq rsi, r12;  // rsi: CallSiteId
+            movq rdx, [rsp]; // rcx: receiver:Value
+            movq rax, (runtime::get_super_data);
+            call rax;   // rax <- Option<&FuncData>
+            testq rax, rax;
+            jeq vm_return;
+            movq [r13 + 8], rax;    // FuncData
+            movl [r13 - 8], r15;    // ClassId of receiver
+            movl rdi, [rip + class_version];
+            movl [r13 - 4], rdi;    // class_version
+            jmp exec;
+        );
+        self.jit.select_page(0);
+
+        label
+    }
+
+    fn vm_method_call_main(
+        &mut self,
+        slow_path: DestLabel,
+        exec: DestLabel,
+        with_block: bool,
+        has_splat: bool,
+    ) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        let slowpath = self.jit.label();
-        let exec = self.jit.label();
         let vm_return = self.vm_return;
         let class_version = self.class_version;
         //      -16    -12    -8     -4
@@ -72,10 +174,10 @@ impl Codegen {
             call rax;
             movl r15, rax;
             cmpl r15, [r13 - 8];
-            jne  slowpath;
+            jne  slow_path;
             movl rdi, [r13 - 4];
             cmpl rdi, [rip + class_version];
-            jne  slowpath;
+            jne  slow_path;
         exec:
         };
         self.set_method_outer();
@@ -131,26 +233,6 @@ impl Codegen {
         };
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
-
-        self.jit.select_page(1);
-        monoasm!(self.jit,
-        slowpath:
-            movq rdi, r12;
-            movq rsi, [rsp + 8];  // rsi: CallSiteId
-            movq rdx, [rsp]; // rcx: receiver:Value
-            movzxw rcx, [r13 +  4];
-            movq rax, (runtime::find_method);
-            call rax;   // rax <- Option<&FuncData>
-            testq rax, rax;
-            jeq vm_return;
-            movq [r13 + 8], rax;    // FuncData
-            movl [r13 - 8], r15;    // ClassId of receiver
-            movl rdi, [rip + class_version];
-            movl [r13 - 4], rdi;    // class_version
-            jmp exec;
-        );
-        self.jit.select_page(0);
-
         label
     }
 

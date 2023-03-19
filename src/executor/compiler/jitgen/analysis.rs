@@ -353,6 +353,17 @@ impl LoopAnalysis {
                     }
                     reg_info.def_as(ret, false);
                 }
+                TraceIr::Super { ret, info, .. } => {
+                    let MethodInfo { args, len, .. } = info;
+                    for i in 0..len {
+                        reg_info.use_non_float(args + i);
+                    }
+                    // unlink all local variables.
+                    for i in 1..1 + func.local_num() as u16 {
+                        reg_info.unlink(SlotId(i));
+                    }
+                    reg_info.def_as(ret, false);
+                }
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
                     ret, method, info, ..

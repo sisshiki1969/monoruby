@@ -184,6 +184,7 @@ impl Codegen {
         self.dispatch[31] = self.vm_method_call(false, false);
         self.dispatch[32] = self.vm_method_call(true, true);
         self.dispatch[33] = self.vm_method_call(true, false);
+        self.dispatch[34] = self.vm_super();
 
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();

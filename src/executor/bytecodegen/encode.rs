@@ -103,6 +103,17 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
+                BcIr::Super(ret, callid) => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => info.get_index(ret),
+                    };
+                    Bc::from_with_class_and_version(
+                        enc_wl(34, op1.0, callid.get()),
+                        ClassId::new(0),
+                        -1i32 as u32,
+                    )
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = info.get_index(ret);
                     let op2 = info.get_index(src);

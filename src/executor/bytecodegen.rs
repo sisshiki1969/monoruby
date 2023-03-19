@@ -157,7 +157,7 @@ impl IrContext {
         for OptionalInfo { local, initializer } in info.args.optional_info.clone() {
             let local = local.into();
             let next = ir.new_label();
-            ir.gen_check_local(local, next);
+            ir.emit_check_local(local, next);
             ir.gen_store_expr(ctx, info, local, initializer)?;
             ir.apply_label(next);
         }
@@ -165,11 +165,11 @@ impl IrContext {
         for (id, (_, initializer)) in info.args.keyword_args.clone().into_iter().enumerate() {
             let local = BcLocal((kw_reg + id) as u16).into();
             let next = ir.new_label();
-            ir.gen_check_local(local, next);
+            ir.emit_check_local(local, next);
             if let Some(box init) = initializer {
                 ir.gen_store_expr(ctx, info, local, init)?;
             } else {
-                ir.gen_nil(info, Some(local));
+                ir.emit_nil(info, Some(local));
             }
             ir.apply_label(next);
         }
@@ -207,7 +207,7 @@ impl IrContext {
         self.labels[label] = Some(pos);
     }
 
-    fn gen_ret(&mut self, info: &mut ISeqInfo, src: Option<BcReg>) {
+    fn emit_ret(&mut self, info: &mut ISeqInfo, src: Option<BcReg>) {
         let ret = match src {
             Some(ret) => ret,
             None => info.pop().into(),
@@ -216,22 +216,22 @@ impl IrContext {
         self.push(BcIr::Ret(ret), Loc::default());
     }
 
-    fn gen_mov(&mut self, dst: BcReg, src: BcReg) {
+    fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
             self.push(BcIr::Mov(dst, src), Loc::default());
         }
     }
 
-    fn gen_temp_mov(&mut self, info: &mut ISeqInfo, src: BcReg) {
+    fn emit_temp_mov(&mut self, info: &mut ISeqInfo, src: BcReg) {
         let dst = info.push();
-        self.gen_mov(dst.into(), src);
+        self.emit_mov(dst.into(), src);
     }
 
-    fn gen_br(&mut self, jmp_pos: usize) {
+    fn emit_br(&mut self, jmp_pos: usize) {
         self.push(BcIr::Br(jmp_pos), Loc::default());
     }
 
-    fn gen_condbr(&mut self, cond: BcReg, jmp_pos: usize, jmp_if_true: bool, optimizable: bool) {
+    fn emit_condbr(&mut self, cond: BcReg, jmp_pos: usize, jmp_if_true: bool, optimizable: bool) {
         self.push(
             BcIr::CondBr(
                 cond,
@@ -247,11 +247,11 @@ impl IrContext {
         );
     }
 
-    fn gen_check_local(&mut self, local: BcReg, else_pos: usize) {
+    fn emit_check_local(&mut self, local: BcReg, else_pos: usize) {
         self.push(BcIr::CheckLocal(local, else_pos), Loc::default());
     }
 
-    fn gen_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>) {
+    fn emit_nil(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>) {
         let reg = match dst {
             Some(dst) => dst,
             None => info.push().into(),
@@ -259,13 +259,13 @@ impl IrContext {
         self.push(BcIr::Nil(reg), Loc::default());
     }
 
-    fn gen_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
+    fn emit_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
         let reg = BcReg::get_reg(info, dst);
         info.literals.push(v);
         self.push(BcIr::Literal(reg, v), Loc::default());
     }
 
-    fn gen_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
+    fn emit_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local,
@@ -273,19 +273,19 @@ impl IrContext {
             };
             self.push(BcIr::Integer(reg, i), Loc::default());
         } else {
-            self.gen_literal(info, dst, Value::new_integer(i));
+            self.emit_literal(info, dst, Value::new_integer(i));
         }
     }
 
-    fn gen_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
-        self.gen_literal(info, dst, Value::new_bigint(bigint));
+    fn emit_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
+        self.emit_literal(info, dst, Value::new_bigint(bigint));
     }
 
-    fn gen_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
-        self.gen_literal(info, dst, Value::new_float(f));
+    fn emit_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
+        self.emit_literal(info, dst, Value::new_float(f));
     }
 
-    fn gen_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: String) {
+    fn emit_symbol(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, sym: String) {
         let reg = BcReg::get_reg(info, dst);
         self.push(
             BcIr::Symbol(reg, IdentId::get_ident_id_from_string(sym)),
@@ -293,8 +293,8 @@ impl IrContext {
         );
     }
 
-    fn gen_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
-        self.gen_literal(info, dst, Value::new_string(s));
+    fn emit_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
+        self.emit_literal(info, dst, Value::new_string(s));
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
@@ -348,7 +348,7 @@ impl IrContext {
         Ok(())
     }
 
-    fn gen_range(
+    fn emit_range(
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
@@ -372,6 +372,62 @@ impl IrContext {
         Ok(())
     }
 
+    fn emit_load_const(
+        &mut self,
+        info: &mut ISeqInfo,
+        dst: Option<BcReg>,
+        toplevel: bool,
+        name: String,
+        prefix: Vec<String>,
+        loc: Loc,
+    ) {
+        let name = IdentId::get_ident_id_from_string(name);
+        let prefix = prefix
+            .into_iter()
+            .map(IdentId::get_ident_id_from_string)
+            .collect();
+        let reg = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
+    }
+
+    fn emit_load_ivar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let reg = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadIvar(reg, name), loc);
+    }
+
+    fn emit_load_gvar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
+        let ret = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadGvar { ret, name }, loc);
+    }
+
+    fn emit_load_svar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, id: u32, loc: Loc) {
+        let ret = BcReg::get_reg(info, dst);
+        self.push(BcIr::LoadSvar { ret, id }, loc);
+    }
+
+    fn emit_neg(&mut self, info: &mut ISeqInfo, local: Option<BcReg>, loc: Loc) {
+        match local {
+            Some(local) => {
+                self.push(
+                    BcIr::Neg {
+                        ret: local,
+                        src: local,
+                    },
+                    loc,
+                );
+            }
+            None => {
+                let src = info.pop().into();
+                let ret = info.push().into();
+                self.push(BcIr::Neg { ret, src }, loc);
+            }
+        };
+    }
+
+    fn emit_not(&mut self, ret: BcReg, src: BcReg, loc: Loc) {
+        self.push(BcIr::Not { ret, src }, loc);
+    }
+
     fn gen_opt_condbr(
         &mut self,
         ctx: &mut FnStore,
@@ -385,7 +441,7 @@ impl IrContext {
             let cond = info.next_reg().into();
             self.gen_cmp(ctx, info, None, kind, lhs, rhs, true, loc)?;
             info.pop();
-            self.gen_condbr(cond, else_pos, jmp_if_true, true);
+            self.emit_condbr(cond, else_pos, jmp_if_true, true);
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_lor_condbr(ctx, info, jmp_if_true, lhs, rhs, else_pos)?;
@@ -400,7 +456,7 @@ impl IrContext {
             }
         } else {
             let cond = self.gen_temp_expr(ctx, info, cond)?;
-            self.gen_condbr(cond, else_pos, jmp_if_true, false);
+            self.emit_condbr(cond, else_pos, jmp_if_true, false);
         }
         Ok(())
     }
@@ -420,7 +476,7 @@ impl IrContext {
             BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
             loc,
         );
-        self.gen_condbr(lhs, cont_pos, jmp_if_true, true);
+        self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
         Ok(())
     }
 
@@ -451,39 +507,6 @@ impl IrContext {
         self.gen_opt_condbr(ctx, info, jmp_if_true, rhs, else_pos)?;
         self.apply_label(cont_pos);
         Ok(())
-    }
-
-    fn gen_load_const(
-        &mut self,
-        info: &mut ISeqInfo,
-        dst: Option<BcReg>,
-        toplevel: bool,
-        name: String,
-        prefix: Vec<String>,
-        loc: Loc,
-    ) {
-        let name = IdentId::get_ident_id_from_string(name);
-        let prefix = prefix
-            .into_iter()
-            .map(IdentId::get_ident_id_from_string)
-            .collect();
-        let reg = BcReg::get_reg(info, dst);
-        self.push(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
-    }
-
-    fn gen_load_ivar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
-        let reg = BcReg::get_reg(info, dst);
-        self.push(BcIr::LoadIvar(reg, name), loc);
-    }
-
-    fn gen_load_gvar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, name: IdentId, loc: Loc) {
-        let ret = BcReg::get_reg(info, dst);
-        self.push(BcIr::LoadGvar { ret, name }, loc);
-    }
-
-    fn gen_load_svar(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, id: u32, loc: Loc) {
-        let ret = BcReg::get_reg(info, dst);
-        self.push(BcIr::LoadSvar { ret, id }, loc);
     }
 
     fn gen_index(
@@ -598,36 +621,13 @@ impl IrContext {
         }
     }
 
-    fn gen_neg(&mut self, info: &mut ISeqInfo, local: Option<BcReg>, loc: Loc) {
-        match local {
-            Some(local) => {
-                self.push(
-                    BcIr::Neg {
-                        ret: local,
-                        src: local,
-                    },
-                    loc,
-                );
-            }
-            None => {
-                let src = info.pop().into();
-                let ret = info.push().into();
-                self.push(BcIr::Neg { ret, src }, loc);
-            }
-        };
-    }
-
-    fn gen_not(&mut self, ret: BcReg, src: BcReg, loc: Loc) {
-        self.push(BcIr::Not { ret, src }, loc);
-    }
-
     fn handle_mode(&mut self, info: &mut ISeqInfo, use_mode: UseMode, src: BcReg) {
         match use_mode {
             UseMode::Ret => {
-                self.gen_ret(info, Some(src));
+                self.emit_ret(info, Some(src));
             }
             UseMode::Use => {
-                self.gen_temp_mov(info, src);
+                self.emit_temp_mov(info, src);
             }
             UseMode::NotUse => {}
         }
@@ -653,10 +653,10 @@ impl IrContext {
                 self.gen_store_expr(ctx, info, ret, last)?;
                 match use_mode {
                     UseMode::Ret => {
-                        self.gen_ret(info, ret.into());
+                        self.emit_ret(info, ret.into());
                     }
                     UseMode::Use => {
-                        self.gen_temp_mov(info, ret);
+                        self.emit_temp_mov(info, ret);
                     }
                     UseMode::NotUse => {}
                 }
@@ -748,27 +748,27 @@ impl IrContext {
         }
         let loc = expr.loc;
         match expr.kind {
-            NodeKind::Nil => self.gen_nil(info, None),
-            NodeKind::Bool(b) => self.gen_literal(info, None, Value::bool(b)),
-            NodeKind::SelfValue => self.gen_temp_mov(info, BcReg::Self_),
+            NodeKind::Nil => self.emit_nil(info, None),
+            NodeKind::Bool(b) => self.emit_literal(info, None, Value::bool(b)),
+            NodeKind::SelfValue => self.emit_temp_mov(info, BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.gen_integer(info, None, i);
+                self.emit_integer(info, None, i);
             }
             NodeKind::Symbol(sym) => {
-                self.gen_symbol(info, None, sym);
+                self.emit_symbol(info, None, sym);
             }
-            NodeKind::Bignum(bigint) => self.gen_bigint(info, None, bigint),
-            NodeKind::Float(f) => self.gen_float(info, None, f),
-            NodeKind::String(s) => self.gen_string(info, None, s),
+            NodeKind::Bignum(bigint) => self.emit_bigint(info, None, bigint),
+            NodeKind::Float(f) => self.emit_float(info, None, f),
+            NodeKind::String(s) => self.emit_string(info, None, s),
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&expr);
-                self.gen_literal(info, None, val);
+                self.emit_literal(info, None, val);
             }
             NodeKind::RegExp(nodes, true) => {
                 let val = self.const_regexp(info, nodes, loc)?;
-                self.gen_literal(info, None, val);
+                self.emit_literal(info, None, val);
             }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, None, nodes, loc)?,
@@ -777,7 +777,7 @@ impl IrContext {
                 box end,
                 exclude_end,
                 is_const: false,
-            } => self.gen_range(ctx, info, None, start, end, exclude_end, loc)?,
+            } => self.emit_range(ctx, info, None, start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -795,17 +795,17 @@ impl IrContext {
                 UnOp::Neg => {
                     match rhs.kind {
                         //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
-                        NodeKind::Float(f) => self.gen_float(info, None, -f),
+                        NodeKind::Float(f) => self.emit_float(info, None, -f),
                         _ => {
                             self.push_expr(ctx, info, rhs)?;
-                            self.gen_neg(info, None, loc);
+                            self.emit_neg(info, None, loc);
                         }
                     };
                 }
                 UnOp::Not => {
                     let src = self.push_expr(ctx, info, rhs)?;
                     let ret = info.push().into();
-                    self.gen_not(ret, src, loc);
+                    self.emit_not(ret, src, loc);
                 }
                 _ => {
                     return Err(MonorubyErr::unsupported_feature(
@@ -871,18 +871,18 @@ impl IrContext {
                 parent: _,
                 prefix,
             } => {
-                self.gen_load_const(info, None, toplevel, name, prefix, loc);
+                self.emit_load_const(info, None, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
-                self.gen_load_ivar(info, None, name, loc);
+                self.emit_load_ivar(info, None, name, loc);
             }
             NodeKind::GlobalVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
-                self.gen_load_gvar(info, None, name, loc);
+                self.emit_load_gvar(info, None, name, loc);
             }
             NodeKind::SpecialVar(id) => {
-                self.gen_load_svar(info, None, id as u32, loc);
+                self.emit_load_svar(info, None, id as u32, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -907,6 +907,9 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 return self.gen_method_call(ctx, info, method, None, arglist, None, use_mode, loc);
+            }
+            NodeKind::Super(arglist) => {
+                return self.gen_super(ctx, info, arglist, None, use_mode, loc);
             }
             NodeKind::Command(box expr) => {
                 let mut arglist = ArgList::default();
@@ -946,10 +949,10 @@ impl IrContext {
                 match use_mode {
                     UseMode::Ret => {}
                     UseMode::NotUse => {
-                        self.gen_br(succ_pos);
+                        self.emit_br(succ_pos);
                     }
                     UseMode::Use => {
-                        self.gen_br(succ_pos);
+                        self.emit_br(succ_pos);
                         info.pop();
                     }
                 }
@@ -977,7 +980,7 @@ impl IrContext {
                     self.gen_while(ctx, info, cond_op, cond, body, use_mode.use_val())?;
                 }
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -988,7 +991,7 @@ impl IrContext {
             } => {
                 self.gen_for(ctx, info, param, iter, body, use_mode.use_val())?;
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -1013,7 +1016,7 @@ impl IrContext {
                             for when in when {
                                 self.gen_teq_condbr(ctx, info, when, rhs, then_pos, true)?;
                             }
-                            self.gen_br(succ_pos);
+                            self.emit_br(succ_pos);
                             self.apply_label(then_pos);
                         }
                         self.gen_store_expr(ctx, info, ret, body)?;
@@ -1021,7 +1024,7 @@ impl IrContext {
                         if use_mode.is_ret() {
                             self.push(BcIr::Ret(ret), Loc::default());
                         } else {
-                            self.gen_br(exit_pos);
+                            self.emit_br(exit_pos);
                         }
 
                         self.apply_label(succ_pos);
@@ -1030,7 +1033,7 @@ impl IrContext {
                     self.gen_store_expr(ctx, info, ret, else_)?;
                     match use_mode {
                         UseMode::Ret => {
-                            self.gen_ret(info, None);
+                            self.emit_ret(info, None);
                         }
                         UseMode::NotUse => {
                             info.pop();
@@ -1051,12 +1054,12 @@ impl IrContext {
                             for when in when {
                                 self.gen_opt_condbr(ctx, info, true, when, then_pos)?;
                             }
-                            self.gen_br(succ_pos);
+                            self.emit_br(succ_pos);
                             self.apply_label(then_pos);
                         }
                         self.gen_expr(ctx, info, body, use_mode)?;
                         if !use_mode.is_ret() {
-                            self.gen_br(exit_pos);
+                            self.emit_br(exit_pos);
                         }
                         self.apply_label(succ_pos);
                     }
@@ -1075,14 +1078,14 @@ impl IrContext {
                 };
                 if let Some(reg) = ret_reg {
                     let temp = self.gen_temp_expr(ctx, info, val)?;
-                    self.gen_mov(reg, temp)
+                    self.emit_mov(reg, temp)
                 }
                 self.push(BcIr::Br(break_pos), loc);
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
                 if let Some(local) = info.is_refer_local(&expr) {
-                    self.gen_ret(info, Some(local.into()));
+                    self.emit_ret(info, Some(local.into()));
                 } else {
                     self.gen_expr(ctx, info, expr, UseMode::Ret)?;
                 }
@@ -1114,10 +1117,10 @@ impl IrContext {
             NodeKind::MethodDef(name, block) => {
                 self.gen_method_def(ctx, info, name.clone(), block, loc)?;
                 if use_mode.use_val() {
-                    self.gen_symbol(info, None, name);
+                    self.emit_symbol(info, None, name);
                 }
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -1125,10 +1128,10 @@ impl IrContext {
                 self.gen_expr(ctx, info, obj, UseMode::Use)?;
                 self.gen_singleton_method_def(ctx, info, name.clone(), block, loc)?;
                 if use_mode.use_val() {
-                    self.gen_symbol(info, None, name);
+                    self.emit_symbol(info, None, name);
                 }
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -1144,6 +1147,7 @@ impl IrContext {
                 } else {
                     None
                 };
+                let name = IdentId::get_ident_id_from_string(name);
                 self.gen_class_def(
                     ctx,
                     info,
@@ -1156,7 +1160,7 @@ impl IrContext {
                     loc,
                 )?;
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -1171,7 +1175,7 @@ impl IrContext {
                 };
                 self.gen_singleton_class_def(ctx, info, singleton, *block_info.body, dst, loc)?;
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
@@ -1189,15 +1193,15 @@ impl IrContext {
                 };
                 self.push(BcIr::ConcatStr(ret, arg, len), Loc::default());
                 if use_mode.is_ret() {
-                    self.gen_ret(info, None);
+                    self.emit_ret(info, None);
                 }
                 return Ok(());
             }
             NodeKind::AliasMethod(box new, box old) => {
                 match (new.kind, old.kind) {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
-                        self.gen_symbol(info, None, new);
-                        self.gen_symbol(info, None, old);
+                        self.emit_symbol(info, None, new);
+                        self.emit_symbol(info, None, old);
                         let old = info.pop().into();
                         let new = info.pop().into();
                         self.push(BcIr::AliasMethod { new, old }, loc);
@@ -1206,12 +1210,12 @@ impl IrContext {
                 };
                 match use_mode {
                     UseMode::Ret => {
-                        self.gen_nil(info, None);
-                        self.gen_ret(info, None);
+                        self.emit_nil(info, None);
+                        self.emit_ret(info, None);
                     }
                     UseMode::NotUse => {}
                     UseMode::Use => {
-                        self.gen_nil(info, None);
+                        self.emit_nil(info, None);
                     }
                 }
                 return Ok(());
@@ -1220,7 +1224,7 @@ impl IrContext {
         }
         match use_mode {
             UseMode::Ret => {
-                self.gen_ret(info, None);
+                self.emit_ret(info, None);
             }
             UseMode::NotUse => {
                 info.pop();
@@ -1239,32 +1243,32 @@ impl IrContext {
     ) -> Result<()> {
         let loc = rhs.loc;
         match rhs.kind {
-            NodeKind::Nil => self.gen_nil(info, Some(dst)),
-            NodeKind::Bool(b) => self.gen_literal(info, Some(dst), Value::bool(b)),
-            NodeKind::SelfValue => self.gen_mov(dst, BcReg::Self_),
-            NodeKind::Integer(i) => self.gen_integer(info, Some(dst), i),
-            NodeKind::Symbol(sym) => self.gen_symbol(info, Some(dst), sym),
-            NodeKind::Bignum(bigint) => self.gen_bigint(info, Some(dst), bigint),
-            NodeKind::Float(f) => self.gen_float(info, Some(dst), f),
-            NodeKind::String(s) => self.gen_string(info, Some(dst), s),
+            NodeKind::Nil => self.emit_nil(info, Some(dst)),
+            NodeKind::Bool(b) => self.emit_literal(info, Some(dst), Value::bool(b)),
+            NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
+            NodeKind::Integer(i) => self.emit_integer(info, Some(dst), i),
+            NodeKind::Symbol(sym) => self.emit_symbol(info, Some(dst), sym),
+            NodeKind::Bignum(bigint) => self.emit_bigint(info, Some(dst), bigint),
+            NodeKind::Float(f) => self.emit_float(info, Some(dst), f),
+            NodeKind::String(s) => self.emit_string(info, Some(dst), s),
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, Some(dst), nodes, loc)?,
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&rhs);
-                self.gen_literal(info, Some(dst), val);
+                self.emit_literal(info, Some(dst), val);
             }
             NodeKind::RegExp(nodes, true) => {
                 let val = self.const_regexp(info, nodes, loc)?;
-                self.gen_literal(info, Some(dst), val);
+                self.emit_literal(info, Some(dst), val);
             }
             NodeKind::Range {
                 box start,
                 box end,
                 exclude_end,
                 is_const: false,
-            } => self.gen_range(ctx, info, Some(dst), start, end, exclude_end, loc)?,
+            } => self.emit_range(ctx, info, Some(dst), start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -1281,17 +1285,17 @@ impl IrContext {
             NodeKind::UnOp(op, box rhs) => match op {
                 UnOp::Neg => {
                     match rhs.kind {
-                        NodeKind::Integer(i) => self.gen_integer(info, Some(dst), -i),
-                        NodeKind::Float(f) => self.gen_float(info, Some(dst), -f),
+                        NodeKind::Integer(i) => self.emit_integer(info, Some(dst), -i),
+                        NodeKind::Float(f) => self.emit_float(info, Some(dst), -f),
                         _ => {
                             self.gen_store_expr(ctx, info, dst, rhs)?;
-                            self.gen_neg(info, Some(dst), loc);
+                            self.emit_neg(info, Some(dst), loc);
                         }
                     };
                 }
                 UnOp::Not => {
                     self.gen_store_expr(ctx, info, dst, rhs)?;
-                    self.gen_not(dst, dst, loc);
+                    self.emit_not(dst, dst, loc);
                 }
                 _ => {
                     return Err(MonorubyErr::unsupported_feature(
@@ -1309,7 +1313,7 @@ impl IrContext {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
                     if let Some(src) = info.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, src.into(), rhs)?;
-                        self.gen_mov(dst, src.into());
+                        self.emit_mov(dst, src.into());
                     } else {
                         let temp = info.temp;
                         let lhs = self.eval_lvalue(ctx, info, &lhs)?;
@@ -1320,12 +1324,12 @@ impl IrContext {
                 } else {
                     self.gen_mul_assign(ctx, info, mlhs, mrhs, UseMode::Use)?;
                     let temp = info.pop().into();
-                    self.gen_mov(dst, temp);
+                    self.emit_mov(dst, temp);
                 }
             }
             NodeKind::LocalVar(0, ident) => {
                 let local2 = info.refer_local(&ident);
-                self.gen_mov(dst, local2.into());
+                self.emit_mov(dst, local2.into());
             }
             NodeKind::Const {
                 toplevel,
@@ -1333,11 +1337,11 @@ impl IrContext {
                 parent: _,
                 prefix,
             } => {
-                self.gen_load_const(info, dst.into(), toplevel, name, prefix, loc);
+                self.emit_load_const(info, dst.into(), toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_ident_id_from_string(name);
-                self.gen_load_ivar(info, dst.into(), name, loc);
+                self.emit_load_ivar(info, dst.into(), name, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -1377,6 +1381,7 @@ impl IrContext {
                 is_module,
             } => {
                 let dst = Some(dst);
+                let name = IdentId::get_ident_id_from_string(name);
                 self.gen_class_def(
                     ctx,
                     info,
@@ -1391,7 +1396,7 @@ impl IrContext {
             }
             _ => {
                 let ret = self.push_expr(ctx, info, rhs)?;
-                self.gen_mov(dst, ret);
+                self.emit_mov(dst, ret);
                 info.pop();
             }
         };
@@ -1460,11 +1465,11 @@ impl IrContext {
         &mut self,
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
-        name: String,
+        name: IdentId,
         base: Option<Box<Node>>,
         superclass: Option<Box<Node>>,
         body: Node,
-        dst: Option<BcReg>,
+        ret: Option<BcReg>,
         is_module: bool,
         loc: Loc,
     ) -> Result<()> {
@@ -1475,22 +1480,17 @@ impl IrContext {
                 info.sourceinfo.clone(),
             ));
         };
-        let func_id = ctx.add_classdef(Some(name.clone()), body, info.sourceinfo.clone());
-        let name = IdentId::get_ident_id_from_string(name);
+        let func_id = ctx.add_classdef(Some(name), body, info.sourceinfo.clone());
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, *superclass)?),
             None => None,
         };
         self.push(
             if is_module {
-                BcIr::ModuleDef {
-                    ret: dst,
-                    name,
-                    func_id,
-                }
+                BcIr::ModuleDef { ret, name, func_id }
             } else {
                 BcIr::ClassDef {
-                    ret: dst,
+                    ret,
                     superclass,
                     name,
                     func_id,
@@ -1678,7 +1678,7 @@ impl IrContext {
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
             if let Some(local) = info.is_assign_local(&lhs) {
                 assert_eq!(LvalueKind::Other, kind);
-                self.gen_mov(local.into(), temp_reg.into());
+                self.emit_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
                 self.gen_assign(ctx, src, kind, loc);
@@ -1693,7 +1693,7 @@ impl IrContext {
             self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
         }
         if use_mode.is_ret() {
-            self.gen_ret(info, None);
+            self.emit_ret(info, None);
         }
         Ok(())
     }
@@ -1768,7 +1768,7 @@ impl IrContext {
                 ),
                 loc,
             );
-            self.gen_condbr(dst, loop_exit, true, true);
+            self.emit_condbr(dst, loop_exit, true, true);
             info.pop(); // pop *dst*
 
             self.gen_expr(ctx, info, *body.body, UseMode::NotUse)?;
@@ -1781,7 +1781,7 @@ impl IrContext {
                 ),
                 loc,
             );
-            self.gen_br(loop_entry);
+            self.emit_br(loop_entry);
 
             self.apply_label(loop_exit);
             info.pop(); // pop *end*
@@ -1825,11 +1825,11 @@ impl IrContext {
         self.push(BcIr::LoopStart, loc);
         self.gen_opt_condbr(ctx, info, !cond_op, cond, succ_pos)?;
         self.gen_expr(ctx, info, body, UseMode::NotUse)?;
-        self.gen_br(cond_pos);
+        self.emit_br(cond_pos);
         self.apply_label(succ_pos);
 
         if use_value {
-            self.gen_nil(info, None);
+            self.emit_nil(info, None);
         }
         self.loops.pop().unwrap();
         self.apply_label(break_pos);
@@ -1865,7 +1865,7 @@ impl IrContext {
         self.gen_opt_condbr(ctx, info, cond_op, cond, loop_pos)?;
 
         if use_value {
-            self.gen_nil(info, None);
+            self.emit_nil(info, None);
         }
         self.loops.pop().unwrap();
         self.apply_label(break_pos);

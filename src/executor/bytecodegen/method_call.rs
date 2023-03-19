@@ -46,9 +46,42 @@ impl IrContext {
         } else {
             None
         };
-        self.gen_call(recv, callid, ret, args, len, with_block, has_splat, loc);
+        self.emit_call(recv, callid, ret, args, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
-            self.gen_ret(info, None);
+            self.emit_ret(info, None);
+        }
+        Ok(())
+    }
+
+    pub(super) fn gen_super(
+        &mut self,
+        ctx: &mut FnStore,
+        info: &mut ISeqInfo,
+        arglist: Option<ArgList>,
+        ret: Option<BcReg>,
+        use_mode: UseMode,
+        loc: Loc,
+    ) -> Result<()> {
+        if let Some(arglist) = arglist {
+            assert!(arglist.hash_splat.is_empty());
+            assert!(!arglist.delegate);
+            //let has_splat = arglist.splat;
+            //let with_block = arglist.block.is_some();
+            let (callid, args, len) = self.handle_arguments(ctx, info, arglist, None, loc)?;
+
+            let ret = if ret.is_some() {
+                ret
+            } else if use_mode.use_val() {
+                Some(info.push().into())
+            } else {
+                None
+            };
+            self.emit_super(callid, ret, args, len, loc);
+        } else {
+            unimplemented!()
+        };
+        if use_mode.is_ret() {
+            self.emit_ret(info, None);
         }
         Ok(())
     }
@@ -88,7 +121,7 @@ impl IrContext {
         let old_temp = info.temp;
         let arg = info.next_reg();
         self.handle_block(ctx, info, optional_params, block)?;
-        self.gen_nil(info, None);
+        self.emit_nil(info, None);
         info.temp = old_temp;
 
         let recv = match recv_kind {
@@ -104,9 +137,9 @@ impl IrContext {
             None
         };
         let callid = ctx.add_callsite(IdentId::EACH, 0, HashMap::default(), 0, vec![]);
-        self.gen_call(recv, callid, ret, arg.into(), 0, true, false, loc);
+        self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
-            self.gen_ret(info, None);
+            self.emit_ret(info, None);
         }
         Ok(())
     }
@@ -152,7 +185,7 @@ impl IrContext {
         );
 
         if is_ret {
-            self.gen_ret(info, None);
+            self.emit_ret(info, None);
         }
         Ok(())
     }
@@ -162,7 +195,7 @@ impl IrContext {
         ctx: &mut FnStore,
         info: &mut ISeqInfo,
         mut arglist: ArgList,
-        method: IdentId,
+        method: impl Into<Option<IdentId>>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = info.temp;
@@ -229,7 +262,7 @@ impl IrContext {
                         self.push(BcIr::BlockArgProxy(proc_temp, 0), loc);
                     } else {
                         let local = info.refer_local(&proc_local).into();
-                        self.gen_temp_mov(info, local);
+                        self.emit_temp_mov(info, local);
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {
@@ -250,12 +283,12 @@ impl IrContext {
                 }
             }
         } else {
-            self.gen_nil(info, None);
+            self.emit_nil(info, None);
         }
         Ok(())
     }
 
-    fn gen_call(
+    fn emit_call(
         &mut self,
         recv: BcReg,
         callid: CallSiteId,
@@ -274,6 +307,18 @@ impl IrContext {
         self.push(BcIr::MethodArgs(recv, arg, len), loc);
     }
 
+    fn emit_super(
+        &mut self,
+        callid: CallSiteId,
+        ret: Option<BcReg>,
+        args: BcReg,
+        len: usize,
+        loc: Loc,
+    ) {
+        self.push(BcIr::Super(ret, callid), loc);
+        self.push(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
+    }
+
     fn handle_block(
         &mut self,
         ctx: &mut FnStore,
@@ -289,7 +334,7 @@ impl IrContext {
             info.sourceinfo.clone(),
         )?;
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-        self.gen_literal(info, None, Value::new_integer(block_handler));
+        self.emit_literal(info, None, Value::new_integer(block_handler));
         Ok(())
     }
 
@@ -300,6 +345,6 @@ impl IrContext {
         val: BcReg,
         loc: Loc,
     ) {
-        self.gen_call(receiver, callid, None, val, 1, false, false, loc);
+        self.emit_call(receiver, callid, None, val, 1, false, false, loc);
     }
 }

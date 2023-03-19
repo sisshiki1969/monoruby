@@ -96,7 +96,7 @@ impl Funcs {
 
     fn add_classdef(
         &mut self,
-        name: Option<String>,
+        name: Option<IdentId>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
@@ -257,8 +257,8 @@ pub struct ConstSiteId(pub u32);
 /// Infomation for a call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallSiteInfo {
-    /// Name of method.
-    pub name: IdentId,
+    /// Name of method. (None for *super*)
+    pub name: Option<IdentId>,
     /// Number of positional arguments.
     pub arg_num: usize,
     /// Postion of keyword arguments.
@@ -372,7 +372,7 @@ impl FnStore {
 
     pub(crate) fn add_classdef(
         &mut self,
-        name: Option<String>,
+        name: Option<IdentId>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
@@ -438,12 +438,13 @@ impl FnStore {
 
     pub fn add_callsite(
         &mut self,
-        name: IdentId,
+        name: impl Into<Option<IdentId>>,
         arg_len: usize,
         kw_args: HashMap<IdentId, usize>,
         kw_pos: u16,
         splat_pos: Vec<usize>,
     ) -> CallSiteId {
+        let name = name.into();
         let id = self.callsite_info.len();
         self.callsite_info.push(CallSiteInfo {
             name,
@@ -505,10 +506,7 @@ pub const FUNCDATA_OFFSET_PC: u64 = 16;
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// name of this function.
-    name: Option<String>,
-    /// arity of this function.
-    /// -1 for variable numbers.
-    //arity: i32,
+    name: Option<IdentId>,
     pub(in crate::executor) data: FuncData,
     pub(in crate::executor) kind: FuncKind,
 }
@@ -528,7 +526,8 @@ impl FuncInfo {
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name.clone(), args, body, sourceinfo);
+        let name = name.map(|name| IdentId::get_ident_id_from_string(name));
+        let info = ISeqInfo::new_method(func_id, name, args, body, sourceinfo);
         Self {
             name,
             //arity: info.args.arity(),
@@ -562,18 +561,12 @@ impl FuncInfo {
     }
 
     fn new_classdef_iseq(
-        name: Option<String>,
+        name: Option<IdentId>,
         func_id: Option<FuncId>,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_method(
-            func_id,
-            name.clone(),
-            ArgumentsInfo::default(),
-            body,
-            sourceinfo,
-        );
+        let info = ISeqInfo::new_method(func_id, name, ArgumentsInfo::default(), body, sourceinfo);
         Self {
             name,
             //arity: info.args.arity(),
@@ -589,8 +582,7 @@ impl FuncInfo {
     fn new_native(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
         let reg_num = if arity == -1 { -1 } else { arity as i64 };
         Self {
-            name: Some(name),
-            //arity,
+            name: Some(IdentId::get_ident_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -604,8 +596,7 @@ impl FuncInfo {
 
     fn new_attr_reader(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(name),
-            //arity: 0,
+            name: Some(IdentId::get_ident_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -617,8 +608,7 @@ impl FuncInfo {
 
     fn new_attr_writer(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(name),
-            //arity: 1,
+            name: Some(IdentId::get_ident_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -628,13 +618,9 @@ impl FuncInfo {
         }
     }
 
-    pub(crate) fn name(&self) -> Option<&String> {
-        self.name.as_ref()
+    pub(crate) fn name(&self) -> Option<IdentId> {
+        self.name
     }
-
-    /*pub(crate) fn arity(&self) -> i32 {
-        self.arity
-    }*/
 
     pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
         match &self.kind {
@@ -659,9 +645,9 @@ impl FuncInfo {
         eprintln!(
             "{:?} name:{} bc:{:?} meta:{:?} {:?}",
             info.id,
-            match &self.name {
-                Some(name) => name,
-                None => "<ANONYMOUS>",
+            match self.name {
+                Some(name) => IdentId::get_name(name),
+                None => "<ANONYMOUS>".to_string(),
             },
             BcPcBase::new(info),
             self.data.meta,
@@ -686,7 +672,7 @@ impl FuncInfo {
 pub(crate) struct ISeqInfo {
     /// ID of this function.
     id: Option<FuncId>,
-    name: Option<String>,
+    name: Option<IdentId>,
     /// Bytecode.
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
     /// Source map.
@@ -738,7 +724,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn new(
         id: Option<FuncId>,
         outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
-        name: Option<String>,
+        name: Option<IdentId>,
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
@@ -779,7 +765,7 @@ impl ISeqInfo {
 
     pub(in crate::executor) fn new_method(
         id: Option<FuncId>,
-        name: Option<String>,
+        name: Option<IdentId>,
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
@@ -860,13 +846,11 @@ impl ISeqInfo {
     }
 
     /// get name.
-    #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
     pub(crate) fn name(&self) -> String {
         match &self.name {
-            Some(name) => name,
-            None => "<unnamed>",
+            Some(name) => IdentId::get_name(*name),
+            None => "<unnamed>".to_string(),
         }
-        .to_string()
     }
 
     /// get bytecode.
