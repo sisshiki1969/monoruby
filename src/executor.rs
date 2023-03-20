@@ -4,12 +4,14 @@ use ruruby_parse::Node;
 mod builtins;
 mod bytecodegen;
 mod compiler;
+mod frame;
 mod globals;
 mod inst;
 mod op;
 pub use builtins::*;
 use bytecodegen::*;
 use fancy_regex::Captures;
+use frame::*;
 pub use globals::*;
 use inst::*;
 use op::*;
@@ -36,227 +38,6 @@ const LBP_META_FUNCID: i64 = LBP_META;
 const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
 const LBP_ARG0: i64 = LBP_SELF + 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[repr(transparent)]
-struct CFP(*const CFP);
-
-impl std::default::Default for CFP {
-    fn default() -> Self {
-        Self(std::ptr::null())
-    }
-}
-
-impl CFP {
-    ///
-    /// Get CFP of previous frame of *self*.
-    ///
-    unsafe fn prev(&self) -> Self {
-        *self.0
-    }
-
-    fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-
-    unsafe fn return_addr(&self) -> *const usize {
-        (*self.0.add(2)).0 as _
-    }
-
-    unsafe fn bp(&self) -> *const usize {
-        self.0.add(BP_PREV_CFP as usize / 8) as _
-    }
-
-    ///
-    /// Get LFP.
-    ///
-    fn lfp(&self) -> LFP {
-        unsafe {
-            let bp = self.bp();
-            LFP(*bp.sub(BP_LFP as usize / 8) as _)
-        }
-    }
-
-    ///
-    /// Set LFP.
-    ///
-    unsafe fn set_lfp(&mut self, lfp: LFP) {
-        let bp = self.bp() as *mut usize;
-        *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
-    }
-
-    ///
-    /// Get func_id of a current method / classdef.
-    ///
-    fn method_func_id(&self) -> FuncId {
-        unsafe {
-            let mut lfp = self.lfp();
-            loop {
-                if lfp.outer().is_null() {
-                    break;
-                }
-                lfp = lfp.outer().lfp();
-            }
-            lfp.meta().func_id()
-        }
-    }
-
-    ///
-    /// Get *BlockHandler* of a current method / classdef.
-    ///
-    fn get_block(&self) -> Option<BlockHandler> {
-        unsafe {
-            let mut lfp = self.lfp();
-            loop {
-                if lfp.outer().is_null() {
-                    break;
-                }
-                lfp = lfp.outer().lfp();
-            }
-
-            lfp.block().map(|bh| match bh.0.try_fixnum() {
-                Some(mut i) => {
-                    let mut cfp = *self;
-                    loop {
-                        if cfp.lfp() == lfp {
-                            break;
-                        }
-                        if cfp.prev().is_null() {
-                            unreachable!()
-                        }
-                        i += 1;
-                        cfp = cfp.prev();
-                    }
-                    BlockHandler::new(Value::new_integer(i))
-                }
-                None => bh,
-            })
-        }
-    }
-
-    ///
-    /// Get func_id of a current source position.
-    ///
-    fn get_source_pos(&self) -> FuncId {
-        let mut cfp = *self;
-        unsafe {
-            loop {
-                if !cfp.lfp().meta().is_native() {
-                    return cfp.lfp().meta().func_id();
-                }
-                let prev_cfp = cfp.prev();
-                if prev_cfp.is_null() {
-                    unreachable!("get_source_pos: non-native method not found.");
-                };
-                cfp = prev_cfp;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[repr(transparent)]
-struct LFP(*const u8);
-
-impl std::default::Default for LFP {
-    fn default() -> Self {
-        Self(std::ptr::null())
-    }
-}
-
-impl alloc::GC<RValue> for LFP {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        unsafe {
-            let meta = self.meta();
-            for r in 0..meta.reg_num() as usize {
-                let v = self.register(r);
-                v.mark(alloc);
-            }
-            if let Some(v) = self.block() {
-                v.0.mark(alloc)
-            };
-            let outer = self.outer();
-            if !outer.is_null() {
-                outer.lfp().mark(alloc);
-            }
-        }
-    }
-}
-
-impl LFP {
-    unsafe fn cfp(&self) -> CFP {
-        CFP(self.0.sub(BP_PREV_CFP as usize) as _)
-    }
-
-    unsafe fn outer_address(&self) -> DFP {
-        DFP(self.0.sub(LBP_OUTER as usize) as _)
-    }
-
-    ///
-    /// Get outer.
-    ///
-    unsafe fn outer(&self) -> DFP {
-        self.outer_address().outer()
-    }
-
-    ///
-    /// Set outer.
-    ///
-    unsafe fn set_outer(&mut self, outer: DFP) {
-        *self.outer_address().0 = outer;
-    }
-
-    ///
-    /// Get Meta.
-    ///
-    unsafe fn meta(&self) -> Meta {
-        Meta::from(*(self.0.sub(LBP_META as usize) as *const u64))
-    }
-
-    ///
-    /// Get block.
-    ///
-    fn block(&self) -> Option<BlockHandler> {
-        unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const _) }
-    }
-
-    ///
-    /// Get a value of register slot *index*.
-    ///
-    unsafe fn register(&self, index: usize) -> Value {
-        *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[repr(transparent)]
-struct DFP(*mut DFP);
-
-impl std::default::Default for DFP {
-    fn default() -> Self {
-        Self(std::ptr::null_mut())
-    }
-}
-
-impl DFP {
-    ///
-    /// Get CFP of previous frame of *self*.
-    ///
-    unsafe fn outer(&self) -> Self {
-        *self.0
-    }
-
-    fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-
-    ///
-    /// Get LFP.
-    ///
-    unsafe fn lfp(&self) -> LFP {
-        LFP(self.0.add(LBP_OUTER as usize / 8) as _)
-    }
-}
 
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -373,13 +154,11 @@ impl alloc::GC<RValue> for Executor {
             v.mark(alloc)
         };
         let mut cfp = self.cfp;
-        unsafe {
-            loop {
-                cfp.lfp().mark(alloc);
-                cfp = cfp.prev();
-                if cfp.is_null() {
-                    break;
-                }
+        loop {
+            cfp.lfp().mark(alloc);
+            cfp = cfp.prev();
+            if cfp.is_null() {
+                break;
             }
         }
     }
@@ -399,7 +178,7 @@ impl Executor {
     }
 
     fn within_stack(&self, lfp: LFP) -> bool {
-        self.lfp_top >= lfp && lfp.0 > self.cfp.0 as _
+        self.lfp_top >= lfp && lfp > self.cfp
     }
 }
 
@@ -460,15 +239,13 @@ impl Executor {
     ) -> BlockData {
         if let Some((func_id, idx)) = block_handler.try_proxy() {
             let mut cfp = self.cfp;
-            unsafe {
-                for _ in 0..idx {
-                    cfp = cfp.prev();
-                }
-                let func_data = globals.compile_on_demand(func_id) as _;
-                BlockData {
-                    outer_lfp: cfp.lfp(),
-                    func_data,
-                }
+            for _ in 0..idx {
+                cfp = cfp.prev();
+            }
+            let func_data = globals.compile_on_demand(func_id) as _;
+            BlockData {
+                outer_lfp: cfp.lfp(),
+                func_data,
             }
         } else {
             block_handler.as_proc().clone()
