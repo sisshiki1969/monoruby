@@ -1075,6 +1075,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
+                let method = IdentId::get_ident_id_from_string(method);
                 return self.gen_method_call(method, Some(receiver), arglist, None, use_mode, loc);
             }
             NodeKind::FuncCall {
@@ -1082,15 +1083,16 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
+                let method = IdentId::get_ident_id_from_string(method);
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
                 return self.gen_super(arglist, None, use_mode, loc);
             }
             NodeKind::Command(box expr) => {
-                let mut arglist = ArgList::default();
-                arglist.args.push(expr);
-                return self.gen_method_call("`".to_string(), None, arglist, None, use_mode, loc);
+                let arglist = ArgList::from_args(vec![expr]);
+                let method = IdentId::get_ident_id("`");
+                return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
                 let ret = if use_mode.use_val() {
@@ -1102,6 +1104,7 @@ impl IrContext {
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
+                let method = IdentId::get_ident_id_from_string(method);
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::If {
@@ -1500,6 +1503,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
+                let method = IdentId::get_ident_id_from_string(method);
                 self.gen_method_call(method, Some(receiver), arglist, ret, UseMode::Use, loc)?;
             }
             NodeKind::FuncCall {
@@ -1508,6 +1512,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
+                let method = IdentId::get_ident_id_from_string(method);
                 self.gen_method_call(method, None, arglist, ret, UseMode::Use, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),

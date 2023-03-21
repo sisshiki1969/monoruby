@@ -3,14 +3,13 @@ use super::*;
 impl IrContext {
     pub(super) fn gen_method_call(
         &mut self,
-        method: String,
+        method: IdentId,
         receiver: Option<Node>,
         arglist: ArgList,
         ret: Option<BcReg>,
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
-        let method = IdentId::get_ident_id_from_string(method);
         let recv_kind = match receiver {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {

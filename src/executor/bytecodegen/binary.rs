@@ -131,17 +131,11 @@ impl IrContext {
         } else {
             self.next_reg().into()
         };
+        let method = IdentId::get_ident_id("=~");
         self.gen_method_call(
-            "=~".to_string(),
+            method,
             Some(lhs),
-            ArgList {
-                args: vec![rhs],
-                kw_args: vec![],
-                hash_splat: vec![],
-                block: None,
-                delegate: false,
-                splat: false,
-            },
+            ArgList::from_args(vec![rhs]),
             dst,
             UseMode::Use,
             loc,
