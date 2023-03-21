@@ -1939,18 +1939,18 @@ mod test {
     fn test_super() {
         run_test_with_prelude(
             r#"
-            D.new.f(42, 100, a:50)
+            D.new.f(42, 100)
         "#,
             r#"
             class C
-                def f(x,y,a)
-                    x+y+a
+                def f(x,y,z,a:1000)
+                    x+y+z+a
                 end
             end
 
             class D < C
-                def f(x,y,a:0)
-                    super x,y,a
+                def f(x,y,z=10,a:77)
+                    super x,y,z,a:a
                 end
             end
         "#,

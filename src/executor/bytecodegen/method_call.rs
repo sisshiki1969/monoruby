@@ -328,6 +328,7 @@ impl IrContext {
     ) -> Result<()> {
         let outer_locals = info.get_locals();
         let func_id = ctx.add_block(
+            info.mother.unwrap(),
             (info.id(), outer_locals),
             optional_params,
             block,

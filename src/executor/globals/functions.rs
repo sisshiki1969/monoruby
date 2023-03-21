@@ -77,6 +77,7 @@ impl Funcs {
 
     fn add_block(
         &mut self,
+        mother: FuncId,
         outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         for_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
@@ -86,6 +87,7 @@ impl Funcs {
         let func_id = self.next_func_id();
         self.0.push(FuncInfo::new_block_iseq(
             Some(func_id),
+            mother,
             outer,
             args,
             *info.body,
@@ -381,13 +383,14 @@ impl FnStore {
 
     pub(crate) fn add_block(
         &mut self,
+        mother: FuncId,
         outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         optional_params: Vec<(usize, BcLocal, String)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         self.functions
-            .add_block(outer, optional_params, info, sourceinfo)
+            .add_block(mother, outer, optional_params, info, sourceinfo)
     }
 
     pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
@@ -542,12 +545,13 @@ impl FuncInfo {
 
     fn new_block_iseq(
         func_id: Option<FuncId>,
+        mother: FuncId,
         outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, outer, args, body, sourceinfo);
+        let info = ISeqInfo::new_block(func_id, mother, outer, args, body, sourceinfo);
         Self {
             name: None,
             //arity: info.args.arity(),
@@ -644,7 +648,7 @@ impl FuncInfo {
         eprintln!("------------------------------------");
         eprintln!(
             "{:?} name:{} bc:{:?} meta:{:?} {:?}",
-            info.id,
+            info.id(),
             match self.name {
                 Some(name) => IdentId::get_name(name),
                 None => "<ANONYMOUS>".to_string(),
@@ -672,6 +676,7 @@ impl FuncInfo {
 pub(crate) struct ISeqInfo {
     /// ID of this function.
     id: Option<FuncId>,
+    pub(crate) mother: Option<FuncId>,
     name: Option<IdentId>,
     /// Bytecode.
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
@@ -702,9 +707,10 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id: {}, name: {:?}. locals: {:?} args: {} non_temp: {} temp: {}}}",
+            "RubyFuncInfo {{ id:{} name:{} method:{:?} locals: {:?} args: {} non_temp: {} temp: {}}}",
             self.id().get(),
-            self.name,
+            self.name(),
+            self.mother,
             self.locals,
             self.args.args_names.len(),
             self.non_temp_num,
@@ -723,6 +729,7 @@ impl alloc::GC<RValue> for ISeqInfo {
 impl ISeqInfo {
     pub(in crate::executor) fn new(
         id: Option<FuncId>,
+        mother: Option<FuncId>,
         outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
         name: Option<IdentId>,
         args: ArgumentsInfo,
@@ -732,6 +739,7 @@ impl ISeqInfo {
     ) -> Self {
         let mut info = ISeqInfo {
             id,
+            mother,
             name,
             bytecode: None,
             sourcemap: vec![],
@@ -755,12 +763,22 @@ impl ISeqInfo {
 
     pub(in crate::executor) fn new_block(
         id: Option<FuncId>,
+        mother: FuncId,
         outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, outer.1, None, args, body, sourceinfo, true)
+        Self::new(
+            id,
+            Some(mother),
+            outer.1,
+            None,
+            args,
+            body,
+            sourceinfo,
+            true,
+        )
     }
 
     pub(in crate::executor) fn new_method(
@@ -770,7 +788,7 @@ impl ISeqInfo {
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, vec![], name, args, body, sourceinfo, false)
+        Self::new(id, id, vec![], name, args, body, sourceinfo, false)
     }
 
     pub(crate) fn id(&self) -> FuncId {
