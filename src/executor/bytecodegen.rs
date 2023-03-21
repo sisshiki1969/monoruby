@@ -145,10 +145,8 @@ pub(crate) struct IrContext {
 }
 
 impl IrContext {
-    pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<()> {
+    pub(crate) fn compile_func(info: &ISeqInfo, ctx: &mut FnStore, ast: Node) -> Result<IrContext> {
         let mut ir = IrContext::new(info);
-        let ast = std::mem::take(&mut info.ast).unwrap();
-        ir.gen_dummy_init(info.is_block_style);
         for ForParamInfo {
             dst_outer,
             dst_reg,
@@ -189,8 +187,7 @@ impl IrContext {
         ir.gen_expr(ctx, ast, UseMode::Ret)?;
         ir.replace_init(info);
         assert_eq!(0, ir.temp);
-        ir.into_bytecode(info, ctx);
-        Ok(())
+        Ok(ir)
     }
 }
 
@@ -214,6 +211,8 @@ impl IrContext {
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(name.clone());
         });
+        ir.gen_dummy_init(info.is_block_style);
+
         ir
     }
 }

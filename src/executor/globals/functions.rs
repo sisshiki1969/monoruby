@@ -482,10 +482,13 @@ impl FnStore {
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
         let old_callid = self.callsite_info.len();
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        IrContext::compile_func(&mut info, self)?;
+        let ast = std::mem::take(&mut info.ast).unwrap();
+        let ir = IrContext::compile_func(&info, self, ast)?;
+        ir.into_bytecode(&mut info, self);
         let regs = info.total_reg_num();
+        let pc = info.get_bytecode_address(0);
         std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
-        self[func_id].data.pc = self[func_id].as_ruby_func().get_bytecode_address(0);
+        self[func_id].data.pc = pc;
         self[func_id].data.set_reg_num(regs as i64);
         let temp_start = self[func_id].as_ruby_func().non_temp_num + 1;
         let new_callid = self.callsite_info.len();

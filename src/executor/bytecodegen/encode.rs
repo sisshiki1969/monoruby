@@ -1,7 +1,7 @@
 use super::*;
 
 impl IrContext {
-    pub(super) fn into_bytecode(self, info: &mut ISeqInfo, store: &mut FnStore) {
+    pub(crate) fn into_bytecode(self, info: &mut ISeqInfo, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
