@@ -48,8 +48,7 @@ impl Executor {
     ) -> Option<Value> {
         if let Some(_bh) = block_handler.try_proxy() {
             unsafe {
-                let cfp = self.cfp.prev();
-                let lfp = cfp.lfp();
+                let lfp = self.cfp.prev().unwrap().lfp();
                 self.move_frame_to_heap(lfp);
             }
         }

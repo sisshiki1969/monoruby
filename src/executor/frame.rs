@@ -14,8 +14,15 @@ impl CFP {
     ///
     /// Get CFP of previous frame of *self*.
     ///
-    pub fn prev(&self) -> Self {
-        unsafe { *self.0 }
+    pub fn prev(&self) -> Option<Self> {
+        unsafe {
+            let p = *self.0;
+            if p.is_null() {
+                None
+            } else {
+                Some(p)
+            }
+        }
     }
 
     pub fn is_null(&self) -> bool {
@@ -84,11 +91,8 @@ impl CFP {
                         if cfp.lfp() == lfp {
                             break;
                         }
-                        if cfp.prev().is_null() {
-                            unreachable!()
-                        }
                         i += 1;
-                        cfp = cfp.prev();
+                        cfp = cfp.prev().unwrap();
                     }
                     BlockHandler::new(Value::new_integer(i))
                 }
@@ -101,17 +105,14 @@ impl CFP {
     /// Get func_id of a current source position.
     ///
     pub fn get_source_pos(&self) -> FuncId {
-        let mut cfp = *self;
-        loop {
-            if !cfp.lfp().meta().is_native() {
-                return cfp.lfp().meta().func_id();
+        let mut cfp = Some(*self);
+        while let Some(inner_cfp) = cfp {
+            if !inner_cfp.lfp().meta().is_native() {
+                return inner_cfp.lfp().meta().func_id();
             }
-            let prev_cfp = cfp.prev();
-            if prev_cfp.is_null() {
-                unreachable!("get_source_pos: non-native method not found.");
-            };
-            cfp = prev_cfp;
+            cfp = inner_cfp.prev();
         }
+        unreachable!("get_source_pos: non-native method not found.")
     }
 }
 

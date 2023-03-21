@@ -600,10 +600,11 @@ pub extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Global
             eprintln!(" ret adr: {ret_addr:?} ");
             let prev_cfp = cfp.prev();
             globals.dump_frame_info(cfp.lfp());
-            if prev_cfp.is_null() {
+            if let Some(prev_cfp) = prev_cfp {
+                cfp = prev_cfp;
+            } else {
                 break;
             }
-            cfp = prev_cfp;
         }
     }
     eprintln!("-----end stacktrace");

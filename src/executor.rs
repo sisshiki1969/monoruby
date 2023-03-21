@@ -153,13 +153,10 @@ impl alloc::GC<RValue> for Executor {
         if let Some(v) = self.sp_post_match {
             v.mark(alloc)
         };
-        let mut cfp = self.cfp;
-        loop {
-            cfp.lfp().mark(alloc);
-            cfp = cfp.prev();
-            if cfp.is_null() {
-                break;
-            }
+        let mut cfp = Some(self.cfp);
+        while let Some(inner_cfp) = cfp {
+            inner_cfp.lfp().mark(alloc);
+            cfp = inner_cfp.prev();
         }
     }
 }
@@ -240,7 +237,7 @@ impl Executor {
         if let Some((func_id, idx)) = block_handler.try_proxy() {
             let mut cfp = self.cfp;
             for _ in 0..idx {
-                cfp = cfp.prev();
+                cfp = cfp.prev().unwrap();
             }
             let func_data = globals.compile_on_demand(func_id) as _;
             BlockData {
