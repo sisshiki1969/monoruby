@@ -1,9 +1,7 @@
 use super::*;
 
 impl IrContext {
-    pub(super) fn ir_to_bytecode(&mut self, info: &mut ISeqInfo, store: &mut FnStore) {
-        info.temp_num = self.temp_num;
-        info.non_temp_num = self.non_temp_num;
+    pub(super) fn into_bytecode(self, info: &mut ISeqInfo, store: &mut FnStore) {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
@@ -314,6 +312,9 @@ impl IrContext {
             ops.push(op);
             locs.push(*loc);
         }
+        info.temp_num = self.temp_num;
+        info.non_temp_num = self.non_temp_num;
+        info.literals = self.literals;
         info.set_bytecode(ops);
         info.sourcemap = locs;
     }

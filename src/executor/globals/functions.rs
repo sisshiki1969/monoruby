@@ -684,8 +684,6 @@ pub(crate) struct ISeqInfo {
     pub sourcemap: Vec<Loc>,
     /// the name of arguments.
     pub(in crate::executor) args: ArgumentsInfo,
-    /// local variables.
-    locals: HashMap<String, u16>,
     /// outer local variables. (dynamic_locals, block_param)
     pub outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
     /// literal values. (for GC)
@@ -705,11 +703,10 @@ impl std::fmt::Debug for ISeqInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RubyFuncInfo {{ id:{} name:{} method:{:?} locals: {:?} args: {} non_temp: {} temp: {}}}",
+            "RubyFuncInfo {{ id:{} name:{} method:{:?} args: {} non_temp: {} temp: {}}}",
             self.id().get(),
             self.name(),
             self.mother,
-            self.locals,
             self.args.args_names.len(),
             self.non_temp_num,
             self.temp_num
@@ -742,7 +739,6 @@ impl ISeqInfo {
             bytecode: None,
             sourcemap: vec![],
             args: args.clone(),
-            locals: HashMap::default(),
             outer_locals,
             literals: vec![],
             non_temp_num: 0,

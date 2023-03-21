@@ -124,6 +124,8 @@ pub(crate) struct IrContext {
     locals: HashMap<String, u16>,
     /// outer local variables. (dynamic_locals, block_param)
     outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
+    /// literal values. (for GC)
+    literals: Vec<Value>,
     /// The name of the block param.
     block_param: Option<String>,
     /// The current register id.
@@ -179,7 +181,7 @@ impl IrContext {
         ir.gen_expr(ctx, info, ast, UseMode::Ret)?;
         ir.replace_init(info);
         assert_eq!(0, ir.temp);
-        ir.ir_to_bytecode(info, ctx);
+        ir.into_bytecode(info, ctx);
         Ok(())
     }
 }
@@ -192,6 +194,7 @@ impl IrContext {
             loops: vec![],
             locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
+            literals: vec![],
             block_param: info.block_param_name().cloned(),
             temp: 0,
             temp_num: 0,
@@ -391,13 +394,13 @@ impl IrContext {
         self.emit(BcIr::Nil(reg), Loc::default());
     }
 
-    fn emit_literal(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, v: Value) {
+    fn emit_literal(&mut self, dst: Option<BcReg>, v: Value) {
         let reg = self.get_reg(dst);
-        info.literals.push(v);
+        self.literals.push(v);
         self.emit(BcIr::Literal(reg, v), Loc::default());
     }
 
-    fn emit_integer(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, i: i64) {
+    fn emit_integer(&mut self, dst: Option<BcReg>, i: i64) {
         if let Ok(i) = i32::try_from(i) {
             let reg = match dst {
                 Some(local) => local,
@@ -405,16 +408,16 @@ impl IrContext {
             };
             self.emit(BcIr::Integer(reg, i), Loc::default());
         } else {
-            self.emit_literal(info, dst, Value::new_integer(i));
+            self.emit_literal(dst, Value::new_integer(i));
         }
     }
 
-    fn emit_bigint(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, bigint: BigInt) {
-        self.emit_literal(info, dst, Value::new_bigint(bigint));
+    fn emit_bigint(&mut self, dst: Option<BcReg>, bigint: BigInt) {
+        self.emit_literal(dst, Value::new_bigint(bigint));
     }
 
-    fn emit_float(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, f: f64) {
-        self.emit_literal(info, dst, Value::new_float(f));
+    fn emit_float(&mut self, dst: Option<BcReg>, f: f64) {
+        self.emit_literal(dst, Value::new_float(f));
     }
 
     fn emit_symbol(&mut self, dst: Option<BcReg>, sym: String) {
@@ -425,8 +428,8 @@ impl IrContext {
         );
     }
 
-    fn emit_string(&mut self, info: &mut ISeqInfo, dst: Option<BcReg>, s: String) {
-        self.emit_literal(info, dst, Value::new_string(s));
+    fn emit_string(&mut self, dst: Option<BcReg>, s: String) {
+        self.emit_literal(dst, Value::new_string(s));
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {
@@ -880,26 +883,26 @@ impl IrContext {
         let loc = expr.loc;
         match expr.kind {
             NodeKind::Nil => self.emit_nil(None),
-            NodeKind::Bool(b) => self.emit_literal(info, None, Value::bool(b)),
+            NodeKind::Bool(b) => self.emit_literal(None, Value::bool(b)),
             NodeKind::SelfValue => self.emit_temp_mov(BcReg::Self_),
             NodeKind::Integer(i) => {
-                self.emit_integer(info, None, i);
+                self.emit_integer(None, i);
             }
             NodeKind::Symbol(sym) => {
                 self.emit_symbol(None, sym);
             }
-            NodeKind::Bignum(bigint) => self.emit_bigint(info, None, bigint),
-            NodeKind::Float(f) => self.emit_float(info, None, f),
-            NodeKind::String(s) => self.emit_string(info, None, s),
+            NodeKind::Bignum(bigint) => self.emit_bigint(None, bigint),
+            NodeKind::Float(f) => self.emit_float(None, f),
+            NodeKind::String(s) => self.emit_string(None, s),
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&expr);
-                self.emit_literal(info, None, val);
+                self.emit_literal(None, val);
             }
             NodeKind::RegExp(nodes, true) => {
                 let val = self.const_regexp(info, nodes, loc)?;
-                self.emit_literal(info, None, val);
+                self.emit_literal(None, val);
             }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, None, nodes, loc)?,
@@ -926,7 +929,7 @@ impl IrContext {
                 UnOp::Neg => {
                     match rhs.kind {
                         //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
-                        NodeKind::Float(f) => self.emit_float(info, None, -f),
+                        NodeKind::Float(f) => self.emit_float(None, -f),
                         _ => {
                             self.push_expr(ctx, info, rhs)?;
                             self.emit_neg(None, loc);
@@ -1375,24 +1378,24 @@ impl IrContext {
         let loc = rhs.loc;
         match rhs.kind {
             NodeKind::Nil => self.emit_nil(Some(dst)),
-            NodeKind::Bool(b) => self.emit_literal(info, Some(dst), Value::bool(b)),
+            NodeKind::Bool(b) => self.emit_literal(Some(dst), Value::bool(b)),
             NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
-            NodeKind::Integer(i) => self.emit_integer(info, Some(dst), i),
+            NodeKind::Integer(i) => self.emit_integer(Some(dst), i),
             NodeKind::Symbol(sym) => self.emit_symbol(Some(dst), sym),
-            NodeKind::Bignum(bigint) => self.emit_bigint(info, Some(dst), bigint),
-            NodeKind::Float(f) => self.emit_float(info, Some(dst), f),
-            NodeKind::String(s) => self.emit_string(info, Some(dst), s),
+            NodeKind::Bignum(bigint) => self.emit_bigint(Some(dst), bigint),
+            NodeKind::Float(f) => self.emit_float(Some(dst), f),
+            NodeKind::String(s) => self.emit_string(Some(dst), s),
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, Some(dst), nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(ctx, info, Some(dst), nodes, loc)?,
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&rhs);
-                self.emit_literal(info, Some(dst), val);
+                self.emit_literal(Some(dst), val);
             }
             NodeKind::RegExp(nodes, true) => {
                 let val = self.const_regexp(info, nodes, loc)?;
-                self.emit_literal(info, Some(dst), val);
+                self.emit_literal(Some(dst), val);
             }
             NodeKind::Range {
                 box start,
@@ -1416,8 +1419,8 @@ impl IrContext {
             NodeKind::UnOp(op, box rhs) => match op {
                 UnOp::Neg => {
                     match rhs.kind {
-                        NodeKind::Integer(i) => self.emit_integer(info, Some(dst), -i),
-                        NodeKind::Float(f) => self.emit_float(info, Some(dst), -f),
+                        NodeKind::Integer(i) => self.emit_integer(Some(dst), -i),
+                        NodeKind::Float(f) => self.emit_float(Some(dst), -f),
                         _ => {
                             self.gen_store_expr(ctx, info, dst, rhs)?;
                             self.emit_neg(Some(dst), loc);

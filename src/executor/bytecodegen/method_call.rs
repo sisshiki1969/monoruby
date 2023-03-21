@@ -335,7 +335,7 @@ impl IrContext {
             info.sourceinfo.clone(),
         )?;
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-        self.emit_literal(info, None, Value::new_integer(block_handler));
+        self.emit_literal(None, Value::new_integer(block_handler));
         Ok(())
     }
 
