@@ -62,13 +62,7 @@ impl Executor {
     unsafe fn move_frame_to_heap(&self, lfp: LFP) -> DFP {
         if self.within_stack(lfp) {
             let mut cfp = lfp.cfp();
-            let len = LBP_SELF as usize + 8 * lfp.meta().reg_num as usize;
-            let v = unsafe {
-                std::slice::from_raw_parts((lfp.0 as usize + 8 - len) as *const u8, len)
-                    .to_vec()
-                    .into_boxed_slice()
-            };
-            let mut heap_lfp = LFP((Box::into_raw(v) as *mut u64 as usize + len - 8) as _);
+            let mut heap_lfp = lfp.move_to_heap();
             cfp.set_lfp(heap_lfp);
             let outer = heap_lfp.outer();
             if !outer.is_null() {
