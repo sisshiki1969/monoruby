@@ -274,7 +274,7 @@ fn handle_keyword(
         unsafe {
             *callee_reg.sub(callee_kw_pos + id) = kw_args
                 .get(param_name)
-                .map(|id| *caller_reg.sub(*kw_pos as usize + id));
+                .map(|id| *caller_reg.sub(kw_pos.0 as usize + id));
         }
     }
 }

@@ -257,14 +257,14 @@ pub struct ConstSiteInfo {
 pub struct ConstSiteId(pub u32);
 
 /// Infomation for a call site.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CallSiteInfo {
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Number of positional arguments.
     pub arg_num: usize,
     /// Postion of keyword arguments.
-    pub kw_pos: u16,
+    pub(crate) kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
     /// Positions of splat arguments.
@@ -273,7 +273,7 @@ pub struct CallSiteInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct CallSiteId(u32);
+pub struct CallSiteId(pub u32);
 
 impl std::convert::From<u32> for CallSiteId {
     fn from(id: u32) -> Self {
@@ -439,24 +439,29 @@ impl FnStore {
         self.inline.insert(func_id, inline_id);
     }
 
-    pub fn add_callsite(
+    pub fn callsite_offset(&self) -> usize {
+        self.callsite_info.len()
+    }
+
+    pub fn functions_offset(&self) -> usize {
+        self.functions.0.len()
+    }
+
+    pub(crate) fn add_callsite(
         &mut self,
-        name: impl Into<Option<IdentId>>,
-        arg_len: usize,
+        name: Option<IdentId>,
+        arg_num: usize,
+        kw_pos: SlotId,
         kw_args: HashMap<IdentId, usize>,
-        kw_pos: u16,
         splat_pos: Vec<usize>,
-    ) -> CallSiteId {
-        let name = name.into();
-        let id = self.callsite_info.len();
+    ) {
         self.callsite_info.push(CallSiteInfo {
             name,
-            arg_num: arg_len,
-            kw_args,
+            arg_num,
             kw_pos,
+            kw_args,
             splat_pos,
-        });
-        CallSiteId(id as u32)
+        })
     }
 
     pub(crate) fn add_constsite(
@@ -480,21 +485,16 @@ impl FnStore {
 impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
-        let old_callid = self.callsite_info.len();
         let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
         let ast = std::mem::take(&mut info.ast).unwrap();
         let ir = IrContext::compile_func(&info, self, ast)?;
-        ir.into_bytecode(&mut info, self);
+        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
+        ir.into_bytecode(self, func_id)?;
+        let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
         let pc = info.get_bytecode_address(0);
-        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
         self[func_id].data.pc = pc;
         self[func_id].data.set_reg_num(regs as i64);
-        let temp_start = self[func_id].as_ruby_func().non_temp_num + 1;
-        let new_callid = self.callsite_info.len();
-        for callid in old_callid..new_callid {
-            self[CallSiteId::from(callid as u32)].kw_pos += temp_start;
-        }
         Ok(())
     }
 }

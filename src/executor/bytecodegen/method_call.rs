@@ -117,7 +117,7 @@ impl IrContext {
 
         let old_temp = self.temp;
         let arg = self.next_reg();
-        self.handle_block(ctx, optional_params, block)?;
+        self.handle_block(optional_params, block)?;
         self.emit_nil(None);
         self.temp = old_temp;
 
@@ -133,7 +133,7 @@ impl IrContext {
         } else {
             None
         };
-        let callid = ctx.add_callsite(IdentId::EACH, 0, HashMap::default(), 0, vec![]);
+        let callid = self.add_callsite(IdentId::EACH, 0, None, vec![]);
         self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
@@ -197,15 +197,20 @@ impl IrContext {
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let (args, arg_len, splat_pos) = self.handle_positional_arguments(ctx, arglist, loc)?;
 
-        let mut kw_args = HashMap::default();
-        let kw_pos = self.next_reg().0;
-        for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
-            self.push_expr(ctx, node)?;
-            kw_args.insert(IdentId::get_ident_id_from_string(name), id);
-        }
+        let kw = if kw_args_list.len() == 0 {
+            None
+        } else {
+            let mut kw_args = HashMap::default();
+            let kw_pos = self.next_reg().into();
+            for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
+                self.push_expr(ctx, node)?;
+                kw_args.insert(IdentId::get_ident_id_from_string(name), id);
+            }
+            Some(KeywordArgs { kw_pos, kw_args })
+        };
 
         self.temp = old_temp;
-        let callid = ctx.add_callsite(method, arg_len, kw_args, kw_pos, splat_pos);
+        let callid = self.add_callsite(method, arg_len, kw, splat_pos);
         Ok((callid, args, arg_len))
     }
 
@@ -218,7 +223,7 @@ impl IrContext {
         let with_block = arglist.block.is_some();
         let args = self.next_reg().into();
         if with_block {
-            self.handle_block_param(ctx, arglist.block, loc)?;
+            self.handle_block_param(arglist.block, loc)?;
         } else if arglist.args.len() == 1 {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
@@ -237,16 +242,11 @@ impl IrContext {
         Ok((args, arg_len, splat_pos))
     }
 
-    fn handle_block_param(
-        &mut self,
-        ctx: &mut FnStore,
-        block: Option<Box<Node>>,
-        loc: Loc,
-    ) -> Result<()> {
+    fn handle_block_param(&mut self, block: Option<Box<Node>>, loc: Loc) -> Result<()> {
         if let Some(box block) = block {
             match block.kind {
                 NodeKind::Lambda(block) => {
-                    self.handle_block(ctx, vec![], block)?;
+                    self.handle_block(vec![], block)?;
                 }
                 NodeKind::LocalVar(0, proc_local) => {
                     if self.block_param.is_some() {
@@ -313,18 +313,16 @@ impl IrContext {
 
     fn handle_block(
         &mut self,
-        ctx: &mut FnStore,
         optional_params: Vec<(usize, BcLocal, String)>,
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = self.get_locals();
-        let func_id = ctx.add_block(
+        let func_id = self.add_block(
             self.mother.unwrap(),
             (self.id, outer_locals),
             optional_params,
             block,
-            self.sourceinfo.clone(),
-        )?;
+        );
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         self.emit_literal(None, Value::new_integer(block_handler));
         Ok(())

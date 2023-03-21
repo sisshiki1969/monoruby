@@ -555,7 +555,7 @@ impl Codegen {
                             match kw_args.get(param_name) {
                                 Some(caller) => {
                                     let caller_ofs =
-                                        (*kw_pos as i64 + *caller as i64) * 8 + LBP_SELF;
+                                        (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;
                                     monoasm! {self.jit,
                                         movq  rax, [r14 - (caller_ofs)];
                                         movq  [rsp - (16 + callee_ofs)], rax;

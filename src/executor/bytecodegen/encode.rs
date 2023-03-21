@@ -1,7 +1,7 @@
 use super::*;
 
 impl IrContext {
-    pub(crate) fn into_bytecode(self, info: &mut ISeqInfo, store: &mut FnStore) {
+    pub(crate) fn into_bytecode(mut self, store: &mut FnStore, func_id: FuncId) -> Result<()> {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
@@ -312,11 +312,51 @@ impl IrContext {
             ops.push(op);
             locs.push(*loc);
         }
+        for CallSite {
+            name,
+            arg_num,
+            kw,
+            splat_pos,
+        } in std::mem::take(&mut self.callsites)
+        {
+            if let Some(KeywordArgs { kw_pos, kw_args }) = kw {
+                let pos = self.get_index(&kw_pos);
+                store.add_callsite(name, arg_num, pos, kw_args, splat_pos);
+            } else {
+                store.add_callsite(name, arg_num, SlotId(0), HashMap::default(), splat_pos);
+            }
+        }
+        for f in std::mem::take(&mut self.functions) {
+            match f {
+                Functions::Method { name, info } => {
+                    store.add_method(name, info, self.sourceinfo.clone())?;
+                }
+                Functions::ClassDef { name, body } => {
+                    store.add_classdef(name, body, self.sourceinfo.clone());
+                }
+                Functions::Block {
+                    mother,
+                    outer,
+                    optional_params,
+                    info,
+                } => {
+                    store.add_block(
+                        mother,
+                        outer,
+                        optional_params,
+                        info,
+                        self.sourceinfo.clone(),
+                    )?;
+                }
+            }
+        }
+        let mut info = store[func_id].as_ruby_func_mut();
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = self.literals;
         info.set_bytecode(ops);
         info.sourcemap = locs;
+        Ok(())
     }
 }
 

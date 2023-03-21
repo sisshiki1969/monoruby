@@ -114,6 +114,44 @@ impl UseMode {
     }
 }
 
+/// Infomation for a call site.
+#[derive(Debug, Clone)]
+struct CallSite {
+    /// Name of method. (None for *super*)
+    name: Option<IdentId>,
+    /// Number of positional arguments.
+    arg_num: usize,
+    /// *BcTemp* of keyword arguments.
+    kw: Option<KeywordArgs>,
+    /// Positions of splat arguments.
+    splat_pos: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct KeywordArgs {
+    kw_pos: BcReg,
+    /// Names and positions of keyword arguments.
+    kw_args: HashMap<IdentId, usize>,
+}
+
+#[derive(Debug, Clone)]
+enum Functions {
+    Method {
+        name: Option<String>,
+        info: BlockInfo,
+    },
+    ClassDef {
+        name: Option<IdentId>,
+        body: Node,
+    },
+    Block {
+        mother: FuncId,
+        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
+        optional_params: Vec<(usize, BcLocal, String)>,
+        info: BlockInfo,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct IrContext {
     /// ID of this function.
@@ -142,11 +180,19 @@ pub(crate) struct IrContext {
     non_temp_num: u16,
     /// Source info.
     sourceinfo: SourceInfoRef,
+    /// Call site info.
+    callsites: Vec<CallSite>,
+    /// Offset of call site info.
+    callsite_offset: usize,
+    /// Func info.
+    functions: Vec<Functions>,
+    /// Offset of func info.
+    functions_offset: usize,
 }
 
 impl IrContext {
     pub(crate) fn compile_func(info: &ISeqInfo, ctx: &mut FnStore, ast: Node) -> Result<IrContext> {
-        let mut ir = IrContext::new(info);
+        let mut ir = IrContext::new(info, ctx.callsite_offset(), ctx.functions_offset());
         for ForParamInfo {
             dst_outer,
             dst_reg,
@@ -157,7 +203,7 @@ impl IrContext {
                 BcIr::StoreDynVar {
                     dst: (*dst_reg).into(),
                     outer: *dst_outer,
-                    src: BcReg::Local(BcLocal(*src_reg as u16)),
+                    src: BcLocal(*src_reg as u16).into(),
                 },
                 Loc::default(),
             );
@@ -192,7 +238,7 @@ impl IrContext {
 }
 
 impl IrContext {
-    fn new(info: &ISeqInfo) -> Self {
+    fn new(info: &ISeqInfo, callsite_offset: usize, functions_offset: usize) -> Self {
         let mut ir = Self {
             id: info.id(),
             mother: info.mother,
@@ -207,6 +253,10 @@ impl IrContext {
             temp_num: 0,
             non_temp_num: 0,
             sourceinfo: info.sourceinfo.clone(),
+            callsites: vec![],
+            callsite_offset,
+            functions: vec![],
+            functions_offset,
         };
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(name.clone());
@@ -214,6 +264,53 @@ impl IrContext {
         ir.gen_dummy_init(info.is_block_style);
 
         ir
+    }
+
+    fn add_callsite(
+        &mut self,
+        name: impl Into<Option<IdentId>>,
+        arg_num: usize,
+        kw: Option<KeywordArgs>,
+        splat_pos: Vec<usize>,
+    ) -> CallSiteId {
+        let name = name.into();
+        let id = self.callsite_offset + self.callsites.len();
+        self.callsites.push(CallSite {
+            name,
+            arg_num,
+            kw,
+            splat_pos,
+        });
+        CallSiteId(id as u32)
+    }
+
+    fn add_method(&mut self, name: Option<String>, info: BlockInfo) -> FuncId {
+        let id = self.functions_offset + self.functions.len();
+        self.functions.push(Functions::Method { name, info });
+        FuncId::new(id as _)
+    }
+
+    fn add_classdef(&mut self, name: Option<IdentId>, body: Node) -> FuncId {
+        let id = self.functions_offset + self.functions.len();
+        self.functions.push(Functions::ClassDef { name, body });
+        FuncId::new(id as _)
+    }
+
+    fn add_block(
+        &mut self,
+        mother: FuncId,
+        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
+        optional_params: Vec<(usize, BcLocal, String)>,
+        info: BlockInfo,
+    ) -> FuncId {
+        let id = self.functions_offset + self.functions.len();
+        self.functions.push(Functions::Block {
+            mother,
+            outer,
+            optional_params,
+            info,
+        });
+        FuncId::new(id as _)
     }
 }
 
@@ -732,7 +829,7 @@ impl IrContext {
         Ok(lhs)
     }
 
-    fn gen_assign(&mut self, ctx: &mut FnStore, src: BcReg, lhs: LvalueKind, loc: Loc) {
+    fn gen_assign(&mut self, src: BcReg, lhs: LvalueKind, loc: Loc) {
         match lhs {
             LvalueKind::Const(name) => {
                 self.emit(BcIr::StoreConst(src, name), loc);
@@ -750,7 +847,7 @@ impl IrContext {
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
             LvalueKind::Send { recv, method } => {
-                let callid = ctx.add_callsite(method, 1, HashMap::default(), 0, vec![]);
+                let callid = self.add_callsite(method, 1, None, vec![]);
                 self.gen_method_assign(callid, recv, src, loc);
             }
             LvalueKind::Other => unreachable!(),
@@ -946,7 +1043,7 @@ impl IrContext {
                 // Evaluate rvalue.
                 let src = self.gen_binop(ctx, op, lhs, rhs, None, loc)?;
                 // Assign rvalue to lvalue.
-                self.gen_assign(ctx, src, lhs_kind, lhs_loc);
+                self.gen_assign(src, lhs_kind, lhs_loc);
                 self.temp = temp;
                 self.handle_mode(use_mode, src);
                 return Ok(());
@@ -965,7 +1062,7 @@ impl IrContext {
                     let temp = self.temp;
                     let lhs = self.eval_lvalue(ctx, &lhs)?;
                     let src = self.gen_expr_reg(ctx, rhs)?;
-                    self.gen_assign(ctx, src, lhs, loc);
+                    self.gen_assign(src, lhs, loc);
                     self.temp = temp;
                     self.handle_mode(use_mode, src);
                     return Ok(());
@@ -1222,7 +1319,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::MethodDef(name, block) => {
-                self.gen_method_def(ctx, name.clone(), block, loc)?;
+                self.gen_method_def(name.clone(), block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1233,7 +1330,7 @@ impl IrContext {
             }
             NodeKind::SingletonMethodDef(box obj, name, block) => {
                 self.gen_expr(ctx, obj, UseMode::Use)?;
-                self.gen_singleton_method_def(ctx, name.clone(), block, loc)?;
+                self.gen_singleton_method_def(name.clone(), block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1418,7 +1515,7 @@ impl IrContext {
                         let temp = self.temp;
                         let lhs = self.eval_lvalue(ctx, &lhs)?;
                         self.gen_store_expr(ctx, dst, rhs)?;
-                        self.gen_assign(ctx, dst, lhs, loc);
+                        self.gen_assign(dst, lhs, loc);
                         self.temp = temp;
                     }
                 } else {
@@ -1522,27 +1619,15 @@ impl IrContext {
         Ok(Value::new_regexp(re))
     }
 
-    fn gen_method_def(
-        &mut self,
-        ctx: &mut FnStore,
-        name: String,
-        block: BlockInfo,
-        loc: Loc,
-    ) -> Result<()> {
-        let func_id = ctx.add_method(Some(name.clone()), block, self.sourceinfo.clone())?;
+    fn gen_method_def(&mut self, name: String, block: BlockInfo, loc: Loc) -> Result<()> {
+        let func_id = self.add_method(Some(name.clone()), block);
         let name = IdentId::get_ident_id_from_string(name);
         self.emit(BcIr::MethodDef { name, func_id }, loc);
         Ok(())
     }
 
-    fn gen_singleton_method_def(
-        &mut self,
-        ctx: &mut FnStore,
-        name: String,
-        block: BlockInfo,
-        loc: Loc,
-    ) -> Result<()> {
-        let func_id = ctx.add_method(Some(name.clone()), block, self.sourceinfo.clone())?;
+    fn gen_singleton_method_def(&mut self, name: String, block: BlockInfo, loc: Loc) -> Result<()> {
+        let func_id = self.add_method(Some(name.clone()), block);
         let obj = self.pop().into();
         let name = IdentId::get_ident_id_from_string(name);
         self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
@@ -1567,7 +1652,7 @@ impl IrContext {
                 self.sourceinfo.clone(),
             ));
         };
-        let func_id = ctx.add_classdef(Some(name), body, self.sourceinfo.clone());
+        let func_id = self.add_classdef(Some(name), body);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, *superclass)?),
             None => None,
@@ -1596,7 +1681,7 @@ impl IrContext {
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_classdef(None, body, self.sourceinfo.clone());
+        let func_id = self.add_classdef(None, body);
         let base = self.gen_temp_expr(ctx, base)?;
         self.emit(
             BcIr::SingletonClassDef {
@@ -1762,7 +1847,7 @@ impl IrContext {
                 self.emit_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
-                self.gen_assign(ctx, src, kind, loc);
+                self.gen_assign(src, kind, loc);
             }
             temp_reg += 1;
         }
