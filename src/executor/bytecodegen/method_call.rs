@@ -37,18 +37,18 @@ impl IrContext {
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
             RecvKind::Local(reg) => reg,
-            RecvKind::Temp => info.pop().into(),
+            RecvKind::Temp => self.pop().into(),
         };
         let ret = if ret.is_some() {
             ret
         } else if use_mode.use_val() {
-            Some(info.push().into())
+            Some(self.push().into())
         } else {
             None
         };
         self.emit_call(recv, callid, ret, args, len, with_block, has_splat, loc);
         if use_mode.is_ret() {
-            self.emit_ret(info, None);
+            self.emit_ret(None);
         }
         Ok(())
     }
@@ -72,7 +72,7 @@ impl IrContext {
             let ret = if ret.is_some() {
                 ret
             } else if use_mode.use_val() {
-                Some(info.push().into())
+                Some(self.push().into())
             } else {
                 None
             };
@@ -81,7 +81,7 @@ impl IrContext {
             unimplemented!()
         };
         if use_mode.is_ret() {
-            self.emit_ret(info, None);
+            self.emit_ret(None);
         }
         Ok(())
     }
@@ -118,28 +118,28 @@ impl IrContext {
             RecvKind::Temp
         };
 
-        let old_temp = info.temp;
-        let arg = info.next_reg();
+        let old_temp = self.temp;
+        let arg = self.next_reg();
         self.handle_block(ctx, info, optional_params, block)?;
-        self.emit_nil(info, None);
-        info.temp = old_temp;
+        self.emit_nil(None);
+        self.temp = old_temp;
 
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
             RecvKind::Local(reg) => reg,
-            RecvKind::Temp => info.pop().into(),
+            RecvKind::Temp => self.pop().into(),
         };
         let ret = if ret.is_some() {
             ret
         } else if use_mode.use_val() {
-            Some(info.push().into())
+            Some(self.push().into())
         } else {
             None
         };
         let callid = ctx.add_callsite(IdentId::EACH, 0, HashMap::default(), 0, vec![]);
         self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
-            self.emit_ret(info, None);
+            self.emit_ret(None);
         }
         Ok(())
     }
@@ -174,7 +174,7 @@ impl IrContext {
         let (callid, args, len) =
             self.handle_arguments(ctx, info, arglist, IdentId::get_ident_id("<block>"), loc)?;
 
-        self.push(
+        self.emit(
             BcIr::Yield {
                 ret,
                 args,
@@ -185,7 +185,7 @@ impl IrContext {
         );
 
         if is_ret {
-            self.emit_ret(info, None);
+            self.emit_ret(None);
         }
         Ok(())
     }
@@ -198,19 +198,19 @@ impl IrContext {
         method: impl Into<Option<IdentId>>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
-        let old_temp = info.temp;
+        let old_temp = self.temp;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let (args, arg_len, splat_pos) =
             self.handle_positional_arguments(ctx, info, arglist, loc)?;
 
         let mut kw_args = HashMap::default();
-        let kw_pos = info.next_reg().0;
+        let kw_pos = self.next_reg().0;
         for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
             self.push_expr(ctx, info, node)?;
             kw_args.insert(IdentId::get_ident_id_from_string(name), id);
         }
 
-        info.temp = old_temp;
+        self.temp = old_temp;
         let callid = ctx.add_callsite(method, arg_len, kw_args, kw_pos, splat_pos);
         Ok((callid, args, arg_len))
     }
@@ -223,7 +223,7 @@ impl IrContext {
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>)> {
         let with_block = arglist.block.is_some();
-        let args = info.next_reg().into();
+        let args = self.next_reg().into();
         if with_block {
             self.handle_block_param(ctx, info, arglist.block, loc)?;
         } else if arglist.args.len() == 1 {
@@ -258,21 +258,21 @@ impl IrContext {
                 }
                 NodeKind::LocalVar(0, proc_local) => {
                     if Some(&proc_local) == info.block_param_name() {
-                        let proc_temp = info.push().into();
-                        self.push(BcIr::BlockArgProxy(proc_temp, 0), loc);
+                        let proc_temp = self.push().into();
+                        self.emit(BcIr::BlockArgProxy(proc_temp, 0), loc);
                     } else {
                         let local = info.refer_local(&proc_local).into();
-                        self.emit_temp_mov(info, local);
+                        self.emit_temp_mov(local);
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {
                     if Some(&proc_local) == info.outer_block_param_name(outer) {
-                        let proc_temp = info.push().into();
-                        self.push(BcIr::BlockArgProxy(proc_temp, outer), loc);
+                        let proc_temp = self.push().into();
+                        self.emit(BcIr::BlockArgProxy(proc_temp, outer), loc);
                     } else {
                         let src = info.refer_dynamic_local(outer, &proc_local).into();
-                        let ret = info.push().into();
-                        self.push(BcIr::LoadDynVar { ret, src, outer }, loc);
+                        let ret = self.push().into();
+                        self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                     }
                 }
                 _ => {
@@ -283,7 +283,7 @@ impl IrContext {
                 }
             }
         } else {
-            self.emit_nil(info, None);
+            self.emit_nil(None);
         }
         Ok(())
     }
@@ -300,11 +300,11 @@ impl IrContext {
         loc: Loc,
     ) {
         if with_block {
-            self.push(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
+            self.emit(BcIr::MethodCallBlock(ret, callid, has_splat), loc)
         } else {
-            self.push(BcIr::MethodCall(ret, callid, has_splat), loc)
+            self.emit(BcIr::MethodCall(ret, callid, has_splat), loc)
         };
-        self.push(BcIr::MethodArgs(recv, arg, len), loc);
+        self.emit(BcIr::MethodArgs(recv, arg, len), loc);
     }
 
     fn emit_super(
@@ -315,8 +315,8 @@ impl IrContext {
         len: usize,
         loc: Loc,
     ) {
-        self.push(BcIr::Super(ret, callid), loc);
-        self.push(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
+        self.emit(BcIr::Super(ret, callid), loc);
+        self.emit(BcIr::MethodArgs(BcReg::Self_, args, len), loc);
     }
 
     fn handle_block(

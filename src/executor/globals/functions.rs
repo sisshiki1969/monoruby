@@ -690,12 +690,10 @@ pub(crate) struct ISeqInfo {
     outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
     /// literal values. (for GC)
     pub literals: Vec<Value>,
-    /// The current register id.
-    pub temp: u16,
     /// The number of non-temporary registers.
-    non_temp_num: u16,
+    pub non_temp_num: u16,
     /// The number of temporary registers.
-    temp_num: u16,
+    pub temp_num: u16,
     pub lexical_context: Vec<Module>,
     /// AST.
     pub ast: Option<Node>,
@@ -747,7 +745,6 @@ impl ISeqInfo {
             locals: HashMap::default(),
             outer_locals,
             literals: vec![],
-            temp: 0,
             non_temp_num: 0,
             temp_num: 0,
             lexical_context: vec![],
@@ -902,29 +899,6 @@ impl ISeqInfo {
         let mut locals = vec![(self.locals.clone(), self.block_param_name().cloned())];
         locals.extend_from_slice(&self.outer_locals);
         locals
-    }
-
-    /// get the next register id.
-    pub(crate) fn next_reg(&self) -> BcTemp {
-        BcTemp(self.temp)
-    }
-
-    pub(crate) fn push(&mut self) -> BcTemp {
-        let reg = BcTemp(self.temp);
-        self.temp += 1;
-        if self.temp > self.temp_num {
-            self.temp_num = self.temp;
-        }
-        reg
-    }
-
-    pub(crate) fn pop(&mut self) -> BcTemp {
-        self.temp -= 1;
-        BcTemp(self.temp)
-    }
-
-    pub(crate) fn popn(&mut self, len: usize) {
-        self.temp -= len as u16;
     }
 
     pub(crate) fn assign_local(&mut self, ident: &str) -> BcLocal {

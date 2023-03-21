@@ -45,7 +45,7 @@ macro_rules! gen_ops {
               loc: Loc,
           ) -> Result<BcReg> {
               let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
-              self.push(BcIr::BinOp(BinOpK::$inst, dst, BinopMode::RR(lhs, rhs)), loc);
+              self.emit(BcIr::BinOp(BinOpK::$inst, dst, BinopMode::RR(lhs, rhs)), loc);
               Ok(dst)
           }
       }
@@ -78,7 +78,7 @@ macro_rules! gen_ri_ops {
                   let (dst, lhs, rhs) = self.gen_binary(ctx, info, dst, lhs, rhs)?;
                   (dst, BinopMode::RR(lhs, rhs))
               };
-              self.push(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
+              self.emit(BcIr::BinOp(BinOpK::$inst, dst, mode), loc);
               Ok(dst)
           }
       }
@@ -114,7 +114,7 @@ impl IrContext {
     ) -> Result<BcReg> {
         let exit_pos = self.new_label();
         let dst = match dst {
-            None => info.push().into(),
+            None => self.push().into(),
             Some(reg) => reg,
         };
         self.gen_store_expr(ctx, info, dst, lhs)?;
@@ -134,7 +134,7 @@ impl IrContext {
     ) -> Result<BcReg> {
         let exit_pos = self.new_label();
         let dst = match dst {
-            None => info.push().into(),
+            None => self.push().into(),
             Some(reg) => reg,
         };
         self.gen_store_expr(ctx, info, dst, lhs)?;
@@ -156,7 +156,7 @@ impl IrContext {
         let ret = if let Some(ret) = dst {
             ret
         } else {
-            info.next_reg().into()
+            self.next_reg().into()
         };
         self.gen_method_call(
             ctx,
