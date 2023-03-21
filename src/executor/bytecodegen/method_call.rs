@@ -3,7 +3,6 @@ use super::*;
 impl IrContext {
     pub(super) fn gen_method_call(
         &mut self,
-        ctx: &mut FnStore,
         method: String,
         receiver: Option<Node>,
         arglist: ArgList,
@@ -19,7 +18,7 @@ impl IrContext {
                 } else if let Some(local) = self.is_refer_local(&receiver) {
                     RecvKind::Local(local.into())
                 } else {
-                    self.push_expr(ctx, receiver)?;
+                    self.push_expr(receiver)?;
                     RecvKind::Temp
                 }
             }
@@ -31,7 +30,7 @@ impl IrContext {
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
 
-        let (callid, args, len) = self.handle_arguments(ctx, arglist, method, loc)?;
+        let (callid, args, len) = self.handle_arguments(arglist, method, loc)?;
 
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
@@ -54,7 +53,6 @@ impl IrContext {
 
     pub(super) fn gen_super(
         &mut self,
-        ctx: &mut FnStore,
         arglist: Option<ArgList>,
         ret: Option<BcReg>,
         use_mode: UseMode,
@@ -65,7 +63,7 @@ impl IrContext {
             assert!(!arglist.delegate);
             //let has_splat = arglist.splat;
             //let with_block = arglist.block.is_some();
-            let (callid, args, len) = self.handle_arguments(ctx, arglist, None, loc)?;
+            let (callid, args, len) = self.handle_arguments(arglist, None, loc)?;
 
             let ret = if ret.is_some() {
                 ret
@@ -86,7 +84,6 @@ impl IrContext {
 
     pub(super) fn gen_each(
         &mut self,
-        ctx: &mut FnStore,
         param: Vec<(usize, String)>,
         iter: Node,
         mut block: BlockInfo,
@@ -111,7 +108,7 @@ impl IrContext {
         } else if let Some(local) = self.is_refer_local(&iter) {
             RecvKind::Local(local.into())
         } else {
-            self.push_expr(ctx, iter)?;
+            self.push_expr(iter)?;
             RecvKind::Temp
         };
 
@@ -143,7 +140,6 @@ impl IrContext {
 
     pub(super) fn gen_yield(
         &mut self,
-        ctx: &mut FnStore,
         arglist: ArgList,
         ret: Option<BcReg>,
         is_ret: bool,
@@ -168,7 +164,7 @@ impl IrContext {
         }
 
         let (callid, args, len) =
-            self.handle_arguments(ctx, arglist, IdentId::get_ident_id("<block>"), loc)?;
+            self.handle_arguments(arglist, IdentId::get_ident_id("<block>"), loc)?;
 
         self.emit(
             BcIr::Yield {
@@ -188,14 +184,13 @@ impl IrContext {
 
     fn handle_arguments(
         &mut self,
-        ctx: &mut FnStore,
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
-        let (args, arg_len, splat_pos) = self.handle_positional_arguments(ctx, arglist, loc)?;
+        let (args, arg_len, splat_pos) = self.handle_positional_arguments(arglist, loc)?;
 
         let kw = if kw_args_list.len() == 0 {
             None
@@ -203,7 +198,7 @@ impl IrContext {
             let mut kw_args = HashMap::default();
             let kw_pos = self.next_reg().into();
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
-                self.push_expr(ctx, node)?;
+                self.push_expr(node)?;
                 kw_args.insert(IdentId::get_ident_id_from_string(name), id);
             }
             Some(KeywordArgs { kw_pos, kw_args })
@@ -216,7 +211,6 @@ impl IrContext {
 
     fn handle_positional_arguments(
         &mut self,
-        ctx: &mut FnStore,
         arglist: ArgList,
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>)> {
@@ -238,7 +232,7 @@ impl IrContext {
             }
         }
 
-        let (_, arg_len, splat_pos) = self.gen_args(ctx, arglist.args)?;
+        let (_, arg_len, splat_pos) = self.gen_args(arglist.args)?;
         Ok((args, arg_len, splat_pos))
     }
 

@@ -485,11 +485,7 @@ impl FnStore {
 impl FnStore {
     /// Generate bytecode for a function which has *func_id*.
     fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
-        let mut info = std::mem::take(self[func_id].as_ruby_func_mut());
-        let ast = std::mem::take(&mut info.ast).unwrap();
-        let ir = IrContext::compile_func(&info, self, ast)?;
-        std::mem::swap(&mut info, self[func_id].as_ruby_func_mut());
-        ir.into_bytecode(self, func_id)?;
+        IrContext::compile_func(func_id, self)?;
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
         let pc = info.get_bytecode_address(0);
