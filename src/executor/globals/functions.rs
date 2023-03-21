@@ -458,6 +458,23 @@ impl FnStore {
         });
         CallSiteId(id as u32)
     }
+
+    pub(crate) fn add_constsite(
+        &mut self,
+        name: IdentId,
+        prefix: Vec<IdentId>,
+        toplevel: bool,
+    ) -> ConstSiteId {
+        let info = ConstSiteInfo {
+            name,
+            prefix,
+            toplevel,
+            cache: (usize::MAX, None),
+        };
+        let id = self.constsite_info.len();
+        self.constsite_info.push(info);
+        ConstSiteId(id as u32)
+    }
 }
 
 impl FnStore {
@@ -847,11 +864,6 @@ impl ISeqInfo {
         self.args.block_param.as_ref()
     }
 
-    /// get a outer block argument name.
-    pub(crate) fn outer_block_param_name(&self, outer: usize) -> Option<&String> {
-        self.outer_locals[outer - 1].1.as_ref()
-    }
-
     /// get name.
     pub(crate) fn name(&self) -> String {
         match &self.name {
@@ -935,25 +947,5 @@ impl ISeqInfo {
             eprintln!("{} {} {:?}", id, i, v);
         }*/
         bb_info
-    }
-}
-
-impl ISeqInfo {
-    pub(crate) fn add_constsite(
-        &self,
-        store: &mut FnStore,
-        name: IdentId,
-        prefix: Vec<IdentId>,
-        toplevel: bool,
-    ) -> ConstSiteId {
-        let info = ConstSiteInfo {
-            name,
-            prefix,
-            toplevel,
-            cache: (usize::MAX, None),
-        };
-        let id = store.constsite_info.len();
-        store.constsite_info.push(info);
-        ConstSiteId(id as u32)
     }
 }

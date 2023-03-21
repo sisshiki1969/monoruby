@@ -4,7 +4,6 @@ impl IrContext {
     pub(super) fn gen_method_call(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         method: String,
         receiver: Option<Node>,
         arglist: ArgList,
@@ -20,7 +19,7 @@ impl IrContext {
                 } else if let Some(local) = self.is_refer_local(&receiver) {
                     RecvKind::Local(local.into())
                 } else {
-                    self.push_expr(ctx, info, receiver)?;
+                    self.push_expr(ctx, receiver)?;
                     RecvKind::Temp
                 }
             }
@@ -32,7 +31,7 @@ impl IrContext {
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
 
-        let (callid, args, len) = self.handle_arguments(ctx, info, arglist, method, loc)?;
+        let (callid, args, len) = self.handle_arguments(ctx, arglist, method, loc)?;
 
         let recv = match recv_kind {
             RecvKind::SelfValue => BcReg::Self_,
@@ -56,7 +55,6 @@ impl IrContext {
     pub(super) fn gen_super(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         arglist: Option<ArgList>,
         ret: Option<BcReg>,
         use_mode: UseMode,
@@ -67,7 +65,7 @@ impl IrContext {
             assert!(!arglist.delegate);
             //let has_splat = arglist.splat;
             //let with_block = arglist.block.is_some();
-            let (callid, args, len) = self.handle_arguments(ctx, info, arglist, None, loc)?;
+            let (callid, args, len) = self.handle_arguments(ctx, arglist, None, loc)?;
 
             let ret = if ret.is_some() {
                 ret
@@ -89,7 +87,6 @@ impl IrContext {
     pub(super) fn gen_each(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         param: Vec<(usize, String)>,
         iter: Node,
         mut block: BlockInfo,
@@ -114,13 +111,13 @@ impl IrContext {
         } else if let Some(local) = self.is_refer_local(&iter) {
             RecvKind::Local(local.into())
         } else {
-            self.push_expr(ctx, info, iter)?;
+            self.push_expr(ctx, iter)?;
             RecvKind::Temp
         };
 
         let old_temp = self.temp;
         let arg = self.next_reg();
-        self.handle_block(ctx, info, optional_params, block)?;
+        self.handle_block(ctx, optional_params, block)?;
         self.emit_nil(None);
         self.temp = old_temp;
 
@@ -147,7 +144,6 @@ impl IrContext {
     pub(super) fn gen_yield(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         arglist: ArgList,
         ret: Option<BcReg>,
         is_ret: bool,
@@ -172,7 +168,7 @@ impl IrContext {
         }
 
         let (callid, args, len) =
-            self.handle_arguments(ctx, info, arglist, IdentId::get_ident_id("<block>"), loc)?;
+            self.handle_arguments(ctx, arglist, IdentId::get_ident_id("<block>"), loc)?;
 
         self.emit(
             BcIr::Yield {
@@ -193,20 +189,18 @@ impl IrContext {
     fn handle_arguments(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         mut arglist: ArgList,
         method: impl Into<Option<IdentId>>,
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
-        let (args, arg_len, splat_pos) =
-            self.handle_positional_arguments(ctx, info, arglist, loc)?;
+        let (args, arg_len, splat_pos) = self.handle_positional_arguments(ctx, arglist, loc)?;
 
         let mut kw_args = HashMap::default();
         let kw_pos = self.next_reg().0;
         for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
-            self.push_expr(ctx, info, node)?;
+            self.push_expr(ctx, node)?;
             kw_args.insert(IdentId::get_ident_id_from_string(name), id);
         }
 
@@ -218,14 +212,13 @@ impl IrContext {
     fn handle_positional_arguments(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         arglist: ArgList,
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>)> {
         let with_block = arglist.block.is_some();
         let args = self.next_reg().into();
         if with_block {
-            self.handle_block_param(ctx, info, arglist.block, loc)?;
+            self.handle_block_param(ctx, arglist.block, loc)?;
         } else if arglist.args.len() == 1 {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
@@ -240,24 +233,23 @@ impl IrContext {
             }
         }
 
-        let (_, arg_len, splat_pos) = self.gen_args(ctx, info, arglist.args)?;
+        let (_, arg_len, splat_pos) = self.gen_args(ctx, arglist.args)?;
         Ok((args, arg_len, splat_pos))
     }
 
     fn handle_block_param(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         block: Option<Box<Node>>,
         loc: Loc,
     ) -> Result<()> {
         if let Some(box block) = block {
             match block.kind {
                 NodeKind::Lambda(block) => {
-                    self.handle_block(ctx, info, vec![], block)?;
+                    self.handle_block(ctx, vec![], block)?;
                 }
                 NodeKind::LocalVar(0, proc_local) => {
-                    if info.block_param_name().is_some() {
+                    if self.block_param.is_some() {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, 0), loc);
                     } else {
@@ -266,7 +258,7 @@ impl IrContext {
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {
-                    if Some(&proc_local) == info.outer_block_param_name(outer) {
+                    if Some(&proc_local) == self.outer_block_param_name(outer) {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, outer), loc);
                     } else {
@@ -322,14 +314,13 @@ impl IrContext {
     fn handle_block(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         optional_params: Vec<(usize, BcLocal, String)>,
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = self.get_locals();
         let func_id = ctx.add_block(
-            info.mother.unwrap(),
-            (info.id(), outer_locals),
+            self.mother.unwrap(),
+            (self.id, outer_locals),
             optional_params,
             block,
             self.sourceinfo.clone(),

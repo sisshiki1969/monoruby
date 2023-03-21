@@ -29,7 +29,7 @@ impl IrContext {
                 }
                 BcIr::LoadConst(reg, toplevel, prefix, name) => {
                     let op1 = self.get_index(reg);
-                    let op2 = info.add_constsite(store, *name, prefix.clone(), *toplevel);
+                    let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
                     Bc::from(enc_wl(10, op1.0, op2.0))
                 }
                 BcIr::StoreConst(reg, name) => {
