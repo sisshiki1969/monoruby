@@ -159,7 +159,7 @@ impl IrContext {
             return Err(MonorubyErr::syntax(
                 "Delegate argument should not be given".to_string(),
                 loc,
-                info.sourceinfo.clone(),
+                self.sourceinfo.clone(),
             ));
         }
         // yield does not accept block.
@@ -167,7 +167,7 @@ impl IrContext {
             return Err(MonorubyErr::syntax(
                 "Block argument should not be given".to_string(),
                 loc,
-                info.sourceinfo.clone(),
+                self.sourceinfo.clone(),
             ));
         }
 
@@ -278,7 +278,7 @@ impl IrContext {
                 _ => {
                     return Err(MonorubyErr::unsupported_block_param(
                         &block,
-                        info.sourceinfo.clone(),
+                        self.sourceinfo.clone(),
                     ))
                 }
             }
@@ -332,7 +332,7 @@ impl IrContext {
             (info.id(), outer_locals),
             optional_params,
             block,
-            info.sourceinfo.clone(),
+            self.sourceinfo.clone(),
         )?;
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         self.emit_literal(None, Value::new_integer(block_handler));

@@ -1,7 +1,9 @@
 use super::*;
 use num::BigInt;
 use paste::paste;
-use ruruby_parse::{ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, UnOp};
+use ruruby_parse::{
+    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, SourceInfoRef, UnOp,
+};
 
 mod binary;
 mod encode;
@@ -134,6 +136,8 @@ pub(crate) struct IrContext {
     temp_num: u16,
     /// The number of non-temporary registers.
     non_temp_num: u16,
+    /// Source info.
+    sourceinfo: SourceInfoRef,
 }
 
 impl IrContext {
@@ -199,6 +203,7 @@ impl IrContext {
             temp: 0,
             temp_num: 0,
             non_temp_num: 0,
+            sourceinfo: info.sourceinfo.clone(),
         };
         info.args.args_names.iter().for_each(|name| {
             ir.add_local(name.clone());
@@ -722,10 +727,10 @@ impl IrContext {
                 return Err(MonorubyErr::cant_set_variable(
                     *id,
                     lhs.loc,
-                    info.sourceinfo.clone(),
+                    self.sourceinfo.clone(),
                 ));
             }
-            _ => return Err(MonorubyErr::unsupported_lhs(lhs, info.sourceinfo.clone())),
+            _ => return Err(MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone())),
         };
         Ok(lhs)
     }
@@ -901,7 +906,7 @@ impl IrContext {
                 self.emit_literal(None, val);
             }
             NodeKind::RegExp(nodes, true) => {
-                let val = self.const_regexp(info, nodes, loc)?;
+                let val = self.const_regexp(nodes, loc)?;
                 self.emit_literal(None, val);
             }
             NodeKind::Array(nodes, false) => self.gen_array(ctx, info, None, nodes, loc)?,
@@ -920,7 +925,7 @@ impl IrContext {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported index. {}", index.len()),
                         loc,
-                        info.sourceinfo.clone(),
+                        self.sourceinfo.clone(),
                     ));
                 };
                 self.gen_index(ctx, info, None, base, index.remove(0), loc)?;
@@ -945,7 +950,7 @@ impl IrContext {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported unop. {:?}", op),
                         loc,
-                        info.sourceinfo.clone(),
+                        self.sourceinfo.clone(),
                     ))
                 }
             },
@@ -1207,7 +1212,7 @@ impl IrContext {
                 let (_kind, break_pos, ret_reg) = match self.loops.last() {
                     Some(data) => data.clone(),
                     None => {
-                        return Err(MonorubyErr::escape_from_eval(loc, info.sourceinfo.clone()))
+                        return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
                     }
                 };
                 if let Some(reg) = ret_reg {
@@ -1249,7 +1254,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::MethodDef(name, block) => {
-                self.gen_method_def(ctx, info, name.clone(), block, loc)?;
+                self.gen_method_def(ctx, name.clone(), block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1260,7 +1265,7 @@ impl IrContext {
             }
             NodeKind::SingletonMethodDef(box obj, name, block) => {
                 self.gen_expr(ctx, info, obj, UseMode::Use)?;
-                self.gen_singleton_method_def(ctx, info, name.clone(), block, loc)?;
+                self.gen_singleton_method_def(ctx, name.clone(), block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1354,7 +1359,7 @@ impl IrContext {
                 }
                 return Ok(());
             }
-            _ => return Err(MonorubyErr::unsupported_node(expr, info.sourceinfo.clone())),
+            _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
         match use_mode {
             UseMode::Ret => {
@@ -1394,7 +1399,7 @@ impl IrContext {
                 self.emit_literal(Some(dst), val);
             }
             NodeKind::RegExp(nodes, true) => {
-                let val = self.const_regexp(info, nodes, loc)?;
+                let val = self.const_regexp(nodes, loc)?;
                 self.emit_literal(Some(dst), val);
             }
             NodeKind::Range {
@@ -1411,7 +1416,7 @@ impl IrContext {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported index. {}", index.len()),
                         loc,
-                        info.sourceinfo.clone(),
+                        self.sourceinfo.clone(),
                     ));
                 };
                 self.gen_index(ctx, info, Some(dst), base, index.remove(0), loc)?;
@@ -1435,7 +1440,7 @@ impl IrContext {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported unop. {:?}", op),
                         loc,
-                        info.sourceinfo.clone(),
+                        self.sourceinfo.clone(),
                     ))
                 }
             },
@@ -1537,7 +1542,7 @@ impl IrContext {
         Ok(())
     }
 
-    fn const_regexp(&self, info: &ISeqInfo, nodes: Vec<Node>, loc: Loc) -> Result<Value> {
+    fn const_regexp(&self, nodes: Vec<Node>, loc: Loc) -> Result<Value> {
         let mut string = String::new();
         for node in nodes {
             match &node.kind {
@@ -1555,13 +1560,13 @@ impl IrContext {
                 return Err(MonorubyErr::syntax(
                     "Illegal internal regexp expression.".to_string(),
                     loc,
-                    info.sourceinfo.clone(),
+                    self.sourceinfo.clone(),
                 ))
             }
         };
         let re = match RegexpInner::new(string) {
             Ok(re) => re,
-            Err(err) => return Err(MonorubyErr::syntax(err, loc, info.sourceinfo.clone())),
+            Err(err) => return Err(MonorubyErr::syntax(err, loc, self.sourceinfo.clone())),
         };
         Ok(Value::new_regexp(re))
     }
@@ -1569,12 +1574,11 @@ impl IrContext {
     fn gen_method_def(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         name: String,
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_method(Some(name.clone()), block, self.sourceinfo.clone())?;
         let name = IdentId::get_ident_id_from_string(name);
         self.emit(BcIr::MethodDef { name, func_id }, loc);
         Ok(())
@@ -1583,12 +1587,11 @@ impl IrContext {
     fn gen_singleton_method_def(
         &mut self,
         ctx: &mut FnStore,
-        info: &mut ISeqInfo,
         name: String,
         block: BlockInfo,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_method(Some(name.clone()), block, info.sourceinfo.clone())?;
+        let func_id = ctx.add_method(Some(name.clone()), block, self.sourceinfo.clone())?;
         let obj = self.pop().into();
         let name = IdentId::get_ident_id_from_string(name);
         self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
@@ -1611,10 +1614,10 @@ impl IrContext {
             return Err(MonorubyErr::unsupported_feature(
                 &format!("base in class def. {:?}", base.kind),
                 loc,
-                info.sourceinfo.clone(),
+                self.sourceinfo.clone(),
             ));
         };
-        let func_id = ctx.add_classdef(Some(name), body, info.sourceinfo.clone());
+        let func_id = ctx.add_classdef(Some(name), body, self.sourceinfo.clone());
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(ctx, info, *superclass)?),
             None => None,
@@ -1644,7 +1647,7 @@ impl IrContext {
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = ctx.add_classdef(None, body, info.sourceinfo.clone());
+        let func_id = ctx.add_classdef(None, body, self.sourceinfo.clone());
         let base = self.gen_temp_expr(ctx, info, base)?;
         self.emit(
             BcIr::SingletonClassDef {
