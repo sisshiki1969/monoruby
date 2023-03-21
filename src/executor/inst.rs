@@ -164,8 +164,8 @@ impl std::fmt::Debug for FnInitInfo {
 }
 
 impl FnInitInfo {
-    pub(super) fn new(ir: &IrContext, info: &ISeqInfo) -> Self {
-        let reg_num = ir.total_reg_num(info) - 1;
+    pub(super) fn new(total_reg_num: usize, info: &ISeqInfo) -> Self {
+        let reg_num = total_reg_num - 1;
         let arg_num = info.args.args_names.len();
         let stack_offset = (reg_num * 8 + LBP_ARG0 as usize + 15) >> 4;
         FnInitInfo {

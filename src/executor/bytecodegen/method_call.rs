@@ -17,7 +17,7 @@ impl IrContext {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {
                     RecvKind::SelfValue
-                } else if let Some(local) = info.is_refer_local(&receiver) {
+                } else if let Some(local) = self.is_refer_local(&receiver) {
                     RecvKind::Local(local.into())
                 } else {
                     self.push_expr(ctx, info, receiver)?;
@@ -102,16 +102,16 @@ impl IrContext {
         let mut optional_params = vec![];
         for (outer, name) in param {
             let r = if outer == 0 {
-                info.assign_local(&name)
+                self.assign_local(&name)
             } else {
-                info.refer_dynamic_local(outer, &name)
+                self.refer_dynamic_local(outer, &name)
             };
             optional_params.push((outer + 1, r, name));
         }
-        info.level_down(&mut block.body, 0);
+        self.level_down(&mut block.body, 0);
         let recv_kind = if iter.kind == NodeKind::SelfValue {
             RecvKind::SelfValue
-        } else if let Some(local) = info.is_refer_local(&iter) {
+        } else if let Some(local) = self.is_refer_local(&iter) {
             RecvKind::Local(local.into())
         } else {
             self.push_expr(ctx, info, iter)?;
@@ -229,12 +229,12 @@ impl IrContext {
         } else if arglist.args.len() == 1 {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
-                let local = info.refer_local(ident).into();
+                let local = self.refer_local(ident).into();
                 return Ok((local, 1, vec![]));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
-                    let local = info.refer_local(ident).into();
+                    let local = self.refer_local(ident).into();
                     return Ok((local, 1, vec![0]));
                 }
             }
@@ -257,11 +257,11 @@ impl IrContext {
                     self.handle_block(ctx, info, vec![], block)?;
                 }
                 NodeKind::LocalVar(0, proc_local) => {
-                    if Some(&proc_local) == info.block_param_name() {
+                    if info.block_param_name().is_some() {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, 0), loc);
                     } else {
-                        let local = info.refer_local(&proc_local).into();
+                        let local = self.refer_local(&proc_local).into();
                         self.emit_temp_mov(local);
                     }
                 }
@@ -270,7 +270,7 @@ impl IrContext {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, outer), loc);
                     } else {
-                        let src = info.refer_dynamic_local(outer, &proc_local).into();
+                        let src = self.refer_dynamic_local(outer, &proc_local).into();
                         let ret = self.push().into();
                         self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                     }
@@ -326,7 +326,7 @@ impl IrContext {
         optional_params: Vec<(usize, BcLocal, String)>,
         block: BlockInfo,
     ) -> Result<()> {
-        let outer_locals = info.get_locals();
+        let outer_locals = self.get_locals();
         let func_id = ctx.add_block(
             info.mother.unwrap(),
             (info.id(), outer_locals),

@@ -1,7 +1,6 @@
 use fancy_regex::Regex;
 use ruruby_parse::{
-    BlockInfo, Loc, LvarCollector, Node, NodeKind, ParamKind, ParseErr, ParseErrKind, Parser,
-    SourceInfoRef,
+    BlockInfo, Loc, LvarCollector, Node, ParamKind, ParseErr, ParseErrKind, Parser, SourceInfoRef,
 };
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};

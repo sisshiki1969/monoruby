@@ -120,15 +120,23 @@ pub(crate) struct IrContext {
     labels: Vec<Option<InstId>>,
     /// loop information.
     loops: Vec<(LoopKind, usize, Option<BcReg>)>, // (kind, label for exit, return register)
+    /// local variables.
+    locals: HashMap<String, u16>,
+    /// outer local variables. (dynamic_locals, block_param)
+    outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
+    /// The name of the block param.
+    block_param: Option<String>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
     temp_num: u16,
+    /// The number of non-temporary registers.
+    non_temp_num: u16,
 }
 
 impl IrContext {
     pub(crate) fn compile_func(info: &mut ISeqInfo, ctx: &mut FnStore) -> Result<()> {
-        let mut ir = IrContext::new();
+        let mut ir = IrContext::new(info);
         let ast = std::mem::take(&mut info.ast).unwrap();
         ir.gen_dummy_init(info.is_block_style);
         for ForParamInfo {
@@ -177,26 +185,40 @@ impl IrContext {
 }
 
 impl IrContext {
-    fn new() -> Self {
-        Self {
+    fn new(info: &ISeqInfo) -> Self {
+        let mut ir = Self {
             ir: vec![],
             labels: vec![],
             loops: vec![],
+            locals: HashMap::default(),
+            outer_locals: info.outer_locals.clone(),
+            block_param: info.block_param_name().cloned(),
             temp: 0,
             temp_num: 0,
-        }
+            non_temp_num: 0,
+        };
+        info.args.args_names.iter().for_each(|name| {
+            ir.add_local(name.clone());
+        });
+        ir
     }
+}
 
-    fn emit(&mut self, op: BcIr, loc: Loc) {
-        self.ir.push((op, loc));
+//
+// temporary registers handling.
+//
+impl IrContext {
+    /// get a number of registers.
+    fn total_reg_num(&self) -> usize {
+        1 + (self.non_temp_num + self.temp_num) as usize
     }
 
     /// get the next register id.
-    pub(crate) fn next_reg(&self) -> BcTemp {
+    fn next_reg(&self) -> BcTemp {
         BcTemp(self.temp)
     }
 
-    pub(crate) fn push(&mut self) -> BcTemp {
+    fn push(&mut self) -> BcTemp {
         let reg = BcTemp(self.temp);
         self.temp += 1;
         if self.temp > self.temp_num {
@@ -205,12 +227,12 @@ impl IrContext {
         reg
     }
 
-    pub(crate) fn pop(&mut self) -> BcTemp {
+    fn pop(&mut self) -> BcTemp {
         self.temp -= 1;
         BcTemp(self.temp)
     }
 
-    pub(crate) fn popn(&mut self, len: usize) {
+    fn popn(&mut self, len: usize) {
         self.temp -= len as u16;
     }
 
@@ -221,11 +243,85 @@ impl IrContext {
         }
     }
 
-    /// get a number of registers.
-    pub(crate) fn total_reg_num(&self, info: &ISeqInfo) -> usize {
-        1 + (info.non_temp_num + self.temp_num) as usize
+    fn get_index(&self, reg: &BcReg) -> SlotId {
+        let id = match reg {
+            BcReg::Self_ => 0,
+            BcReg::Temp(i) => 1 + self.non_temp_num + i.0,
+            BcReg::Local(i) => 1 + i.0,
+        };
+        SlotId(id)
+    }
+}
+
+//
+// local variables handling.
+//
+impl IrContext {
+    fn get_locals(&self) -> Vec<(HashMap<String, u16>, Option<String>)> {
+        let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
+        locals.extend_from_slice(&self.outer_locals);
+        locals
     }
 
+    fn assign_local(&mut self, ident: &str) -> BcLocal {
+        match self.locals.get(ident) {
+            Some(local) => BcLocal(*local),
+            None => self.add_local(ident.to_owned()),
+        }
+    }
+
+    fn refer_local(&mut self, ident: &str) -> BcLocal {
+        match self.locals.get(ident) {
+            Some(local) => BcLocal(*local),
+            None => panic!("undefined local var `{}`", ident),
+        }
+    }
+
+    fn refer_dynamic_local(&self, outer: usize, ident: &str) -> BcLocal {
+        BcLocal(
+            *self.outer_locals[outer - 1]
+                .0
+                .get(ident)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
+                        self.outer_locals, self.locals
+                    )
+                }),
+        )
+    }
+
+    /// Add a variable identifier without checking duplicates.
+    fn add_local(&mut self, ident: impl Into<Option<String>>) -> BcLocal {
+        let local = self.non_temp_num;
+        if let Some(ident) = ident.into() {
+            assert!(self.locals.insert(ident, local).is_none());
+        };
+        self.non_temp_num += 1;
+        BcLocal(local)
+    }
+
+    fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {
+        if let NodeKind::LocalVar(0, name) = &node.kind {
+            Some(self.assign_local(name))
+        } else {
+            None
+        }
+    }
+
+    fn is_refer_local(&mut self, node: &Node) -> Option<BcLocal> {
+        if let NodeKind::LocalVar(0, name) = &node.kind {
+            Some(self.refer_local(name))
+        } else {
+            None
+        }
+    }
+}
+
+//
+// emit bytecode ir.
+//
+impl IrContext {
     /// get new destination label.
     fn new_label(&mut self) -> usize {
         let label = self.labels.len();
@@ -237,6 +333,10 @@ impl IrContext {
     fn apply_label(&mut self, label: usize) {
         let pos = InstId(self.ir.len() as u32);
         self.labels[label] = Some(pos);
+    }
+
+    fn emit(&mut self, op: BcIr, loc: Loc) {
+        self.ir.push((op, loc));
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) {
@@ -588,7 +688,7 @@ impl IrContext {
             NodeKind::LocalVar(0, _) => LvalueKind::Other,
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
-                let dst = info.refer_dynamic_local(outer, ident).into();
+                let dst = self.refer_dynamic_local(outer, ident).into();
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {
@@ -706,7 +806,7 @@ impl IrContext {
         info: &mut ISeqInfo,
         expr: Node,
     ) -> Result<BcReg> {
-        Ok(match info.is_refer_local(&expr) {
+        Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
             None => self.push_expr(ctx, info, expr)?,
         })
@@ -719,7 +819,7 @@ impl IrContext {
         info: &mut ISeqInfo,
         expr: Node,
     ) -> Result<BcReg> {
-        Ok(match info.is_refer_local(&expr) {
+        Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
             None => {
                 self.push_expr(ctx, info, expr)?;
@@ -735,7 +835,7 @@ impl IrContext {
         lhs: Node,
         rhs: Node,
     ) -> Result<(BcReg, BcReg)> {
-        match (info.is_refer_local(&lhs), info.is_refer_local(&rhs)) {
+        match (self.is_refer_local(&lhs), self.is_refer_local(&rhs)) {
             (None, None) => {
                 let lhs = self.push_expr(ctx, info, lhs)?;
                 let rhs = self.push_expr(ctx, info, rhs)?;
@@ -847,7 +947,7 @@ impl IrContext {
                 }
             },
             NodeKind::AssignOp(op, box lhs, box rhs) => {
-                if let Some(local) = info.is_refer_local(&lhs) {
+                if let Some(local) = self.is_refer_local(&lhs) {
                     self.gen_binop(ctx, info, op, lhs, rhs, Some(local.into()), loc)?;
                     self.handle_mode(use_mode, local.into());
                     return Ok(());
@@ -870,7 +970,7 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let Some(local) = info.is_assign_local(&lhs) {
+                    if let Some(local) = self.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, local.into(), rhs)?;
                         self.handle_mode(use_mode, local.into());
                         return Ok(());
@@ -887,13 +987,13 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(0, ident) => {
-                let local = info.refer_local(&ident);
+                let local = self.refer_local(&ident);
                 self.handle_mode(use_mode, local.into());
                 return Ok(());
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
-                let src = info.refer_dynamic_local(outer, &ident).into();
+                let src = self.refer_dynamic_local(outer, &ident).into();
                 self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
             }
             NodeKind::Const {
@@ -1115,7 +1215,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
-                if let Some(local) = info.is_refer_local(&expr) {
+                if let Some(local) = self.is_refer_local(&expr) {
                     self.emit_ret(Some(local.into()));
                 } else {
                     self.gen_expr(ctx, info, expr, UseMode::Ret)?;
@@ -1342,7 +1442,7 @@ impl IrContext {
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
                     let (lhs, rhs) = (mlhs.remove(0), mrhs.remove(0));
-                    if let Some(src) = info.is_assign_local(&lhs) {
+                    if let Some(src) = self.is_assign_local(&lhs) {
                         self.gen_store_expr(ctx, info, src.into(), rhs)?;
                         self.emit_mov(dst, src.into());
                     } else {
@@ -1359,7 +1459,7 @@ impl IrContext {
                 }
             }
             NodeKind::LocalVar(0, ident) => {
-                let local2 = info.refer_local(&ident);
+                let local2 = self.refer_local(&ident);
                 self.emit_mov(dst, local2.into());
             }
             NodeKind::Const {
@@ -1602,7 +1702,7 @@ impl IrContext {
     }
 
     fn replace_init(&mut self, info: &ISeqInfo) {
-        let fninfo = FnInitInfo::new(self, info);
+        let fninfo = FnInitInfo::new(self.total_reg_num(), info);
         self.ir[0] = (
             if info.is_block_style {
                 BcIr::InitBlock(fninfo)
@@ -1707,7 +1807,7 @@ impl IrContext {
 
         // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
-            if let Some(local) = info.is_assign_local(&lhs) {
+            if let Some(local) = self.is_assign_local(&lhs) {
                 assert_eq!(LvalueKind::Other, kind);
                 self.emit_mov(local.into(), temp_reg.into());
             } else {
@@ -1747,7 +1847,7 @@ impl IrContext {
             ..
         } = iter.kind
         {
-            let counter = info.assign_local(&param[0].1);
+            let counter = self.assign_local(&param[0].1);
             let break_pos = self.new_label();
             self.loops.push((
                 LoopKind::For,
@@ -1903,5 +2003,209 @@ impl IrContext {
         self.emit(BcIr::LoopEnd, loc);
 
         Ok(())
+    }
+}
+
+impl IrContext {
+    fn level_down(&mut self, node: &mut Node, level: usize) {
+        match &mut node.kind {
+            NodeKind::LocalVar(l, _) => {
+                if *l >= level {
+                    *l += 1;
+                }
+            }
+            NodeKind::MulAssign(n1, n2) => {
+                n1.iter_mut().for_each(|n| {
+                    if level == 0 {
+                        if let NodeKind::LocalVar(0, name) = &n.kind {
+                            self.assign_local(name);
+                        }
+                    }
+                    self.level_down(n, level);
+                });
+                n2.iter_mut().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::Lambda(BlockInfo { params, body, .. }) => {
+                self.level_down(body, level + 1);
+                for p in params {
+                    match &mut p.kind {
+                        ruruby_parse::ParamKind::Optional(_, n) => {
+                            self.level_down(n, level);
+                        }
+                        ruruby_parse::ParamKind::Keyword(_, Some(n)) => {
+                            self.level_down(n, level);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NodeKind::SelfValue
+            | NodeKind::Nil
+            | NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
+            | NodeKind::Bool(_)
+            | NodeKind::String(_)
+            | NodeKind::Symbol(_)
+            | NodeKind::Ident(_)
+            | NodeKind::InstanceVar(_)
+            | NodeKind::GlobalVar(_)
+            | NodeKind::SpecialVar(_)
+            | NodeKind::ClassVar(_)
+            | NodeKind::MethodDef(..)
+            | NodeKind::SingletonMethodDef(..)
+            | NodeKind::ClassDef { .. }
+            | NodeKind::SingletonClassDef { .. } => {}
+            NodeKind::CompStmt(nodes)
+            | NodeKind::InterporatedString(nodes)
+            | NodeKind::Array(nodes, ..)
+            | NodeKind::RegExp(nodes, ..) => {
+                nodes.into_iter().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::Command(n)
+            | NodeKind::UnOp(_, n)
+            | NodeKind::Splat(n)
+            | NodeKind::Break(n)
+            | NodeKind::Next(n)
+            | NodeKind::Return(n)
+            | NodeKind::Defined(n) => {
+                self.level_down(n, level);
+            }
+            NodeKind::Const { parent, .. } => {
+                if let Some(n) = parent {
+                    self.level_down(n, level);
+                }
+            }
+            NodeKind::BinOp(_, box n1, box n2)
+            | NodeKind::AssignOp(_, box n1, box n2)
+            | NodeKind::Range {
+                start: box n1,
+                end: box n2,
+                ..
+            }
+            | NodeKind::While {
+                cond: box n1,
+                body: box n2,
+                ..
+            }
+            | NodeKind::AliasMethod(box n1, box n2) => {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+            }
+            NodeKind::If {
+                cond: n1,
+                then_: n2,
+                else_: n3,
+            } => {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+                self.level_down(n3, level);
+            }
+            NodeKind::Hash(pairs, ..) => pairs.iter_mut().for_each(|(n1, n2)| {
+                self.level_down(n1, level);
+                self.level_down(n2, level);
+            }),
+            NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
+                self.level_down_arglist(arglist, level);
+            }
+            NodeKind::MethodCall {
+                receiver, arglist, ..
+            } => {
+                self.level_down(receiver, level);
+                self.level_down_arglist(arglist, level);
+            }
+            NodeKind::Index { base, index } => {
+                self.level_down(base, level);
+                index.iter_mut().for_each(|n| self.level_down(n, level));
+            }
+            NodeKind::For { param, iter, body } => {
+                for (outer, name) in param {
+                    if level == *outer {
+                        self.assign_local(name);
+                    }
+                    if *outer >= level {
+                        *outer += 1;
+                    }
+                }
+                self.level_down(iter, level);
+                let BlockInfo { params, body, .. } = body;
+                self.level_down(body, level);
+                for p in params {
+                    match &mut p.kind {
+                        ruruby_parse::ParamKind::Optional(_, n) => {
+                            self.level_down(n, level);
+                        }
+                        ruruby_parse::ParamKind::Keyword(_, Some(n)) => {
+                            self.level_down(n, level);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            NodeKind::Case { cond, when_, else_ } => {
+                if let Some(n) = cond {
+                    self.level_down(n, level);
+                }
+                self.level_down(else_, level);
+                for CaseBranch { when, body } in when_ {
+                    when.into_iter().for_each(|n| self.level_down(n, level));
+                    self.level_down(body, level);
+                }
+            }
+            NodeKind::Super(args) => {
+                if let Some(arglist) = args {
+                    self.level_down_arglist(arglist, level);
+                }
+            }
+            NodeKind::Begin {
+                body,
+                rescue,
+                else_,
+                ensure,
+            } => {
+                self.level_down(body, level);
+                for ruruby_parse::RescueEntry {
+                    exception_list,
+                    assign,
+                    body,
+                } in rescue
+                {
+                    exception_list
+                        .into_iter()
+                        .for_each(|n| self.level_down(n, level));
+                    if let Some(n) = assign {
+                        self.level_down(n, level);
+                    }
+                    self.level_down(body, level);
+                }
+                if let Some(n) = else_ {
+                    self.level_down(n, level);
+                }
+                if let Some(n) = ensure {
+                    self.level_down(n, level);
+                }
+            }
+        }
+    }
+
+    fn level_down_arglist(&mut self, arglist: &mut ArgList, level: usize) {
+        let ArgList {
+            args,
+            kw_args,
+            hash_splat,
+            block,
+            ..
+        } = arglist;
+        args.iter_mut().for_each(|n| self.level_down(n, level));
+        kw_args
+            .iter_mut()
+            .for_each(|(_, n)| self.level_down(n, level));
+        hash_splat
+            .iter_mut()
+            .for_each(|n| self.level_down(n, level));
+        if let Some(n) = block {
+            self.level_down(n, level);
+        }
     }
 }
