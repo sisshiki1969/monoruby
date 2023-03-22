@@ -28,7 +28,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
     func_id: FuncId,
     self_value: Module,
 ) -> &'a FuncData {
-    let current_func = executor.cfp.method_func_id();
+    let current_func = executor.method_func_id();
     let mut lexical_context = globals[current_func].as_ruby_func().lexical_context.clone();
     lexical_context.push(self_value);
     globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
@@ -40,7 +40,7 @@ pub(super) extern "C" fn get_super_data(
     globals: &mut Globals,
     self_val: Value,
 ) -> Option<FuncDataPtr> {
-    let func_id = executor.cfp.method_func_id();
+    let func_id = executor.method_func_id();
     let func_name = globals.func[func_id].name().unwrap();
     let super_id = globals.find_super(self_val, func_name)?.func_id();
     let func_data = globals.compile_on_demand(super_id);
@@ -49,7 +49,7 @@ pub(super) extern "C" fn get_super_data(
 
 pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {
     executor
-        .cfp
+        .cfp()
         .get_block()
         .map(|bh| executor.get_block_data(globals, bh))
         .unwrap_or_default()
@@ -502,7 +502,7 @@ pub(super) extern "C" fn define_method(
         module_function,
         visibility,
     } = executor.get_class_context();
-    let current_func = executor.cfp.method_func_id();
+    let current_func = executor.method_func_id();
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     globals.add_method(class_id, name, func, visibility);
@@ -519,7 +519,7 @@ pub(super) extern "C" fn singleton_define_method(
     func: FuncId,
     obj: Value,
 ) {
-    let current_func = executor.cfp.method_func_id();
+    let current_func = executor.method_func_id();
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     let class_id = globals.get_singleton(obj).class_id();
@@ -591,7 +591,7 @@ pub(super) extern "C" fn get_error_location(
 }
 
 pub extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Globals) {
-    let mut cfp = executor.cfp;
+    let mut cfp = executor.cfp();
     eprintln!("-----begin stacktrace");
     unsafe {
         for i in 0..16 {

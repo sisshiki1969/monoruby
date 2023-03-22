@@ -212,7 +212,7 @@ impl Globals {
         }
     }
     pub(crate) fn current_source_path(&self, executor: &Executor) -> PathBuf {
-        let source_func_id = executor.cfp.get_source_pos();
+        let source_func_id = executor.cfp().get_source_pos();
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 

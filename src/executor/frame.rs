@@ -2,34 +2,30 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct CFP(*const u8);
-
-impl std::default::Default for CFP {
-    fn default() -> Self {
-        Self(std::ptr::null())
-    }
-}
+pub struct CFP(std::ptr::NonNull<Option<CFP>>);
 
 impl CFP {
+    fn new(ptr: *mut u8) -> Self {
+        CFP(std::ptr::NonNull::new(ptr as *mut Option<CFP>).unwrap())
+    }
+
+    fn get(&self) -> *const Option<CFP> {
+        self.0.as_ptr()
+    }
+
     ///
     /// Get CFP of previous frame of *self*.
     ///
     pub fn prev(&self) -> Option<Self> {
-        assert!(!self.0.is_null());
-        unsafe {
-            match *(self.0 as *const usize) {
-                0 => None,
-                p => Some(Self(p as _)),
-            }
-        }
+        unsafe { *self.get() }
     }
 
     pub unsafe fn return_addr(&self) -> *const usize {
-        (*(self.0.add(16) as *const usize)) as _
+        *(self.get().add(2) as *const *const usize)
     }
 
     pub unsafe fn bp(&self) -> *const usize {
-        self.0.add(BP_PREV_CFP as usize) as _
+        self.get().add(BP_PREV_CFP as usize / 8) as _
     }
 
     ///
@@ -117,13 +113,13 @@ impl std::default::Default for LFP {
 
 impl std::cmp::PartialEq<CFP> for LFP {
     fn eq(&self, other: &CFP) -> bool {
-        self.0 == other.0 as _
+        self.0 == other.get() as _
     }
 }
 
 impl std::cmp::PartialOrd<CFP> for LFP {
     fn partial_cmp(&self, other: &CFP) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&(other.0 as *const u8))
+        self.0.partial_cmp(&(other.get() as *const u8))
     }
 }
 
@@ -153,11 +149,11 @@ impl LFP {
     }
 
     pub unsafe fn cfp(&self) -> CFP {
-        CFP(self.0.sub(BP_PREV_CFP as usize) as _)
+        CFP::new(self.0.sub(BP_PREV_CFP as usize) as _)
     }
 
     pub unsafe fn outer_address(&self) -> DFP {
-        DFP(self.0.sub(LBP_OUTER as usize) as _)
+        DFP::new(self.0.sub(LBP_OUTER as usize) as _)
     }
 
     ///
@@ -170,8 +166,8 @@ impl LFP {
     ///
     /// Set outer.
     ///
-    pub unsafe fn set_outer(&mut self, outer: DFP) {
-        *(self.outer_address().0 as *mut DFP) = outer;
+    pub unsafe fn set_outer(&mut self, outer: Option<DFP>) {
+        *(self.outer_address().0.as_ptr()) = outer;
     }
 
     ///
@@ -207,27 +203,28 @@ impl LFP {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct DFP(*const u8);
+pub struct DFP(std::ptr::NonNull<Option<DFP>>);
 
 impl DFP {
+    fn new(ptr: *mut u8) -> Self {
+        DFP(std::ptr::NonNull::new(ptr as *mut Option<DFP>).unwrap())
+    }
+
+    fn get(&self) -> *const Option<DFP> {
+        self.0.as_ptr()
+    }
+
     ///
     /// Get CFP of previous frame of *self*.
     ///
     pub fn outer(&self) -> Option<Self> {
-        assert!(!self.0.is_null());
-        unsafe {
-            match *(self.0 as *const usize) {
-                0 => None,
-                p => Some(Self(p as _)),
-            }
-        }
+        unsafe { *self.get() }
     }
 
     ///
     /// Get LFP.
     ///
     pub fn lfp(&self) -> LFP {
-        assert!(!self.0.is_null());
-        LFP(unsafe { self.0.add(LBP_OUTER as usize) })
+        LFP(unsafe { (self.get() as *const u8).add(LBP_OUTER as usize) })
     }
 }

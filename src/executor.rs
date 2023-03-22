@@ -132,8 +132,8 @@ impl Cref {
 #[derive(Default)]
 #[repr(C)]
 pub struct Executor {
-    cfp: CFP,     // [rbx]
-    lfp_top: LFP, // [rbx + 8]
+    cfp: Option<CFP>, // [rbx]
+    lfp_top: LFP,     // [rbx + 8]
     lexical_class: Vec<Cref>,
     sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
@@ -153,7 +153,7 @@ impl alloc::GC<RValue> for Executor {
         if let Some(v) = self.sp_post_match {
             v.mark(alloc)
         };
-        let mut cfp = Some(self.cfp);
+        let mut cfp = self.cfp;
         while let Some(inner_cfp) = cfp {
             inner_cfp.lfp().mark(alloc);
             cfp = inner_cfp.prev();
@@ -174,8 +174,16 @@ impl Executor {
         executor
     }
 
+    fn cfp(&self) -> CFP {
+        self.cfp.unwrap()
+    }
+
+    fn method_func_id(&self) -> FuncId {
+        self.cfp().method_func_id()
+    }
+
     fn within_stack(&self, lfp: LFP) -> bool {
-        self.lfp_top >= lfp && lfp > self.cfp
+        self.lfp_top >= lfp && lfp > self.cfp.unwrap()
     }
 }
 
@@ -235,7 +243,7 @@ impl Executor {
         block_handler: BlockHandler,
     ) -> BlockData {
         if let Some((func_id, idx)) = block_handler.try_proxy() {
-            let mut cfp = self.cfp;
+            let mut cfp = self.cfp();
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
@@ -311,7 +319,7 @@ impl Executor {
     /// Find Constant in current class context.
     ///
     fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
-        let current_func = self.cfp.method_func_id();
+        let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func)
     }
 
