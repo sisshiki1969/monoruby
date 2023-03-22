@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct CFP(*const CFP);
+pub struct CFP(*const u8);
 
 impl std::default::Default for CFP {
     fn default() -> Self {
@@ -15,26 +15,21 @@ impl CFP {
     /// Get CFP of previous frame of *self*.
     ///
     pub fn prev(&self) -> Option<Self> {
+        assert!(!self.0.is_null());
         unsafe {
-            let p = *self.0;
-            if p.is_null() {
-                None
-            } else {
-                Some(p)
+            match *(self.0 as *const usize) {
+                0 => None,
+                p => Some(Self(p as _)),
             }
         }
     }
 
-    pub fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-
     pub unsafe fn return_addr(&self) -> *const usize {
-        (*self.0.add(2)).0 as _
+        (*(self.0.add(16) as *const usize)) as _
     }
 
     pub unsafe fn bp(&self) -> *const usize {
-        self.0.add(BP_PREV_CFP as usize / 8) as _
+        self.0.add(BP_PREV_CFP as usize) as _
     }
 
     ///
@@ -212,7 +207,7 @@ impl LFP {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct DFP(*mut u8);
+pub struct DFP(*const u8);
 
 impl DFP {
     ///
@@ -221,7 +216,7 @@ impl DFP {
     pub fn outer(&self) -> Option<Self> {
         assert!(!self.0.is_null());
         unsafe {
-            match *(self.0 as *mut usize) {
+            match *(self.0 as *const usize) {
                 0 => None,
                 p => Some(Self(p as _)),
             }
