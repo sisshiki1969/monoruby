@@ -1,29 +1,44 @@
 use super::*;
 
+///
+/// Control frame pointer.
+///
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct CFP(std::ptr::NonNull<Option<CFP>>);
 
 impl CFP {
-    fn new(ptr: *mut u8) -> Self {
+    ///
+    /// Create CFP from raw pointer.
+    ///
+    unsafe fn new(ptr: *mut u8) -> Self {
         CFP(std::ptr::NonNull::new(ptr as *mut Option<CFP>).unwrap())
     }
 
+    ///
+    /// Get inner raw pointer.
+    ///
     fn get(&self) -> *const Option<CFP> {
         self.0.as_ptr()
     }
 
     ///
-    /// Get CFP of previous frame of *self*.
+    /// Get a previous control frame of *self*.
     ///
     pub fn prev(&self) -> Option<Self> {
         unsafe { *self.get() }
     }
 
+    ///
+    /// Get a return address of *self*.
+    ///
     pub unsafe fn return_addr(&self) -> *const usize {
         *(self.get().add(2) as *const *const usize)
     }
 
+    ///
+    /// Get base pointer address of *self*.
+    ///
     pub unsafe fn bp(&self) -> *const usize {
         self.get().add(BP_PREV_CFP as usize / 8) as _
     }
@@ -39,6 +54,16 @@ impl CFP {
     }
 
     ///
+    /// Get outermost LFP.
+    ///
+    fn outermost_lfp(&self) -> LFP {
+        match self.lfp().outer() {
+            Some(dfp) => dfp.outermost().lfp(),
+            None => self.lfp(),
+        }
+    }
+
+    ///
     /// Set LFP.
     ///
     pub unsafe fn set_lfp(&mut self, lfp: LFP) {
@@ -47,47 +72,36 @@ impl CFP {
     }
 
     ///
-    /// Get func_id of a current method / classdef.
+    /// Get *FuncId* of a current method / classdef.
     ///
     pub fn method_func_id(&self) -> FuncId {
-        unsafe {
-            let mut lfp = self.lfp();
-            while let Some(outer) = lfp.outer() {
-                lfp = outer.lfp();
-            }
-            lfp.meta().func_id()
-        }
+        self.outermost_lfp().meta().func_id()
     }
 
     ///
     /// Get *BlockHandler* of a current method / classdef.
     ///
     pub fn get_block(&self) -> Option<BlockHandler> {
-        unsafe {
-            let mut lfp = self.lfp();
-            while let Some(outer) = lfp.outer() {
-                lfp = outer.lfp();
-            }
+        let lfp = self.outermost_lfp();
 
-            lfp.block().map(|bh| match bh.0.try_fixnum() {
-                Some(mut i) => {
-                    let mut cfp = *self;
-                    loop {
-                        if cfp.lfp() == lfp {
-                            break;
-                        }
-                        i += 1;
-                        cfp = cfp.prev().unwrap();
+        lfp.block().map(|bh| match bh.0.try_fixnum() {
+            Some(mut i) => {
+                let mut cfp = *self;
+                loop {
+                    if cfp.lfp() == lfp {
+                        break;
                     }
-                    BlockHandler::new(Value::new_integer(i))
+                    i += 1;
+                    cfp = cfp.prev().unwrap();
                 }
-                None => bh,
-            })
-        }
+                BlockHandler::new(Value::new_integer(i))
+            }
+            None => bh,
+        })
     }
 
     ///
-    /// Get func_id of a current source position.
+    /// Get *FuncId* of a current position in the source code.
     ///
     pub fn get_source_pos(&self) -> FuncId {
         let mut cfp = Some(*self);
@@ -142,24 +156,33 @@ impl alloc::GC<RValue> for LFP {
 }
 
 impl LFP {
+    ///
+    /// Move local frame on the stack to the heap.
+    ///
     pub fn move_to_heap(&self) -> Self {
         let len = self.len_in_bytes();
         let v = self.registers().to_vec().into_boxed_slice();
         LFP((Box::into_raw(v) as *mut u64 as usize + len - 8) as _)
     }
 
+    ///
+    /// Get CFP.
+    ///
     pub unsafe fn cfp(&self) -> CFP {
         CFP::new(self.0.sub(BP_PREV_CFP as usize) as _)
     }
 
-    pub unsafe fn outer_address(&self) -> DFP {
-        DFP::new(self.0.sub(LBP_OUTER as usize) as _)
+    ///
+    /// Get the address of outer.
+    ///
+    pub fn outer_address(&self) -> DFP {
+        DFP::new(unsafe { self.0.sub(LBP_OUTER as usize) } as _)
     }
 
     ///
-    /// Get outer.
+    /// Get outer DFP.
     ///
-    pub unsafe fn outer(&self) -> Option<DFP> {
+    pub fn outer(&self) -> Option<DFP> {
         self.outer_address().outer()
     }
 
@@ -215,10 +238,21 @@ impl DFP {
     }
 
     ///
-    /// Get CFP of previous frame of *self*.
+    /// Get DFP of an outer frame of *self*.
     ///
     pub fn outer(&self) -> Option<Self> {
         unsafe { *self.get() }
+    }
+
+    ///
+    /// Get DFP of an outermost frame of *self*.
+    ///
+    fn outermost(&self) -> DFP {
+        let mut dfp = *self;
+        while let Some(outer) = dfp.outer() {
+            dfp = outer;
+        }
+        dfp
     }
 
     ///
