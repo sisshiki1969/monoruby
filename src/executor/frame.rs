@@ -61,11 +61,8 @@ impl CFP {
     pub fn method_func_id(&self) -> FuncId {
         unsafe {
             let mut lfp = self.lfp();
-            loop {
-                if lfp.outer().is_null() {
-                    break;
-                }
-                lfp = lfp.outer().lfp();
+            while let Some(outer) = lfp.outer() {
+                lfp = outer.lfp();
             }
             lfp.meta().func_id()
         }
@@ -77,11 +74,8 @@ impl CFP {
     pub fn get_block(&self) -> Option<BlockHandler> {
         unsafe {
             let mut lfp = self.lfp();
-            loop {
-                if lfp.outer().is_null() {
-                    break;
-                }
-                lfp = lfp.outer().lfp();
+            while let Some(outer) = lfp.outer() {
+                lfp = outer.lfp();
             }
 
             lfp.block().map(|bh| match bh.0.try_fixnum() {
@@ -149,8 +143,7 @@ impl alloc::GC<RValue> for LFP {
             if let Some(v) = self.block() {
                 v.0.mark(alloc)
             };
-            let outer = self.outer();
-            if !outer.is_null() {
+            if let Some(outer) = self.outer() {
                 outer.lfp().mark(alloc);
             }
         }
@@ -175,7 +168,7 @@ impl LFP {
     ///
     /// Get outer.
     ///
-    pub unsafe fn outer(&self) -> DFP {
+    pub unsafe fn outer(&self) -> Option<DFP> {
         self.outer_address().outer()
     }
 
@@ -183,7 +176,7 @@ impl LFP {
     /// Set outer.
     ///
     pub unsafe fn set_outer(&mut self, outer: DFP) {
-        *self.outer_address().0 = outer;
+        *(self.outer_address().0 as *mut DFP) = outer;
     }
 
     ///
@@ -219,30 +212,27 @@ impl LFP {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct DFP(*mut DFP);
-
-impl std::default::Default for DFP {
-    fn default() -> Self {
-        Self(std::ptr::null_mut())
-    }
-}
+pub struct DFP(*mut u8);
 
 impl DFP {
     ///
     /// Get CFP of previous frame of *self*.
     ///
-    pub unsafe fn outer(&self) -> Self {
-        *self.0
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.0.is_null()
+    pub fn outer(&self) -> Option<Self> {
+        assert!(!self.0.is_null());
+        unsafe {
+            match *(self.0 as *mut usize) {
+                0 => None,
+                p => Some(Self(p as _)),
+            }
+        }
     }
 
     ///
     /// Get LFP.
     ///
-    pub unsafe fn lfp(&self) -> LFP {
-        LFP(self.0.add(LBP_OUTER as usize / 8) as _)
+    pub fn lfp(&self) -> LFP {
+        assert!(!self.0.is_null());
+        LFP(unsafe { self.0.add(LBP_OUTER as usize) })
     }
 }

@@ -63,8 +63,7 @@ impl Executor {
             let mut cfp = lfp.cfp();
             let mut heap_lfp = lfp.move_to_heap();
             cfp.set_lfp(heap_lfp);
-            let outer = heap_lfp.outer();
-            if !outer.is_null() {
+            if let Some(outer) = heap_lfp.outer() {
                 let outer_lfp = outer.lfp();
                 let outer = self.move_frame_to_heap(outer_lfp);
                 heap_lfp.set_outer(outer);

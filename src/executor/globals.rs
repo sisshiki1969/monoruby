@@ -569,10 +569,9 @@ impl Globals {
                 }
                 None => "None".to_string(),
             },
-            if outer.is_null() {
-                "None".to_string()
-            } else {
-                format!("{:?}", outer.lfp())
+            match outer {
+                None => "None".to_string(),
+                Some(outer) => format!("{:?}", outer.lfp()),
             },
             meta,
         );
