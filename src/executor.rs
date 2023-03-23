@@ -1358,6 +1358,9 @@ mod test {
     }
 }
 
+///
+/// Parameters information in *ISeqInfo*.
+///
 #[derive(Clone, Default, PartialEq)]
 struct ArgumentsInfo {
     required_num: usize,
@@ -1377,15 +1380,11 @@ struct ArgumentsInfo {
     for_param_info: Vec<ForParamInfo>,
 }
 
-/*impl ArgumentsInfo {
-    fn arity(&self) -> i32 {
-        if self.reqopt_num == self.required_num && self.reqopt_num == self.pos_num {
-            self.reqopt_num as i32
-        } else {
-            -1
-        }
+impl ArgumentsInfo {
+    fn keyword_args(&self) -> Vec<IdentId> {
+        self.keyword_args.iter().map(|r| r.0).collect()
     }
-}*/
+}
 
 #[derive(Clone, Default, PartialEq)]
 struct ExpandInfo {

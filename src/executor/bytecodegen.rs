@@ -127,6 +127,9 @@ struct CallSite {
     splat_pos: Vec<usize>,
 }
 
+///
+/// keyword arguments information in *Callsite*.
+///
 #[derive(Debug, Clone)]
 struct KeywordArgs {
     kw_pos: BcReg,
@@ -157,7 +160,7 @@ pub(crate) struct IrContext {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
-    mother: Option<FuncId>,
+    mother: Option<ISeqInfo>,
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
@@ -194,7 +197,8 @@ impl IrContext {
     pub(crate) fn compile_func(func_id: FuncId, ctx: &mut FnStore) -> Result<()> {
         let ast = std::mem::take(&mut ctx[func_id].as_ruby_func_mut().ast).unwrap();
         let info = ctx[func_id].as_ruby_func();
-        let mut ir = IrContext::new(info, ctx.callsite_offset(), ctx.functions_offset());
+        let mother = info.mother.map(|fid| ctx[fid].as_ruby_func().clone());
+        let mut ir = IrContext::new(info, mother, ctx.callsite_offset(), ctx.functions_offset());
         // arguments preparation
         for ForParamInfo {
             dst_outer,
@@ -243,10 +247,15 @@ impl IrContext {
 }
 
 impl IrContext {
-    fn new(info: &ISeqInfo, callsite_offset: usize, functions_offset: usize) -> Self {
+    fn new(
+        info: &ISeqInfo,
+        mother: Option<ISeqInfo>,
+        callsite_offset: usize,
+        functions_offset: usize,
+    ) -> Self {
         let mut ir = Self {
             id: info.id(),
-            mother: info.mother,
+            mother,
             ir: vec![],
             labels: vec![],
             loops: vec![],

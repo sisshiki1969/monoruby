@@ -57,24 +57,38 @@ impl IrContext {
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
-        if let Some(arglist) = arglist {
+        let (callid, args, len) = if let Some(arglist) = arglist {
             assert!(arglist.hash_splat.is_empty());
             assert!(!arglist.delegate);
             //let has_splat = arglist.splat;
             //let with_block = arglist.block.is_some();
-            let (callid, args, len) = self.handle_arguments(arglist, None, loc)?;
-
-            let ret = if ret.is_some() {
-                ret
-            } else if use_mode.use_val() {
-                Some(self.push().into())
-            } else {
-                None
-            };
-            self.emit_super(callid, ret, args, len, loc);
+            self.handle_arguments(arglist, None, loc)?
         } else {
-            unimplemented!()
+            let info = self.mother.as_ref().unwrap();
+            let arg_num = info.pos_num();
+            let args = BcLocal(0).into();
+            let kw_list = info.args.keyword_args();
+            let kw = if kw_list.len() == 0 {
+                None
+            } else {
+                let mut kw_args = HashMap::default();
+                let kw_pos = BcLocal(info.args.pos_num as u16).into();
+                for (id, name) in kw_list.into_iter().enumerate() {
+                    kw_args.insert(name, id);
+                }
+                Some(KeywordArgs { kw_pos, kw_args })
+            };
+            let callid = self.add_callsite(None, arg_num, kw, vec![]);
+            (callid, args, arg_num)
         };
+        let ret = if ret.is_some() {
+            ret
+        } else if use_mode.use_val() {
+            Some(self.push().into())
+        } else {
+            None
+        };
+        self.emit_super(callid, ret, args, len, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
         }
@@ -310,12 +324,8 @@ impl IrContext {
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = self.get_locals();
-        let func_id = self.add_block(
-            self.mother.unwrap(),
-            (self.id, outer_locals),
-            optional_params,
-            block,
-        );
+        let mother = self.mother.as_ref().unwrap().id();
+        let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         self.emit_literal(None, Value::new_integer(block_handler));
         Ok(())
