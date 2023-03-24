@@ -88,7 +88,7 @@ impl ArrayInner {
         Some(src)
     }
 
-    pub fn get_index(&self, idx: i64) -> Option<Value> {
+    pub(crate) fn get_index(&self, idx: i64) -> Option<Value> {
         return Some(if idx >= 0 {
             self.get(idx as usize).cloned().unwrap_or_default()
         } else {
@@ -101,33 +101,174 @@ impl ArrayInner {
         });
     }
 
-    pub fn get_index_range(&self, globals: &mut Globals, range: &Range) -> Option<Value> {
-        let len = self.len() as i64;
-        let i_start = match range.start.coerce_to_fixnum(globals)? {
-            i if i < 0 => len + i,
-            i => i,
-        };
-        let start = if len < i_start {
-            return Some(Value::nil());
-        } else if len == i_start {
-            return Some(Value::new_empty_array());
+    /// Calculate array index.
+    /// if `index` is a zero or positeve integer, return `index`.
+    /// Else, return `len` + `index.`
+    fn get_array_index(&self, index: i64) -> Option<usize> {
+        if index < 0 {
+            let i = self.len() as i64 + index;
+            if i < 0 {
+                return None;
+            };
+            Some(i as usize)
         } else {
-            i_start as usize
+            Some(index as usize)
+        }
+    }
+
+    pub(crate) fn get_elem2(
+        &self,
+        globals: &mut Globals,
+        arg0: Value,
+        arg1: Value,
+    ) -> Option<Value> {
+        let index = arg0.coerce_to_fixnum(globals)?;
+        let self_len = self.len();
+        let index = self.get_array_index(index).unwrap_or(self_len);
+        let len = arg1.coerce_to_fixnum(globals)?;
+        let val = if len < 0 || index > self_len {
+            Value::nil()
+        } else if index == self_len {
+            Value::new_empty_array()
+        } else {
+            let len = len as usize;
+            let start = index;
+            let end = std::cmp::min(self_len, start + len);
+            Value::new_array_from_iter(self[start..end].iter().cloned())
         };
-        let i_end = range.end.coerce_to_fixnum(globals)?;
-        let end = if i_end >= 0 {
-            let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
-            if self.len() < end {
-                self.len()
+        Some(val)
+    }
+
+    pub(crate) fn get_elem1(&self, globals: &mut Globals, idx: Value) -> Option<Value> {
+        if let Some(index) = idx.try_fixnum() {
+            let self_len = self.len();
+            let index = self.get_array_index(index).unwrap_or(self_len);
+            let val = self.get(index).cloned().unwrap_or_default();
+            Some(val)
+        } else if let Some(range) = idx.is_range() {
+            let len = self.len() as i64;
+            let i_start = match range.start.coerce_to_fixnum(globals)? {
+                i if i < 0 => len + i,
+                i => i,
+            };
+            let start = if len < i_start {
+                return Some(Value::nil());
+            } else if len == i_start {
+                return Some(Value::new_empty_array());
             } else {
-                end
+                i_start as usize
+            };
+            let i_end = range.end.coerce_to_fixnum(globals)?;
+            let end = if i_end >= 0 {
+                let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
+                if self.len() < end {
+                    self.len()
+                } else {
+                    end
+                }
+            } else {
+                (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
+            };
+            if start >= end {
+                return Some(Value::new_empty_array());
+            }
+            Some(Value::new_array_from_iter(self[start..end].iter().cloned()))
+        } else {
+            globals.err_no_implicit_conversion(idx, INTEGER_CLASS);
+            None
+        }
+    }
+
+    /*pub(crate) fn set_elem(&mut self, args: &[Value]) -> VMResult {
+        let val = if args.len() == 3 { args[2] } else { args[1] };
+        if args.len() == 2 {
+            self.set_elem1(args[0], args[1])
+        } else {
+            let index = args[0].coerce_to_fixnum("Index")?;
+            let index = self.get_array_index(index)?;
+            let length = args[1].coerce_to_fixnum("Length")?;
+            if length < 0 {
+                return Err(RubyError::index(format!("Negative length. {}", length)));
+            };
+            self.set_elem2(index, length as usize, val)
+        }
+    }
+
+    pub(crate) fn set_elem1(&mut self, idx: Value, val: Value) -> VMResult {
+        if let Some(index) = idx.as_fixnum() {
+            if index >= 0 {
+                self.set_elem_imm(index as usize, val);
+            } else {
+                let index = self.get_array_index(index)?;
+                self[index] = val;
+            }
+            Ok(val)
+        } else if let Some(range) = idx.as_range() {
+            let first = {
+                let i = range.start.coerce_to_fixnum("Start of the range")?;
+                self.get_array_index(i)?
+            };
+            let last = {
+                let i = range.end.coerce_to_fixnum("End of the range")?;
+                self.get_array_index(i)? + if range.exclude { 0 } else { 1 }
+            };
+            if last < first {
+                self.set_elem2(first, 0, val)
+            } else {
+                let length = last - first;
+                self.set_elem2(first, length, val)
             }
         } else {
-            (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
-        };
-        if start >= end {
-            return Some(Value::new_empty_array());
+            Err(VMError::no_implicit_conv(idx, "Integer or Range"))
         }
-        Some(Value::new_array_from_iter(self[start..end].iter().cloned()))
     }
+
+    pub(crate) fn set_elem2(&mut self, index: usize, length: usize, val: Value) -> VMResult {
+        let len = self.len();
+        match val.as_array() {
+            Some(ary) => {
+                // if self = ary, something wrong happens..
+                let ary_len = ary.len();
+                if index >= len || index + length > len {
+                    self.resize(index + ary_len, Value::nil());
+                } else if ary_len > length {
+                    // possibly self == ary
+                    self.resize(len + ary_len - length, Value::nil());
+                    self.copy_within(index + length..len, index + ary_len);
+                } else {
+                    // self != ary
+                    self.copy_within(index + length..len, index + ary_len);
+                    self.resize(len + ary_len - length, Value::nil());
+                }
+                self[index..index + ary_len].copy_from_slice(&ary[0..ary_len]);
+            }
+            None => {
+                if index >= len {
+                    self.resize(index + 1, Value::nil());
+                } else if length == 0 {
+                    self.push(Value::nil());
+                    self.copy_within(index..len, index + 1);
+                } else {
+                    let end = index + length;
+                    if end < len {
+                        self.copy_within(end..len, index + 1);
+                        self.truncate(len + 1 - length);
+                    } else {
+                        self.truncate(index + 1);
+                    }
+                }
+                self[index] = val;
+            }
+        };
+        Ok(val)
+    }
+
+    pub(crate) fn set_elem_imm(&mut self, index: usize, val: Value) {
+        if index >= self.len() {
+            self.resize(index as usize, Value::nil());
+            self.push(val);
+        } else {
+            self[index] = val;
+        }
+    }*/
 }

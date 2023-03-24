@@ -65,6 +65,7 @@ impl IrContext {
             self.handle_arguments(arglist, None, loc)?
         } else {
             let info = self.mother.as_ref().unwrap();
+            assert_eq!(self.id, info.id());
             let arg_num = info.pos_num();
             let args = BcLocal(0).into();
             let kw_list = info.args.keyword_args();

@@ -301,15 +301,7 @@ pub(super) extern "C" fn get_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     match base_classid {
-        ARRAY_CLASS => {
-            if let Some(idx) = index.try_fixnum() {
-                class_slot.idx = INTEGER_CLASS;
-                return base.as_array().get_index(idx);
-            } else if let Some(range) = index.is_range() {
-                class_slot.idx = RANGE_CLASS;
-                return base.as_array().get_index_range(globals, range);
-            }
-        }
+        ARRAY_CLASS => return base.as_array().get_elem1(globals, index),
         _ => {}
     }
     class_slot.idx = index.class();

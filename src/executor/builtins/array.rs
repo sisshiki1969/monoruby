@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
@@ -103,6 +104,31 @@ extern "C" fn shl(
 ) -> Option<Value> {
     self_val.as_array_mut().push(arg[0]);
     Some(self_val)
+}
+
+///
+/// ### Array#[]
+///
+/// - self[nth] -> object | nil
+/// - self[range] -> Array | nil
+/// - self[start, length] -> Array | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
+extern "C" fn index(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    arg: Arg,
+    len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    if len == 1 {
+        let idx = arg[0];
+        self_val.as_array().get_elem1(globals, idx)
+    } else {
+        self_val.as_array().get_elem2(globals, arg[0], arg[1])
+    }
 }
 
 ///
@@ -345,6 +371,24 @@ mod test {
             r##"
         a = [ "a", "b", "c", "d", "e" ];
         [a[0..1], a[0...1], a[0..-1], a[-2..-1], a[-2..4], a[0..10], a[10..11], a[2..1], a[-1..-2], a[5..10]]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [ "a", "b", "c", "d", "e" ];
+        [a.[](0), a.[](1), a.[](-1), a.[](-2), a.[](10)]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [ "a", "b", "c", "d", "e" ];
+        [a.[](0..1), a.[](0...1), a.[](0..-1), a.[](-2..-1), a.[](-2..4), a.[](0..10), a.[](10..11), a.[](2..1), a.[](-1..-2), a.[](5..10)]
+        "##,
+        );
+        run_test(
+            r##"
+        a = [ "a", "b", "c", "d", "e" ];
+        [a[0, 1], a[-1, 1], a[0, 10], a[0, 0], a[0, -1], a[10, 1], a[5], a[5, 1], a[5..10]]
         "##,
         );
     }

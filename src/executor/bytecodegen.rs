@@ -979,14 +979,26 @@ impl IrContext {
                 box base,
                 mut index,
             } => {
-                if index.len() != 1 {
+                if index.len() == 1 {
+                    self.gen_index(None, base, index.remove(0), loc)?;
+                } else if index.len() == 2 {
+                    let arglist = ArgList::from_args(index);
+                    self.gen_method_call(
+                        IdentId::_INDEX,
+                        Some(base),
+                        arglist,
+                        None,
+                        use_mode,
+                        loc,
+                    )?;
+                    return Ok(());
+                } else {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported index. {}", index.len()),
                         loc,
                         self.sourceinfo.clone(),
                     ));
                 };
-                self.gen_index(None, base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => match op {
                 UnOp::Neg => {
@@ -1446,14 +1458,25 @@ impl IrContext {
                 box base,
                 mut index,
             } => {
-                if index.len() != 1 {
+                if index.len() == 1 {
+                    self.gen_index(Some(dst), base, index.remove(0), loc)?;
+                } else if index.len() == 2 {
+                    let arglist = ArgList::from_args(index);
+                    self.gen_method_call(
+                        IdentId::_INDEX,
+                        Some(base),
+                        arglist,
+                        Some(dst),
+                        UseMode::Use,
+                        loc,
+                    )?;
+                } else {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported index. {}", index.len()),
                         loc,
                         self.sourceinfo.clone(),
                     ));
                 };
-                self.gen_index(Some(dst), base, index.remove(0), loc)?;
             }
             NodeKind::UnOp(op, box rhs) => match op {
                 UnOp::Neg => {
