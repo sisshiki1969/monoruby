@@ -2,7 +2,7 @@ use super::*;
 
 impl Globals {
     pub(crate) fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
-        let name = IdentId::get_ident_id(name);
+        let name = IdentId::get_id(name);
         self.set_constant(class_id, name, val);
     }
 
@@ -28,7 +28,7 @@ impl Globals {
         let mut class = OBJECT_CLASS;
         for name in name {
             class = self
-                .get_constant(class, IdentId::get_ident_id(name))?
+                .get_constant(class, IdentId::get_id(name))?
                 .expect_class_or_module(self)?;
         }
         Some(class.get_obj(self).as_val())

@@ -95,11 +95,11 @@ impl IdentId {
 }
 
 impl IdentId {
-    pub(crate) fn get_ident_id(name: &str) -> IdentId {
+    pub(crate) fn get_id(name: &str) -> IdentId {
         ID.write().unwrap().get_ident_id(name)
     }
 
-    pub(crate) fn get_ident_id_from_string(name: String) -> IdentId {
+    pub(crate) fn get_id_from_string(name: String) -> IdentId {
         ID.write().unwrap().get_ident_id_from_string(name)
     }
 

@@ -181,7 +181,7 @@ impl Value {
     }
 
     pub fn set_instance_var(&mut self, globals: &mut Globals, name: &str, val: Value) {
-        globals.set_ivar(*self, IdentId::get_ident_id(name), val);
+        globals.set_ivar(*self, IdentId::get_id(name), val);
     }
 }
 
@@ -626,7 +626,7 @@ impl Value {
             RV::Symbol(sym) => return Some(sym),
             RV::String(s) => {
                 let s = String::from_utf8_lossy(s).into_owned();
-                return Some(IdentId::get_ident_id_from_string(s));
+                return Some(IdentId::get_id_from_string(s));
             }
             _ => {}
         }
@@ -721,7 +721,7 @@ impl Value {
             NodeKind::Float(num) => Value::new_float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
+            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast(node, globals));
@@ -736,7 +736,7 @@ impl Value {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
                 assert_eq!(0, prefix.len());
-                let constant = IdentId::get_ident_id(name);
+                let constant = IdentId::get_id(name);
                 globals.get_constant(OBJECT_CLASS, constant).unwrap()
             }
             NodeKind::Range {
@@ -769,7 +769,7 @@ impl Value {
             NodeKind::Float(num) => Value::new_float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_ident_id(sym)),
+            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, true) => {
                 let iter = v.iter().map(Self::from_ast2);

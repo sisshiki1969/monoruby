@@ -108,10 +108,11 @@ impl IrContext {
         // collect assignments for local variables.
         let mut optional_params = vec![];
         for (outer, name) in param {
+            let name = IdentId::get_id_from_string(name);
             let r = if outer == 0 {
-                self.assign_local(&name)
+                self.assign_local(name)
             } else {
-                self.refer_dynamic_local(outer, &name)
+                self.refer_dynamic_local(outer, name)
             };
             optional_params.push((outer + 1, r, name));
         }
@@ -177,7 +178,7 @@ impl IrContext {
         }
 
         let (callid, args, len) =
-            self.handle_arguments(arglist, IdentId::get_ident_id("<block>"), loc)?;
+            self.handle_arguments(arglist, IdentId::get_id("<block>"), loc)?;
 
         self.emit(
             BcIr::Yield {
@@ -212,7 +213,7 @@ impl IrContext {
             let kw_pos = self.next_reg().into();
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
                 self.push_expr(node)?;
-                kw_args.insert(IdentId::get_ident_id_from_string(name), id);
+                kw_args.insert(IdentId::get_id_from_string(name), id);
             }
             Some(KeywordArgs { kw_pos, kw_args })
         };
@@ -265,11 +266,12 @@ impl IrContext {
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {
-                    if Some(&proc_local) == self.outer_block_param_name(outer) {
+                    let proc_local = IdentId::get_id_from_string(proc_local);
+                    if Some(proc_local) == self.outer_block_param_name(outer) {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, outer), loc);
                     } else {
-                        let src = self.refer_dynamic_local(outer, &proc_local).into();
+                        let src = self.refer_dynamic_local(outer, proc_local).into();
                         let ret = self.push().into();
                         self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                     }
@@ -320,7 +322,7 @@ impl IrContext {
 
     fn handle_block(
         &mut self,
-        optional_params: Vec<(usize, BcLocal, String)>,
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = self.get_locals();

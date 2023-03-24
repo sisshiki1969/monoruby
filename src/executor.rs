@@ -1369,9 +1369,9 @@ struct ArgumentsInfo {
     // required + optional + rest
     pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
-    args_names: Vec<Option<String>>,
+    args_names: Vec<Option<IdentId>>,
     keyword_args: Vec<(IdentId, Option<Box<Node>>)>,
-    block_param: Option<String>,
+    block_param: Option<IdentId>,
     /// argument expansion info
     expand_info: Vec<ExpandInfo>,
     /// optional parameters initializer

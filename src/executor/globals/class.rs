@@ -105,7 +105,7 @@ impl Globals {
 
     pub(crate) fn define_module(&mut self, name: &str) -> Module {
         let object_class = OBJECT_CLASS.get_obj(self);
-        let name_id = IdentId::get_ident_id(name);
+        let name_id = IdentId::get_id(name);
         self.define_class(name_id, Some(object_class), OBJECT_CLASS, true)
     }
 
@@ -124,7 +124,7 @@ impl Globals {
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Module {
-        let name_id = IdentId::get_ident_id(name);
+        let name_id = IdentId::get_id(name);
         self.define_class(name_id, superclass, parent, false)
     }
 
@@ -135,7 +135,7 @@ impl Globals {
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Module {
-        let name_id = IdentId::get_ident_id(name);
+        let name_id = IdentId::get_id(name);
         self.define_builtin_class(name_id, class_id, superclass, parent)
     }
 

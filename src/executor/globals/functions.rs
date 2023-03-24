@@ -67,7 +67,7 @@ impl Funcs {
 
     pub(crate) fn add_method(
         &mut self,
-        name: Option<String>,
+        name: Option<IdentId>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -78,8 +78,8 @@ impl Funcs {
     fn add_block(
         &mut self,
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
-        for_params: Vec<(usize, BcLocal, String)>,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        for_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -114,7 +114,7 @@ impl Funcs {
 
     fn add_method_iseq(
         &mut self,
-        name: Option<String>,
+        name: Option<IdentId>,
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
@@ -150,7 +150,7 @@ impl Funcs {
 }
 
 fn handle_args(
-    for_params: Vec<(usize, BcLocal, String)>,
+    for_params: Vec<(usize, BcLocal, IdentId)>,
     params: Vec<FormalParam>,
     sourceinfo: &SourceInfoRef,
 ) -> Result<ArgumentsInfo> {
@@ -176,7 +176,7 @@ fn handle_args(
     for param in params {
         match param.kind {
             ParamKind::Param(name) => {
-                args_names.push(Some(name));
+                args_names.push(Some(IdentId::get_id_from_string(name)));
                 required_num += 1;
             }
             ParamKind::Destruct(names) => {
@@ -184,27 +184,28 @@ fn handle_args(
                 args_names.push(None);
                 required_num += 1;
                 names.into_iter().for_each(|(name, _)| {
-                    destruct_args.push(Some(name));
+                    destruct_args.push(Some(IdentId::get_id_from_string(name)));
                 });
             }
             ParamKind::Optional(name, box initializer) => {
                 let local = BcLocal(args_names.len() as u16);
-                args_names.push(Some(name));
+                args_names.push(Some(IdentId::get_id_from_string(name)));
                 optional_num += 1;
                 optional_info.push(OptionalInfo { local, initializer });
             }
             ParamKind::Rest(name) => {
-                args_names.push(Some(name));
+                args_names.push(Some(IdentId::get_id_from_string(name)));
                 assert_eq!(0, rest);
                 rest = 1;
             }
             ParamKind::Keyword(name, init) => {
-                args_names.push(Some(name.clone()));
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
+                args_names.push(Some(name));
                 keyword_args.push((name, init));
             }
             ParamKind::Block(name) => {
-                args_names.push(Some(name.clone()));
+                let name = IdentId::get_id_from_string(name.clone());
+                args_names.push(Some(name));
                 block_param = Some(name);
             }
             _ => {
@@ -365,7 +366,7 @@ impl FnStore {
 impl FnStore {
     pub(crate) fn add_method(
         &mut self,
-        name: Option<String>,
+        name: Option<IdentId>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -384,8 +385,8 @@ impl FnStore {
     pub(crate) fn add_block(
         &mut self,
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
-        optional_params: Vec<(usize, BcLocal, String)>,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
@@ -403,7 +404,7 @@ impl FnStore {
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let main_fid = self.functions.add_method_iseq(
-            Some("/main".to_string()),
+            Some(IdentId::get_id("/main")),
             ArgumentsInfo::default(),
             ast,
             sourceinfo,
@@ -538,18 +539,16 @@ impl alloc::GC<RValue> for FuncInfo {
 
 impl FuncInfo {
     fn new_method_iseq(
-        name: impl Into<Option<String>>,
+        name: impl Into<Option<IdentId>>,
         func_id: Option<FuncId>,
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let name = name.map(|name| IdentId::get_ident_id_from_string(name));
         let info = ISeqInfo::new_method(func_id, name, args, body, sourceinfo);
         Self {
             name,
-            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -562,7 +561,7 @@ impl FuncInfo {
     fn new_block_iseq(
         func_id: Option<FuncId>,
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
@@ -602,7 +601,7 @@ impl FuncInfo {
     fn new_native(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
         let reg_num = if arity == -1 { -1 } else { arity as i64 };
         Self {
-            name: Some(IdentId::get_ident_id_from_string(name)),
+            name: Some(IdentId::get_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -616,7 +615,7 @@ impl FuncInfo {
 
     fn new_attr_reader(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(IdentId::get_ident_id_from_string(name)),
+            name: Some(IdentId::get_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -628,7 +627,7 @@ impl FuncInfo {
 
     fn new_attr_writer(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(IdentId::get_ident_id_from_string(name)),
+            name: Some(IdentId::get_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -701,7 +700,7 @@ pub(crate) struct ISeqInfo {
     /// the name of arguments.
     pub(in crate::executor) args: ArgumentsInfo,
     /// outer local variables. (dynamic_locals, block_param)
-    pub outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
+    pub outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
     /// literal values. (for GC)
     pub literals: Vec<Value>,
     /// The number of non-temporary registers.
@@ -741,7 +740,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn new(
         id: Option<FuncId>,
         mother: Option<FuncId>,
-        outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
+        outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
         args: ArgumentsInfo,
         body: Node,
@@ -769,7 +768,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn new_block(
         id: Option<FuncId>,
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ArgumentsInfo,
         body: Node,
         sourceinfo: SourceInfoRef,
@@ -859,8 +858,8 @@ impl ISeqInfo {
     }
 
     /// get a block argument name.
-    pub(crate) fn block_param_name(&self) -> Option<&String> {
-        self.args.block_param.as_ref()
+    pub(crate) fn block_param_name(&self) -> Option<IdentId> {
+        self.args.block_param
     }
 
     /// get name.

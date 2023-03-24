@@ -97,10 +97,7 @@ mod test {
             (FLOAT_CLASS, Value::new_float(f64::MAX)),
             (FLOAT_CLASS, Value::new_float(f64::MIN)),
             (NIL_CLASS, Value::nil()),
-            (
-                SYMBOL_CLASS,
-                Value::new_symbol(IdentId::get_ident_id("Ruby")),
-            ),
+            (SYMBOL_CLASS, Value::new_symbol(IdentId::get_id("Ruby"))),
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
         ] {

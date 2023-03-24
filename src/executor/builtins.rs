@@ -148,16 +148,16 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);
-    globals.set_gvar(IdentId::get_ident_id("$stdin"), stdin);
+    globals.set_gvar(IdentId::get_id("$stdin"), stdin);
 
     let stdout = Value::new_io_stdout();
     globals.set_constant_by_str(OBJECT_CLASS, "STDOUT", stdout);
-    globals.set_gvar(IdentId::get_ident_id("$stdout"), stdout);
-    globals.set_gvar(IdentId::get_ident_id("$>"), stdout);
+    globals.set_gvar(IdentId::get_id("$stdout"), stdout);
+    globals.set_gvar(IdentId::get_id("$>"), stdout);
 
     let stderr = Value::new_io_stderr();
     globals.set_constant_by_str(OBJECT_CLASS, "STDERR", stderr);
-    globals.set_gvar(IdentId::get_ident_id("$stderr"), stderr);
+    globals.set_gvar(IdentId::get_id("$stderr"), stderr);
 }
 
 #[derive(Debug, Clone, Copy)]

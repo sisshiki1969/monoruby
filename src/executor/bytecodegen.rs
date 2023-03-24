@@ -140,7 +140,7 @@ struct KeywordArgs {
 #[derive(Debug, Clone)]
 enum Functions {
     Method {
-        name: Option<String>,
+        name: Option<IdentId>,
         info: BlockInfo,
     },
     ClassDef {
@@ -149,8 +149,8 @@ enum Functions {
     },
     Block {
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
-        optional_params: Vec<(usize, BcLocal, String)>,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     },
 }
@@ -168,13 +168,13 @@ pub(crate) struct IrContext {
     /// loop information.
     loops: Vec<(LoopKind, usize, Option<BcReg>)>, // (kind, label for exit, return register)
     /// local variables.
-    locals: HashMap<String, u16>,
+    locals: HashMap<IdentId, u16>,
     /// outer local variables. (dynamic_locals, block_param)
-    outer_locals: Vec<(HashMap<String, u16>, Option<String>)>,
+    outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
     /// literal values. (for GC)
     literals: Vec<Value>,
     /// The name of the block param.
-    block_param: Option<String>,
+    block_param: Option<IdentId>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
@@ -262,7 +262,7 @@ impl IrContext {
             locals: HashMap::default(),
             outer_locals: info.outer_locals.clone(),
             literals: vec![],
-            block_param: info.block_param_name().cloned(),
+            block_param: info.block_param_name(),
             temp: 0,
             temp_num: 0,
             non_temp_num: 0,
@@ -273,7 +273,7 @@ impl IrContext {
             functions_offset,
         };
         info.args.args_names.iter().for_each(|name| {
-            ir.add_local(name.clone());
+            ir.add_local(*name);
         });
         ir.gen_dummy_init(info.is_block_style);
 
@@ -298,7 +298,7 @@ impl IrContext {
         CallSiteId(id as u32)
     }
 
-    fn add_method(&mut self, name: Option<String>, info: BlockInfo) -> FuncId {
+    fn add_method(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
         let id = self.functions_offset + self.functions.len();
         self.functions.push(Functions::Method { name, info });
         FuncId::new(id as _)
@@ -313,8 +313,8 @@ impl IrContext {
     fn add_block(
         &mut self,
         mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<String, u16>, Option<String>)>),
-        optional_params: Vec<(usize, BcLocal, String)>,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
     ) -> FuncId {
         let id = self.functions_offset + self.functions.len();
@@ -381,47 +381,50 @@ impl IrContext {
 // local variables handling.
 //
 impl IrContext {
-    fn get_locals(&self) -> Vec<(HashMap<String, u16>, Option<String>)> {
+    fn get_locals(&self) -> Vec<(HashMap<IdentId, u16>, Option<IdentId>)> {
         let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
         locals.extend_from_slice(&self.outer_locals);
         locals
     }
 
     /// get the outer block argument name.
-    fn outer_block_param_name(&self, outer: usize) -> Option<&String> {
-        self.outer_locals[outer - 1].1.as_ref()
+    fn outer_block_param_name(&self, outer: usize) -> Option<IdentId> {
+        self.outer_locals[outer - 1].1
     }
 
-    fn assign_local(&mut self, ident: &str) -> BcLocal {
-        match self.locals.get(ident) {
+    fn assign_local(&mut self, name: IdentId) -> BcLocal {
+        match self.locals.get(&name) {
             Some(local) => BcLocal(*local),
-            None => self.add_local(ident.to_owned()),
+            None => self.add_local(name),
         }
     }
 
     fn refer_local(&mut self, ident: &str) -> BcLocal {
-        match self.locals.get(ident) {
+        let name = IdentId::get_id(ident);
+        match self.locals.get(&name) {
             Some(local) => BcLocal(*local),
             None => panic!("undefined local var `{}`", ident),
         }
     }
 
-    fn refer_dynamic_local(&self, outer: usize, ident: &str) -> BcLocal {
+    fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> BcLocal {
         BcLocal(
             *self.outer_locals[outer - 1]
                 .0
-                .get(ident)
+                .get(&name)
                 .unwrap_or_else(|| {
                     panic!(
-                        "Bytecodegen: dynamic local was not found. {outer} {ident} {:?} {:?}",
-                        self.outer_locals, self.locals
+                        "Bytecodegen: dynamic local was not found. {outer} {} {:?} {:?}",
+                        IdentId::get_name(name),
+                        self.outer_locals,
+                        self.locals
                     )
                 }),
         )
     }
 
     /// Add a variable identifier without checking duplicates.
-    fn add_local(&mut self, ident: impl Into<Option<String>>) -> BcLocal {
+    fn add_local(&mut self, ident: impl Into<Option<IdentId>>) -> BcLocal {
         let local = self.non_temp_num;
         if let Some(ident) = ident.into() {
             assert!(self.locals.insert(ident, local).is_none());
@@ -432,6 +435,7 @@ impl IrContext {
 
     fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {
         if let NodeKind::LocalVar(0, name) = &node.kind {
+            let name = IdentId::get_id(name);
             Some(self.assign_local(name))
         } else {
             None
@@ -546,12 +550,9 @@ impl IrContext {
         self.emit_literal(dst, Value::new_float(f));
     }
 
-    fn emit_symbol(&mut self, dst: Option<BcReg>, sym: String) {
+    fn emit_symbol(&mut self, dst: Option<BcReg>, sym: IdentId) {
         let reg = self.get_reg(dst);
-        self.emit(
-            BcIr::Symbol(reg, IdentId::get_ident_id_from_string(sym)),
-            Loc::default(),
-        );
+        self.emit(BcIr::Symbol(reg, sym), Loc::default());
     }
 
     fn emit_string(&mut self, dst: Option<BcReg>, s: String) {
@@ -625,10 +626,10 @@ impl IrContext {
         prefix: Vec<String>,
         loc: Loc,
     ) {
-        let name = IdentId::get_ident_id_from_string(name);
+        let name = IdentId::get_id_from_string(name);
         let prefix = prefix
             .into_iter()
-            .map(IdentId::get_ident_id_from_string)
+            .map(IdentId::get_id_from_string)
             .collect();
         let reg = self.get_reg(dst);
         self.emit(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
@@ -761,21 +762,22 @@ impl IrContext {
                 parent,
                 prefix,
             } if !toplevel && parent.is_none() && prefix.is_empty() => {
-                let name = IdentId::get_ident_id(name);
+                let name = IdentId::get_id(name);
                 LvalueKind::Const(name)
             }
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_ident_id(name);
+                let name = IdentId::get_id(name);
                 LvalueKind::InstanceVar(name)
             }
             NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_ident_id(name);
+                let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
             }
             NodeKind::LocalVar(0, _) => LvalueKind::Other,
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
-                let dst = self.refer_dynamic_local(outer, ident).into();
+                let name = IdentId::get_id(ident);
+                let dst = self.refer_dynamic_local(outer, name).into();
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {
@@ -796,7 +798,7 @@ impl IrContext {
                 && !safe_nav =>
             {
                 let recv = self.gen_expr_reg(receiver.clone())?;
-                let method = IdentId::get_ident_id(&format!("{method}="));
+                let method = IdentId::get_id(&format!("{method}="));
                 LvalueKind::Send { recv, method }
             }
             NodeKind::SpecialVar(id) => {
@@ -949,6 +951,7 @@ impl IrContext {
                 self.emit_integer(None, i);
             }
             NodeKind::Symbol(sym) => {
+                let sym = IdentId::get_id_from_string(sym);
                 self.emit_symbol(None, sym);
             }
             NodeKind::Bignum(bigint) => self.emit_bigint(None, bigint),
@@ -1056,7 +1059,8 @@ impl IrContext {
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
-                let src = self.refer_dynamic_local(outer, &ident).into();
+                let name = IdentId::get_id_from_string(ident);
+                let src = self.refer_dynamic_local(outer, name).into();
                 self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
             }
             NodeKind::Const {
@@ -1068,11 +1072,11 @@ impl IrContext {
                 self.emit_load_const(None, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(None, name, loc);
             }
             NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
                 self.emit_load_gvar(None, name, loc);
             }
             NodeKind::SpecialVar(id) => {
@@ -1084,7 +1088,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let method = IdentId::get_ident_id_from_string(method);
+                let method = IdentId::get_id_from_string(method);
                 return self.gen_method_call(method, Some(receiver), arglist, None, use_mode, loc);
             }
             NodeKind::FuncCall {
@@ -1092,7 +1096,7 @@ impl IrContext {
                 arglist,
                 safe_nav: false,
             } => {
-                let method = IdentId::get_ident_id_from_string(method);
+                let method = IdentId::get_id_from_string(method);
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
@@ -1100,7 +1104,7 @@ impl IrContext {
             }
             NodeKind::Command(box expr) => {
                 let arglist = ArgList::from_args(vec![expr]);
-                let method = IdentId::get_ident_id("`");
+                let method = IdentId::get_id("`");
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
@@ -1113,7 +1117,7 @@ impl IrContext {
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
-                let method = IdentId::get_ident_id_from_string(method);
+                let method = IdentId::get_id_from_string(method);
                 return self.gen_method_call(method, None, arglist, None, use_mode, loc);
             }
             NodeKind::If {
@@ -1285,7 +1289,8 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::MethodDef(name, block) => {
-                self.gen_method_def(name.clone(), block, loc)?;
+                let name = IdentId::get_id_from_string(name);
+                self.gen_method_def(name, block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1296,7 +1301,8 @@ impl IrContext {
             }
             NodeKind::SingletonMethodDef(box obj, name, block) => {
                 self.gen_expr(obj, UseMode::Use)?;
-                self.gen_singleton_method_def(name.clone(), block, loc)?;
+                let name = IdentId::get_id_from_string(name);
+                self.gen_singleton_method_def(name, block, loc)?;
                 if use_mode.use_val() {
                     self.emit_symbol(None, name);
                 }
@@ -1317,7 +1323,7 @@ impl IrContext {
                 } else {
                     None
                 };
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
                 self.gen_class_def(
                     name,
                     base,
@@ -1368,6 +1374,8 @@ impl IrContext {
             NodeKind::AliasMethod(box new, box old) => {
                 match (new.kind, old.kind) {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
+                        let new = IdentId::get_id_from_string(new);
+                        let old = IdentId::get_id_from_string(old);
                         self.emit_symbol(None, new);
                         self.emit_symbol(None, old);
                         let old = self.pop().into();
@@ -1409,7 +1417,10 @@ impl IrContext {
             NodeKind::Bool(b) => self.emit_literal(Some(dst), Value::bool(b)),
             NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
             NodeKind::Integer(i) => self.emit_integer(Some(dst), i),
-            NodeKind::Symbol(sym) => self.emit_symbol(Some(dst), sym),
+            NodeKind::Symbol(sym) => {
+                let sym = IdentId::get_id_from_string(sym);
+                self.emit_symbol(Some(dst), sym)
+            }
             NodeKind::Bignum(bigint) => self.emit_bigint(Some(dst), bigint),
             NodeKind::Float(f) => self.emit_float(Some(dst), f),
             NodeKind::String(s) => self.emit_string(Some(dst), s),
@@ -1502,7 +1513,7 @@ impl IrContext {
                 self.emit_load_const(dst.into(), toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
             NodeKind::MethodCall {
@@ -1512,7 +1523,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
-                let method = IdentId::get_ident_id_from_string(method);
+                let method = IdentId::get_id_from_string(method);
                 self.gen_method_call(method, Some(receiver), arglist, ret, UseMode::Use, loc)?;
             }
             NodeKind::FuncCall {
@@ -1521,7 +1532,7 @@ impl IrContext {
                 safe_nav: false,
             } => {
                 let ret = Some(dst);
-                let method = IdentId::get_ident_id_from_string(method);
+                let method = IdentId::get_id_from_string(method);
                 self.gen_method_call(method, None, arglist, ret, UseMode::Use, loc)?;
             }
             NodeKind::Return(_) => unreachable!(),
@@ -1536,7 +1547,7 @@ impl IrContext {
                 is_module,
             } => {
                 let dst = Some(dst);
-                let name = IdentId::get_ident_id_from_string(name);
+                let name = IdentId::get_id_from_string(name);
                 self.gen_class_def(
                     name,
                     base,
@@ -1585,17 +1596,20 @@ impl IrContext {
         Ok(Value::new_regexp(re))
     }
 
-    fn gen_method_def(&mut self, name: String, block: BlockInfo, loc: Loc) -> Result<()> {
-        let func_id = self.add_method(Some(name.clone()), block);
-        let name = IdentId::get_ident_id_from_string(name);
+    fn gen_method_def(&mut self, name: IdentId, block: BlockInfo, loc: Loc) -> Result<()> {
+        let func_id = self.add_method(Some(name), block);
         self.emit(BcIr::MethodDef { name, func_id }, loc);
         Ok(())
     }
 
-    fn gen_singleton_method_def(&mut self, name: String, block: BlockInfo, loc: Loc) -> Result<()> {
-        let func_id = self.add_method(Some(name.clone()), block);
+    fn gen_singleton_method_def(
+        &mut self,
+        name: IdentId,
+        block: BlockInfo,
+        loc: Loc,
+    ) -> Result<()> {
+        let func_id = self.add_method(Some(name), block);
         let obj = self.pop().into();
-        let name = IdentId::get_ident_id_from_string(name);
         self.emit(BcIr::SingletonMethodDef { obj, name, func_id }, loc);
         Ok(())
     }
@@ -1831,7 +1845,8 @@ impl IrContext {
             ..
         } = iter.kind
         {
-            let counter = self.assign_local(&param[0].1);
+            let name = IdentId::get_id(&param[0].1);
+            let counter = self.assign_local(name);
             let break_pos = self.new_label();
             self.loops.push((
                 LoopKind::For,
@@ -1992,6 +2007,7 @@ impl IrContext {
                 n1.iter_mut().for_each(|n| {
                     if level == 0 {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
+                            let name = IdentId::get_id(name);
                             self.assign_local(name);
                         }
                     }
@@ -2096,6 +2112,7 @@ impl IrContext {
             NodeKind::For { param, iter, body } => {
                 for (outer, name) in param {
                     if level == *outer {
+                        let name = IdentId::get_id(name);
                         self.assign_local(name);
                     }
                     if *outer >= level {

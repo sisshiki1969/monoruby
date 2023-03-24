@@ -277,7 +277,7 @@ extern "C" fn respond_to(
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
-        RV::String(b) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(b).into_owned()),
+        RV::String(b) => IdentId::get_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
     Some(Value::bool(globals.check_method(self_val, name).is_some()))
@@ -399,7 +399,7 @@ extern "C" fn instance_variable_defined(
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_ident_id_from_string(String::from_utf8_lossy(s).into_owned()),
+        RV::String(s) => IdentId::get_id_from_string(String::from_utf8_lossy(s).into_owned()),
         _ => return None,
     };
     let b = globals.get_ivar(self_val, id).is_some();

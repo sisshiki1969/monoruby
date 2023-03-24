@@ -131,7 +131,7 @@ impl IrContext {
         } else {
             self.next_reg().into()
         };
-        let method = IdentId::get_ident_id("=~");
+        let method = IdentId::get_id("=~");
         self.gen_method_call(
             method,
             Some(lhs),
