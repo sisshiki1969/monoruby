@@ -11,6 +11,7 @@ mod rusage;
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
     globals.define_class_by_str("Tms", OBJECT_CLASS.get_obj(globals), class_id);
+    globals.define_builtin_module_func(class_id, "pid", pid, 0);
     globals.define_builtin_module_func(class_id, "times", times, 0);
     globals.define_builtin_module_func(class_id, "clock_gettime", clock_gettime, 1);
 }
@@ -59,6 +60,23 @@ extern "C" fn times(
         Value::new_float(child_rusage.ru_stime.get_f64()),
     );
     Some(val)
+}
+
+///
+/// ### Process.#pid
+///
+/// - pid -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/pid.html]
+extern "C" fn pid(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _: Value,
+    _arg: Arg,
+    _len: usize,
+    _: Option<BlockHandler>,
+) -> Option<Value> {
+    Some(Value::new_integer(std::process::id() as i64))
 }
 
 ///
