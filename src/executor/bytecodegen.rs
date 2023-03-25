@@ -160,7 +160,7 @@ pub(crate) struct IrContext {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
-    mother: Option<ISeqInfo>,
+    mother: Option<(FuncId, ArgumentsInfo)>,
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
@@ -195,44 +195,51 @@ pub(crate) struct IrContext {
 
 impl IrContext {
     pub(crate) fn compile_func(func_id: FuncId, ctx: &mut FnStore) -> Result<()> {
-        let ast = std::mem::take(&mut ctx[func_id].as_ruby_func_mut().ast).unwrap();
+        let info = ctx[func_id].as_ruby_func_mut();
+        let ast = std::mem::take(&mut info.ast).unwrap();
+        let for_param_info = std::mem::take(&mut info.args.for_param_info);
+        let expand_info = std::mem::take(&mut info.args.expand_info);
+        let optional_info = std::mem::take(&mut info.args.optional_info);
+        let keyword_initializers = std::mem::take(&mut info.args.keyword_initializers);
         let info = ctx[func_id].as_ruby_func();
-        let mother = info.mother.map(|fid| ctx[fid].as_ruby_func().clone());
+        let mother = info
+            .mother
+            .map(|fid| (fid, ctx[fid].as_ruby_func().args.clone()));
         let mut ir = IrContext::new(info, mother, ctx.callsite_offset(), ctx.functions_offset());
         // arguments preparation
         for ForParamInfo {
             dst_outer,
             dst_reg,
             src_reg,
-        } in &info.args.for_param_info
+        } in for_param_info
         {
             ir.emit(
                 BcIr::StoreDynVar {
-                    dst: (*dst_reg).into(),
-                    outer: *dst_outer,
-                    src: BcLocal(*src_reg as u16).into(),
+                    dst: (dst_reg).into(),
+                    outer: dst_outer,
+                    src: BcLocal(src_reg as u16).into(),
                 },
                 Loc::default(),
             );
         }
-        for ExpandInfo { src, dst, len } in &info.args.expand_info {
-            ir.gen_expand_array(*src, *dst, *len);
+        for ExpandInfo { src, dst, len } in expand_info {
+            ir.gen_expand_array(src, dst, len);
         }
-        for OptionalInfo { local, initializer } in &info.args.optional_info {
-            let local = (*local).into();
+        for OptionalInfo { local, initializer } in optional_info {
+            let local = local.into();
             let next = ir.new_label();
             ir.emit_check_local(local, next);
-            ir.gen_store_expr(local, initializer.clone())?;
+            ir.gen_store_expr(local, initializer)?;
             ir.apply_label(next);
         }
         let kw_reg = info.pos_num();
         // keyword args preparation
-        for (id, initializer) in info.args.keyword_initializers.iter().enumerate() {
+        for (id, initializer) in keyword_initializers.into_iter().enumerate() {
             let local = BcLocal((kw_reg + id) as u16).into();
             let next = ir.new_label();
             ir.emit_check_local(local, next);
             if let Some(box init) = initializer {
-                ir.gen_store_expr(local, init.clone())?;
+                ir.gen_store_expr(local, init)?;
             } else {
                 ir.emit_nil(Some(local));
             }
@@ -249,7 +256,7 @@ impl IrContext {
 impl IrContext {
     fn new(
         info: &ISeqInfo,
-        mother: Option<ISeqInfo>,
+        mother: Option<(FuncId, ArgumentsInfo)>,
         callsite_offset: usize,
         functions_offset: usize,
     ) -> Self {

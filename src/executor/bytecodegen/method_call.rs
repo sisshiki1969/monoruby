@@ -64,16 +64,16 @@ impl IrContext {
             //let with_block = arglist.block.is_some();
             self.handle_arguments(arglist, None, loc)?
         } else {
-            let info = self.mother.as_ref().unwrap();
-            assert_eq!(self.id, info.id());
-            let arg_num = info.pos_num();
+            let (mother_id, mother_args) = self.mother.as_ref().unwrap();
+            assert_eq!(self.id, *mother_id);
+            let arg_num = mother_args.pos_num;
             let args = BcLocal(0).into();
-            let kw_list = info.args.keyword_names();
+            let kw_list = mother_args.keyword_names();
             let kw = if kw_list.len() == 0 {
                 None
             } else {
                 let mut kw_args = HashMap::default();
-                let kw_pos = BcLocal(info.args.pos_num as u16).into();
+                let kw_pos = BcLocal(mother_args.pos_num as u16).into();
                 for (id, name) in kw_list.iter().enumerate() {
                     kw_args.insert(*name, id);
                 }
@@ -327,7 +327,7 @@ impl IrContext {
         block: BlockInfo,
     ) -> Result<()> {
         let outer_locals = self.get_locals();
-        let mother = self.mother.as_ref().unwrap().id();
+        let mother = self.mother.as_ref().unwrap().0;
         let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         self.emit_literal(None, Value::new_integer(block_handler));

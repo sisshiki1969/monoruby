@@ -1351,7 +1351,7 @@ mod test {
 ///
 /// Parameters information in *ISeqInfo*.
 ///
-#[derive(Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct ArgumentsInfo {
     required_num: usize,
     // required + optional
@@ -1378,20 +1378,20 @@ impl ArgumentsInfo {
     }
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct ExpandInfo {
     src: usize,
     dst: usize,
     len: usize,
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct OptionalInfo {
     local: BcLocal,
     initializer: Node,
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct ForParamInfo {
     dst_outer: usize,
     dst_reg: BcLocal,
