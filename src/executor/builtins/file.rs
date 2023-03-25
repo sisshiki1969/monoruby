@@ -20,10 +20,9 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 extern "C" fn write(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
@@ -47,10 +46,9 @@ extern "C" fn write(
 extern "C" fn expand_path(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     let current_dir = match std::env::current_dir() {
@@ -115,10 +113,9 @@ extern "C" fn expand_path(
 extern "C" fn dirname(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let filename = string_to_path(globals, arg[0])?;
     let mut dirname = match filename.parent() {

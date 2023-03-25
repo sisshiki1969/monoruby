@@ -201,6 +201,13 @@ impl LFP {
     }
 
     ///
+    /// Get *self*.
+    ///
+    pub fn self_val(&self) -> Value {
+        unsafe { *(self.0.sub(LBP_SELF as usize) as *const _) }
+    }
+
+    ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {

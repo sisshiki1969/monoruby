@@ -18,10 +18,9 @@ pub(super) fn init(globals: &mut Globals, class: ClassId) {
 extern "C" fn srand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random.seed);
@@ -46,10 +45,9 @@ extern "C" fn srand(
 extern "C" fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let f = globals.random.gen();
     Some(Value::new_float(f))

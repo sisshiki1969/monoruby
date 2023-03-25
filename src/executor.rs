@@ -11,20 +11,13 @@ mod op;
 pub use builtins::*;
 use bytecodegen::*;
 use fancy_regex::Captures;
-use frame::*;
+pub use frame::*;
 pub use globals::*;
 use inst::*;
 use op::*;
 
 type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(
-    &mut Executor,
-    &mut Globals,
-    Value,
-    Arg,
-    usize,
-    Option<BlockHandler>,
-) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg, usize) -> Option<Value>;
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;

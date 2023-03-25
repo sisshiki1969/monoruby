@@ -57,12 +57,11 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn new(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class().class_id();
+    let class = lfp.self_val().as_class().class_id();
     let map = IndexMap::default();
     let obj = Value::new_hash_with_class(map, class);
     Some(obj)
@@ -76,12 +75,11 @@ extern "C" fn new(
 extern "C" fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let len = self_val.as_hash().len();
+    let len = lfp.self_val().as_hash().len();
     Some(Value::new_integer(len as i64))
 }
 
@@ -93,14 +91,13 @@ extern "C" fn size(
 extern "C" fn index_assign(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let key = arg[0];
     let val = arg[1];
-    self_val.as_hash_mut().insert(key, val);
+    lfp.self_val().as_hash_mut().insert(key, val);
     Some(val)
 }
 
@@ -111,13 +108,12 @@ extern "C" fn index_assign(
 extern "C" fn index(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let key = arg[0];
-    let val = self_val.as_hash().get(key).unwrap_or_default();
+    let val = lfp.self_val().as_hash().get(key).unwrap_or_default();
     Some(val)
 }
 
@@ -128,13 +124,13 @@ extern "C" fn index(
 extern "C" fn clear(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    self_val.as_hash_mut().clear();
-    Some(self_val)
+    let mut self_ = lfp.self_val();
+    self_.as_hash_mut().clear();
+    Some(self_)
 }
 
 /// ### Hash#keys
@@ -144,12 +140,11 @@ extern "C" fn clear(
 extern "C" fn keys(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let keys = self_val.as_hash().keys();
+    let keys = lfp.self_val().as_hash().keys();
     Some(Value::new_array_from_vec(keys))
 }
 
@@ -160,12 +155,11 @@ extern "C" fn keys(
 extern "C" fn values(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let keys = self_val.as_hash().values();
+    let keys = lfp.self_val().as_hash().values();
     Some(Value::new_array_from_vec(keys))
 }
 
@@ -179,12 +173,11 @@ extern "C" fn values(
 extern "C" fn include(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let b = self_val.as_hash().contains_key(arg[0]);
+    let b = lfp.self_val().as_hash().contains_key(arg[0]);
     Some(Value::bool(b))
 }
 
@@ -196,12 +189,11 @@ extern "C" fn include(
 extern "C" fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let s = globals.val_inspect(self_val);
+    let s = globals.val_inspect(lfp.self_val());
     Some(Value::new_string(s))
 }
 
@@ -214,17 +206,16 @@ extern "C" fn inspect(
 extern "C" fn env_index(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let key = arg[0];
     if key.is_string().is_none() {
         globals.err_no_implicit_conversion(key, STRING_CLASS);
         return None;
     }
-    let val = self_val.as_hash().get(key).unwrap_or_default();
+    let val = lfp.self_val().as_hash().get(key).unwrap_or_default();
     Some(val)
 }
 
@@ -237,13 +228,13 @@ extern "C" fn env_index(
 extern "C" fn env_fetch(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block_handler: Option<BlockHandler>,
 ) -> Option<Value> {
-    let env_map = self_val.as_hash();
-    let s = if let Some(bh) = block_handler {
+    let self_ = lfp.self_val();
+    let env_map = self_.as_hash();
+    let s = if let Some(bh) = lfp.block() {
         globals.check_number_of_arguments(len, 1..=1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,

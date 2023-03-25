@@ -25,10 +25,9 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 extern "C" fn times(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let tms_class = globals
         .get_qualified_constant(&["Process", "Tms"])
@@ -71,10 +70,9 @@ extern "C" fn times(
 extern "C" fn pid(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _: Value,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(Value::new_integer(std::process::id() as i64))
 }
@@ -88,10 +86,9 @@ extern "C" fn pid(
 extern "C" fn clock_gettime(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut tp = TimeSpec::default();
     let clk_id = arg[0].coerce_to_fixnum(globals)? as i32;

@@ -23,10 +23,9 @@ pub(crate) fn init(globals: &mut Globals) {
 extern "C" fn regexp_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
@@ -43,10 +42,9 @@ extern "C" fn regexp_new(
 extern "C" fn regexp_escape(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
@@ -62,10 +60,9 @@ extern "C" fn regexp_escape(
 extern "C" fn regexp_last_match(
     vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     if len == 0 {
@@ -83,12 +80,12 @@ extern "C" fn regexp_last_match(
 extern "C" fn regexp_match(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let regex = self_val.is_regex().unwrap();
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
     let given = arg[0].expect_string(globals)?;
     let res = match RegexpInner::find_one(vm, globals, regex, &given).unwrap() {
         Some(mat) => Value::new_integer(mat.start() as i64),

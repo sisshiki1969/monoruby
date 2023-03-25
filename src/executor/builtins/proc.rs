@@ -13,12 +13,11 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn new(
     vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    if let Some(block_handler) = block {
+    if let Some(block_handler) = lfp.block() {
         vm.generate_proc(globals, block_handler)
     } else {
         globals.err_create_proc_no_block();
@@ -30,12 +29,12 @@ extern "C" fn new(
 extern "C" fn call(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let block_data = self_val.as_proc();
+    let self_ = lfp.self_val();
+    let block_data = self_.as_proc();
     let res = vm.invoke_proc(globals, block_data, &arg.to_vec(len))?;
     Some(res)
 }

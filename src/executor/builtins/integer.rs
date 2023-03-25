@@ -23,16 +23,15 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn times(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let count = match self_val.try_fixnum() {
+    let count = match lfp.self_val().try_fixnum() {
         Some(i) => i,
         None => unimplemented!(),
     };
-    if let Some(block) = block {
+    if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block);
         for i in 0..count {
             vm.invoke_block(globals, data.clone(), &[Value::new_integer(i)])?;
@@ -41,7 +40,7 @@ extern "C" fn times(
         unimplemented!("needs block.")
     };
 
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 struct PosStep {
@@ -91,13 +90,12 @@ impl Iterator for NegStep {
 extern "C" fn step(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     args: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
-    let block = match block {
+    let block = match lfp.block() {
         None => {
             /*let id = IdentId::get_ident_id("step");
             let val = vm.create_enumerator(id, self_val, args.into(vm))?;
@@ -106,7 +104,7 @@ extern "C" fn step(
         }
         Some(block) => block,
     };
-    let cur = self_val.as_fixnum();
+    let cur = lfp.self_val().as_fixnum();
     let limit = args[0].coerce_to_fixnum(globals)?;
     let step = if len == 2 {
         let step = args[1].coerce_to_fixnum(globals)?;
@@ -131,7 +129,7 @@ extern "C" fn step(
             vm.invoke_block(globals, data.clone(), &[i])?;
         }
     }
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 /// ### Integer#chr
@@ -142,29 +140,27 @@ extern "C" fn step(
 extern "C" fn chr(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    if let Some(i) = self_val.try_fixnum() {
+    if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
             return Some(Value::new_string_from_slice(&[b]));
         }
     };
-    globals.err_char_out_of_range(self_val);
+    globals.err_char_out_of_range(lfp.self_val());
     None
 }
 
 extern "C" fn to_f(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let f = match self_val.unpack() {
+    let f = match lfp.self_val().unpack() {
         RV::Integer(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => unimplemented!(),
@@ -182,12 +178,11 @@ extern "C" fn to_f(
 extern "C" fn to_i(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 #[cfg(test)]

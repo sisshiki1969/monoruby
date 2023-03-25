@@ -27,16 +27,15 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn eq(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let rhs = match arg[0].is_class_or_module() {
         Some(class) => class,
         None => return Some(Value::bool(false)),
     };
-    let lhs = self_val.as_class().class_id();
+    let lhs = lfp.self_val().as_class().class_id();
     Some(Value::bool(lhs == rhs))
 }
 
@@ -47,12 +46,11 @@ extern "C" fn eq(
 extern "C" fn teq(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class().class_id();
+    let class = lfp.self_val().as_class().class_id();
     Some(Value::bool(arg[0].is_kind_of(globals, class)))
 }
 
@@ -63,12 +61,11 @@ extern "C" fn teq(
 extern "C" fn tos(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_name = self_val.as_class().class_id().get_name(globals);
+    let class_name = lfp.self_val().as_class().class_id().get_name(globals);
     let res = Value::new_string(class_name);
     Some(res)
 }
@@ -80,12 +77,11 @@ extern "C" fn tos(
 extern "C" fn constants(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let iter = globals
         .get_constant_names(class_id)
         .into_iter()
@@ -104,12 +100,11 @@ extern "C" fn constants(
 extern "C" fn instance_methods(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let iter = globals
         .get_method_names(class_id)
         .into_iter()
@@ -124,13 +119,12 @@ extern "C" fn instance_methods(
 extern "C" fn attr_reader(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -147,13 +141,12 @@ extern "C" fn attr_reader(
 extern "C" fn attr_writer(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -170,13 +163,12 @@ extern "C" fn attr_writer(
 extern "C" fn attr_accessor(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -195,16 +187,15 @@ extern "C" fn attr_accessor(
 extern "C" fn module_function(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     if len == 0 {
         vm.set_module_function();
         Some(Value::nil())
     } else {
-        let class_id = self_val.as_class().class_id();
+        let class_id = lfp.self_val().as_class().class_id();
         let visi = vm.context_visibility();
         for v in arg.iter(len) {
             let name = v.expect_symbol_or_string(globals)?;
@@ -225,18 +216,18 @@ extern "C" fn module_function(
 extern "C" fn include(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
+    let self_ = lfp.self_val();
     globals.check_min_number_of_arguments(len, 1)?;
-    let class = self_val.as_class();
+    let class = self_.as_class();
     for v in arg.rev(len) {
         v.expect_module(globals)?;
         globals.include_module(class, v.as_class());
     }
-    Some(self_val)
+    Some(self_)
 }
 
 /// ### Module#private
@@ -247,12 +238,18 @@ extern "C" fn include(
 extern "C" fn private(
     executor: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    change_visi(executor, globals, self_val, arg, len, Visibility::Private)
+    change_visi(
+        executor,
+        globals,
+        lfp.self_val(),
+        arg,
+        len,
+        Visibility::Private,
+    )
 }
 
 /// ### Module#protected
@@ -263,12 +260,18 @@ extern "C" fn private(
 extern "C" fn protected(
     executor: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    change_visi(executor, globals, self_val, arg, len, Visibility::Protected)
+    change_visi(
+        executor,
+        globals,
+        lfp.self_val(),
+        arg,
+        len,
+        Visibility::Protected,
+    )
 }
 
 /// ### Module#public
@@ -279,12 +282,18 @@ extern "C" fn protected(
 extern "C" fn public(
     executor: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    change_visi(executor, globals, self_val, arg, len, Visibility::Public)
+    change_visi(
+        executor,
+        globals,
+        lfp.self_val(),
+        arg,
+        len,
+        Visibility::Public,
+    )
 }
 
 fn change_visi(

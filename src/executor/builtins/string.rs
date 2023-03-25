@@ -35,12 +35,11 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn add(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut b = StringInner::from_slice(self_val.as_bytes());
+    let mut b = StringInner::from_slice(lfp.self_val().as_bytes());
     b.extend_from_slice(arg[0].as_bytes());
     Some(Value::new_string_from_inner(b))
 }
@@ -54,12 +53,11 @@ extern "C" fn add(
 extern "C" fn mul(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut lhs = StringInner::from_slice(self_val.as_bytes());
+    let mut lhs = StringInner::from_slice(lfp.self_val().as_bytes());
     let count = match arg[0].coerce_to_fixnum(globals)? {
         i if i < 0 => {
             globals.err_negative_argument();
@@ -82,12 +80,12 @@ extern "C" fn mul(
 extern "C" fn eq(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let lhs = self_val.as_str();
+    let self_ = lfp.self_val();
+    let lhs = self_.as_str();
     let b = match arg[0].is_string() {
         Some(rhs) => rhs == lhs,
         None => false,
@@ -201,10 +199,9 @@ macro_rules! next_char {
 extern "C" fn rem(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _block: Option<BlockHandler>,
 ) -> Option<Value> {
     let arguments = match arg[0].is_array() {
         Some(ary) => ary.to_vec(),
@@ -212,7 +209,8 @@ extern "C" fn rem(
     };
     let mut arg_no = 0;
     let mut format_str = String::new();
-    let self_str = self_val.as_str();
+    let self_ = lfp.self_val();
+    let self_str = self_.as_str();
     let mut chars = self_str.as_ref().chars();
     let mut ch = match chars.next() {
         Some(ch) => ch,
@@ -377,12 +375,11 @@ extern "C" fn rem(
 extern "C" fn sub(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let (res, _) = sub_main(vm, globals, self_val, arg, len, block)?;
+    let (res, _) = sub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
     Some(Value::new_string(res))
 }
 
@@ -396,14 +393,14 @@ extern "C" fn sub(
 extern "C" fn sub_(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let (res, changed) = sub_main(vm, globals, self_val, arg, len, block)?;
-    self_val.replace_string(res);
-    let res = if changed { self_val } else { Value::nil() };
+    let mut self_ = lfp.self_val();
+    let (res, changed) = sub_main(vm, globals, self_, arg, len, lfp.block())?;
+    self_.replace_string(res);
+    let res = if changed { self_ } else { Value::nil() };
     Some(res)
 }
 
@@ -441,12 +438,11 @@ fn sub_main(
 extern "C" fn gsub(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let (res, _) = gsub_main(vm, globals, self_val, arg, len, block)?;
+    let (res, _) = gsub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
     Some(Value::new_string(res))
 }
 
@@ -461,14 +457,14 @@ extern "C" fn gsub(
 extern "C" fn gsub_(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let (res, changed) = gsub_main(vm, globals, self_val, arg, len, block)?;
-    self_val.replace_string(res);
-    let res = if changed { self_val } else { Value::nil() };
+    let mut self_ = lfp.self_val();
+    let (res, changed) = gsub_main(vm, globals, self_, arg, len, lfp.block())?;
+    self_.replace_string(res);
+    let res = if changed { self_ } else { Value::nil() };
     Some(res)
 }
 
@@ -505,10 +501,9 @@ fn gsub_main(
 extern "C" fn string_match(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     let pos = match len {
@@ -519,23 +514,23 @@ extern "C" fn string_match(
         },
         _ => unreachable!(),
     };
-    let given = self_val.expect_string(globals)?;
+    let self_ = lfp.self_val();
+    let given = self_.expect_string(globals)?;
     let re = arg[0].expect_regexp_or_string(globals)?;
 
-    RegexpInner::match_one(vm, globals, &re, &given, block, pos)
+    RegexpInner::match_one(vm, globals, &re, &given, lfp.block(), pos)
 }
 
 /// ### String#to_s
 extern "C" fn tos(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=0)?;
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 ///
@@ -548,12 +543,11 @@ extern "C" fn tos(
 extern "C" fn length(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let length = self_val.as_str().chars().count();
+    let length = lfp.self_val().as_str().chars().count();
     Some(Value::new_integer(length as i64))
 }
 
@@ -573,10 +567,9 @@ fn gen_pad(padding: &str, len: usize) -> String {
 extern "C" fn ljust(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
@@ -589,7 +582,8 @@ extern "C" fn ljust(
         globals.err_zero_width_padding();
         return None;
     };
-    let lhs = self_val.as_str();
+    let self_ = lfp.self_val();
+    let lhs = self_.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
@@ -612,10 +606,9 @@ extern "C" fn ljust(
 extern "C" fn rjust(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
@@ -628,7 +621,8 @@ extern "C" fn rjust(
         globals.err_zero_width_padding();
         return None;
     };
-    let lhs = self_val.as_str();
+    let self_ = lfp.self_val();
+    let lhs = self_.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
@@ -651,12 +645,11 @@ extern "C" fn rjust(
 extern "C" fn empty(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(Value::bool(self_val.as_bytes().is_empty()))
+    Some(Value::bool(lfp.self_val().as_bytes().is_empty()))
 }
 
 ///
@@ -668,13 +661,13 @@ extern "C" fn empty(
 extern "C" fn to_i(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
-    let s = self_val.as_str();
+    let self_ = lfp.self_val();
+    let s = self_.as_str();
     let radix = if len == 0 {
         10
     } else {

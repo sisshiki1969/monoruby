@@ -113,15 +113,14 @@ impl Codegen {
         monoasm!(self.jit,
             subq rsp, rax;
             lea  rcx, [r14 - (LBP_ARG0)];     // rcx <- *const arg[0]
-            movq  r9, [r14 - (LBP_BLOCK)];     // r9 <- block
-            movq  rdx, [r14 - (LBP_SELF)];    // rdx <- self
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
             movw [r14 - (LBP_META_REGNUM)], rdi;
 
             movq rdi, rbx;
             movq rsi, r12;
+            movq rdx, r14;    // rdx <- lfp
             movq rax, (abs_address);
-            // fn(&mut Interp, &mut Globals, Value, *const Value, len:usize, block:Option<Value>)
+            // fn(&mut Interp, &mut Globals, LFP, *const Value, len:usize)
             call rax;
 
             leave;

@@ -19,10 +19,9 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn class_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let superclass = if len == 0 {
@@ -44,12 +43,11 @@ extern "C" fn class_new(
 extern "C" fn new(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let obj = allocate(vm, globals, self_val, arg, 0, None)?;
+    let obj = allocate(vm, globals, lfp, arg, 0)?;
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, dbg!(len))?;
     Some(obj)
 }
@@ -61,12 +59,11 @@ extern "C" fn new(
 extern "C" fn superclass(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class();
+    let class = lfp.self_val().as_class();
     Some(class.superclass_value().unwrap_or_default())
 }
 
@@ -77,12 +74,11 @@ extern "C" fn superclass(
 extern "C" fn allocate(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class_id = self_val.as_class().class_id();
+    let class_id = lfp.self_val().as_class().class_id();
     let obj = Value::new_object(class_id);
     Some(obj)
 }

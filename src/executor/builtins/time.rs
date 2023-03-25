@@ -24,10 +24,9 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn now(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInfo::Local(t);
@@ -42,13 +41,12 @@ extern "C" fn now(
 extern "C" fn inspect(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let time = self_val.as_time();
-    Some(Value::new_string(time.to_string()))
+    let time = lfp.self_val().as_time().to_string();
+    Some(Value::new_string(time))
 }
 
 ///
@@ -59,12 +57,11 @@ extern "C" fn inspect(
 extern "C" fn to_s(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let s = match self_val.as_time() {
+    let s = match lfp.self_val().as_time() {
         TimeInfo::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
         TimeInfo::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
@@ -80,14 +77,13 @@ extern "C" fn to_s(
 extern "C" fn strftime(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut fmt = arg[0].expect_string(globals)?;
     fmt = fmt.replace("%N", "%f");
-    let s = match self_val.as_time() {
+    let s = match lfp.self_val().as_time() {
         TimeInfo::Local(t) => t.format(&fmt).to_string(),
         TimeInfo::UTC(t) => {
             let fmt = fmt + " UTC";
@@ -104,12 +100,12 @@ extern "C" fn strftime(
 extern "C" fn sub(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let lhs_rv = self_val.try_rvalue().unwrap();
+    let self_ = lfp.self_val();
+    let lhs_rv = self_.try_rvalue().unwrap();
     let lhs = match lhs_rv.kind() {
         ObjKind::TIME => lhs_rv.as_time().clone(),
         _ => unreachable!(),
@@ -118,7 +114,7 @@ extern "C" fn sub(
     let rhs = match rhs_rv.kind() {
         ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
-            globals.err_method_not_found(IdentId::_SUB, self_val);
+            globals.err_method_not_found(IdentId::_SUB, self_);
             return None;
         }
     };

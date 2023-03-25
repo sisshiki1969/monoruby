@@ -13,10 +13,9 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _self_val: Value,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(Value::bool(false))
 }
@@ -24,10 +23,9 @@ extern "C" fn sync(
 extern "C" fn assign_sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    _self_val: Value,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     Some(arg[0])
 }

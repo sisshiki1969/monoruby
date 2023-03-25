@@ -32,12 +32,11 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn new(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class().class_id();
+    let class = lfp.self_val().as_class().class_id();
     let obj = Value::new_array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Some(obj)
@@ -53,12 +52,11 @@ extern "C" fn new(
 extern "C" fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let len = self_val.as_array_mut().len();
+    let len = lfp.self_val().as_array().len();
     Some(Value::new_integer(len as i64))
 }
 
@@ -71,12 +69,11 @@ extern "C" fn size(
 extern "C" fn add(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let mut lhs = self_val.as_array().clone();
+    let mut lhs = lfp.self_val().as_array().clone();
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
@@ -97,13 +94,13 @@ extern "C" fn add(
 extern "C" fn shl(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    self_val.as_array_mut().push(arg[0]);
-    Some(self_val)
+    let mut self_ = lfp.self_val();
+    self_.as_array_mut().push(arg[0]);
+    Some(self_)
 }
 
 ///
@@ -117,17 +114,16 @@ extern "C" fn shl(
 extern "C" fn index(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 1..=2)?;
     if len == 1 {
         let idx = arg[0];
-        self_val.as_array().get_elem1(globals, idx)
+        lfp.self_val().as_array().get_elem1(globals, idx)
     } else {
-        self_val.as_array().get_elem2(globals, arg[0], arg[1])
+        lfp.self_val().as_array().get_elem2(globals, arg[0], arg[1])
     }
 }
 
@@ -140,15 +136,14 @@ extern "C" fn index(
 extern "C" fn index_assign(
     _vm: &mut Executor,
     globals: &mut Globals,
-    mut self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let i = arg[0];
     let val = arg[1];
     if let Some(idx) = i.try_fixnum() {
-        return self_val.as_array_mut().set_index(globals, idx, val);
+        return lfp.self_val().as_array_mut().set_index(globals, idx, val);
     } else {
         unimplemented!()
     }
@@ -164,12 +159,11 @@ extern "C" fn index_assign(
 extern "C" fn inject(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block_handler: Option<BlockHandler>,
 ) -> Option<Value> {
-    let bh = match block_handler {
+    let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
             globals.err_no_block_given();
@@ -177,8 +171,8 @@ extern "C" fn inject(
         }
     };
     globals.check_number_of_arguments(len, 0..=1)?;
-    let ary = self_val.as_array();
-    let mut iter = ary.iter();
+    let self_ = lfp.self_val();
+    let mut iter = self_.as_array().iter();
     let mut res = if len == 0 {
         iter.next().cloned().unwrap_or_default()
     } else {
@@ -201,10 +195,9 @@ extern "C" fn inject(
 extern "C" fn join(
     _: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let sep = if len == 0 {
@@ -212,9 +205,9 @@ extern "C" fn join(
     } else {
         arg[0].expect_string(globals)?
     };
-    let aref = self_val.as_array();
+    let self_ = lfp.self_val();
     let mut res = String::new();
-    array_join(globals, &mut res, aref, &sep);
+    array_join(globals, &mut res, self_.as_array(), &sep);
     Some(Value::new_string(res))
 }
 
@@ -240,15 +233,15 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 extern "C" fn sum(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
-    let aref = self_val.as_array();
-    match block {
+    let self_ = lfp.self_val();
+    let aref = self_.as_array();
+    match lfp.block() {
         None => {
             for v in &**aref {
                 sum = add_values(vm, globals, sum, *v)?;
@@ -275,22 +268,21 @@ extern "C" fn sum(
 extern "C" fn each(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let block_handler = if let Some(block) = block {
+    let block_handler = if let Some(block) = lfp.block() {
         block
     } else {
         globals.err_no_block_given();
         return None;
     };
     let data = vm.get_block_data(globals, block_handler);
-    for i in &**self_val.as_array() {
+    for i in &**lfp.self_val().as_array() {
         vm.invoke_block(globals, data.clone(), &[*i])?;
     }
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 #[cfg(test)]

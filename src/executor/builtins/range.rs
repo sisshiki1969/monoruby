@@ -19,10 +19,9 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn range_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
@@ -35,12 +34,11 @@ extern "C" fn range_new(
 extern "C" fn begin(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.as_range().start)
+    Some(lfp.self_val().as_range().start)
 }
 
 /// Range#end
@@ -50,12 +48,11 @@ extern "C" fn begin(
 extern "C" fn end(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.as_range().end)
+    Some(lfp.self_val().as_range().end)
 }
 
 /// Range#exclude_end?
@@ -65,12 +62,11 @@ extern "C" fn end(
 extern "C" fn exclude_end(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(Value::bool(self_val.as_range().exclude_end()))
+    Some(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
 ///
@@ -83,18 +79,18 @@ extern "C" fn exclude_end(
 extern "C" fn each(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    block: Option<BlockHandler>,
 ) -> Option<Value> {
-    let block_handler = if let Some(block) = block {
+    let block_handler = if let Some(block) = lfp.block() {
         block
     } else {
         globals.err_no_block_given();
         return None;
     };
-    let range = self_val.as_range();
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
         let start = range.start.as_fixnum();
         let mut end = range.end.as_fixnum();
@@ -117,7 +113,7 @@ extern "C" fn each(
     } else {
         unimplemented!()
     }
-    Some(self_val)
+    Some(self_)
 }
 
 #[cfg(test)]

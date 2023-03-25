@@ -19,10 +19,9 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 extern "C" fn sqrt(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {
@@ -44,10 +43,9 @@ extern "C" fn sqrt(
 extern "C" fn sin(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {
@@ -69,10 +67,9 @@ extern "C" fn sin(
 extern "C" fn cos(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     let f = match arg0.unpack() {

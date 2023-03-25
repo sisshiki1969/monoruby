@@ -12,23 +12,21 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn tof(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val)
+    Some(lfp.self_val())
 }
 
 extern "C" fn toi(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    match self_val.unpack() {
+    match lfp.self_val().unpack() {
         RV::Float(f) => Some(Value::new_integer(f.trunc() as i64)),
         _ => unreachable!(),
     }

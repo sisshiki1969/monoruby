@@ -61,13 +61,12 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn object_new(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let class = self_val.as_class();
-    let obj = Value::new_object(class.class_id());
+    let class = lfp.self_val().as_class().class_id();
+    let obj = Value::new_object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
@@ -83,13 +82,12 @@ extern "C" fn object_new(
 extern "C" fn is_a(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let class = arg[0].expect_class_or_module(globals)?;
-    Some(Value::bool(self_val.is_kind_of(globals, class)))
+    Some(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
 
 ///
@@ -101,12 +99,11 @@ extern "C" fn is_a(
 extern "C" fn nil(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(Value::bool(self_val.is_nil()))
+    Some(Value::bool(lfp.self_val().is_nil()))
 }
 
 ///
@@ -118,12 +115,11 @@ extern "C" fn nil(
 extern "C" fn dup(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.dup())
+    Some(lfp.self_val().dup())
 }
 
 ///
@@ -135,10 +131,9 @@ extern "C" fn dup(
 extern "C" fn puts(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.is_array() {
@@ -171,10 +166,9 @@ extern "C" fn puts(
 extern "C" fn print(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     for v in arg.iter(len) {
         globals.write_stdout(&v.to_bytes(globals));
@@ -191,12 +185,11 @@ extern "C" fn print(
 extern "C" fn to_s(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let s = self_val.to_s(globals);
+    let s = lfp.self_val().to_s(globals);
     Some(Value::new_string(s))
 }
 
@@ -209,10 +202,9 @@ extern "C" fn to_s(
 extern "C" fn p(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut buf = String::new();
     for v in arg.iter(len) {
@@ -233,10 +225,9 @@ extern "C" fn p(
 extern "C" fn assert(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let expected = arg[0];
     let actual = arg[1];
@@ -252,10 +243,9 @@ extern "C" fn assert(
 extern "C" fn dump(
     vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     _arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
     Some(Value::nil())
@@ -270,17 +260,18 @@ extern "C" fn dump(
 extern "C" fn respond_to(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => IdentId::get_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
-    Some(Value::bool(globals.check_method(self_val, name).is_some()))
+    Some(Value::bool(
+        globals.check_method(lfp.self_val(), name).is_some(),
+    ))
 }
 
 ///
@@ -292,12 +283,11 @@ extern "C" fn respond_to(
 extern "C" fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let s = self_val.inspect(globals);
+    let s = lfp.self_val().inspect(globals);
     Some(Value::new_string(s))
 }
 
@@ -310,12 +300,11 @@ extern "C" fn inspect(
 extern "C" fn class(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.real_class(globals).as_val())
+    Some(lfp.self_val().real_class(globals).as_val())
 }
 
 ///
@@ -327,12 +316,12 @@ extern "C" fn class(
 extern "C" fn instance_of(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    let b = self_val.real_class(globals).class_id() == arg[0].expect_class_or_module(globals)?;
+    let b =
+        lfp.self_val().real_class(globals).class_id() == arg[0].expect_class_or_module(globals)?;
     Some(Value::bool(b))
 }
 
@@ -346,10 +335,9 @@ extern "C" fn instance_of(
 extern "C" fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     let i = match len {
@@ -375,12 +363,11 @@ extern "C" fn rand(
 extern "C" fn singleton_class(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     _: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
-    Some(self_val.get_singleton(globals))
+    Some(lfp.self_val().get_singleton(globals))
 }
 
 ///
@@ -392,17 +379,16 @@ extern "C" fn singleton_class(
 extern "C" fn instance_variable_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id_from_string(String::from_utf8_lossy(s).into_owned()),
         _ => return None,
     };
-    let b = globals.get_ivar(self_val, id).is_some();
+    let b = globals.get_ivar(lfp.self_val(), id).is_some();
     Some(Value::bool(b))
 }
 
@@ -415,14 +401,13 @@ extern "C" fn instance_variable_defined(
 extern "C" fn instance_variable_set(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let val = arg[1];
-    globals.set_ivar(self_val, id, val)?;
+    globals.set_ivar(lfp.self_val(), id, val)?;
     Some(val)
 }
 
@@ -435,13 +420,12 @@ extern "C" fn instance_variable_set(
 extern "C" fn instance_variable_get(
     _vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
-    let v = globals.get_ivar(self_val, id).unwrap_or_default();
+    let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
     Some(v)
 }
 
@@ -454,10 +438,9 @@ extern "C" fn instance_variable_get(
 extern "C" fn kernel_integer(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     _len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {
@@ -491,10 +474,9 @@ extern "C" fn kernel_integer(
 extern "C" fn require(
     executor: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
@@ -512,10 +494,9 @@ extern "C" fn require(
 extern "C" fn require_relative(
     executor: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     let mut path = globals.current_source_path(executor);
     path.pop();
@@ -564,10 +545,9 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 extern "C" fn system(
     _executor: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     use std::process::Command;
     let input = arg[0].as_string();
@@ -594,10 +574,9 @@ extern "C" fn system(
 extern "C" fn command(
     _executor: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     _: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     use std::process::Command;
     let input = arg[0].as_string();
@@ -624,10 +603,9 @@ extern "C" fn command(
 extern "C" fn abort(
     _executor: &mut Executor,
     globals: &mut Globals,
-    _: Value,
+    lfp: LFP,
     arg: Arg,
     len: usize,
-    _: Option<BlockHandler>,
 ) -> Option<Value> {
     globals.check_number_of_arguments(len, 0..=1)?;
     if len == 1 {
