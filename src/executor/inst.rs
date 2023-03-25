@@ -543,7 +543,6 @@ pub(super) enum TraceIr {
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
-    Splat(SlotId),
     AliasMethod {
         new: SlotId,
         old: SlotId,
@@ -681,7 +680,6 @@ impl TraceIr {
                     src: SlotId::new(op1),
                     name: IdentId::from(op2),
                 },
-                27 => Self::Splat(SlotId::new(op1)),
                 28 => Self::LoadSvar {
                     dst: SlotId::new(op1),
                     id: op2,

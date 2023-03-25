@@ -130,10 +130,6 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -
     }
 }
 
-pub(super) extern "C" fn make_splat() {
-    //unsafe { *src = Value::new_splat(*src) };
-}
-
 pub(super) extern "C" fn vm_handle_arguments(
     globals: &mut Globals,
     callid: CallSiteId,

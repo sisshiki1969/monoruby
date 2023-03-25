@@ -1305,18 +1305,6 @@ impl Codegen {
                     );
                     self.xmm_restore(&xmm_using);
                 }
-                TraceIr::Splat(src) => {
-                    self.write_back_slot(&mut ctx, src);
-                    ctx.dealloc_xmm(src);
-                    let xmm_using = ctx.get_xmm_using();
-                    self.xmm_save(&xmm_using);
-                    monoasm!(self.jit,
-                        lea  rdi, [r14 - (conv(src))];
-                        movq rax, (runtime::make_splat);
-                        call rax;
-                    );
-                    self.xmm_restore(&xmm_using);
-                }
                 TraceIr::AliasMethod { new, old } => {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);

@@ -973,9 +973,6 @@ impl BcPc {
             TraceIr::ExpandArray(src, dst, len) => {
                 format!("{:?}; {} = expand({:?})", dst, len, src)
             }
-            TraceIr::Splat(src) => {
-                format!("splat({:?})", src)
-            }
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
@@ -1127,6 +1124,23 @@ impl std::fmt::Debug for InstId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Visibility {
+    Public = 0,
+    Protected = 1,
+    Private = 2,
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        self == &Self::Public
+    }
+
+    pub fn is_private(&self) -> bool {
+        self == &Self::Private
+    }
+}
+
 ///
 /// Metadata.
 ///
@@ -1149,28 +1163,11 @@ impl std::fmt::Debug for InstId {
 struct Meta {
     func_id: Option<FuncId>,
     reg_num: u16,
-    /// interpreter:0 native:2
+    /// interpreter:0 JIT code:1 native:2
     kind: u8,
     /// bit 2-1: public:0 private:1 protected:2
     /// bit 0: method:0 class_def:1
     mode: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub enum Visibility {
-    Public = 0,
-    Protected = 1,
-    Private = 2,
-}
-
-impl Visibility {
-    pub fn is_public(&self) -> bool {
-        self == &Self::Public
-    }
-
-    pub fn is_private(&self) -> bool {
-        self == &Self::Private
-    }
 }
 
 impl std::fmt::Debug for Meta {

@@ -178,7 +178,6 @@ impl Codegen {
         self.dispatch[22] = self.vm_singleton_class_def();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
-        self.dispatch[27] = self.vm_splat();
         self.dispatch[28] = self.vm_load_svar();
         self.dispatch[30] = self.vm_method_call(false, true);
         self.dispatch[31] = self.vm_method_call(false, false);
@@ -734,28 +733,6 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        self.fetch_and_dispatch();
-        label
-    }
-
-    /// Make splat
-    ///
-    /// ~~~text
-    /// +---+---+---+---++---+---+---+---+
-    /// | op|src|       ||       |       |
-    /// +---+---+---+---++---+---+---+---+
-    ///
-    /// src: the source resister
-    /// ~~~
-    fn vm_splat(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        monoasm! { self.jit,
-            // rdi <- *mut Value
-            negq r15;
-            lea rdi, [r14 + r15 * 8 - (LBP_SELF)];
-            movq rax, (runtime::make_splat);
-            call rax;
-        };
         self.fetch_and_dispatch();
         label
     }
