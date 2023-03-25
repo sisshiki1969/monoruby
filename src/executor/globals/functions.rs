@@ -155,7 +155,8 @@ fn handle_args(
     sourceinfo: &SourceInfoRef,
 ) -> Result<ArgumentsInfo> {
     let mut args_names = vec![];
-    let mut keyword_args = vec![];
+    let mut keyword_names = vec![];
+    let mut keyword_initializers = vec![];
     let mut destruct_args = vec![];
     let mut expand = vec![];
     let mut optional_info = vec![];
@@ -201,7 +202,8 @@ fn handle_args(
             ParamKind::Keyword(name, init) => {
                 let name = IdentId::get_id_from_string(name);
                 args_names.push(Some(name));
-                keyword_args.push((name, init));
+                keyword_names.push(name);
+                keyword_initializers.push(init);
             }
             ParamKind::Block(name) => {
                 let name = IdentId::get_id_from_string(name.clone());
@@ -230,7 +232,8 @@ fn handle_args(
     args_names.append(&mut destruct_args);
     Ok(ArgumentsInfo {
         args_names,
-        keyword_args,
+        keyword_names,
+        keyword_initializers,
         pos_num: reqopt_num + rest,
         reqopt_num,
         required_num,
@@ -821,7 +824,7 @@ impl ISeqInfo {
 
     /// get a number of keyword arguments.
     pub(crate) fn key_num(&self) -> usize {
-        self.args.keyword_args.len()
+        self.args.keyword_names.len()
     }
 
     /// get a position of keyword arguments.

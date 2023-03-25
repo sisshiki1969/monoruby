@@ -1360,19 +1360,21 @@ struct ArgumentsInfo {
     pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
     args_names: Vec<Option<IdentId>>,
-    keyword_args: Vec<(IdentId, Option<Box<Node>>)>,
+    keyword_names: Vec<IdentId>,
     block_param: Option<IdentId>,
-    /// argument expansion info
+    /// keyword params initializers.
+    keyword_initializers: Vec<Option<Box<Node>>>,
+    /// param expansion info
     expand_info: Vec<ExpandInfo>,
-    /// optional parameters initializer
+    /// optional parameters initializers.
     optional_info: Vec<OptionalInfo>,
-    /// for parameter info.
+    /// *for* statement parameters info.
     for_param_info: Vec<ForParamInfo>,
 }
 
 impl ArgumentsInfo {
-    fn keyword_args(&self) -> Vec<IdentId> {
-        self.keyword_args.iter().map(|r| r.0).collect()
+    fn keyword_names(&self) -> &Vec<IdentId> {
+        &self.keyword_names
     }
 }
 

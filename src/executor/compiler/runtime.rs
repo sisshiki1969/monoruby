@@ -174,7 +174,7 @@ pub(super) extern "C" fn handle_invoker_arguments(
                 kw_pos,
                 kw_args,
             } = &globals.func[callid];*/
-            let params = &info.args.keyword_args;
+            let params = &info.args.keyword_names;
             let callee_kw_pos = info.args.pos_num + 1;
             for (id, _) in params.iter().enumerate() {
                 *callee_reg.sub(callee_kw_pos + id) = Some(Value::nil());
@@ -266,7 +266,7 @@ fn handle_keyword(
         kw_pos, kw_args, ..
     } = callsite;
     let callee_kw_pos = info.args.pos_num + 1;
-    for (id, (param_name, _)) in info.args.keyword_args.iter().enumerate() {
+    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
             *callee_reg.sub(callee_kw_pos + id) = kw_args
                 .get(param_name)

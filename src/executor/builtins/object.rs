@@ -131,7 +131,7 @@ extern "C" fn dup(
 extern "C" fn puts(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -166,7 +166,7 @@ extern "C" fn puts(
 extern "C" fn print(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -202,7 +202,7 @@ extern "C" fn to_s(
 extern "C" fn p(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -225,7 +225,7 @@ extern "C" fn p(
 extern "C" fn assert(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -243,7 +243,7 @@ extern "C" fn assert(
 extern "C" fn dump(
     vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -335,7 +335,7 @@ extern "C" fn instance_of(
 extern "C" fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -438,7 +438,7 @@ extern "C" fn instance_variable_get(
 extern "C" fn kernel_integer(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -474,7 +474,7 @@ extern "C" fn kernel_integer(
 extern "C" fn require(
     executor: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _: usize,
 ) -> Option<Value> {
@@ -494,7 +494,7 @@ extern "C" fn require(
 extern "C" fn require_relative(
     executor: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _: usize,
 ) -> Option<Value> {
@@ -545,7 +545,7 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 extern "C" fn system(
     _executor: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -574,7 +574,7 @@ extern "C" fn system(
 extern "C" fn command(
     _executor: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _: usize,
 ) -> Option<Value> {
@@ -603,7 +603,7 @@ extern "C" fn command(
 extern "C" fn abort(
     _executor: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {

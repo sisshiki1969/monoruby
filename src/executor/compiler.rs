@@ -481,19 +481,6 @@ impl Codegen {
     ///
     /// ## out
     /// - rax : result
-    fn call_dest(&mut self, dest: DestLabel) {
-        self.push_frame();
-        self.set_lfp();
-        monoasm!(self.jit,
-            call dest;
-        );
-        self.pop_frame();
-    }
-
-    /// ## in
-    ///
-    /// ## out
-    /// - rax : result
     fn call_codeptr(&mut self, codeptr: CodePtr) {
         self.push_frame();
         self.set_lfp();

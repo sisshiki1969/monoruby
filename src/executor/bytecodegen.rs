@@ -155,7 +155,7 @@ enum Functions {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct IrContext {
     /// ID of this function.
     id: FuncId,
@@ -227,7 +227,7 @@ impl IrContext {
         }
         let kw_reg = info.pos_num();
         // keyword args preparation
-        for (id, (_, initializer)) in info.args.keyword_args.iter().enumerate() {
+        for (id, initializer) in info.args.keyword_initializers.iter().enumerate() {
             let local = BcLocal((kw_reg + id) as u16).into();
             let next = ir.new_label();
             ir.emit_check_local(local, next);

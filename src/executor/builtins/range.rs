@@ -19,7 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn range_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {

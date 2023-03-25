@@ -18,7 +18,7 @@ pub(super) fn init(globals: &mut Globals, class: ClassId) {
 extern "C" fn srand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -45,7 +45,7 @@ extern "C" fn srand(
 extern "C" fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {

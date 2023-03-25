@@ -20,7 +20,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 extern "C" fn write(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -46,7 +46,7 @@ extern "C" fn write(
 extern "C" fn expand_path(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {
@@ -113,7 +113,7 @@ extern "C" fn expand_path(
 extern "C" fn dirname(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {

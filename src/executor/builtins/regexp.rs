@@ -23,7 +23,7 @@ pub(crate) fn init(globals: &mut Globals) {
 extern "C" fn regexp_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -42,7 +42,7 @@ extern "C" fn regexp_new(
 extern "C" fn regexp_escape(
     _vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
@@ -60,7 +60,7 @@ extern "C" fn regexp_escape(
 extern "C" fn regexp_last_match(
     vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Option<Value> {

@@ -24,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
 extern "C" fn now(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {

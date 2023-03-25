@@ -68,14 +68,14 @@ impl IrContext {
             assert_eq!(self.id, info.id());
             let arg_num = info.pos_num();
             let args = BcLocal(0).into();
-            let kw_list = info.args.keyword_args();
+            let kw_list = info.args.keyword_names();
             let kw = if kw_list.len() == 0 {
                 None
             } else {
                 let mut kw_args = HashMap::default();
                 let kw_pos = BcLocal(info.args.pos_num as u16).into();
-                for (id, name) in kw_list.into_iter().enumerate() {
-                    kw_args.insert(name, id);
+                for (id, name) in kw_list.iter().enumerate() {
+                    kw_args.insert(*name, id);
                 }
                 Some(KeywordArgs { kw_pos, kw_args })
             };
