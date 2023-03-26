@@ -1295,7 +1295,14 @@ impl IrContext {
                 else_,
                 ensure,
             } => {
-                assert!(rescue.is_empty());
+                if !rescue.is_empty() {
+                    /*return Err(MonorubyErr::unsupported_feature(
+                        "rescue clause is not supported.",
+                        loc,
+                        self.sourceinfo.clone(),
+                    ));*/
+                    eprintln!("rescue clause is not supported.");
+                };
 
                 if let Some(box else_) = else_ {
                     self.gen_expr(body, UseMode::NotUse)?;

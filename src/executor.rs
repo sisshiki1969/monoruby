@@ -131,6 +131,7 @@ pub struct Executor {
     sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
+    temp_stack: Vec<Value>,
 }
 
 impl alloc::GC<RValue> for Executor {
@@ -146,6 +147,7 @@ impl alloc::GC<RValue> for Executor {
         if let Some(v) = self.sp_post_match {
             v.mark(alloc)
         };
+        self.temp_stack.iter().for_each(|v| v.mark(alloc));
         let mut cfp = self.cfp;
         while let Some(inner_cfp) = cfp {
             inner_cfp.lfp().mark(alloc);
@@ -177,6 +179,14 @@ impl Executor {
 
     fn within_stack(&self, lfp: LFP) -> bool {
         self.lfp_top >= lfp && lfp > self.cfp.unwrap()
+    }
+
+    fn temp_push(&mut self, val: Value) {
+        self.temp_stack.push(val);
+    }
+
+    fn temp_clear(&mut self) {
+        self.temp_stack.clear()
     }
 }
 
@@ -341,6 +351,10 @@ impl Executor {
     ///
     /// Invoke block for *block_handler*.
     ///
+    /// To get BlockData, use Executor.get_block_data().
+    ///  
+    /// let data = vm.get_block_data(globals, block);
+    ///
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
@@ -355,6 +369,19 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
+    }
+
+    pub fn invoke_block_iter1(
+        &mut self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+        iter: impl Iterator<Item = Value>,
+    ) -> Option<()> {
+        let block_data = self.get_block_data(globals, block_handler);
+        for val in iter {
+            self.invoke_block(globals, block_data.clone(), &[val])?;
+        }
+        Some(())
     }
 
     ///

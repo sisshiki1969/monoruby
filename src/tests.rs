@@ -74,7 +74,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
     );
     eprintln!("{}", wrapped);
     let (interp_val, mut globals) = run_test_main(&wrapped);
-    let ruby_res = run_ruby(&(prelude.to_string() + code), &mut globals);
+    let ruby_res = run_ruby(&format!("{prelude}\n{code}"), &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
 }

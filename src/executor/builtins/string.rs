@@ -12,6 +12,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
+    globals.define_builtin_func(STRING_CLASS, "[]", index, -1);
+    globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
+    globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
+    globals.define_builtin_func(STRING_CLASS, "split", split, -1);
     globals.define_builtin_func(STRING_CLASS, "gsub", gsub, -1);
     globals.define_builtin_func(STRING_CLASS, "gsub!", gsub_, -1);
     globals.define_builtin_func(STRING_CLASS, "sub", sub, -1);
@@ -22,6 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "size", length, 0);
     globals.define_builtin_func(STRING_CLASS, "ljust", ljust, -1);
     globals.define_builtin_func(STRING_CLASS, "rjust", rjust, -1);
+    globals.define_builtin_func(STRING_CLASS, "lines", lines, -0);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(STRING_CLASS, "to_i", to_i, -1);
 }
@@ -366,6 +371,297 @@ extern "C" fn rem(
 }
 
 ///
+/// ### String#[]
+/// - self[nth] -> String | nil
+/// - self[nth, len] -> String | nil
+/// [NOT SUPPORTED] - self[substr] -> String | nil
+/// - self[regexp, nth = 0] -> String
+/// [NOT SUPPORTED] - self[regexp, nth = 0] -> String
+/// - self[range] -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d.html]
+extern "C" fn index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    fn conv_index(i: i64, len: usize) -> Option<usize> {
+        if i >= 0 {
+            if i <= len as i64 {
+                Some(i as usize)
+            } else {
+                None
+            }
+        } else {
+            match len as i64 + i {
+                n if n < 0 => None,
+                n => Some(n as usize),
+            }
+        }
+    }
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let self_ = lfp.self_val();
+    let lhs = self_.expect_string(globals)?;
+    if let Some(i) = arg[0].try_fixnum() {
+        let index = match conv_index(i, lhs.chars().count()) {
+            Some(i) => i,
+            None => return Some(Value::nil()),
+        };
+        if len == 2 {
+            let len = match arg[1].coerce_to_fixnum(globals)? {
+                0 => return Some(Value::new_string_from_str("")),
+                i if i < 0 => return Some(Value::nil()),
+                i => i as usize,
+            };
+            let ch: String = lhs.chars().skip(index).take(len).collect();
+            Some(Value::new_string_from_vec(ch.into_bytes()))
+        } else {
+            let len = 1usize;
+            let ch: String = lhs.chars().skip(index).take(len).collect();
+            if ch.len() != 0 {
+                Some(Value::new_string_from_vec(ch.into_bytes()))
+            } else {
+                Some(Value::nil())
+            }
+        }
+    } else if let Some(info) = arg[0].is_range() {
+        let len = lhs.chars().count();
+        // TODO: exclude?
+        let (start, end) = match (info.start.try_fixnum(), info.end.try_fixnum()) {
+            (Some(start), Some(end)) => match (conv_index(start, len), conv_index(end, len)) {
+                (Some(start), Some(end)) if start > end => {
+                    return Some(Value::new_string_from_str(""))
+                }
+                (Some(start), Some(end)) => (start, end),
+                _ => return Some(Value::nil()),
+            },
+            _ => {
+                globals.err_argument("Index must be Integer.");
+                return None;
+            }
+        };
+        let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
+        Some(Value::new_string(s))
+    } else if let Some(info) = arg[0].is_regex() {
+        let nth = if len == 1 {
+            0
+        } else {
+            arg[1].coerce_to_fixnum(globals)?
+        };
+        match info.captures(&lhs) {
+            Ok(None) => return Some(Value::nil()),
+            Ok(Some(captures)) => {
+                vm.get_captures(&captures, &lhs);
+                let len = captures.len() as i64;
+                if nth == 0 {
+                    Some(Value::new_string_from_str(
+                        captures.get(0).unwrap().as_str(),
+                    ))
+                } else if nth > 0 {
+                    match captures.get(nth as usize) {
+                        Some(m) => Some(Value::new_string_from_str(m.as_str())),
+                        None => Some(Value::nil()),
+                    }
+                } else {
+                    match len + nth {
+                        i if i > 0 => Some(Value::new_string_from_str(
+                            captures.get(i as usize).unwrap().as_str(),
+                        )),
+                        _ => Some(Value::nil()),
+                    }
+                }
+            }
+            Err(err) => {
+                globals.err_internal(format!("Capture failed. {:?}", err));
+                None
+            }
+        }
+    } else {
+        globals.err_argument("Bad type for index.");
+        None
+    }
+}
+
+///
+/// ### String#start_with?
+/// - start_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
+extern "C" fn start_with(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let string = lfp.self_val().expect_string(globals)?;
+    let arg0 = arg[0];
+    let arg = arg0.expect_string(globals)?;
+    let res = string.starts_with(&arg);
+    Some(Value::bool(res))
+}
+
+///
+/// ### String#end_with?
+/// - end_with?([NOT SUPPORTED]*strs) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
+extern "C" fn end_with(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let string = lfp.self_val().expect_string(globals)?;
+    let arg0 = arg[0];
+    let arg = arg0.expect_string(globals)?;
+    let res = string.ends_with(&arg);
+    Some(Value::bool(res))
+}
+
+///
+/// ### String#split
+/// - split(sep = $;, limit = 0) -> [String]
+/// - split(sep = $;, limit = 0) {|s| ... } -> self
+///
+/// TODO: support nil and ' ' for sep.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/split.html]
+extern "C" fn split(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Option<Value> {
+    globals.check_number_of_arguments(len, 1..=2)?;
+    let self_ = lfp.self_val();
+    let string = self_.expect_string(globals)?;
+    let arg0 = arg[0];
+    if let Some(sep) = arg0.is_string() {
+        let lim = if len > 1 {
+            arg[1].coerce_to_fixnum(globals)?
+        } else {
+            0
+        };
+        let v: Vec<Value> = if sep == " " {
+            if lim < 0 {
+                string
+                    //.trim_start_matches(|c: char| c.is_ascii_whitespace())
+                    .split_whitespace()
+                    .map(Value::new_string_from_str)
+                    .collect()
+            } else if lim == 0 {
+                let mut vec: Vec<&str> = string.split_whitespace().collect();
+                while let Some(s) = vec.last() {
+                    if s.is_empty() {
+                        vec.pop().unwrap();
+                    } else {
+                        break;
+                    }
+                }
+                vec.into_iter().map(Value::new_string_from_str).collect()
+            } else {
+                string
+                    .trim_start()
+                    .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
+                    .map(|s| s.trim_start())
+                    .map(Value::new_string_from_str)
+                    .collect()
+            }
+        } else if lim < 0 {
+            string.split(&sep).map(Value::new_string_from_str).collect()
+        } else if lim == 0 {
+            let mut vec: Vec<&str> = string.split(&sep).collect();
+            while let Some(s) = vec.last() {
+                if s.is_empty() {
+                    vec.pop().unwrap();
+                } else {
+                    break;
+                }
+            }
+            vec.into_iter().map(Value::new_string_from_str).collect()
+        } else {
+            string
+                .splitn(lim as usize, &sep)
+                .map(Value::new_string_from_str)
+                .collect()
+        };
+        match lfp.block() {
+            Some(b) => {
+                let tmp = Value::new_array_from_vec(v.clone());
+                vm.temp_push(tmp);
+                vm.invoke_block_iter1(globals, b, v.into_iter())?;
+                vm.temp_clear();
+                Some(lfp.self_val())
+            }
+            None => Some(Value::new_array_from_vec(v)),
+        }
+    } else if let Some(re) = arg0.is_regex() {
+        let lim = if len > 1 {
+            arg[1].coerce_to_fixnum(globals)?
+        } else {
+            0
+        };
+        let all_cap = re.captures_iter(&string);
+        let mut cursor = 0usize;
+        let mut res = vec![];
+        let mut count = 0;
+        'l: for c in all_cap {
+            let c = c.unwrap();
+            let mut iter = c.iter();
+            let m = iter.next().unwrap().unwrap();
+            count += 1;
+            if count == lim {
+                break 'l;
+            } else {
+                res.push(&string[cursor..m.start()]);
+            }
+            while let Some(m) = iter.next() {
+                count += 1;
+                if count == lim {
+                    cursor = m.unwrap().start();
+                    break 'l;
+                } else {
+                    res.push(m.unwrap().as_str())
+                }
+            }
+            cursor = m.end();
+        }
+        if cursor <= string.len() {
+            res.push(&string[cursor..]);
+        }
+        // if lim == 0, remove all empty strings from a tail.
+        if lim == 0 {
+            while let Some(s) = res.last() {
+                if s.is_empty() {
+                    res.pop().unwrap();
+                } else {
+                    break;
+                }
+            }
+        }
+        let iter = res.into_iter().map(|s| Value::new_string_from_str(s));
+        match lfp.block() {
+            Some(b) => {
+                vm.invoke_block_iter1(globals, b, iter)?;
+                Some(lfp.self_val())
+            }
+            None => {
+                let v = iter.collect();
+                Some(Value::new_array_from_vec(v))
+            }
+        }
+    } else {
+        globals.err_is_not_regexp_nor_string(arg0);
+        None
+    }
+}
+
+///
 /// ### String#sub
 ///
 /// - sub(pattern, replace) -> String
@@ -637,6 +933,32 @@ extern "C" fn rjust(
 }
 
 ///
+/// ### String#lines
+/// - lines(rs = $/, chomp: false) -> [String]
+/// [NOT SUPPORTED] - lines(rs = $/, chomp: false) {|line| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/lines.html]
+extern "C" fn lines(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _: Arg,
+    _: usize,
+) -> Option<Value> {
+    if lfp.block().is_some() {
+        globals.err_internal("block is not supported.".to_string());
+        return None;
+    }
+    let receiver = lfp.self_val();
+    let string = receiver.expect_string(globals)?;
+    let ary = string
+        .split_inclusive('\n')
+        .map(|line| Value::new_string_from_str(line))
+        .collect();
+    Some(Value::new_array_from_vec(ary))
+}
+
+///
 /// ### String#empty?
 ///
 /// - empty? -> bool
@@ -694,7 +1016,7 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn string() {
+    fn string_empty() {
         run_test(r##""文字列".empty?"##);
         run_test(r##""".empty?"##);
     }
@@ -717,6 +1039,27 @@ mod test {
         run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDOM""##);
         run_test(r##""機動戦士GUNDOM" == "機動戦士GUNDAM""##);
         run_test(r##""機動戦士GUNDOM" == :abs"##);
+    }
+
+    #[test]
+    fn string_index() {
+        run_test(r##"'bar'[2]"##);
+        run_test(r##"'bar'[2] == ?r"##);
+        run_test(r##"'bar'[-1]"##);
+        run_test(r##"'bar'[3]"##);
+        run_test(r##"'bar'[-4]"##);
+        run_test_with_prelude(
+            r##"[str0[2,1], str0[2,0], str0[2,100], str0[-1,1], str0[-1,2], str0[3,1], str0[4,1], str0[-4,1]]"##,
+            r#"str0 = "bar""#,
+        );
+        run_test(r##""foobar"[/bar/]"##);
+        run_test(r##""def getcnt(line)"[ /def\s+(\w+)/, 1 ]"##);
+        run_test(
+            r##"['abcd'[2..1], 'abcd'[2..2], 'abcd'[2..3], 'abcd'[2..4], 'abcd'[2..-1], 'abcd'[3..-1]]"##,
+        );
+        run_test(
+            r##"['abcd'[1..2], 'abcd'[2..2], 'abcd'[3..2], 'abcd'[4..2], 'abcd'[5..2], 'abcd'[-3..2], 'abcd'[-4..2], 'abcd'[-5..2]]"##,
+        );
     }
 
     #[test]
@@ -841,12 +1184,12 @@ mod test {
     }
 
     #[test]
-    fn string_length() {
+    fn length() {
         run_test(r##""本日は快晴なり".length"##);
     }
 
     #[test]
-    fn string_ljust() {
+    fn ljust() {
         run_test(r##""戦闘妖精".ljust 11"##);
         run_test(r##""戦闘妖精".ljust 11,"$""##);
         run_test(r##""戦闘妖精".ljust 11,"123""##);
@@ -855,7 +1198,7 @@ mod test {
     }
 
     #[test]
-    fn string_rjust() {
+    fn rjust() {
         run_test(r##""戦闘妖精".rjust 11"##);
         run_test(r##""戦闘妖精".rjust 11,"$""##);
         run_test(r##""戦闘妖精".rjust 11,"123""##);
@@ -864,7 +1207,45 @@ mod test {
     }
 
     #[test]
-    fn string_toi() {
+    fn with() {
+        run_test(r##""string".start_with?("str")"##);
+        run_test(r##""string".start_with?("ing")"##);
+        run_test(r##""string".end_with?("str")"##);
+        run_test(r##""string".end_with?("ing")"##);
+    }
+
+    #[test]
+    fn lines() {
+        run_test(r##""aa\nbb\ncc\n".lines"##);
+        run_test(r##""hello\nworld\n".lines"##);
+    }
+
+    #[test]
+    fn split() {
+        run_test(r##""   a \t  b \n  c".split(/\s+/)"##);
+        //run_test(r##""   a \t  b \n  c".split(nil)"##);
+        run_test(r##""   a \t  b \n  c  ".split(' ')"##);
+        //run_test(r##""   a \t  b \n  c  ".split(' ', -1)"##);
+        run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
+        run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
+        //run_test(r##""   a \t  b \n  c".split"##);
+        run_test(r##"'1-10,20'.split(/([-,])/)"##);
+        run_test(r##"'hi there'.split(/\s*/).join(':')"##);
+        run_test(r##"'hi there'.split(//).join(':')"##);
+        run_test(r##""a,b,c,,,".split(/,/, 0)"##);
+        run_test(r##""a,b,c,,,".split(/,/)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 1)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 2)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 3)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 4)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 5)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 6)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, 7)"##);
+        run_test(r##""a,b,c,d,e".split(/,/, -1)"##);
+    }
+
+    #[test]
+    fn toi() {
         run_test(r"'42581'.to_i");
         run_test(r"'4a5f1'.to_i(16)");
         run_test(r"'4258159248352010254587519982001542568633842205196875555'.to_i");

@@ -24,7 +24,20 @@ impl IrContext {
             None => RecvKind::SelfValue,
         };
 
-        assert!(arglist.hash_splat.is_empty());
+        if !arglist.hash_splat.is_empty() {
+            return Err(MonorubyErr::unsupported_feature(
+                "hash splat is not supported.",
+                loc,
+                self.sourceinfo.clone(),
+            ));
+        }
+        if arglist.delegate {
+            return Err(MonorubyErr::unsupported_feature(
+                "argument delegation is not supported.",
+                loc,
+                self.sourceinfo.clone(),
+            ));
+        }
         assert!(!arglist.delegate);
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();

@@ -17,6 +17,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
 }
 
 ///
@@ -247,8 +249,8 @@ extern "C" fn sum(
                 sum = add_values(vm, globals, sum, *v)?;
             }
         }
-        Some(bh) => {
-            let data = vm.get_block_data(globals, bh);
+        Some(b) => {
+            let data = vm.get_block_data(globals, b);
             for v in &**aref {
                 let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
                 sum = add_values(vm, globals, sum, rhs)?;
@@ -272,6 +274,7 @@ extern "C" fn each(
     _arg: Arg,
     _len: usize,
 ) -> Option<Value> {
+    let ary = lfp.self_val();
     let block_handler = if let Some(block) = lfp.block() {
         block
     } else {
@@ -279,10 +282,40 @@ extern "C" fn each(
         return None;
     };
     let data = vm.get_block_data(globals, block_handler);
-    for i in &**lfp.self_val().as_array() {
+    for i in ary.as_array().iter() {
         vm.invoke_block(globals, data.clone(), &[*i])?;
     }
     Some(lfp.self_val())
+}
+
+///
+/// #### Enumerable#detect
+///
+/// - find([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
+/// - detect([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
+extern "C" fn detect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let ary = lfp.self_val();
+    let bh = if let Some(block) = lfp.block() {
+        block
+    } else {
+        globals.err_no_block_given();
+        return None;
+    };
+    let data = vm.get_block_data(globals, bh);
+    for elem in ary.as_array().iter() {
+        if vm.invoke_block(globals, data.clone(), &[*elem])?.as_bool() {
+            return Some(*elem);
+        };
+    }
+    Some(Value::nil())
 }
 
 #[cfg(test)]
@@ -417,5 +450,11 @@ mod test {
         x
         "##,
         );
+    }
+
+    #[test]
+    fn detect() {
+        run_test(r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#);
+        run_test(r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#);
     }
 }

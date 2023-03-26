@@ -7,8 +7,10 @@ use std::{fs::File, io::Write};
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
     globals.define_builtin_class_func(class_id, "write", write, 2);
+    globals.define_builtin_class_func(class_id, "read", read, 1);
     globals.define_builtin_class_func(class_id, "expand_path", expand_path, -1);
     globals.define_builtin_class_func(class_id, "dirname", dirname, 1);
+    globals.define_builtin_class_func(class_id, "exist?", exist, 1);
 }
 
 ///
@@ -35,6 +37,37 @@ extern "C" fn write(
     let bytes = arg[1].to_s(globals).into_bytes();
     file.write_all(&bytes).unwrap();
     Some(Value::new_integer(bytes.len() as i64))
+}
+
+///
+/// ### IO.read
+/// - read(path, [NOT SUPPORTED]**opt) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
+extern "C" fn read(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let filename = string_to_path(arg[0], globals)?;
+    let mut file = match File::open(&filename) {
+        Ok(file) => file,
+        Err(_) => {
+            globals.err_runtime(format!("Can not open file. {:?}", &filename));
+            return None;
+        }
+    };
+    let mut contents = String::new();
+    match std::io::Read::read_to_string(&mut file, &mut contents) {
+        Ok(file) => file,
+        Err(_) => {
+            globals.err_runtime("Could not read the file.".to_string());
+            return None;
+        }
+    };
+    Some(Value::new_string(contents))
 }
 
 ///
@@ -66,10 +99,10 @@ extern "C" fn expand_path(
         }
     };
     let path = if len == 1 {
-        string_to_path(globals, arg[0])?
+        string_to_path(arg[0], globals)?
     } else {
-        let mut path = string_to_path(globals, arg[1])?;
-        let rel_path = string_to_path(globals, arg[0])?;
+        let mut path = string_to_path(arg[1], globals)?;
+        let rel_path = string_to_path(arg[0], globals)?;
         path.push(rel_path);
         path
     };
@@ -117,7 +150,7 @@ extern "C" fn dirname(
     arg: Arg,
     _len: usize,
 ) -> Option<Value> {
-    let filename = string_to_path(globals, arg[0])?;
+    let filename = string_to_path(arg[0], globals)?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(&ostr.to_path_buf()),
         None => "".to_string(),
@@ -128,11 +161,43 @@ extern "C" fn dirname(
     Some(Value::new_string(dirname))
 }
 
+///
+/// ### File.exist?
+/// - exist?(path) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
+extern "C" fn exist(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Option<Value> {
+    let b = string_to_canonicalized_path(globals, arg[0], "1st arg").is_some();
+    Some(Value::bool(b))
+}
+
 // Utils
 
-/// Convert Ruby String value`string` to PathBuf.
-fn string_to_path(globals: &mut Globals, string: Value) -> Option<std::path::PathBuf> {
-    let file = string.expect_string(globals)?;
+/// Convert `file` to canonicalized PathBuf.
+fn string_to_canonicalized_path(
+    globals: &mut Globals,
+    file: Value,
+    msg: &str,
+) -> Option<std::path::PathBuf> {
+    let path = string_to_path(file, globals)?;
+    match path.canonicalize() {
+        Ok(file) => Some(file),
+        Err(_) => {
+            globals.err_argument(&format!("{} is an invalid filename. {:?}", msg, path));
+            None
+        }
+    }
+}
+
+/// Convert `file` to PathBuf.
+fn string_to_path(file: Value, globals: &mut Globals) -> Option<std::path::PathBuf> {
+    let file = file.expect_string(globals)?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
         if p == ".." && path.file_name().is_some() {
@@ -160,16 +225,23 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn test_expand_path() {
+    fn expand_path() {
         run_test(r##"File.expand_path("..")"##);
         run_test(r##"File.expand_path("..", "/tmp")"##);
         run_test(r##"File.expand_path("~")"##);
     }
 
     #[test]
-    fn test_dirname() {
+    fn dirname() {
         run_test(r##"File.dirname("dir/file.ext")"##);
         run_test(r##"File.dirname("file.ext")"##);
         run_test(r##"File.dirname("foo/bar/")"##);
+    }
+
+    #[test]
+    fn read() {
+        run_test(r##"File.read("LICENSE")"##);
+        run_test(r##"File.exist?("LICENSE")"##);
+        run_test(r##"File.exist?("LICENCE")"##);
     }
 }

@@ -31,11 +31,9 @@ extern "C" fn times(
         Some(i) => i,
         None => unimplemented!(),
     };
-    if let Some(block) = lfp.block() {
-        let data = vm.get_block_data(globals, block);
-        for i in 0..count {
-            vm.invoke_block(globals, data.clone(), &[Value::new_integer(i)])?;
-        }
+    if let Some(b) = lfp.block() {
+        let iter = (0..count).map(|i| Value::new_integer(i));
+        vm.invoke_block_iter1(globals, b, iter)?;
     } else {
         unimplemented!("needs block.")
     };
@@ -117,17 +115,12 @@ extern "C" fn step(
         1
     };
 
-    let data = vm.get_block_data(globals, block);
     if step > 0 {
         let iter = PosStep { cur, step, limit };
-        for i in iter {
-            vm.invoke_block(globals, data.clone(), &[i])?;
-        }
+        vm.invoke_block_iter1(globals, block, iter)?;
     } else {
         let iter = NegStep { cur, step, limit };
-        for i in iter {
-            vm.invoke_block(globals, data.clone(), &[i])?;
-        }
+        vm.invoke_block_iter1(globals, block, iter)?;
     }
     Some(lfp.self_val())
 }
