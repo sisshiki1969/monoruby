@@ -549,13 +549,17 @@ extern "C" fn split(
         };
         let v: Vec<Value> = if sep == " " {
             if lim < 0 {
-                string
-                    //.trim_start_matches(|c: char| c.is_ascii_whitespace())
-                    .split_whitespace()
+                let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
+                let mut v: Vec<_> = string
+                    .split_ascii_whitespace()
                     .map(Value::new_string_from_str)
-                    .collect()
+                    .collect();
+                if end_with {
+                    v.push(Value::new_string_from_str(""))
+                }
+                v
             } else if lim == 0 {
-                let mut vec: Vec<&str> = string.split_whitespace().collect();
+                let mut vec: Vec<&str> = string.split_ascii_whitespace().collect();
                 while let Some(s) = vec.last() {
                     if s.is_empty() {
                         vec.pop().unwrap();
@@ -1225,7 +1229,7 @@ mod test {
         run_test(r##""   a \t  b \n  c".split(/\s+/)"##);
         //run_test(r##""   a \t  b \n  c".split(nil)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ')"##);
-        //run_test(r##""   a \t  b \n  c  ".split(' ', -1)"##);
+        run_test(r##""   a \t  b \n  c  ".split(' ', -1)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
         //run_test(r##""   a \t  b \n  c".split"##);
