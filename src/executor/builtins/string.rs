@@ -1230,6 +1230,8 @@ mod test {
         //run_test(r##""   a \t  b \n  c".split(nil)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ')"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', -1)"##);
+        run_test(r##""   a \t  b \n  c ".split(' ', -1)"##);
+        run_test(r##""   a \t  b \n  c".split(' ', -1)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 0)"##);
         run_test(r##""   a \t  b \n  c  ".split(' ', 2)"##);
         //run_test(r##""   a \t  b \n  c".split"##);
