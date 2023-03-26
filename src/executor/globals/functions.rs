@@ -1,5 +1,3 @@
-use ruruby_parse::FormalParam;
-
 use super::*;
 use std::pin::Pin;
 
@@ -26,43 +24,42 @@ impl FuncId {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct Funcs(Vec<FuncInfo>);
+pub(super) struct Funcs {
+    info: Vec<FuncInfo>,
+    compile_info: Vec<CompileInfo>,
+}
 
 impl std::ops::Index<FuncId> for Funcs {
     type Output = FuncInfo;
     fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.0[u32::from(index) as usize]
+        &self.info[u32::from(index) as usize]
     }
 }
 
 impl std::ops::IndexMut<FuncId> for Funcs {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.0[u32::from(index) as usize]
+        &mut self.info[u32::from(index) as usize]
     }
 }
 
 impl std::default::Default for Funcs {
     fn default() -> Self {
-        Self(vec![FuncInfo::new_method_iseq(
-            None,
-            None,
-            ArgumentsInfo::default(),
-            Node::new_nil(Loc(0, 0)),
-            SourceInfoRef::default(),
-        )])
+        Self {
+            info: vec![FuncInfo::default()],
+            compile_info: vec![],
+        }
     }
 }
 
 impl alloc::GC<RValue> for Funcs {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.iter().for_each(|info| info.mark(alloc))
+        self.info.iter().for_each(|info| info.mark(alloc))
     }
 }
 
 impl Funcs {
     fn next_func_id(&self) -> FuncId {
-        FuncId::new(self.0.len() as u32)
+        FuncId::new(self.info.len() as u32)
     }
 
     pub(crate) fn add_method(
@@ -71,8 +68,8 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let args = handle_args(vec![], info.params, &sourceinfo)?;
-        Ok(self.add_method_iseq(name, args, *info.body, sourceinfo))
+        let args = self.handle_args(info, vec![], &sourceinfo)?;
+        Ok(self.add_method_iseq(name, args, sourceinfo))
     }
 
     fn add_block(
@@ -83,165 +80,160 @@ impl Funcs {
         info: BlockInfo,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let args = handle_args(for_params, info.params, &sourceinfo)?;
+        let args = self.handle_args(info, for_params, &sourceinfo)?;
         let func_id = self.next_func_id();
-        self.0.push(FuncInfo::new_block_iseq(
-            Some(func_id),
-            mother,
-            outer,
-            args,
-            *info.body,
-            sourceinfo,
-        ));
+        let info = FuncInfo::new_block_iseq(Some(func_id), mother, outer, args, sourceinfo);
+        self.info.push(info);
         Ok(func_id)
     }
 
     fn add_classdef(
         &mut self,
         name: Option<IdentId>,
-        body: Node,
+        info: BlockInfo,
         sourceinfo: SourceInfoRef,
-    ) -> FuncId {
+    ) -> Result<FuncId> {
+        let _ = self.handle_args(info, vec![], &sourceinfo)?;
         let func_id = self.next_func_id();
-        self.0.push(FuncInfo::new_classdef_iseq(
-            name,
-            Some(func_id),
-            body,
-            sourceinfo,
-        ));
-        func_id
+        let info = FuncInfo::new_classdef_iseq(name, Some(func_id), sourceinfo);
+        self.info.push(info);
+        Ok(func_id)
     }
 
     fn add_method_iseq(
         &mut self,
         name: Option<IdentId>,
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        self.0.push(FuncInfo::new_method_iseq(
-            name,
-            Some(func_id),
-            args,
-            body,
-            sourceinfo,
-        ));
+        let info = FuncInfo::new_method_iseq(name, Some(func_id), args, sourceinfo);
+        self.info.push(info);
         func_id
     }
 
     fn add_native_func(&mut self, name: String, address: BuiltinFn, arity: i32) -> FuncId {
         let id = self.next_func_id();
-        self.0.push(FuncInfo::new_native(id, name, address, arity));
+        self.info
+            .push(FuncInfo::new_native(id, name, address, arity));
         id
     }
 
     fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
-        self.0.push(FuncInfo::new_attr_reader(id, name, ivar_name));
+        let info = FuncInfo::new_attr_reader(id, name, ivar_name);
+        self.info.push(info);
         id
     }
 
     fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
-        self.0.push(FuncInfo::new_attr_writer(id, name, ivar_name));
+        let info = FuncInfo::new_attr_writer(id, name, ivar_name);
+        self.info.push(info);
         id
     }
-}
 
-fn handle_args(
-    for_params: Vec<(usize, BcLocal, IdentId)>,
-    params: Vec<FormalParam>,
-    sourceinfo: &SourceInfoRef,
-) -> Result<ArgumentsInfo> {
-    let mut args_names = vec![];
-    let mut keyword_names = vec![];
-    let mut keyword_initializers = vec![];
-    let mut destruct_args = vec![];
-    let mut expand = vec![];
-    let mut optional_info = vec![];
-    let mut required_num = 0;
-    let mut optional_num = 0;
-    let mut rest = 0;
-    let mut block_param = None;
-    let mut for_param_info = vec![];
-    for (dst_outer, dst_reg, _name) in for_params {
-        for_param_info.push(ForParamInfo {
-            dst_outer,
-            dst_reg,
-            src_reg: args_names.len(),
-        });
-        args_names.push(None);
-        required_num += 1;
-    }
-    for param in params {
-        match param.kind {
-            ParamKind::Param(name) => {
-                args_names.push(Some(IdentId::get_id_from_string(name)));
-                required_num += 1;
-            }
-            ParamKind::Destruct(names) => {
-                expand.push((args_names.len(), destruct_args.len(), names.len()));
-                args_names.push(None);
-                required_num += 1;
-                names.into_iter().for_each(|(name, _)| {
-                    destruct_args.push(Some(IdentId::get_id_from_string(name)));
-                });
-            }
-            ParamKind::Optional(name, box initializer) => {
-                let local = BcLocal(args_names.len() as u16);
-                args_names.push(Some(IdentId::get_id_from_string(name)));
-                optional_num += 1;
-                optional_info.push(OptionalInfo { local, initializer });
-            }
-            ParamKind::Rest(name) => {
-                args_names.push(Some(IdentId::get_id_from_string(name)));
-                assert_eq!(0, rest);
-                rest = 1;
-            }
-            ParamKind::Keyword(name, init) => {
-                let name = IdentId::get_id_from_string(name);
-                args_names.push(Some(name));
-                keyword_names.push(name);
-                keyword_initializers.push(init);
-            }
-            ParamKind::Block(name) => {
-                let name = IdentId::get_id_from_string(name.clone());
-                args_names.push(Some(name));
-                block_param = Some(name);
-            }
-            _ => {
-                return Err(MonorubyErr::unsupported_parameter_kind(
-                    param.kind,
-                    param.loc,
-                    sourceinfo.clone(),
-                ))
+    fn handle_args(
+        &mut self,
+        info: BlockInfo,
+        for_params: Vec<(usize, BcLocal, IdentId)>,
+        sourceinfo: &SourceInfoRef,
+    ) -> Result<ArgumentsInfo> {
+        let BlockInfo {
+            params, box body, ..
+        } = info;
+        let mut args_names = vec![];
+        let mut keyword_names = vec![];
+        let mut keyword_initializers = vec![];
+        let mut destruct_args = vec![];
+        let mut expand = vec![];
+        let mut optional_info = vec![];
+        let mut required_num = 0;
+        let mut optional_num = 0;
+        let mut rest = 0;
+        let mut block_param = None;
+        let mut for_param_info = vec![];
+        for (dst_outer, dst_reg, _name) in for_params {
+            for_param_info.push(ForParamInfo {
+                dst_outer,
+                dst_reg,
+                src_reg: args_names.len(),
+            });
+            args_names.push(None);
+            required_num += 1;
+        }
+        for param in params {
+            match param.kind {
+                ParamKind::Param(name) => {
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    required_num += 1;
+                }
+                ParamKind::Destruct(names) => {
+                    expand.push((args_names.len(), destruct_args.len(), names.len()));
+                    args_names.push(None);
+                    required_num += 1;
+                    names.into_iter().for_each(|(name, _)| {
+                        destruct_args.push(Some(IdentId::get_id_from_string(name)));
+                    });
+                }
+                ParamKind::Optional(name, box initializer) => {
+                    let local = BcLocal(args_names.len() as u16);
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    optional_num += 1;
+                    optional_info.push(OptionalInfo { local, initializer });
+                }
+                ParamKind::Rest(name) => {
+                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    assert_eq!(0, rest);
+                    rest = 1;
+                }
+                ParamKind::Keyword(name, init) => {
+                    let name = IdentId::get_id_from_string(name);
+                    args_names.push(Some(name));
+                    keyword_names.push(name);
+                    keyword_initializers.push(init);
+                }
+                ParamKind::Block(name) => {
+                    let name = IdentId::get_id_from_string(name.clone());
+                    args_names.push(Some(name));
+                    block_param = Some(name);
+                }
+                _ => {
+                    return Err(MonorubyErr::unsupported_parameter_kind(
+                        param.kind,
+                        param.loc,
+                        sourceinfo.clone(),
+                    ))
+                }
             }
         }
-    }
 
-    let reqopt_num = required_num + optional_num;
-    let expand_info: Vec<_> = expand
-        .into_iter()
-        .map(|(src, dst, len)| ExpandInfo {
-            src,
-            dst: args_names.len() + dst,
-            len,
+        let reqopt_num = required_num + optional_num;
+        let expand_info: Vec<_> = expand
+            .into_iter()
+            .map(|(src, dst, len)| DestructureInfo {
+                src,
+                dst: args_names.len() + dst,
+                len,
+            })
+            .collect();
+        args_names.append(&mut destruct_args);
+        self.compile_info.push(CompileInfo::new(
+            body,
+            keyword_initializers,
+            expand_info,
+            optional_info,
+            for_param_info,
+        ));
+        Ok(ArgumentsInfo {
+            args_names,
+            keyword_names,
+            pos_num: reqopt_num + rest,
+            reqopt_num,
+            required_num,
+            block_param,
         })
-        .collect();
-    args_names.append(&mut destruct_args);
-    Ok(ArgumentsInfo {
-        args_names,
-        keyword_names,
-        keyword_initializers,
-        pos_num: reqopt_num + rest,
-        reqopt_num,
-        required_num,
-        block_param,
-        expand_info,
-        optional_info,
-        for_param_info,
-    })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,7 +283,7 @@ impl CallSiteId {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct FnStore {
     functions: Funcs,
     inline: HashMap<FuncId, InlineMethod>,
@@ -358,11 +350,15 @@ impl FnStore {
 
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &Vec<FuncInfo> {
-        &self.functions.0
+        &self.functions.info
     }
 
     fn len(&self) -> usize {
-        self.functions.0.len()
+        self.functions.info.len()
+    }
+
+    pub(in crate::executor) fn get_init(&mut self) -> CompileInfo {
+        self.functions.compile_info.remove(0)
     }
 }
 
@@ -379,10 +375,10 @@ impl FnStore {
     pub(crate) fn add_classdef(
         &mut self,
         name: Option<IdentId>,
-        body: Node,
+        info: BlockInfo,
         sourceinfo: SourceInfoRef,
-    ) -> FuncId {
-        self.functions.add_classdef(name, body, sourceinfo)
+    ) -> Result<FuncId> {
+        self.functions.add_classdef(name, info, sourceinfo)
     }
 
     pub(crate) fn add_block(
@@ -406,12 +402,15 @@ impl FnStore {
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let main_fid = self.functions.add_method_iseq(
+        let main_fid = self.functions.add_method(
             Some(IdentId::get_id("/main")),
-            ArgumentsInfo::default(),
-            ast,
+            BlockInfo {
+                params: vec![],
+                body: Box::new(ast),
+                lvar: LvarCollector::new(),
+            },
             sourceinfo,
-        );
+        )?;
         let mut fid = main_fid;
 
         while self.len() > fid.get() as usize {
@@ -448,7 +447,7 @@ impl FnStore {
     }
 
     pub fn functions_offset(&self) -> usize {
-        self.functions.0.len()
+        self.functions.info.len()
     }
 
     pub(crate) fn add_callsite(
@@ -545,11 +544,10 @@ impl FuncInfo {
         name: impl Into<Option<IdentId>>,
         func_id: Option<FuncId>,
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name, args, body, sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, args, sourceinfo);
         Self {
             name,
             data: FuncData {
@@ -566,13 +564,11 @@ impl FuncInfo {
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, mother, outer, args, body, sourceinfo);
+        let info = ISeqInfo::new_block(func_id, mother, outer, args, sourceinfo);
         Self {
             name: None,
-            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -585,13 +581,11 @@ impl FuncInfo {
     fn new_classdef_iseq(
         name: Option<IdentId>,
         func_id: Option<FuncId>,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_method(func_id, name, ArgumentsInfo::default(), body, sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, ArgumentsInfo::default(), sourceinfo);
         Self {
             name,
-            //arity: info.args.arity(),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -711,8 +705,6 @@ pub(crate) struct ISeqInfo {
     /// The number of temporary registers.
     pub temp_num: u16,
     pub lexical_context: Vec<Module>,
-    /// AST.
-    pub ast: Option<Node>,
     pub sourceinfo: SourceInfoRef,
     pub(crate) is_block_style: bool,
 }
@@ -746,7 +738,6 @@ impl ISeqInfo {
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
         is_block: bool,
     ) -> Self {
@@ -762,7 +753,6 @@ impl ISeqInfo {
             non_temp_num: 0,
             temp_num: 0,
             lexical_context: vec![],
-            ast: Some(body),
             sourceinfo,
             is_block_style: is_block,
         }
@@ -773,29 +763,18 @@ impl ISeqInfo {
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(
-            id,
-            Some(mother),
-            outer.1,
-            None,
-            args,
-            body,
-            sourceinfo,
-            true,
-        )
+        Self::new(id, Some(mother), outer.1, None, args, sourceinfo, true)
     }
 
     pub(in crate::executor) fn new_method(
         id: Option<FuncId>,
         name: Option<IdentId>,
         args: ArgumentsInfo,
-        body: Node,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, id, vec![], name, args, body, sourceinfo, false)
+        Self::new(id, id, vec![], name, args, sourceinfo, false)
     }
 
     pub(crate) fn id(&self) -> FuncId {

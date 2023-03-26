@@ -1362,24 +1362,46 @@ struct ArgumentsInfo {
     args_names: Vec<Option<IdentId>>,
     keyword_names: Vec<IdentId>,
     block_param: Option<IdentId>,
+}
+
+///
+/// Information for bytecode compiler.
+///
+/// this includes AST and information for initialization of optional, keyword, destructuring parameters.
+///
+struct CompileInfo {
+    /// AST.
+    ast: Node,
     /// keyword params initializers.
     keyword_initializers: Vec<Option<Box<Node>>>,
     /// param expansion info
-    expand_info: Vec<ExpandInfo>,
+    destruct_info: Vec<DestructureInfo>,
     /// optional parameters initializers.
     optional_info: Vec<OptionalInfo>,
     /// *for* statement parameters info.
     for_param_info: Vec<ForParamInfo>,
 }
 
-impl ArgumentsInfo {
-    fn keyword_names(&self) -> &Vec<IdentId> {
-        &self.keyword_names
+impl CompileInfo {
+    fn new(
+        ast: Node,
+        keyword_initializers: Vec<Option<Box<Node>>>,
+        expand_info: Vec<DestructureInfo>,
+        optional_info: Vec<OptionalInfo>,
+        for_param_info: Vec<ForParamInfo>,
+    ) -> Self {
+        Self {
+            ast,
+            keyword_initializers,
+            destruct_info: expand_info,
+            optional_info,
+            for_param_info,
+        }
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-struct ExpandInfo {
+struct DestructureInfo {
     src: usize,
     dst: usize,
     len: usize,

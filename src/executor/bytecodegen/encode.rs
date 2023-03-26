@@ -327,12 +327,13 @@ impl IrContext {
             }
         }
         for f in std::mem::take(&mut self.functions) {
+            let sourceinfo = self.sourceinfo.clone();
             match f {
                 Functions::Method { name, info } => {
-                    store.add_method(name, info, self.sourceinfo.clone())?;
+                    store.add_method(name, info, sourceinfo)?;
                 }
-                Functions::ClassDef { name, body } => {
-                    store.add_classdef(name, body, self.sourceinfo.clone());
+                Functions::ClassDef { name, info } => {
+                    store.add_classdef(name, info, sourceinfo)?;
                 }
                 Functions::Block {
                     mother,
@@ -340,13 +341,7 @@ impl IrContext {
                     optional_params,
                     info,
                 } => {
-                    store.add_block(
-                        mother,
-                        outer,
-                        optional_params,
-                        info,
-                        self.sourceinfo.clone(),
-                    )?;
+                    store.add_block(mother, outer, optional_params, info, sourceinfo)?;
                 }
             }
         }

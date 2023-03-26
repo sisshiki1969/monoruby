@@ -68,7 +68,7 @@ impl IrContext {
             assert_eq!(self.id, *mother_id);
             let arg_num = mother_args.pos_num;
             let args = BcLocal(0).into();
-            let kw_list = mother_args.keyword_names();
+            let kw_list = &mother_args.keyword_names;
             let kw = if kw_list.len() == 0 {
                 None
             } else {

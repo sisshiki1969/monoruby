@@ -145,7 +145,7 @@ enum Functions {
     },
     ClassDef {
         name: Option<IdentId>,
-        body: Node,
+        info: BlockInfo,
     },
     Block {
         mother: FuncId,
@@ -195,12 +195,13 @@ pub(crate) struct IrContext {
 
 impl IrContext {
     pub(crate) fn compile_func(func_id: FuncId, ctx: &mut FnStore) -> Result<()> {
-        let info = ctx[func_id].as_ruby_func_mut();
-        let ast = std::mem::take(&mut info.ast).unwrap();
-        let for_param_info = std::mem::take(&mut info.args.for_param_info);
-        let expand_info = std::mem::take(&mut info.args.expand_info);
-        let optional_info = std::mem::take(&mut info.args.optional_info);
-        let keyword_initializers = std::mem::take(&mut info.args.keyword_initializers);
+        let CompileInfo {
+            ast,
+            for_param_info,
+            keyword_initializers,
+            destruct_info: expand_info,
+            optional_info,
+        } = ctx.get_init();
         let info = ctx[func_id].as_ruby_func();
         let mother = info
             .mother
@@ -222,7 +223,7 @@ impl IrContext {
                 Loc::default(),
             );
         }
-        for ExpandInfo { src, dst, len } in expand_info {
+        for DestructureInfo { src, dst, len } in expand_info {
             ir.gen_expand_array(src, dst, len);
         }
         for OptionalInfo { local, initializer } in optional_info {
@@ -311,9 +312,9 @@ impl IrContext {
         FuncId::new(id as _)
     }
 
-    fn add_classdef(&mut self, name: Option<IdentId>, body: Node) -> FuncId {
+    fn add_classdef(&mut self, name: Option<IdentId>, info: BlockInfo) -> FuncId {
         let id = self.functions_offset + self.functions.len();
-        self.functions.push(Functions::ClassDef { name, body });
+        self.functions.push(Functions::ClassDef { name, info });
         FuncId::new(id as _)
     }
 
@@ -1334,7 +1335,7 @@ impl IrContext {
                 base,
                 name,
                 superclass,
-                info: block_info,
+                info,
                 is_module,
             } => {
                 let dst = if use_mode.use_val() {
@@ -1343,15 +1344,7 @@ impl IrContext {
                     None
                 };
                 let name = IdentId::get_id_from_string(name);
-                self.gen_class_def(
-                    name,
-                    base,
-                    superclass,
-                    *block_info.body,
-                    dst,
-                    is_module,
-                    loc,
-                )?;
+                self.gen_class_def(name, base, superclass, info, dst, is_module, loc)?;
                 if use_mode.is_ret() {
                     self.emit_ret(None);
                 }
@@ -1359,14 +1352,14 @@ impl IrContext {
             }
             NodeKind::SingletonClassDef {
                 box singleton,
-                info: block_info,
+                info,
             } => {
                 let dst = if use_mode.use_val() {
                     Some(self.push().into())
                 } else {
                     None
                 };
-                self.gen_singleton_class_def(singleton, *block_info.body, dst, loc)?;
+                self.gen_singleton_class_def(singleton, info, dst, loc)?;
                 if use_mode.is_ret() {
                     self.emit_ret(None);
                 }
@@ -1573,20 +1566,12 @@ impl IrContext {
                 base,
                 name,
                 superclass,
-                info: block_info,
+                info,
                 is_module,
             } => {
                 let dst = Some(dst);
                 let name = IdentId::get_id_from_string(name);
-                self.gen_class_def(
-                    name,
-                    base,
-                    superclass,
-                    *block_info.body,
-                    dst,
-                    is_module,
-                    loc,
-                )?;
+                self.gen_class_def(name, base, superclass, info, dst, is_module, loc)?;
             }
             _ => {
                 let ret = self.push_expr(rhs)?;
@@ -1649,7 +1634,7 @@ impl IrContext {
         name: IdentId,
         base: Option<Box<Node>>,
         superclass: Option<Box<Node>>,
-        body: Node,
+        info: BlockInfo,
         ret: Option<BcReg>,
         is_module: bool,
         loc: Loc,
@@ -1661,7 +1646,7 @@ impl IrContext {
                 self.sourceinfo.clone(),
             ));
         };
-        let func_id = self.add_classdef(Some(name), body);
+        let func_id = self.add_classdef(Some(name), info);
         let superclass = match superclass {
             Some(superclass) => Some(self.gen_temp_expr(*superclass)?),
             None => None,
@@ -1685,11 +1670,11 @@ impl IrContext {
     fn gen_singleton_class_def(
         &mut self,
         base: Node,
-        body: Node,
+        info: BlockInfo,
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<()> {
-        let func_id = self.add_classdef(None, body);
+        let func_id = self.add_classdef(None, info);
         let base = self.gen_temp_expr(base)?;
         self.emit(
             BcIr::SingletonClassDef {
