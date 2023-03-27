@@ -180,8 +180,13 @@ impl Value {
         self.get() & !0x10 != NIL_VALUE
     }
 
-    pub fn set_instance_var(&mut self, globals: &mut Globals, name: &str, val: Value) {
-        globals.set_ivar(*self, IdentId::get_id(name), val);
+    pub fn set_instance_var(
+        &mut self,
+        globals: &mut Globals,
+        name: &str,
+        val: Value,
+    ) -> Result<()> {
+        globals.set_ivar(*self, IdentId::get_id(name), val)
     }
 }
 
@@ -424,14 +429,15 @@ impl Value {
         }
     }
 
-    pub(crate) fn coerce_to_fixnum(&self, globals: &mut Globals) -> Option<i64> {
+    pub(crate) fn coerce_to_fixnum(&self, globals: &mut Globals) -> Result<i64> {
         match self.unpack() {
-            RV::Integer(i) => Some(i),
-            RV::Float(f) => Some(f.trunc() as i64),
-            _ => {
-                globals.err_no_implicit_conversion(*self, INTEGER_CLASS);
-                None
-            }
+            RV::Integer(i) => Ok(i),
+            RV::Float(f) => Ok(f.trunc() as i64),
+            _ => Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                INTEGER_CLASS,
+            )),
         }
     }
 
@@ -588,79 +594,80 @@ impl Value {
         }
     }
 
-    pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Option<ClassId> {
+    pub(crate) fn expect_class_or_module(&self, globals: &mut Globals) -> Result<ClassId> {
         match self.is_class_or_module() {
-            Some(class) => Some(class),
+            Some(class) => Ok(class),
             None => {
                 let name = globals.val_tos(*self);
-                globals.err_is_not_class_nor_module(name);
-                None
+                Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
     }
 
-    pub(crate) fn expect_class(&self, globals: &mut Globals) -> Option<ClassId> {
+    pub(crate) fn expect_class(&self, globals: &mut Globals) -> Result<ClassId> {
         match self.is_class() {
-            Some(class) => Some(class),
+            Some(class) => Ok(class),
             None => {
                 let name = globals.val_tos(*self);
-                globals.err_is_not_class(name);
-                None
+                Err(MonorubyErr::is_not_class(name))
             }
         }
     }
 
-    pub(crate) fn expect_module(&self, globals: &mut Globals) -> Option<ClassId> {
+    pub(crate) fn expect_module(&self, globals: &mut Globals) -> Result<ClassId> {
         match self.is_module() {
-            Some(class) => Some(class),
+            Some(class) => Ok(class),
             None => {
                 let name = globals.val_tos(*self);
-                globals.err_is_not_class(name);
-                None
+                Err(MonorubyErr::is_not_class(name))
             }
         }
     }
 
-    pub(crate) fn expect_symbol_or_string(&self, globals: &mut Globals) -> Option<IdentId> {
+    pub(crate) fn expect_symbol_or_string(&self, globals: &mut Globals) -> Result<IdentId> {
         match self.unpack() {
-            RV::Symbol(sym) => return Some(sym),
+            RV::Symbol(sym) => return Ok(sym),
             RV::String(s) => {
                 let s = String::from_utf8_lossy(s).into_owned();
-                return Some(IdentId::get_id_from_string(s));
+                return Ok(IdentId::get_id_from_string(s));
             }
             _ => {}
         }
-        globals.err_is_not_symbol_nor_string(*self);
-        None
+        Err(MonorubyErr::is_not_symbol_nor_string(globals, *self))
     }
 
-    pub(crate) fn expect_string(&self, globals: &mut Globals) -> Option<String> {
+    pub(crate) fn expect_string(&self, globals: &mut Globals) -> Result<String> {
         if let RV::String(s) = self.unpack() {
             let s = String::from_utf8_lossy(s).into_owned();
-            Some(s)
+            Ok(s)
         } else {
-            globals.err_no_implicit_conversion(*self, STRING_CLASS);
-            None
+            Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                STRING_CLASS,
+            ))
         }
     }
 
-    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Option<RegexpInner> {
+    pub(crate) fn expect_regexp_or_string(&self, globals: &mut Globals) -> Result<RegexpInner> {
         if let Some(re) = self.is_regex() {
-            Some(re.clone())
+            Ok(re.clone())
         } else if let Some(string) = self.is_string() {
             RegexpInner::from_string(globals, string)
         } else {
-            globals.err_is_not_regexp_nor_string(*self);
-            None
+            Err(MonorubyErr::is_not_regexp_nor_string(globals, *self))
         }
     }
 
-    pub(crate) fn expect_integer(&self, globals: &mut Globals) -> Option<i64> {
+    pub(crate) fn expect_integer(&self, globals: &mut Globals) -> Result<i64> {
         if let RV::Integer(i) = self.unpack() {
-            Some(i)
+            Ok(i)
         } else {
-            globals.err_no_implicit_conversion(*self, INTEGER_CLASS);
-            None
+            Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                INTEGER_CLASS,
+            ))
         }
     }
 

@@ -19,24 +19,27 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 /// - write(path, string, offset=nil, opt={}) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
-extern "C" fn write(
+fn write(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
-            globals.err_no_implicit_conversion(arg[0], STRING_CLASS);
-            return None;
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg[0],
+                STRING_CLASS,
+            ));
         }
     };
     let mut file = File::create(name).unwrap();
     let bytes = arg[1].to_s(globals).into_bytes();
     file.write_all(&bytes).unwrap();
-    Some(Value::new_integer(bytes.len() as i64))
+    Ok(Value::new_integer(bytes.len() as i64))
 }
 
 ///
@@ -44,30 +47,33 @@ extern "C" fn write(
 /// - read(path, [NOT SUPPORTED]**opt) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
-extern "C" fn read(
+fn read(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let filename = string_to_path(arg[0], globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(_) => {
-            globals.err_runtime(format!("Can not open file. {:?}", &filename));
-            return None;
+            return Err(MonorubyErr::runtimeerr(format!(
+                "Can not open file. {:?}",
+                &filename
+            )));
         }
     };
     let mut contents = String::new();
     match std::io::Read::read_to_string(&mut file, &mut contents) {
         Ok(file) => file,
         Err(_) => {
-            globals.err_runtime("Could not read the file.".to_string());
-            return None;
+            return Err(MonorubyErr::runtimeerr(
+                "Could not read the file.".to_string(),
+            ));
         }
     };
-    Some(Value::new_string(contents))
+    Ok(Value::new_string(contents))
 }
 
 ///
@@ -76,26 +82,26 @@ extern "C" fn read(
 /// TODO: support ~USER
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
-extern "C" fn expand_path(
+fn expand_path(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
-            globals.err_runtime(err.to_string());
-            return None;
+            return Err(MonorubyErr::runtimeerr(err.to_string()));
         }
     };
     let home_dir = match dirs::home_dir() {
         Some(dir) => dir,
         None => {
-            globals.err_runtime("Failed to get home directory.".to_string());
-            return None;
+            return Err(MonorubyErr::runtimeerr(
+                "Failed to get home directory.".to_string(),
+            ));
         }
     };
     let path = if len == 1 {
@@ -135,7 +141,7 @@ extern "C" fn expand_path(
     )
     .join(res_path);
 
-    Some(Value::new_string(conv_pathbuf(&res_path)))
+    Ok(Value::new_string(conv_pathbuf(&res_path)))
 }
 
 ///
@@ -143,13 +149,13 @@ extern "C" fn expand_path(
 /// - dirname(filename, level=1) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
-extern "C" fn dirname(
+fn dirname(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let filename = string_to_path(arg[0], globals)?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(&ostr.to_path_buf()),
@@ -158,7 +164,7 @@ extern "C" fn dirname(
     if dirname.is_empty() {
         dirname += "."
     };
-    Some(Value::new_string(dirname))
+    Ok(Value::new_string(dirname))
 }
 
 ///
@@ -166,15 +172,15 @@ extern "C" fn dirname(
 /// - exist?(path) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
-extern "C" fn exist(
+fn exist(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    let b = string_to_canonicalized_path(globals, arg[0], "1st arg").is_some();
-    Some(Value::bool(b))
+) -> Result<Value> {
+    let b = string_to_canonicalized_path(globals, arg[0], "1st arg").is_ok();
+    Ok(Value::bool(b))
 }
 
 // Utils
@@ -184,19 +190,19 @@ fn string_to_canonicalized_path(
     globals: &mut Globals,
     file: Value,
     msg: &str,
-) -> Option<std::path::PathBuf> {
+) -> Result<std::path::PathBuf> {
     let path = string_to_path(file, globals)?;
     match path.canonicalize() {
-        Ok(file) => Some(file),
-        Err(_) => {
-            globals.err_argument(&format!("{} is an invalid filename. {:?}", msg, path));
-            None
-        }
+        Ok(file) => Ok(file),
+        Err(_) => Err(MonorubyErr::argumenterr(format!(
+            "{} is an invalid filename. {:?}",
+            msg, path
+        ))),
     }
 }
 
 /// Convert `file` to PathBuf.
-fn string_to_path(file: Value, globals: &mut Globals) -> Option<std::path::PathBuf> {
+fn string_to_path(file: Value, globals: &mut Globals) -> Result<std::path::PathBuf> {
     let file = file.expect_string(globals)?;
     let mut path = std::path::PathBuf::new();
     for p in std::path::PathBuf::from(file).iter() {
@@ -206,7 +212,7 @@ fn string_to_path(file: Value, globals: &mut Globals) -> Option<std::path::PathB
             path.push(p);
         };
     }
-    Some(path)
+    Ok(path)
 }
 
 #[cfg(not(windows))]

@@ -903,7 +903,6 @@ impl Codegen {
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
-                TraceIr::InitBlock { .. } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;
                 }

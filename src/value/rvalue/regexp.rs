@@ -23,7 +23,7 @@ impl std::ops::Deref for RegexpInner {
 
 impl RegexpInner {
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
-    pub(crate) fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Option<Self> {
+    pub(crate) fn from_escaped(globals: &mut Globals, escaped_str: &str) -> Result<Self> {
         let string = regex::escape(escaped_str);
         RegexpInner::from_string(globals, string)
     }
@@ -31,28 +31,25 @@ impl RegexpInner {
     /// Create `RegexpInfo` from `reg_str`.
     /// The first `\\Z\z` in `reg_str` is replaced by '\z' for compatibility issue
     /// between fancy_regex crate and Regexp class of Ruby.
-    pub(crate) fn from_string(globals: &mut Globals, mut reg_str: String) -> Option<Self> {
+    pub(crate) fn from_string(globals: &mut Globals, mut reg_str: String) -> Result<Self> {
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
         };
         match globals.regexp_cache.get(&reg_str) {
-            Some(re) => Some(RegexpInner(re.clone())),
+            Some(re) => Ok(RegexpInner(re.clone())),
             None => match Regex::new(&reg_str) {
                 Ok(regexp) => {
                     let regex = Rc::new(regexp);
                     globals.regexp_cache.insert(reg_str, regex.clone());
-                    Some(RegexpInner(regex))
+                    Ok(RegexpInner(regex))
                 }
-                Err(err) => {
-                    globals.err_regex(err.to_string());
-                    None
-                }
+                Err(err) => Err(MonorubyErr::regexerr(err.to_string())),
             },
         }
     }
 
-    pub(crate) fn new(mut reg_str: String) -> Result<Self, String> {
+    pub(crate) fn new(mut reg_str: String) -> std::result::Result<Self, String> {
         let conv = Regex::new(r"\\Z\z").unwrap();
         if let Some(mat) = conv.find(&reg_str).unwrap() {
             reg_str.replace_range(mat.range(), r"\z");
@@ -77,17 +74,18 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         replace: &str,
-    ) -> Option<(String, bool)> {
+    ) -> Result<(String, bool)> {
         if let Some(s) = re_val.is_string() {
             let re = Self::from_escaped(globals, &s)?;
-            re.replace_once(vm, globals, given, replace)
+            re.replace_once(vm, given, replace)
                 .map(|(s, c)| (s, c.is_some()))
         } else if let Some(re) = re_val.is_regex() {
-            re.replace_once(vm, globals, given, replace)
+            re.replace_once(vm, given, replace)
                 .map(|(s, c)| (s, c.is_some()))
         } else {
-            globals.err_argument("1st arg must be RegExp or String.");
-            None
+            Err(MonorubyErr::argumenterr(
+                "1st arg must be RegExp or String.".to_string(),
+            ))
         }
     }
 
@@ -97,24 +95,26 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         block_handler: BlockHandler,
-    ) -> Option<(String, bool)> {
+    ) -> Result<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInner,
             given: &str,
             block_handler: BlockHandler,
-        ) -> Option<(String, bool)> {
+        ) -> Result<(String, bool)> {
             let (start, end, matched_str) = match re.captures_from_pos(given, 0) {
-                Ok(None) => return Some((given.to_string(), false)),
+                Ok(None) => return Ok((given.to_string(), false)),
                 Ok(Some(captures)) => {
                     let m = captures.get(0).unwrap();
                     vm.get_captures(&captures, given);
                     (m.start(), m.end(), m.as_str())
                 }
                 Err(err) => {
-                    globals.err_internal(format!("Capture failed. {:?}", err));
-                    return None;
+                    return Err(MonorubyErr::internalerr(format!(
+                        "Capture failed. {:?}",
+                        err
+                    )));
                 }
             };
 
@@ -124,7 +124,7 @@ impl RegexpInner {
             let result = vm.invoke_block(globals, data, &[matched])?;
             let s = result.to_s(globals);
             res.replace_range(start..end, &s);
-            Some((res, true))
+            Ok((res, true))
         }
 
         if let Some(s) = re_val.is_string() {
@@ -133,8 +133,9 @@ impl RegexpInner {
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, block_handler)
         } else {
-            globals.err_argument("1st arg must be RegExp or String.");
-            None
+            Err(MonorubyErr::argumenterr(
+                "1st arg must be RegExp or String.".to_string(),
+            ))
         }
     }
 
@@ -145,15 +146,16 @@ impl RegexpInner {
         regexp: Value,
         given: &str,
         replace: &str,
-    ) -> Option<(String, bool)> {
+    ) -> Result<(String, bool)> {
         if let Some(s) = regexp.is_string() {
             let re = Self::from_escaped(globals, &s)?;
-            re.replace_repeat(vm, globals, given, replace)
+            re.replace_repeat(vm, given, replace)
         } else if let Some(re) = regexp.is_regex() {
-            re.replace_repeat(vm, globals, given, replace)
+            re.replace_repeat(vm, given, replace)
         } else {
-            globals.err_argument("1st arg must be RegExp or String.");
-            None
+            Err(MonorubyErr::argumenterr(
+                "1st arg must be RegExp or String.".to_string(),
+            ))
         }
     }
 
@@ -164,14 +166,14 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         block_handler: BlockHandler,
-    ) -> Option<(String, bool)> {
+    ) -> Result<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInner,
             given: &str,
             block_handler: BlockHandler,
-        ) -> Option<(String, bool)> {
+        ) -> Result<(String, bool)> {
             let mut range = vec![];
             let mut i = 0;
             let data = vm.get_block_data(globals, block_handler);
@@ -185,8 +187,10 @@ impl RegexpInner {
                         (m.start(), m.end(), m.as_str())
                     }
                     Err(err) => {
-                        globals.err_internal(format!("Capture failed. {:?}", err));
-                        return None;
+                        return Err(MonorubyErr::internalerr(format!(
+                            "Capture failed. {:?}",
+                            err
+                        )));
                     }
                 };
                 let matched = Value::new_string_from_str(matched_str);
@@ -199,7 +203,7 @@ impl RegexpInner {
             for (start, end, replace) in range.iter().rev() {
                 res.replace_range(start..end, replace);
             }
-            Some((res, !range.is_empty()))
+            Ok((res, !range.is_empty()))
         }
 
         if let Some(s) = re_val.is_string() {
@@ -208,8 +212,9 @@ impl RegexpInner {
         } else if let Some(re) = re_val.is_regex() {
             replace_(vm, globals, re, given, block_handler)
         } else {
-            globals.err_argument("1st arg must be RegExp or String.");
-            None
+            Err(MonorubyErr::argumenterr(
+                "1st arg must be RegExp or String.".to_string(),
+            ))
         }
     }
 
@@ -220,13 +225,13 @@ impl RegexpInner {
         given: &str,
         block: Option<BlockHandler>,
         pos: usize,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let pos = match given.char_indices().nth(pos) {
             Some((pos, _)) => pos,
-            None => return Some(Value::nil()),
+            None => return Ok(Value::nil()),
         };
         match re.captures_from_pos(given, pos) {
-            Ok(None) => Some(Value::nil()),
+            Ok(None) => Ok(Value::nil()),
             Ok(Some(captures)) => {
                 vm.get_captures(&captures, given);
                 if let Some(block_handler) = block {
@@ -240,13 +245,13 @@ impl RegexpInner {
                             captures.get(i).unwrap().as_str(),
                         ));
                     }
-                    Some(Value::new_array(ary))
+                    Ok(Value::new_array(ary))
                 }
             }
-            Err(err) => {
-                globals.err_internal(format!("Capture failed. {:?}", err));
-                None
-            }
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
         }
     }
 
@@ -331,10 +336,9 @@ impl RegexpInner {
     pub(crate) fn replace_repeat(
         &self,
         vm: &mut Executor,
-        globals: &mut Globals,
         given: &str,
         replace: &str,
-    ) -> Option<(String, bool)> {
+    ) -> Result<(String, bool)> {
         let mut range = vec![];
         let mut i = 0;
         let mut last_captures = None;
@@ -357,8 +361,10 @@ impl RegexpInner {
                     last_captures = Some(captures);
                 }
                 Err(err) => {
-                    globals.err_internal(format!("Capture failed. {:?}", err));
-                    return None;
+                    return Err(MonorubyErr::internalerr(format!(
+                        "Capture failed. {:?}",
+                        err
+                    )));
                 }
             };
         }
@@ -371,7 +377,7 @@ impl RegexpInner {
             vm.get_captures(&c, given)
         }
 
-        Some((res, !range.is_empty()))
+        Ok((res, !range.is_empty()))
     }
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
@@ -381,12 +387,11 @@ impl RegexpInner {
     pub(crate) fn replace_once<'a>(
         &'a self,
         vm: &mut Executor,
-        globals: &mut Globals,
         given: &'a str,
         replace: &str,
-    ) -> Option<(String, Option<Captures>)> {
+    ) -> Result<(String, Option<Captures>)> {
         match self.captures(given) {
-            Ok(None) => Some((given.to_string(), None)),
+            Ok(None) => Ok((given.to_string(), None)),
             Ok(Some(captures)) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
@@ -412,12 +417,12 @@ impl RegexpInner {
                     }
                 }
                 res.replace_range(m.start()..m.end(), &rep);
-                Some((res, Some(captures)))
+                Ok((res, Some(captures)))
             }
-            Err(err) => {
-                globals.err_internal(format!("Capture failed. {:?}", err));
-                None
-            }
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
         }
     }
 }

@@ -10,24 +10,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
 }
 
-extern "C" fn sync(
+fn sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(Value::bool(false))
+) -> Result<Value> {
+    Ok(Value::bool(false))
 }
 
-extern "C" fn assign_sync(
+fn assign_sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(arg[0])
+) -> Result<Value> {
+    Ok(arg[0])
 }
 
 #[cfg(test)]

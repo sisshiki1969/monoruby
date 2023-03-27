@@ -16,14 +16,14 @@ pub(super) fn init(globals: &mut Globals) {
 /// - [NOT SUPPORTED] new(superclass = Object) {|klass| ... } -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
-extern "C" fn class_new(
+fn class_new(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let superclass = if len == 0 {
         None
     } else {
@@ -31,7 +31,7 @@ extern "C" fn class_new(
         Some(arg[0].as_class())
     };
     let obj = globals.new_unnamed_class(superclass);
-    Some(obj)
+    Ok(obj)
 }
 
 /// ### Class#new
@@ -40,47 +40,41 @@ extern "C" fn class_new(
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 ///
 /// !! We must call Object#initialize.
-extern "C" fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let obj = allocate(vm, globals, lfp, arg, 0)?;
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, dbg!(len))?;
-    Some(obj)
+    Ok(obj)
 }
 
 /// ### Class#superclass
 /// - superclass -> Class | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
-extern "C" fn superclass(
+fn superclass(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class = lfp.self_val().as_class();
-    Some(class.superclass_value().unwrap_or_default())
+    Ok(class.superclass_value().unwrap_or_default())
 }
 
 /// ### Class#allocate
 /// - allocate -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
-extern "C" fn allocate(
+fn allocate(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class().class_id();
     let obj = Value::new_object(class_id);
-    Some(obj)
+    Ok(obj)
 }
 
 #[cfg(test)]

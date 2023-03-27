@@ -16,8 +16,8 @@ pub use globals::*;
 use inst::*;
 use op::*;
 
-type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg, usize) -> Option<Value>;
+pub type Result<T> = std::result::Result<T, MonorubyErr>;
+pub type BuiltinFn = fn(&mut Executor, &mut Globals, LFP, Arg, usize) -> Result<Value>;
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;
@@ -321,7 +321,7 @@ impl Executor {
     ///
     /// Find Constant in current class context.
     ///
-    fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Option<Value> {
+    fn find_constant(&self, globals: &mut Globals, site_id: ConstSiteId) -> Result<Value> {
         let current_func = self.method_func_id();
         globals.find_constant(site_id, current_func)
     }
@@ -360,15 +360,18 @@ impl Executor {
         globals: &mut Globals,
         data: BlockData,
         args: &[Value],
-    ) -> Option<Value> {
-        (globals.codegen.block_invoker)(
+    ) -> Result<Value> {
+        match (globals.codegen.block_invoker)(
             self,
             globals,
             &data as _,
             Value::nil(),
             args.as_ptr(),
             args.len(),
-        )
+        ) {
+            Some(val) => Ok(val),
+            None => Err(globals.take_error().unwrap()),
+        }
     }
 
     pub fn invoke_block_iter1(
@@ -376,12 +379,12 @@ impl Executor {
         globals: &mut Globals,
         block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
-    ) -> Option<()> {
+    ) -> Result<()> {
         let block_data = self.get_block_data(globals, block_handler);
         for val in iter {
             self.invoke_block(globals, block_data.clone(), &[val])?;
         }
-        Some(())
+        Ok(())
     }
 
     ///
@@ -392,7 +395,7 @@ impl Executor {
         globals: &mut Globals,
         block_data: &BlockData,
         args: &[Value],
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         (globals.codegen.block_invoker)(
             self,
             globals,
@@ -401,6 +404,7 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
+        .ok_or_else(|| globals.take_error().unwrap())
     }
 
     fn invoke_method2_if_exists(
@@ -410,11 +414,11 @@ impl Executor {
         receiver: Value,
         args: Arg,
         len: usize,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
             self.invoke_func2(globals, func_id, receiver, args, len)
         } else {
-            Some(Value::nil())
+            Ok(Value::nil())
         }
     }
 
@@ -428,9 +432,46 @@ impl Executor {
         receiver: Value,
         args: Arg,
         len: usize,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
+            .ok_or_else(|| globals.take_error().unwrap())
+    }
+
+    fn define_class(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        superclass: Option<Value>,
+        is_module: u32,
+    ) -> Result<Value> {
+        let parent = self.context_class_id();
+        let self_val = match globals.get_constant(parent, name) {
+            Some(val) => {
+                val.expect_class_or_module(globals)?;
+                if let Some(superclass) = superclass {
+                    assert!(is_module != 1);
+                    let superclass_id = superclass.expect_class(globals)?;
+                    if Some(superclass_id) != val.as_class().superclass_id() {
+                        return Err(MonorubyErr::superclass_mismatch(name));
+                    }
+                }
+                val.as_class()
+            }
+            None => {
+                let superclass = match superclass {
+                    Some(superclass) => {
+                        assert!(is_module != 1);
+                        superclass.expect_class(globals)?;
+                        superclass.as_class()
+                    }
+                    None => OBJECT_CLASS.get_obj(globals),
+                };
+                globals.define_class(name, Some(superclass), parent, is_module == 1)
+            }
+        };
+        self.push_class_context(self_val.class_id());
+        Ok(self_val.as_val())
     }
 }
 
@@ -605,9 +646,6 @@ impl BcPc {
         let s = match self.get_ir(&globals.func) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
-            }
-            TraceIr::InitBlock(info) => {
-                format!("init_block {info:?}")
             }
             TraceIr::CheckLocal(local, disp) => {
                 format!("check_local({:?}) =>:{:05}", local, i as i32 + 1 + disp)

@@ -15,14 +15,14 @@ pub(super) fn init(globals: &mut Globals, class: ClassId) {
 /// - srand(number) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
-extern "C" fn srand(
+fn srand(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random.seed);
     let new_seed = if len == 0 {
         None
@@ -33,7 +33,7 @@ extern "C" fn srand(
         }
     };
     globals.random.init_with_seed(new_seed);
-    Some(Value::new_bigint(old_seed))
+    Ok(Value::new_bigint(old_seed))
 }
 
 // ### Random.rand
@@ -42,13 +42,13 @@ extern "C" fn srand(
 /// - rand(range) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
-extern "C" fn rand(
+fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let f = globals.random.gen();
-    Some(Value::new_float(f))
+    Ok(Value::new_float(f))
 }

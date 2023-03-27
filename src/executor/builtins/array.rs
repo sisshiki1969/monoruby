@@ -31,17 +31,11 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 ///
 /// TODO: Support arguments.
-extern "C" fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class().class_id();
     let obj = Value::new_array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
-    Some(obj)
+    Ok(obj)
 }
 
 ///
@@ -51,15 +45,15 @@ extern "C" fn new(
 /// - size -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
-extern "C" fn size(
+fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let len = lfp.self_val().as_array().len();
-    Some(Value::new_integer(len as i64))
+    Ok(Value::new_integer(len as i64))
 }
 
 ///
@@ -68,23 +62,26 @@ extern "C" fn size(
 /// - self + other -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
-extern "C" fn add(
+fn add(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut lhs = lfp.self_val().as_array().clone();
     let rhs = match arg[0].is_array() {
         Some(v) => v,
         None => {
-            globals.err_no_implicit_conversion(arg[0], ARRAY_CLASS);
-            return None;
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg[0],
+                ARRAY_CLASS,
+            ));
         }
     };
     lhs.extend_from_slice(rhs);
-    Some(Value::new_array(lhs))
+    Ok(Value::new_array(lhs))
 }
 
 ///
@@ -93,16 +90,16 @@ extern "C" fn add(
 /// - self << obj -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
-extern "C" fn shl(
+fn shl(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     self_.as_array_mut().push(arg[0]);
-    Some(self_)
+    Ok(self_)
 }
 
 ///
@@ -113,14 +110,14 @@ extern "C" fn shl(
 /// - self[start, length] -> Array | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
-extern "C" fn index(
+fn index(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     if len == 1 {
         let idx = arg[0];
         lfp.self_val().as_array().get_elem1(globals, idx)
@@ -135,17 +132,17 @@ extern "C" fn index(
 /// - self[nth] = val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
-extern "C" fn index_assign(
+fn index_assign(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let i = arg[0];
     let val = arg[1];
     if let Some(idx) = i.try_fixnum() {
-        return lfp.self_val().as_array_mut().set_index(globals, idx, val);
+        return lfp.self_val().as_array_mut().set_index(idx, val);
     } else {
         unimplemented!()
     }
@@ -158,21 +155,20 @@ extern "C" fn index_assign(
 /// - reduce(init = self.first) {|result, item| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
-extern "C" fn inject(
+fn inject(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
-            globals.err_no_block_given();
-            return None;
+            return Err(MonorubyErr::no_block_given());
         }
     };
-    globals.check_number_of_arguments(len, 0..=1)?;
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let self_ = lfp.self_val();
     let mut iter = self_.as_array().iter();
     let mut res = if len == 0 {
@@ -184,7 +180,7 @@ extern "C" fn inject(
     for elem in iter {
         res = vm.invoke_block(globals, data.clone(), &[res, *elem])?;
     }
-    Some(res)
+    Ok(res)
 }
 
 ///
@@ -194,14 +190,8 @@ extern "C" fn inject(
 /// TODO: support recursive join for Array class arguments.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
-extern "C" fn join(
-    _: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let sep = if len == 0 {
         "".to_string()
     } else {
@@ -210,7 +200,7 @@ extern "C" fn join(
     let self_ = lfp.self_val();
     let mut res = String::new();
     array_join(globals, &mut res, self_.as_array(), &sep);
-    Some(Value::new_string(res))
+    Ok(Value::new_string(res))
 }
 
 fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str) {
@@ -232,32 +222,28 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 /// - sum(init=0) {|e| expr } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
-extern "C" fn sum(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
     let self_ = lfp.self_val();
     let aref = self_.as_array();
     match lfp.block() {
         None => {
             for v in &**aref {
-                sum = add_values(vm, globals, sum, *v)?;
+                sum = add_values(vm, globals, sum, *v)
+                    .ok_or_else(|| globals.take_error().unwrap())?;
             }
         }
         Some(b) => {
             let data = vm.get_block_data(globals, b);
             for v in &**aref {
                 let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
-                sum = add_values(vm, globals, sum, rhs)?;
+                sum = add_values(vm, globals, sum, rhs)
+                    .ok_or_else(|| globals.take_error().unwrap())?;
             }
         }
     }
-    Some(sum)
+    Ok(sum)
 }
 
 ///
@@ -267,25 +253,24 @@ extern "C" fn sum(
 /// - [NOT SUPPORTED] each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
-extern "C" fn each(
+fn each(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let ary = lfp.self_val();
     let block_handler = if let Some(block) = lfp.block() {
         block
     } else {
-        globals.err_no_block_given();
-        return None;
+        return Err(MonorubyErr::no_block_given());
     };
     let data = vm.get_block_data(globals, block_handler);
     for i in ary.as_array().iter() {
         vm.invoke_block(globals, data.clone(), &[*i])?;
     }
-    Some(lfp.self_val())
+    Ok(lfp.self_val())
 }
 
 ///
@@ -295,27 +280,26 @@ extern "C" fn each(
 /// - detect([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
-extern "C" fn detect(
+fn detect(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let ary = lfp.self_val();
     let bh = if let Some(block) = lfp.block() {
         block
     } else {
-        globals.err_no_block_given();
-        return None;
+        return Err(MonorubyErr::no_block_given());
     };
     let data = vm.get_block_data(globals, bh);
     for elem in ary.as_array().iter() {
         if vm.invoke_block(globals, data.clone(), &[*elem])?.as_bool() {
-            return Some(*elem);
+            return Ok(*elem);
         };
     }
-    Some(Value::nil())
+    Ok(Value::nil())
 }
 
 #[cfg(test)]

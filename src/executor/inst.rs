@@ -463,8 +463,6 @@ pub(super) enum TraceIr {
     Mov(SlotId, SlotId),
     /// initialize_method
     InitMethod(FnInitInfo),
-    /// initialize_block
-    InitBlock(FnInitInfo),
     //                0       4       8       12      16
     //                +-------+-------+-------+-------+
     // MethodCall     |   |ret|identid| class |version|
@@ -831,7 +829,7 @@ impl TraceIr {
                     stack_offset: op3 as usize,
                 }),
                 171 => Self::ExpandArray(SlotId::new(op1), SlotId::new(op2), op3),
-                172 => Self::InitBlock(FnInitInfo {
+                172 => Self::InitMethod(FnInitInfo {
                     reg_num: op1 as usize,
                     arg_num: pc.u16(3) as usize,
                     block_pos: pc.u16(1) as usize,

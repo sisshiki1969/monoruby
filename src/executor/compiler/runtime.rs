@@ -89,7 +89,13 @@ pub(super) extern "C" fn gen_range(
     globals: &mut Globals,
     exclude_end: bool,
 ) -> Option<Value> {
-    globals.generate_range(start, end, exclude_end)
+    match globals.generate_range(start, end, exclude_end) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            globals.set_error(err);
+            None
+        }
+    }
 }
 
 pub(super) extern "C" fn concatenate_string(
@@ -297,7 +303,15 @@ pub(super) extern "C" fn get_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     match base_classid {
-        ARRAY_CLASS => return base.as_array().get_elem1(globals, index),
+        ARRAY_CLASS => {
+            return match base.as_array().get_elem1(globals, index) {
+                Ok(val) => Some(val),
+                Err(err) => {
+                    globals.set_error(err);
+                    None
+                }
+            }
+        }
         _ => {}
     }
     class_slot.idx = index.class();
@@ -322,7 +336,13 @@ pub(super) extern "C" fn set_index(
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
                 class_slot.idx = INTEGER_CLASS;
-                return base.as_array_mut().set_index(globals, idx, src);
+                return match base.as_array_mut().set_index(idx, src) {
+                    Ok(val) => Some(val),
+                    Err(err) => {
+                        globals.set_error(err);
+                        None
+                    }
+                };
             }
         }
         _ => {}
@@ -337,7 +357,13 @@ pub(super) extern "C" fn set_array_integer_index(
     globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
-    base.as_array_mut().set_index(globals, index, src)
+    match base.as_array_mut().set_index(index, src) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            globals.set_error(err);
+            None
+        }
+    }
 }
 
 ///
@@ -350,7 +376,13 @@ pub(super) extern "C" fn get_constant(
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    executor.find_constant(globals, site_id)
+    match executor.find_constant(globals, site_id) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            globals.set_error(err);
+            None
+        }
+    }
 }
 
 ///
@@ -389,7 +421,10 @@ pub(super) extern "C" fn set_instance_var(
     name: IdentId,
     val: Value,
 ) -> Option<Value> {
-    globals.set_ivar(base, name, val)?;
+    if let Err(err) = globals.set_ivar(base, name, val) {
+        globals.set_error(err);
+        return None;
+    };
     Some(val)
 }
 
@@ -435,34 +470,13 @@ pub(super) extern "C" fn define_class(
     superclass: Option<Value>,
     is_module: u32,
 ) -> Option<Value> {
-    let parent = executor.context_class_id();
-    let self_val = match globals.get_constant(parent, name) {
-        Some(val) => {
-            val.expect_class_or_module(globals)?;
-            if let Some(superclass) = superclass {
-                assert!(is_module != 1);
-                let superclass_id = superclass.expect_class(globals)?;
-                if Some(superclass_id) != val.as_class().superclass_id() {
-                    globals.err_superclass_mismatch(name);
-                    return None;
-                }
-            }
-            val.as_class()
+    match executor.define_class(globals, name, superclass, is_module) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            globals.set_error(err);
+            None
         }
-        None => {
-            let superclass = match superclass {
-                Some(superclass) => {
-                    assert!(is_module != 1);
-                    superclass.expect_class(globals)?;
-                    superclass.as_class()
-                }
-                None => OBJECT_CLASS.get_obj(globals),
-            };
-            globals.define_class(name, Some(superclass), parent, is_module == 1)
-        }
-    };
-    executor.push_class_context(self_val.class_id());
-    Some(self_val.as_val())
+    }
 }
 
 pub(super) extern "C" fn define_singleton_class(
@@ -524,11 +538,17 @@ pub(super) extern "C" fn alias_method(
 ) -> Option<Value> {
     let new = new.as_symbol();
     let old = old.as_symbol();
-    if meta.is_class_def() {
-        globals.alias_method_for_class(self_val.as_class().class_id(), new, old)?
+    match if meta.is_class_def() {
+        globals.alias_method_for_class(self_val.as_class().class_id(), new, old)
     } else {
-        globals.alias_method(self_val, new, old)?
-    };
+        globals.alias_method(self_val, new, old)
+    } {
+        Ok(_) => {}
+        Err(err) => {
+            globals.set_error(err);
+            return None;
+        }
+    }
     Some(Value::nil())
 }
 
@@ -555,8 +575,12 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     given: usize,
     min: usize,
     max: usize,
-) {
-    globals.check_number_of_arguments(given, min..=max);
+) -> Option<Value> {
+    if let Err(err) = Globals::check_number_of_arguments(given, min..=max) {
+        globals.set_error(err);
+        return None;
+    };
+    Some(Value::nil())
 }
 
 pub(super) extern "C" fn get_error_location(

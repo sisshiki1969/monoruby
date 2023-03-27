@@ -65,7 +65,7 @@ impl ArrayInner {
 }
 
 impl ArrayInner {
-    pub fn set_index(&mut self, globals: &mut Globals, idx: i64, src: Value) -> Option<Value> {
+    pub fn set_index(&mut self, idx: i64, src: Value) -> Result<Value> {
         if idx >= 0 {
             match self.get_mut(idx as usize) {
                 Some(v) => *v = src,
@@ -79,13 +79,12 @@ impl ArrayInner {
             let len = self.len();
             let idx_positive = len as i64 + idx;
             if idx_positive < 0 {
-                globals.err_index_too_small(idx, -(len as i64));
-                return None;
+                return Err(MonorubyErr::index_too_small(idx, -(len as i64)));
             } else {
                 self[idx_positive as usize] = src;
             }
         };
-        Some(src)
+        Ok(src)
     }
 
     pub(crate) fn get_index(&self, idx: i64) -> Option<Value> {
@@ -121,7 +120,7 @@ impl ArrayInner {
         globals: &mut Globals,
         arg0: Value,
         arg1: Value,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         let index = arg0.coerce_to_fixnum(globals)?;
         let self_len = self.len();
         let index = self.get_array_index(index).unwrap_or(self_len);
@@ -136,15 +135,15 @@ impl ArrayInner {
             let end = std::cmp::min(self_len, start + len);
             Value::new_array_from_iter(self[start..end].iter().cloned())
         };
-        Some(val)
+        Ok(val)
     }
 
-    pub(crate) fn get_elem1(&self, globals: &mut Globals, idx: Value) -> Option<Value> {
+    pub(crate) fn get_elem1(&self, globals: &mut Globals, idx: Value) -> Result<Value> {
         if let Some(index) = idx.try_fixnum() {
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();
-            Some(val)
+            Ok(val)
         } else if let Some(range) = idx.is_range() {
             let len = self.len() as i64;
             let i_start = match range.start.coerce_to_fixnum(globals)? {
@@ -152,9 +151,9 @@ impl ArrayInner {
                 i => i,
             };
             let start = if len < i_start {
-                return Some(Value::nil());
+                return Ok(Value::nil());
             } else if len == i_start {
-                return Some(Value::new_empty_array());
+                return Ok(Value::new_empty_array());
             } else {
                 i_start as usize
             };
@@ -170,12 +169,15 @@ impl ArrayInner {
                 (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
             };
             if start >= end {
-                return Some(Value::new_empty_array());
+                return Ok(Value::new_empty_array());
             }
-            Some(Value::new_array_from_iter(self[start..end].iter().cloned()))
+            Ok(Value::new_array_from_iter(self[start..end].iter().cloned()))
         } else {
-            globals.err_no_implicit_conversion(idx, INTEGER_CLASS);
-            None
+            Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                idx,
+                INTEGER_CLASS,
+            ))
         }
     }
 

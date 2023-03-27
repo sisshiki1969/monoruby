@@ -373,13 +373,12 @@ impl Globals {
         &mut self,
         class: ClassId,
         func_name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    ) -> Result<MethodTableEntry> {
         match self.check_method_for_class(class, func_name) {
-            Some(entry) => Some(entry),
-            None => {
-                self.err_method_not_found_for_class(func_name, class);
-                None
-            }
+            Some(entry) => Ok(entry),
+            None => Err(MonorubyErr::method_not_found_for_class(
+                self, func_name, class,
+            )),
         }
     }
 

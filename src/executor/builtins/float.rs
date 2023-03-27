@@ -9,25 +9,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
 }
 
-extern "C" fn tof(
+fn tof(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(lfp.self_val())
+) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
-extern "C" fn toi(
+fn toi(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     match lfp.self_val().unpack() {
-        RV::Float(f) => Some(Value::new_integer(f.trunc() as i64)),
+        RV::Float(f) => Ok(Value::new_integer(f.trunc() as i64)),
         _ => unreachable!(),
     }
 }

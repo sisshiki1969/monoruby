@@ -21,16 +21,16 @@ pub(super) fn init(globals: &mut Globals) {
 /// - now -> Time
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
-extern "C" fn now(
+fn now(
     _vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInfo::Local(t);
-    Some(Value::new_time(time_info))
+    Ok(Value::new_time(time_info))
 }
 
 ///
@@ -38,15 +38,15 @@ extern "C" fn now(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
-extern "C" fn inspect(
+fn inspect(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let time = lfp.self_val().as_time().to_string();
-    Some(Value::new_string(time))
+    Ok(Value::new_string(time))
 }
 
 ///
@@ -54,19 +54,19 @@ extern "C" fn inspect(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
-extern "C" fn to_s(
+fn to_s(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
         TimeInfo::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
         TimeInfo::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
-    Some(Value::new_string(s))
+    Ok(Value::new_string(s))
 }
 
 ///
@@ -74,13 +74,13 @@ extern "C" fn to_s(
 /// - strftime(format) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
-extern "C" fn strftime(
+fn strftime(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut fmt = arg[0].expect_string(globals)?;
     fmt = fmt.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
@@ -90,20 +90,20 @@ extern "C" fn strftime(
             t.format(&fmt).to_string()
         }
     };
-    Some(Value::new_string(s))
+    Ok(Value::new_string(s))
 }
 
 /// ### Time#-
 /// - self - time -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
-extern "C" fn sub(
+fn sub(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs_rv = self_.try_rvalue().unwrap();
     let lhs = match lhs_rv.kind() {
@@ -114,12 +114,11 @@ extern "C" fn sub(
     let rhs = match rhs_rv.kind() {
         ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
-            globals.err_method_not_found(IdentId::_SUB, self_);
-            return None;
+            return Err(MonorubyErr::method_not_found(globals, IdentId::_SUB, self_));
         }
     };
     let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;
-    Some(Value::new_float(res))
+    Ok(Value::new_float(res))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

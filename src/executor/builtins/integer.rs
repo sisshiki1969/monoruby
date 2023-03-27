@@ -20,13 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - [TODO] times -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
-extern "C" fn times(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
+fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     let count = match lfp.self_val().try_fixnum() {
         Some(i) => i,
         None => unimplemented!(),
@@ -38,7 +32,7 @@ extern "C" fn times(
         unimplemented!("needs block.")
     };
 
-    Some(lfp.self_val())
+    Ok(lfp.self_val())
 }
 
 struct PosStep {
@@ -85,14 +79,14 @@ impl Iterator for NegStep {
 /// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator::ArithmeticSequence
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
-extern "C" fn step(
+fn step(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     args: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let block = match lfp.block() {
         None => {
             /*let id = IdentId::get_ident_id("step");
@@ -107,8 +101,7 @@ extern "C" fn step(
     let step = if len == 2 {
         let step = args[1].coerce_to_fixnum(globals)?;
         if step == 0 {
-            globals.err_argument("Step can not be 0.");
-            return None;
+            return Err(MonorubyErr::argumenterr("Step can not be 0.".to_string()));
         }
         step
     } else {
@@ -122,7 +115,7 @@ extern "C" fn step(
         let iter = NegStep { cur, step, limit };
         vm.invoke_block_iter1(globals, block, iter)?;
     }
-    Some(lfp.self_val())
+    Ok(lfp.self_val())
 }
 
 /// ### Integer#chr
@@ -130,35 +123,34 @@ extern "C" fn step(
 /// - chr(encoding) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
-extern "C" fn chr(
+fn chr(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
-            return Some(Value::new_string_from_slice(&[b]));
+            return Ok(Value::new_string_from_slice(&[b]));
         }
     };
-    globals.err_char_out_of_range(lfp.self_val());
-    None
+    Err(MonorubyErr::char_out_of_range(globals, lfp.self_val()))
 }
 
-extern "C" fn to_f(
+fn to_f(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let f = match lfp.self_val().unpack() {
         RV::Integer(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => unimplemented!(),
     };
-    Some(Value::new_float(f))
+    Ok(Value::new_float(f))
 }
 
 ///
@@ -168,14 +160,14 @@ extern "C" fn to_f(
 /// - to_int -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
-extern "C" fn to_i(
+fn to_i(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(lfp.self_val())
+) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 #[cfg(test)]

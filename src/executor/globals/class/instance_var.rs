@@ -57,18 +57,17 @@ impl Globals {
     ///
     /// Set *val* to the instance variable with *name* which belongs to *base*.
     ///
-    pub(crate) fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Option<()> {
+    pub(crate) fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Result<()> {
         let class_id = base.class();
         let rval = match base.try_rvalue_mut() {
             Some(rval) => rval,
             None => {
-                self.err_cant_modify_frozen(base);
-                return None;
+                return Err(MonorubyErr::cant_modify_frozen(self, base));
             }
         };
         let id = self.get_ivar_id(class_id, name);
         rval.set_var(id, val);
-        Some(())
+        Ok(())
     }
 }
 
@@ -130,7 +129,7 @@ fn test_ivar() {
     assert_eq!(None, globals.get_ivar(obj, IdentId::INITIALIZE));
     assert!(globals
         .set_ivar(obj, IdentId::INITIALIZE, Value::fixnum(42))
-        .is_some());
+        .is_ok());
     assert_eq!(
         Some(Value::fixnum(42)),
         globals.get_ivar(obj, IdentId::INITIALIZE)
