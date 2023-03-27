@@ -508,7 +508,8 @@ impl Codegen {
             subq rsp, (stack_offset);
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
-            movq rax, (abs_address);
+            movq r9, (abs_address);
+            movq rax, (crate::executor::compiler::wrapper::wrapper);
             call rax;
             addq rsp, (stack_offset);
         );

@@ -127,11 +127,13 @@ impl Globals {
         };
         globals.random.init_with_seed(None);
         builtins::init_builtins(&mut globals);
-        globals.set_ivar(
-            main_object,
-            IdentId::_NAME,
-            Value::new_string_from_str("main"),
-        );
+        globals
+            .set_ivar(
+                main_object,
+                IdentId::_NAME,
+                Value::new_string_from_str("main"),
+            )
+            .unwrap();
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
         let nodes = Parser::parse_program(load_path.to_string(), PathBuf::new())
@@ -216,7 +218,7 @@ impl Globals {
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 
-    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
+    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Result<(String, PathBuf)> {
         for lib in self.lib_directories.clone() {
             let mut lib = std::path::PathBuf::from(lib);
             lib.push(path);
@@ -231,8 +233,7 @@ impl Globals {
             }
             //}
         }
-        self.err_cant_load(None, path);
-        None
+        Err(MonorubyErr::cant_load(None, path))
     }
 
     /// ## ABI of JIT-compiled code.
@@ -282,17 +283,16 @@ impl Globals {
         unsafe { *self.codegen.class_version_addr }
     }
 
-    fn load_file(&mut self, path: &std::path::Path) -> Option<(String, PathBuf)> {
+    fn load_file(&mut self, path: &std::path::Path) -> Result<(String, PathBuf)> {
         let mut file_body = String::new();
         let err = match std::fs::OpenOptions::new().read(true).open(path) {
             Ok(mut file) => match file.read_to_string(&mut file_body) {
-                Ok(_) => return Some((file_body, path.into())),
+                Ok(_) => return Ok((file_body, path.into())),
                 Err(err) => err,
             },
             Err(err) => err,
         };
-        self.err_cant_load(Some(err), path);
-        None
+        Err(MonorubyErr::cant_load(Some(err), path))
     }
 }
 
@@ -365,12 +365,11 @@ impl Globals {
         start: Value,
         end: Value,
         exclude_end: bool,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         if start.real_class(self).class_id() != end.real_class(self).class_id() {
-            self.err_bad_range(start, end);
-            return None;
+            return Err(MonorubyErr::bad_range(start, end));
         }
-        Some(Value::new_range(start, end, exclude_end))
+        Ok(Value::new_range(start, end, exclude_end))
     }
 
     fn array_tos(&self, v: &ArrayInner) -> String {

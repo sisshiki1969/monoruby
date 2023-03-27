@@ -58,19 +58,19 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
-extern "C" fn object_new(
+fn object_new(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class = lfp.self_val().as_class().class_id();
     let obj = Value::new_object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
-    Some(obj)
+    Ok(obj)
 }
 
 ///
@@ -79,15 +79,15 @@ extern "C" fn object_new(
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
-extern "C" fn is_a(
+fn is_a(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class = arg[0].expect_class_or_module(globals)?;
-    Some(Value::bool(lfp.self_val().is_kind_of(globals, class)))
+    Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
 }
 
 ///
@@ -96,14 +96,8 @@ extern "C" fn is_a(
 /// - nil? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
-extern "C" fn nil(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
-    Some(Value::bool(lfp.self_val().is_nil()))
+fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
 ///
@@ -112,14 +106,14 @@ extern "C" fn nil(
 /// - dup -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
-extern "C" fn dup(
+fn dup(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(lfp.self_val().dup())
+) -> Result<Value> {
+    Ok(lfp.self_val().dup())
 }
 
 ///
@@ -128,13 +122,13 @@ extern "C" fn dup(
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
-extern "C" fn puts(
+fn puts(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.is_array() {
             Some(ary) => {
@@ -154,7 +148,7 @@ extern "C" fn puts(
         globals.write_stdout(&bytes);
     }
     globals.flush_stdout();
-    Some(Value::nil())
+    Ok(Value::nil())
 }
 
 ///
@@ -163,17 +157,17 @@ extern "C" fn puts(
 /// - print(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
-extern "C" fn print(
+fn print(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     for v in arg.iter(len) {
         globals.write_stdout(&v.to_bytes(globals));
     }
-    Some(Value::nil())
+    Ok(Value::nil())
 }
 
 ///
@@ -182,15 +176,9 @@ extern "C" fn print(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
-extern "C" fn to_s(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
+fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     let s = lfp.self_val().to_s(globals);
-    Some(Value::new_string(s))
+    Ok(Value::new_string(s))
 }
 
 ///
@@ -199,20 +187,14 @@ extern "C" fn to_s(
 /// - p(*arg) -> object | Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
-extern "C" fn p(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn p(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let mut buf = String::new();
     for v in arg.iter(len) {
         buf += &v.inspect(globals);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
-    Some(match len {
+    Ok(match len {
         0 => Value::nil(),
         1 => arg[0],
         _ => {
@@ -222,13 +204,13 @@ extern "C" fn p(
     })
 }
 
-extern "C" fn assert(
+fn assert(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let expected = arg[0];
     let actual = arg[1];
     eprintln!(
@@ -237,18 +219,18 @@ extern "C" fn assert(
         actual.inspect(globals)
     );
     assert!(Value::eq(expected, actual));
-    Some(Value::nil())
+    Ok(Value::nil())
 }
 
-extern "C" fn dump(
+fn dump(
     vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     crate::executor::compiler::runtime::_dump_stacktrace(vm, globals);
-    Some(Value::nil())
+    Ok(Value::nil())
 }
 
 ///
@@ -257,19 +239,19 @@ extern "C" fn dump(
 /// - respond_to?(name, include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
-extern "C" fn respond_to(
+fn respond_to(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
         RV::String(b) => IdentId::get_id_from_string(String::from_utf8_lossy(b).into_owned()),
         _ => unimplemented!(),
     };
-    Some(Value::bool(
+    Ok(Value::bool(
         globals.check_method(lfp.self_val(), name).is_some(),
     ))
 }
@@ -280,15 +262,15 @@ extern "C" fn respond_to(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
-extern "C" fn inspect(
+fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let s = lfp.self_val().inspect(globals);
-    Some(Value::new_string(s))
+    Ok(Value::new_string(s))
 }
 
 ///
@@ -297,14 +279,14 @@ extern "C" fn inspect(
 /// - class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
-extern "C" fn class(
+fn class(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(lfp.self_val().real_class(globals).as_val())
+) -> Result<Value> {
+    Ok(lfp.self_val().real_class(globals).as_val())
 }
 
 ///
@@ -313,16 +295,16 @@ extern "C" fn class(
 /// - instance_of?(klass) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
-extern "C" fn instance_of(
+fn instance_of(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let b =
         lfp.self_val().real_class(globals).class_id() == arg[0].expect_class_or_module(globals)?;
-    Some(Value::bool(b))
+    Ok(Value::bool(b))
 }
 
 ///
@@ -332,25 +314,25 @@ extern "C" fn instance_of(
 /// - rand(range) -> Integer | Float | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
-extern "C" fn rand(
+fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let i = match len {
         0 => 0i64,
         1 => arg[0].coerce_to_fixnum(globals)?,
         _ => unreachable!(),
     };
     if !i.is_zero() {
-        Some(Value::new_integer(
+        Ok(Value::new_integer(
             (rand::random::<f64>() * (i.abs() as f64)) as i64,
         ))
     } else {
-        Some(Value::new_float(rand::random()))
+        Ok(Value::new_float(rand::random()))
     }
 }
 
@@ -360,14 +342,14 @@ extern "C" fn rand(
 /// - singleton_class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
-extern "C" fn singleton_class(
+fn singleton_class(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _: Arg,
     _len: usize,
-) -> Option<Value> {
-    Some(lfp.self_val().get_singleton(globals))
+) -> Result<Value> {
+    Ok(lfp.self_val().get_singleton(globals))
 }
 
 ///
@@ -376,20 +358,20 @@ extern "C" fn singleton_class(
 /// - instance_variable_defined?(var) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
-extern "C" fn instance_variable_defined(
+fn instance_variable_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
         RV::String(s) => IdentId::get_id_from_string(String::from_utf8_lossy(s).into_owned()),
-        _ => return None,
+        _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, arg[0])),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();
-    Some(Value::bool(b))
+    Ok(Value::bool(b))
 }
 
 ///
@@ -398,17 +380,17 @@ extern "C" fn instance_variable_defined(
 /// - instance_variable_set(var, value) -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
-extern "C" fn instance_variable_set(
+fn instance_variable_set(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let val = arg[1];
     globals.set_ivar(lfp.self_val(), id, val)?;
-    Some(val)
+    Ok(val)
 }
 
 ///
@@ -417,16 +399,16 @@ extern "C" fn instance_variable_set(
 /// - instance_variable_get(var) -> Object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
-extern "C" fn instance_variable_get(
+fn instance_variable_get(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let id = arg[0].expect_symbol_or_string(globals)?;
     let v = globals.get_ivar(lfp.self_val(), id).unwrap_or_default();
-    Some(v)
+    Ok(v)
 }
 
 ///
@@ -435,34 +417,39 @@ extern "C" fn instance_variable_get(
 /// - Integer(arg, base = 0, exception: true) -> Integer | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
-extern "C" fn kernel_integer(
+fn kernel_integer(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {
-        RV::Integer(num) => return Some(Value::new_integer(num)),
-        RV::BigInt(num) => return Some(Value::new_bigint(num.clone())),
-        RV::Float(num) => return Some(Value::new_integer(num.trunc() as i64)),
+        RV::Integer(num) => return Ok(Value::new_integer(num)),
+        RV::BigInt(num) => return Ok(Value::new_bigint(num.clone())),
+        RV::Float(num) => return Ok(Value::new_integer(num.trunc() as i64)),
         RV::String(b) => {
             if let Ok(s) = String::from_utf8(b.to_vec()) {
                 match s.parse::<i64>() {
-                    Ok(num) => return Some(Value::new_integer(num)),
+                    Ok(num) => return Ok(Value::new_integer(num)),
                     Err(_) => {
                         let s = arg0.to_s(globals);
-                        globals.err_argument(&format!("invalid value for Integer(): {}", s));
-                        return None;
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "invalid value for Integer(): {}",
+                            s
+                        )));
                     }
                 }
             }
         }
         _ => {}
     };
-    globals.err_no_implicit_conversion(arg0, INTEGER_CLASS);
-    None
+    Err(MonorubyErr::no_implicit_conversion(
+        globals,
+        arg0,
+        INTEGER_CLASS,
+    ))
 }
 
 ///
@@ -471,18 +458,20 @@ extern "C" fn kernel_integer(
 /// - require(feature) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
-extern "C" fn require(
+fn require(
     executor: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
     let (file_body, path) = globals.load_lib(path)?;
-    executor.eval_script(globals, file_body, &path)?;
-    Some(Value::bool(true))
+    executor
+        .eval_script(globals, file_body, &path)
+        .ok_or_else(|| globals.take_error().unwrap())?;
+    Ok(Value::bool(true))
 }
 
 ///
@@ -491,21 +480,23 @@ extern "C" fn require(
 /// - require_relative(relative_feature) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
-extern "C" fn require_relative(
+fn require_relative(
     executor: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut path = globals.current_source_path(executor);
     path.pop();
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
     path.extend(&feature);
     path.set_extension("rb");
     let (file_body, path) = globals.load_lib(&path)?;
-    executor.eval_script(globals, file_body, &path)?;
-    Some(Value::bool(true))
+    executor
+        .eval_script(globals, file_body, &path)
+        .ok_or_else(|| globals.take_error().unwrap())?;
+    Ok(Value::bool(true))
 }
 
 fn prepare_command_arg(input: String) -> (String, Vec<String>) {
@@ -542,13 +533,13 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 /// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
-extern "C" fn system(
+fn system(
     _executor: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     use std::process::Command;
     let input = arg[0].as_string();
     let (program, mut args) = prepare_command_arg(input);
@@ -559,7 +550,7 @@ extern "C" fn system(
             args.push(v.expect_string(globals)?);
         }
     }
-    Some(match Command::new(program).args(&args).status() {
+    Ok(match Command::new(program).args(&args).status() {
         Ok(status) => Value::bool(status.success()),
         Err(_) => Value::nil(),
     })
@@ -571,25 +562,22 @@ extern "C" fn system(
 /// - `command` -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
-extern "C" fn command(
+fn command(
     _executor: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     use std::process::Command;
     let input = arg[0].as_string();
     let (program, args) = prepare_command_arg(input);
     match Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
-            Some(Value::new_string_from_vec(output.stdout))
+            Ok(Value::new_string_from_vec(output.stdout))
         }
-        Err(err) => {
-            globals.err_runtime(format!("{}", err));
-            None
-        }
+        Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
     }
 }
 
@@ -600,20 +588,23 @@ extern "C" fn command(
 /// - abort(message) -> ()
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
-extern "C" fn abort(
+fn abort(
     _executor: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     if len == 1 {
         match arg[0].is_string() {
             Some(s) => eprintln!("{}", s),
             None => {
-                globals.err_no_implicit_conversion(arg[0], STRING_CLASS);
-                return None;
+                return Err(MonorubyErr::no_implicit_conversion(
+                    globals,
+                    arg[0],
+                    STRING_CLASS,
+                ));
             }
         }
     }

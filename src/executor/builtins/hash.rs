@@ -54,17 +54,17 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new(ifnone = nil) -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
-extern "C" fn new(
+fn new(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class = lfp.self_val().as_class().class_id();
     let map = IndexMap::default();
     let obj = Value::new_hash_with_class(map, class);
-    Some(obj)
+    Ok(obj)
 }
 
 /// ### Hash#length
@@ -72,15 +72,15 @@ extern "C" fn new(
 /// - size -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
-extern "C" fn size(
+fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let len = lfp.self_val().as_hash().len();
-    Some(Value::new_integer(len as i64))
+    Ok(Value::new_integer(len as i64))
 }
 
 /// ### Hash#[]=
@@ -88,79 +88,79 @@ extern "C" fn size(
 /// - store(key, value) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d=3d.html]
-extern "C" fn index_assign(
+fn index_assign(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let key = arg[0];
     let val = arg[1];
     lfp.self_val().as_hash_mut().insert(key, val);
-    Some(val)
+    Ok(val)
 }
 
 /// ### Hash#[]
 /// - self[key] -> object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d.html]
-extern "C" fn index(
+fn index(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let key = arg[0];
     let val = lfp.self_val().as_hash().get(key).unwrap_or_default();
-    Some(val)
+    Ok(val)
 }
 
 /// ### Hash#clear
 /// - clear -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
-extern "C" fn clear(
+fn clear(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     self_.as_hash_mut().clear();
-    Some(self_)
+    Ok(self_)
 }
 
 /// ### Hash#keys
 /// - keys -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keys.html]
-extern "C" fn keys(
+fn keys(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let keys = lfp.self_val().as_hash().keys();
-    Some(Value::new_array_from_vec(keys))
+    Ok(Value::new_array_from_vec(keys))
 }
 
 /// ### Hash#values
 /// - values -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/values.html]
-extern "C" fn values(
+fn values(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let keys = lfp.self_val().as_hash().values();
-    Some(Value::new_array_from_vec(keys))
+    Ok(Value::new_array_from_vec(keys))
 }
 
 /// ### Hash#has_key?
@@ -170,15 +170,15 @@ extern "C" fn values(
 /// - member?(key) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/has_key=3f.html]
-extern "C" fn include(
+fn include(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let b = lfp.self_val().as_hash().contains_key(arg[0]);
-    Some(Value::bool(b))
+    Ok(Value::bool(b))
 }
 
 /// ### Hash#inspect
@@ -186,15 +186,15 @@ extern "C" fn include(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
-extern "C" fn inspect(
+fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let s = globals.val_inspect(lfp.self_val());
-    Some(Value::new_string(s))
+    Ok(Value::new_string(s))
 }
 
 // ENV object
@@ -203,20 +203,23 @@ extern "C" fn inspect(
 /// - self[key] -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
-extern "C" fn env_index(
+fn env_index(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let key = arg[0];
     if key.is_string().is_none() {
-        globals.err_no_implicit_conversion(key, STRING_CLASS);
-        return None;
+        return Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            key,
+            STRING_CLASS,
+        ));
     }
     let val = lfp.self_val().as_hash().get(key).unwrap_or_default();
-    Some(val)
+    Ok(val)
 }
 
 /// ### ENV.fetch
@@ -225,17 +228,17 @@ extern "C" fn env_index(
 /// - fetch(key) {|key| ... } -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
-extern "C" fn env_fetch(
+fn env_fetch(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let env_map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
-        globals.check_number_of_arguments(len, 1..=1)?;
+        Globals::check_number_of_arguments(len, 1..=1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => {
@@ -246,13 +249,13 @@ extern "C" fn env_fetch(
     } else if len == 1 {
         env_map.get(arg[0]).unwrap()
     } else {
-        globals.check_number_of_arguments(len, 1..=2)?;
+        Globals::check_number_of_arguments(len, 1..=2)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => arg[1],
         }
     };
-    Some(s)
+    Ok(s)
 }
 
 #[cfg(test)]

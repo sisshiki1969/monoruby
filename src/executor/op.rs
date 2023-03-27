@@ -510,9 +510,14 @@ pub extern "C" fn vm_get_constant(
     if *cached_version == const_version {
         return *val;
     };
-    let res = executor.find_constant(globals, site_id);
-    if res.is_some() {
-        globals.func[site_id].cache = (const_version, res)
+    match executor.find_constant(globals, site_id) {
+        Ok(val) => {
+            globals.func[site_id].cache = (const_version, Some(val));
+            Some(val)
+        }
+        Err(err) => {
+            globals.set_error(err);
+            None
+        }
     }
-    res
 }

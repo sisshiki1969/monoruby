@@ -10,33 +10,26 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 /// ### Proc.new
-extern "C" fn new(
+fn new(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     if let Some(block_handler) = lfp.block() {
         vm.generate_proc(globals, block_handler)
     } else {
-        globals.err_create_proc_no_block();
-        None
+        Err(MonorubyErr::create_proc_no_block())
     }
 }
 
 /// ### Proc#call
-extern "C" fn call(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let self_ = lfp.self_val();
     let block_data = self_.as_proc();
     let res = vm.invoke_proc(globals, block_data, &arg.to_vec(len))?;
-    Some(res)
+    Ok(res)
 }
 
 impl Executor {
@@ -44,7 +37,7 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         block_handler: BlockHandler,
-    ) -> Option<Value> {
+    ) -> Result<Value> {
         if let Some(_bh) = block_handler.try_proxy() {
             let lfp = self.cfp().prev().unwrap().lfp();
             unsafe {
@@ -52,7 +45,7 @@ impl Executor {
             }
         }
         let block_data = self.get_block_data(globals, block_handler);
-        Some(Value::new_proc(block_data))
+        Ok(Value::new_proc(block_data))
     }
 
     /// ## return

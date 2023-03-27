@@ -20,18 +20,18 @@ pub(crate) fn init(globals: &mut Globals) {
 /// - compile(string, option=nil, code=nil) -> Regexp
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
-extern "C" fn regexp_new(
+fn regexp_new(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
     let regexp = RegexpInner::from_string(globals, string)?;
     let val = Value::new_regexp(regexp);
-    Some(val)
+    Ok(val)
 }
 
 /// ### Regexp.new
@@ -39,17 +39,17 @@ extern "C" fn regexp_new(
 /// - quote(string) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
-extern "C" fn regexp_escape(
+fn regexp_escape(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
     let val = Value::new_string(regex::escape(&string));
-    Some(val)
+    Ok(val)
 }
 
 /// ### Regexp.last_match
@@ -57,19 +57,19 @@ extern "C" fn regexp_escape(
 /// - last_match(nth) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
-extern "C" fn regexp_last_match(
+fn regexp_last_match(
     vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     if len == 0 {
-        Some(vm.get_last_matchdata())
+        Ok(vm.get_last_matchdata())
     } else {
         let nth = arg[0].coerce_to_fixnum(globals)?;
-        Some(vm.get_special_matches(nth))
+        Ok(vm.get_special_matches(nth))
     }
 }
 
@@ -77,13 +77,13 @@ extern "C" fn regexp_last_match(
 /// - self =~ string -> Integer | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
-extern "C" fn regexp_match(
+fn regexp_match(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given = arg[0].expect_string(globals)?;
@@ -91,7 +91,7 @@ extern "C" fn regexp_match(
         Some(mat) => Value::new_integer(mat.start() as i64),
         None => Value::nil(),
     };
-    Some(res)
+    Ok(res)
 }
 
 #[cfg(test)]

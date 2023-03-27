@@ -37,16 +37,16 @@ pub(super) fn init(globals: &mut Globals) {
 /// - self + other -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
-extern "C" fn add(
+fn add(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut b = StringInner::from_slice(lfp.self_val().as_bytes());
     b.extend_from_slice(arg[0].as_bytes());
-    Some(Value::new_string_from_inner(b))
+    Ok(Value::new_string_from_inner(b))
 }
 
 ///
@@ -55,24 +55,21 @@ extern "C" fn add(
 /// - self * times -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
-extern "C" fn mul(
+fn mul(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut lhs = StringInner::from_slice(lfp.self_val().as_bytes());
     let count = match arg[0].coerce_to_fixnum(globals)? {
-        i if i < 0 => {
-            globals.err_negative_argument();
-            return None;
-        }
+        i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
     };
 
     let res = Value::new_string_from_vec(lhs.repeat(count));
-    Some(res)
+    Ok(res)
 }
 
 ///
@@ -82,31 +79,32 @@ extern "C" fn mul(
 /// - self === other -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=3d.html]
-extern "C" fn eq(
+fn eq(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let b = match arg[0].is_string() {
         Some(rhs) => rhs == lhs,
         None => false,
     };
-    Some(Value::bool(b))
+    Ok(Value::bool(b))
 }
 
-fn expect_char(globals: &mut Globals, chars: &mut std::str::Chars) -> Option<char> {
+fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
     let ch = match chars.next() {
         Some(ch) => ch,
         None => {
-            globals.err_argument("Invalid termination of format string");
-            return None;
+            return Err(MonorubyErr::argumenterr(
+                "Invalid termination of format string".to_string(),
+            ));
         }
     };
-    Some(ch)
+    Ok(ch)
 }
 
 enum Integer {
@@ -114,16 +112,16 @@ enum Integer {
     BigInt(BigInt),
 }
 
-fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<Integer> {
+fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
-        RV::Integer(i) => return Some(Integer::Fixnum(i)),
+        RV::Integer(i) => return Ok(Integer::Fixnum(i)),
         RV::String(s) => {
             if let Ok(s) = String::from_utf8(s.to_vec()) {
                 match s.parse::<i64>() {
-                    Ok(i) => return Some(Integer::Fixnum(i)),
+                    Ok(i) => return Ok(Integer::Fixnum(i)),
                     Err(_) => {
                         if let Ok(b) = s.parse::<BigInt>() {
-                            return Some(Integer::BigInt(b));
+                            return Ok(Integer::BigInt(b));
                         }
                     }
                 }
@@ -132,58 +130,61 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Option<Integer> {
         _ => {}
     }
     let s = val.to_s(globals);
-    globals.err_argument(&format!("invalid value for Integer(): {}", s));
-    None
+    Err(MonorubyErr::argumenterr(format!(
+        "invalid value for Integer(): {}",
+        s
+    )))
 }
 
-fn coerce_to_float(globals: &mut Globals, val: Value) -> Option<f64> {
+fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
     match val.unpack() {
-        RV::Integer(i) => Some(i as f64),
-        RV::Float(f) => Some(f),
+        RV::Integer(i) => Ok(i as f64),
+        RV::Float(f) => Ok(f),
         _ => {
             let s = val.to_s(globals);
-            globals.err_argument(&format!("invalid value for Float(): {}", s));
-            None
+            Err(MonorubyErr::argumenterr(format!(
+                "invalid value for Float(): {}",
+                s
+            )))
         }
     }
 }
 
-fn coerce_to_char(globals: &mut Globals, val: Value) -> Option<char> {
+fn coerce_to_char(val: Value) -> Result<char> {
     match val.unpack() {
         RV::Integer(i) => {
             if let Ok(u) = u32::try_from(i) {
                 if let Some(c) = char::from_u32(u) {
-                    return Some(c);
+                    return Ok(c);
                 }
             }
-            globals.err_argument("invalid character");
+            Err(MonorubyErr::argumenterr("invalid character".to_string()))
         }
         RV::Float(f) => {
             let f = f.trunc();
             if 0.0 <= f && f <= u32::MAX as f64 {
                 if let Some(c) = char::from_u32(f as u32) {
-                    return Some(c);
+                    return Ok(c);
                 }
             }
-            globals.err_argument("invalid character");
+            Err(MonorubyErr::argumenterr("invalid character".to_string()))
         }
         RV::String(s) => match String::from_utf8(s.to_vec()) {
             Ok(s) => {
                 if s.chars().count() != 1 {
-                    globals.err_argument("%c requires a character");
+                    Err(MonorubyErr::argumenterr(
+                        "%c requires a character".to_string(),
+                    ))
                 } else {
-                    return Some(s.chars().next().unwrap());
+                    Ok(s.chars().next().unwrap())
                 }
             }
-            _ => {
-                globals.err_argument("%c requires a character");
-            }
+            _ => Err(MonorubyErr::argumenterr(
+                "%c requires a character".to_string(),
+            )),
         },
-        _ => {
-            globals.err_argument("invalid character");
-        }
-    };
-    None
+        _ => Err(MonorubyErr::argumenterr("invalid character".to_string())),
+    }
 }
 
 macro_rules! next_char {
@@ -201,13 +202,13 @@ macro_rules! next_char {
 /// - self % args -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=25.html]
-extern "C" fn rem(
+fn rem(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let arguments = match arg[0].is_array() {
         Some(ary) => ary.to_vec(),
         None => vec![arg[0]],
@@ -220,7 +221,7 @@ extern "C" fn rem(
     let mut ch = match chars.next() {
         Some(ch) => ch,
         None => {
-            return Some(Value::new_string(String::new()));
+            return Ok(Value::new_string(String::new()));
         }
     };
     loop {
@@ -237,43 +238,43 @@ extern "C" fn rem(
             }
             Some(c) => ch = c,
             None => {
-                globals.err_argument("incomplete format specifier; use %% (double %) instead");
-                return None;
+                return Err(MonorubyErr::argumenterr(
+                    "incomplete format specifier; use %% (double %) instead".to_string(),
+                ));
             }
         };
         let mut zero_flag = false;
         // Zero-fill
         if ch == '0' {
             zero_flag = true;
-            ch = expect_char(globals, &mut chars)?;
+            ch = expect_char(&mut chars)?;
         }
         // Width
         let mut width = 0usize;
         while ch.is_ascii_digit() {
             width = width * 10 + ch as usize - '0' as usize;
-            ch = expect_char(globals, &mut chars)?;
+            ch = expect_char(&mut chars)?;
         }
         // Precision
         let mut precision = 0usize;
         if ch == '.' {
-            ch = expect_char(globals, &mut chars)?;
+            ch = expect_char(&mut chars)?;
             while ch.is_ascii_digit() {
                 precision = precision * 10 + ch as usize - '0' as usize;
-                ch = expect_char(globals, &mut chars)?;
+                ch = expect_char(&mut chars)?;
             }
         } else {
             precision = 6;
         };
         if arguments.len() <= arg_no {
-            globals.err_argument("too few arguments");
-            return None;
+            return Err(MonorubyErr::argumenterr("too few arguments".to_string()));
         };
         // Specifier
         let val = arguments[arg_no];
         arg_no += 1;
         let format = match ch {
             'c' => {
-                let ch = coerce_to_char(globals, val)?;
+                let ch = coerce_to_char(val)?;
                 format!("{}", ch)
             }
             's' => val.to_s(globals),
@@ -358,8 +359,10 @@ extern "C" fn rem(
                 }
             }
             _ => {
-                globals.err_argument(&format!("malformed format string - %{}", ch));
-                return None;
+                return Err(MonorubyErr::argumenterr(format!(
+                    "malformed format string - %{}",
+                    ch
+                )))
             }
         };
         format_str += &format;
@@ -367,7 +370,7 @@ extern "C" fn rem(
     }
 
     let res = Value::new_string(format_str);
-    Some(res)
+    Ok(res)
 }
 
 ///
@@ -380,13 +383,13 @@ extern "C" fn rem(
 /// - self[range] -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=5b=5d.html]
-extern "C" fn index(
+fn index(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     fn conv_index(i: i64, len: usize) -> Option<usize> {
         if i >= 0 {
             if i <= len as i64 {
@@ -401,29 +404,29 @@ extern "C" fn index(
             }
         }
     }
-    globals.check_number_of_arguments(len, 1..=2)?;
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let self_ = lfp.self_val();
     let lhs = self_.expect_string(globals)?;
     if let Some(i) = arg[0].try_fixnum() {
         let index = match conv_index(i, lhs.chars().count()) {
             Some(i) => i,
-            None => return Some(Value::nil()),
+            None => return Ok(Value::nil()),
         };
         if len == 2 {
             let len = match arg[1].coerce_to_fixnum(globals)? {
-                0 => return Some(Value::new_string_from_str("")),
-                i if i < 0 => return Some(Value::nil()),
+                0 => return Ok(Value::new_string_from_str("")),
+                i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
             let ch: String = lhs.chars().skip(index).take(len).collect();
-            Some(Value::new_string_from_vec(ch.into_bytes()))
+            Ok(Value::new_string_from_vec(ch.into_bytes()))
         } else {
             let len = 1usize;
             let ch: String = lhs.chars().skip(index).take(len).collect();
             if ch.len() != 0 {
-                Some(Value::new_string_from_vec(ch.into_bytes()))
+                Ok(Value::new_string_from_vec(ch.into_bytes()))
             } else {
-                Some(Value::nil())
+                Ok(Value::nil())
             }
         }
     } else if let Some(info) = arg[0].is_range() {
@@ -432,18 +435,19 @@ extern "C" fn index(
         let (start, end) = match (info.start.try_fixnum(), info.end.try_fixnum()) {
             (Some(start), Some(end)) => match (conv_index(start, len), conv_index(end, len)) {
                 (Some(start), Some(end)) if start > end => {
-                    return Some(Value::new_string_from_str(""))
+                    return Ok(Value::new_string_from_str(""))
                 }
                 (Some(start), Some(end)) => (start, end),
-                _ => return Some(Value::nil()),
+                _ => return Ok(Value::nil()),
             },
             _ => {
-                globals.err_argument("Index must be Integer.");
-                return None;
+                return Err(MonorubyErr::argumenterr(
+                    "Index must be Integer.".to_string(),
+                ));
             }
         };
         let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
-        Some(Value::new_string(s))
+        Ok(Value::new_string(s))
     } else if let Some(info) = arg[0].is_regex() {
         let nth = if len == 1 {
             0
@@ -451,36 +455,35 @@ extern "C" fn index(
             arg[1].coerce_to_fixnum(globals)?
         };
         match info.captures(&lhs) {
-            Ok(None) => return Some(Value::nil()),
+            Ok(None) => return Ok(Value::nil()),
             Ok(Some(captures)) => {
                 vm.get_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 if nth == 0 {
-                    Some(Value::new_string_from_str(
+                    Ok(Value::new_string_from_str(
                         captures.get(0).unwrap().as_str(),
                     ))
                 } else if nth > 0 {
                     match captures.get(nth as usize) {
-                        Some(m) => Some(Value::new_string_from_str(m.as_str())),
-                        None => Some(Value::nil()),
+                        Some(m) => Ok(Value::new_string_from_str(m.as_str())),
+                        None => Ok(Value::nil()),
                     }
                 } else {
                     match len + nth {
-                        i if i > 0 => Some(Value::new_string_from_str(
+                        i if i > 0 => Ok(Value::new_string_from_str(
                             captures.get(i as usize).unwrap().as_str(),
                         )),
-                        _ => Some(Value::nil()),
+                        _ => Ok(Value::nil()),
                     }
                 }
             }
-            Err(err) => {
-                globals.err_internal(format!("Capture failed. {:?}", err));
-                None
-            }
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
         }
     } else {
-        globals.err_argument("Bad type for index.");
-        None
+        Err(MonorubyErr::argumenterr("Bad type for index.".to_string()))
     }
 }
 
@@ -489,18 +492,18 @@ extern "C" fn index(
 /// - start_with?([NOT SUPPORTED]*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/start_with=3f.html]
-extern "C" fn start_with(
+fn start_with(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let string = lfp.self_val().expect_string(globals)?;
     let arg0 = arg[0];
     let arg = arg0.expect_string(globals)?;
     let res = string.starts_with(&arg);
-    Some(Value::bool(res))
+    Ok(Value::bool(res))
 }
 
 ///
@@ -508,18 +511,18 @@ extern "C" fn start_with(
 /// - end_with?([NOT SUPPORTED]*strs) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/end_with=3f.html]
-extern "C" fn end_with(
+fn end_with(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let string = lfp.self_val().expect_string(globals)?;
     let arg0 = arg[0];
     let arg = arg0.expect_string(globals)?;
     let res = string.ends_with(&arg);
-    Some(Value::bool(res))
+    Ok(Value::bool(res))
 }
 
 ///
@@ -530,14 +533,14 @@ extern "C" fn end_with(
 /// TODO: support nil and ' ' for sep.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/split.html]
-extern "C" fn split(
+fn split(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let self_ = lfp.self_val();
     let string = self_.expect_string(globals)?;
     let arg0 = arg[0];
@@ -600,9 +603,9 @@ extern "C" fn split(
                 vm.temp_push(tmp);
                 vm.invoke_block_iter1(globals, b, v.into_iter())?;
                 vm.temp_clear();
-                Some(lfp.self_val())
+                Ok(lfp.self_val())
             }
-            None => Some(Value::new_array_from_vec(v)),
+            None => Ok(Value::new_array_from_vec(v)),
         }
     } else if let Some(re) = arg0.is_regex() {
         let lim = if len > 1 {
@@ -652,16 +655,15 @@ extern "C" fn split(
         match lfp.block() {
             Some(b) => {
                 vm.invoke_block_iter1(globals, b, iter)?;
-                Some(lfp.self_val())
+                Ok(lfp.self_val())
             }
             None => {
                 let v = iter.collect();
-                Some(Value::new_array_from_vec(v))
+                Ok(Value::new_array_from_vec(v))
             }
         }
     } else {
-        globals.err_is_not_regexp_nor_string(arg0);
-        None
+        Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
     }
 }
 
@@ -672,15 +674,9 @@ extern "C" fn split(
 /// - sub(pattern) {|matched| .... } -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub.html]
-extern "C" fn sub(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let (res, _) = sub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
-    Some(Value::new_string(res))
+    Ok(Value::new_string(res))
 }
 
 ///
@@ -690,18 +686,12 @@ extern "C" fn sub(
 /// - sub!(pattern) {|matched| .... } -> self | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/sub=21.html]
-extern "C" fn sub_(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let (res, changed) = sub_main(vm, globals, self_, arg, len, lfp.block())?;
     self_.replace_string(res);
     let res = if changed { self_ } else { Value::nil() };
-    Some(res)
+    Ok(res)
 }
 
 fn sub_main(
@@ -711,16 +701,16 @@ fn sub_main(
     arg: Arg,
     len: usize,
     block: Option<BlockHandler>,
-) -> Option<(String, bool)> {
+) -> Result<(String, bool)> {
     match block {
         None => {
-            globals.check_number_of_arguments(len, 2..=2)?;
+            Globals::check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = arg[1].expect_string(globals)?;
             RegexpInner::replace_one(vm, globals, arg[0], &given, &replace)
         }
         Some(block) => {
-            globals.check_number_of_arguments(len, 1..=1)?;
+            Globals::check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInner::replace_one_block(vm, globals, arg[0], &given, block)
         }
@@ -735,15 +725,9 @@ fn sub_main(
 /// - gsub(pattern) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub.html]
-extern "C" fn gsub(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Option<Value> {
+fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
-    Some(Value::new_string(res))
+    Ok(Value::new_string(res))
 }
 
 ///
@@ -754,18 +738,18 @@ extern "C" fn gsub(
 /// - gsub!(pattern) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/gsub=21.html]
-extern "C" fn gsub_(
+fn gsub_(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let (res, changed) = gsub_main(vm, globals, self_, arg, len, lfp.block())?;
     self_.replace_string(res);
     let res = if changed { self_ } else { Value::nil() };
-    Some(res)
+    Ok(res)
 }
 
 fn gsub_main(
@@ -775,16 +759,16 @@ fn gsub_main(
     args: Arg,
     len: usize,
     block: Option<BlockHandler>,
-) -> Option<(String, bool)> {
+) -> Result<(String, bool)> {
     match block {
         None => {
-            globals.check_number_of_arguments(len, 2..=2)?;
+            Globals::check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = args[1].expect_string(globals)?;
             RegexpInner::replace_all(vm, globals, args[0], &given, &replace)
         }
         Some(block) => {
-            globals.check_number_of_arguments(len, 1..=1)?;
+            Globals::check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInner::replace_all_block(vm, globals, args[0], &given, block)
         }
@@ -798,19 +782,19 @@ fn gsub_main(
 /// - match(regexp, pos = 0) {|m| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/match.html]
-extern "C" fn string_match(
+fn string_match(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let pos = match len {
         1 => 0usize,
         2 => match arg[1].coerce_to_fixnum(globals)? {
             pos if pos >= 0 => pos as usize,
-            _ => return Some(Value::nil()),
+            _ => return Ok(Value::nil()),
         },
         _ => unreachable!(),
     };
@@ -822,15 +806,15 @@ extern "C" fn string_match(
 }
 
 /// ### String#to_s
-extern "C" fn tos(
+fn tos(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=0)?;
-    Some(lfp.self_val())
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=0)?;
+    Ok(lfp.self_val())
 }
 
 ///
@@ -840,15 +824,15 @@ extern "C" fn tos(
 /// - size -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/length.html]
-extern "C" fn length(
+fn length(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let length = lfp.self_val().as_str().chars().count();
-    Some(Value::new_integer(length as i64))
+    Ok(Value::new_integer(length as i64))
 }
 
 fn gen_pad(padding: &str, len: usize) -> String {
@@ -864,14 +848,14 @@ fn gen_pad(padding: &str, len: usize) -> String {
 /// - ljust(width, padding = ' ') -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/ljust.html]
-extern "C" fn ljust(
+fn ljust(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
         arg.expect_string(globals)?
@@ -879,18 +863,17 @@ extern "C" fn ljust(
         " ".to_string()
     };
     if padding.is_empty() {
-        globals.err_zero_width_padding();
-        return None;
+        return Err(MonorubyErr::zero_width_padding());
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Some(Value::new_string(lhs.to_string()));
+        return Ok(Value::new_string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Some(Value::new_string(format!(
+    Ok(Value::new_string(format!(
         "{}{}",
         lhs,
         gen_pad(&padding, tail)
@@ -903,14 +886,14 @@ extern "C" fn ljust(
 /// - rjust(width, padding = ' ') -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rjust.html]
-extern "C" fn rjust(
+fn rjust(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 1..=2)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
         arg.expect_string(globals)?
@@ -918,18 +901,17 @@ extern "C" fn rjust(
         " ".to_string()
     };
     if padding.is_empty() {
-        globals.err_zero_width_padding();
-        return None;
+        return Err(MonorubyErr::zero_width_padding());
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Some(Value::new_string(lhs.to_string()));
+        return Ok(Value::new_string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Some(Value::new_string(format!(
+    Ok(Value::new_string(format!(
         "{}{}",
         gen_pad(&padding, tail),
         lhs
@@ -942,16 +924,11 @@ extern "C" fn rjust(
 /// [NOT SUPPORTED] - lines(rs = $/, chomp: false) {|line| ... } -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lines.html]
-extern "C" fn lines(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
+fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     if lfp.block().is_some() {
-        globals.err_internal("block is not supported.".to_string());
-        return None;
+        return Err(MonorubyErr::runtimeerr(
+            "block is not supported.".to_string(),
+        ));
     }
     let receiver = lfp.self_val();
     let string = receiver.expect_string(globals)?;
@@ -959,7 +936,7 @@ extern "C" fn lines(
         .split_inclusive('\n')
         .map(|line| Value::new_string_from_str(line))
         .collect();
-    Some(Value::new_array_from_vec(ary))
+    Ok(Value::new_array_from_vec(ary))
 }
 
 ///
@@ -968,14 +945,8 @@ extern "C" fn lines(
 /// - empty? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/empty=3f.html]
-extern "C" fn empty(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
-    Some(Value::bool(lfp.self_val().as_bytes().is_empty()))
+fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_bytes().is_empty()))
 }
 
 ///
@@ -984,14 +955,14 @@ extern "C" fn empty(
 /// - to_i(base = 10) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_i.html]
-extern "C" fn to_i(
+fn to_i(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 0..=1)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 0..=1)?;
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let radix = if len == 0 {
@@ -999,8 +970,7 @@ extern "C" fn to_i(
     } else {
         match arg[0].expect_integer(globals)? {
             n if n < 2 || 36 < n => {
-                globals.err_argument(&format!("invalid radix {n}"));
-                return None;
+                return Err(MonorubyErr::argumenterr(format!("invalid radix {n}")));
             }
             n => n as u32,
         }
@@ -1012,7 +982,7 @@ extern "C" fn to_i(
     } else {
         Value::int32(0)
     };
-    Some(num)
+    Ok(num)
 }
 
 #[cfg(test)]

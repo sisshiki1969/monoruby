@@ -24,69 +24,69 @@ pub(super) fn init(globals: &mut Globals) {
 /// - self == obj -> bool
 ///
 /// []
-extern "C" fn eq(
+fn eq(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let rhs = match arg[0].is_class_or_module() {
         Some(class) => class,
-        None => return Some(Value::bool(false)),
+        None => return Ok(Value::bool(false)),
     };
     let lhs = lfp.self_val().as_class().class_id();
-    Some(Value::bool(lhs == rhs))
+    Ok(Value::bool(lhs == rhs))
 }
 
 /// ### Module#===
 /// - self === obj -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
-extern "C" fn teq(
+fn teq(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class = lfp.self_val().as_class().class_id();
-    Some(Value::bool(arg[0].is_kind_of(globals, class)))
+    Ok(Value::bool(arg[0].is_kind_of(globals, class)))
 }
 
 /// ### Module#to_s
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
-extern "C" fn tos(
+fn tos(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class_name = lfp.self_val().as_class().class_id().get_name(globals);
     let res = Value::new_string(class_name);
-    Some(res)
+    Ok(res)
 }
 
 /// ### Module#constants
 /// - constants(inherit = true) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
-extern "C" fn constants(
+fn constants(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class().class_id();
     let iter = globals
         .get_constant_names(class_id)
         .into_iter()
         .map(Value::new_symbol);
-    Some(Value::new_array_from_iter(iter))
+    Ok(Value::new_array_from_iter(iter))
 }
 
 /// ### Module#instance_methods
@@ -97,32 +97,32 @@ extern "C" fn constants(
 /// !! Currently, this method returns only the methods that is defined in *self*.
 ///
 /// TODO: support inherited_too.
-extern "C" fn instance_methods(
+fn instance_methods(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let class_id = lfp.self_val().as_class().class_id();
     let iter = globals
         .get_method_names(class_id)
         .into_iter()
         .map(Value::new_symbol);
-    Some(Value::new_array_from_iter(iter))
+    Ok(Value::new_array_from_iter(iter))
 }
 
 /// ### Module#attr_reader
 /// - attr_reader(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
-extern "C" fn attr_reader(
+fn attr_reader(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
@@ -131,20 +131,20 @@ extern "C" fn attr_reader(
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(ary))
+    Ok(Value::new_array(ary))
 }
 
 /// ### Module#attr_writer
 /// - attr_writer(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
-extern "C" fn attr_writer(
+fn attr_writer(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
@@ -153,20 +153,20 @@ extern "C" fn attr_writer(
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(ary))
+    Ok(Value::new_array(ary))
 }
 
 /// ### Module#attr_accessor
 /// - attr_accessor(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
-extern "C" fn attr_accessor(
+fn attr_accessor(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class().class_id();
     let visi = vm.context_visibility();
@@ -177,23 +177,23 @@ extern "C" fn attr_accessor(
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::new_symbol(method_name));
     }
-    Some(Value::new_array(ary))
+    Ok(Value::new_array(ary))
 }
 
 /// ### Module#module_function
 /// - module_function(*name) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
-extern "C" fn module_function(
+fn module_function(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     if len == 0 {
         vm.set_module_function();
-        Some(Value::nil())
+        Ok(Value::nil())
     } else {
         let class_id = lfp.self_val().as_class().class_id();
         let visi = vm.context_visibility();
@@ -205,7 +205,7 @@ extern "C" fn module_function(
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
         let res = Value::new_array_from_iter(arg.iter(len));
-        Some(res)
+        Ok(res)
     }
 }
 
@@ -213,21 +213,21 @@ extern "C" fn module_function(
 /// - include(*mod) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
-extern "C" fn include(
+fn include(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let self_ = lfp.self_val();
-    globals.check_min_number_of_arguments(len, 1)?;
+    Globals::check_min_number_of_arguments(len, 1)?;
     let class = self_.as_class();
     for v in arg.rev(len) {
         v.expect_module(globals)?;
         globals.include_module(class, v.as_class());
     }
-    Some(self_)
+    Ok(self_)
 }
 
 /// ### Module#private
@@ -235,13 +235,13 @@ extern "C" fn include(
 /// - private(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
-extern "C" fn private(
+fn private(
     executor: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     change_visi(
         executor,
         globals,
@@ -257,13 +257,13 @@ extern "C" fn private(
 /// - protected(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
-extern "C" fn protected(
+fn protected(
     executor: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     change_visi(
         executor,
         globals,
@@ -279,13 +279,13 @@ extern "C" fn protected(
 /// - public(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
-extern "C" fn public(
+fn public(
     executor: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     change_visi(
         executor,
         globals,
@@ -303,10 +303,10 @@ fn change_visi(
     arg: Arg,
     len: usize,
     visi: Visibility,
-) -> Option<Value> {
+) -> Result<Value> {
     if len == 0 {
         executor.set_context_visibility(visi);
-        return Some(Value::nil());
+        return Ok(Value::nil());
     }
     let class_id = self_val.as_class().class_id();
     let mut names = vec![];
@@ -316,7 +316,7 @@ fn change_visi(
                 names.push(v.expect_symbol_or_string(globals)?);
             }
             globals.change_method_visibility_for_class(class_id, &names, visi);
-            return Some(arg[0]);
+            return Ok(arg[0]);
         }
     }
     for v in arg.iter(len) {
@@ -324,7 +324,7 @@ fn change_visi(
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
     let res = Value::new_array_from_iter(arg.iter(len));
-    Some(res)
+    Ok(res)
 }
 
 #[cfg(test)]

@@ -141,17 +141,14 @@ impl Globals {
         obj: Value,
         new_name: IdentId,
         old_name: IdentId,
-    ) -> Option<()> {
+    ) -> Result<()> {
         let class_id = obj.class();
         let entry = match self.check_method_for_class(class_id, old_name) {
             Some(func) => func,
-            None => {
-                self.err_method_not_found(old_name, obj);
-                return None;
-            }
+            None => return Err(MonorubyErr::method_not_found(self, old_name, obj)),
         };
         self.add_method(obj.class(), new_name, entry.func_id(), entry.visibility);
-        Some(())
+        Ok(())
     }
 
     ///
@@ -162,9 +159,9 @@ impl Globals {
         class_id: ClassId,
         new_name: IdentId,
         old_name: IdentId,
-    ) -> Option<()> {
+    ) -> Result<()> {
         let entry = self.find_method_entry_for_class(class_id, old_name)?;
         self.add_method(class_id, new_name, entry.func_id(), entry.visibility);
-        Some(())
+        Ok(())
     }
 }

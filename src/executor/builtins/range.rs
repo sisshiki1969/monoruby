@@ -16,14 +16,14 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new(first, last, exclude_end = false) -> Range
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
-extern "C" fn range_new(
+fn range_new(
     _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     len: usize,
-) -> Option<Value> {
-    globals.check_number_of_arguments(len, 2..=3)?;
+) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
 }
 
@@ -31,42 +31,30 @@ extern "C" fn range_new(
 /// - begin -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
-extern "C" fn begin(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
-    Some(lfp.self_val().as_range().start)
+fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+    Ok(lfp.self_val().as_range().start)
 }
 
 /// Range#end
 /// - end -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
-extern "C" fn end(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Option<Value> {
-    Some(lfp.self_val().as_range().end)
+fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+    Ok(lfp.self_val().as_range().end)
 }
 
 /// Range#exclude_end?
 /// - exclude_end? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
-extern "C" fn exclude_end(
+fn exclude_end(
     _vm: &mut Executor,
     _globals: &mut Globals,
     lfp: LFP,
     _: Arg,
     _: usize,
-) -> Option<Value> {
-    Some(Value::bool(lfp.self_val().as_range().exclude_end()))
+) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
 ///
@@ -76,18 +64,17 @@ extern "C" fn exclude_end(
 /// - [NOT SUPPORTED] each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
-extern "C" fn each(
+fn each(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
-) -> Option<Value> {
+) -> Result<Value> {
     let block_handler = if let Some(block) = lfp.block() {
         block
     } else {
-        globals.err_no_block_given();
-        return None;
+        return Err(MonorubyErr::no_block_given());
     };
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -98,22 +85,12 @@ extern "C" fn each(
             end += 1
         }
 
-        let data = vm.get_block_data(globals, block_handler);
-        for i in start..end {
-            let args = [Value::fixnum(i)];
-            (globals.codegen.block_invoker)(
-                vm,
-                globals,
-                &data as _,
-                Value::nil(),
-                args.as_ptr(),
-                args.len(),
-            )?;
-        }
+        let iter = (start..end).map(|i| Value::fixnum(i));
+        vm.invoke_block_iter1(globals, block_handler, iter)?;
     } else {
         unimplemented!()
     }
-    Some(self_)
+    Ok(self_)
 }
 
 #[cfg(test)]

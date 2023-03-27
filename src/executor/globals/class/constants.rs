@@ -24,14 +24,17 @@ impl Globals {
         self.class[class_id].constants.get(&name).cloned()
     }
 
-    pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Option<Value> {
+    pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Result<Value> {
         let mut class = OBJECT_CLASS;
         for name in name {
-            class = self
-                .get_constant(class, IdentId::get_id(name))?
-                .expect_class_or_module(self)?;
+            let name = IdentId::get_id(name);
+            class = match self.get_constant(class, name) {
+                Some(val) => Ok(val),
+                None => Err(MonorubyErr::uninitialized_constant(name)),
+            }?
+            .expect_class_or_module(self)?;
         }
-        Some(class.get_obj(self).as_val())
+        Ok(class.get_obj(self).as_val())
     }
 
     ///
@@ -46,7 +49,7 @@ impl Globals {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    pub(crate) fn find_constant(&mut self, id: ConstSiteId, current_func: FuncId) -> Option<Value> {
+    pub(crate) fn find_constant(&mut self, id: ConstSiteId, current_func: FuncId) -> Result<Value> {
         let ConstSiteInfo {
             toplevel,
             mut prefix,
@@ -77,26 +80,20 @@ impl Globals {
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+    fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Result<Value> {
         match self.get_constant(class_id, name) {
-            Some(v) => Some(v),
-            None => {
-                self.err_uninitialized_constant(name);
-                None
-            }
+            Some(v) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
         }
     }
 
-    fn search_constant_checked(&mut self, name: IdentId, current_func: FuncId) -> Option<Value> {
+    fn search_constant_checked(&mut self, name: IdentId, current_func: FuncId) -> Result<Value> {
         if let Some(v) = self.search_lexical_stack(name, current_func) {
-            return Some(v);
+            return Ok(v);
         }
         match self.search_superclass(name, current_func) {
-            Some(v) => Some(v),
-            None => {
-                self.err_uninitialized_constant(name);
-                None
-            }
+            Some(v) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
         }
     }
 

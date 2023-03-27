@@ -119,8 +119,8 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, r14;    // rdx <- lfp
-            movq rax, (abs_address);
-            // fn(&mut Interp, &mut Globals, LFP, *const Value, len:usize)
+            movq r9, (abs_address);
+            movq rax, (wrapper);
             call rax;
 
             leave;
@@ -198,5 +198,22 @@ impl Codegen {
             ret;
         );
         label
+    }
+}
+
+pub extern "C" fn wrapper(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+    f: BuiltinFn,
+) -> Option<Value> {
+    match f(vm, globals, lfp, arg, len) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            globals.set_error(err);
+            None
+        }
     }
 }

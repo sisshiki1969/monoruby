@@ -25,10 +25,6 @@ impl Globals {
         )))
     }*/
 
-    pub(crate) fn err_method_not_found_for_class(&mut self, name: IdentId, class: ClassId) {
-        self.set_error(MonorubyErr::method_not_found_for_class(self, name, class))
-    }
-
     pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
     }
@@ -37,100 +33,19 @@ impl Globals {
         self.set_error(MonorubyErr::no_block_given());
     }
 
-    pub(crate) fn err_uninitialized_constant(&mut self, name: IdentId) {
-        self.set_error(MonorubyErr::uninitialized_constant(name));
-    }
-
-    pub(crate) fn err_bad_range(&mut self, start: Value, end: Value) {
-        self.set_error(MonorubyErr::bad_range(start, end));
-    }
-
-    ///
-    /// Set RangeError with message "*val* out of char range".
-    ///
-    pub(crate) fn err_char_out_of_range(&mut self, val: Value) {
-        self.set_error(MonorubyErr::char_out_of_range(self, val));
-    }
-
-    ///
-    /// Set TypeError with message "no_implicit_conversion of {} into {}".
-    ///
-    pub(crate) fn err_no_implicit_conversion(&mut self, val: Value, target_class: ClassId) {
-        self.set_error(MonorubyErr::no_implicit_conversion(self, val, target_class));
-    }
-
-    ///
-    /// Set TypeError with message "*name* is not a class".
-    ///
-    pub(crate) fn err_is_not_class_nor_module(&mut self, name: String) {
-        self.set_error(MonorubyErr::is_not_class_nor_module(name));
-    }
-
-    ///
-    /// Set TypeError with message "*name* is not a class".
-    ///
-    pub(crate) fn err_is_not_class(&mut self, name: String) {
-        self.set_error(MonorubyErr::is_not_class(name));
-    }
-
-    ///
-    /// Set TypeError with message "superclass mismatch for class *name*".
-    ///
-    pub(crate) fn err_superclass_mismatch(&mut self, name: IdentId) {
-        self.set_error(MonorubyErr::superclass_mismatch(name));
-    }
-
-    ///
-    /// Set TypeError with message "*name* is not Symbol nor String".
-    ///
-    pub(crate) fn err_is_not_symbol_nor_string(&mut self, val: Value) {
-        self.set_error(MonorubyErr::is_not_symbol_nor_string(self, val));
-    }
-
-    ///
-    /// Set TypeError with message "*name* is not Regexp nor String".
-    ///
-    pub(crate) fn err_is_not_regexp_nor_string(&mut self, val: Value) {
-        self.set_error(MonorubyErr::is_not_regexp_nor_string(self, val));
-    }
-
-    ///
-    /// Set TypeError with message "can't convert *class of val* into Float".
-    ///
-    pub(crate) fn err_cant_conert_into_float(&mut self, val: Value) {
-        self.set_error(MonorubyErr::cant_conert_into_float(self, val));
-    }
-
-    pub(crate) fn err_argument(&mut self, msg: &str) {
-        self.set_error(MonorubyErr::argumenterr(msg.to_string()));
-    }
-
-    pub(crate) fn err_zero_width_padding(&mut self) {
-        self.set_error(MonorubyErr::zero_width_padding());
-    }
-
-    pub(crate) fn err_negative_argument(&mut self) {
-        self.set_error(MonorubyErr::negative_argument());
-    }
-
-    pub(crate) fn err_create_proc_no_block(&mut self) {
-        self.set_error(MonorubyErr::create_proc_no_block());
-    }
-
     pub(crate) fn check_number_of_arguments(
-        &mut self,
         given: usize,
         range: std::ops::RangeInclusive<usize>,
-    ) -> Option<()> {
+    ) -> Result<()> {
         if range.contains(&given) {
-            Some(())
+            Ok(())
         } else {
-            if range.start() == range.end() {
-                self.set_error(MonorubyErr::wrong_arguments(*range.start(), given));
+            let err = if range.start() == range.end() {
+                MonorubyErr::wrong_arguments(*range.start(), given)
             } else {
-                self.err_wrong_number_of_arg_range(given, range);
+                MonorubyErr::wrong_number_of_arg_range(given, range)
             };
-            None
+            Err(err)
         }
     }
 
@@ -142,52 +57,22 @@ impl Globals {
         self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
     }
 
-    pub(crate) fn check_min_number_of_arguments(&mut self, given: usize, min: usize) -> Option<()> {
+    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
         if given >= min {
-            return Some(());
+            return Ok(());
         }
-        self.set_error(MonorubyErr::wrong_number_of_arg_min(given, min));
-        None
+        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
     }
 
     pub(crate) fn err_internal(&mut self, msg: String) {
         self.set_error(MonorubyErr::internalerr(msg));
     }
 
-    pub(crate) fn err_regex(&mut self, msg: String) {
-        self.set_error(MonorubyErr::regexerr(msg));
-    }
-
-    pub(crate) fn err_runtime(&mut self, msg: String) {
-        self.set_error(MonorubyErr::runtimeerr(msg));
-    }
-
-    ///
-    /// Set IndexError with message "index *actual* too small for array; minimum: *minimum*".
-    ///
-    pub(crate) fn err_index_too_small(&mut self, actual: i64, minimum: i64) {
-        self.set_error(MonorubyErr::index_too_small(actual, minimum));
-    }
-
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
     pub(crate) fn err_cant_modify_frozen(&mut self, val: Value) {
-        self.set_error(MonorubyErr::frozenerr(format!(
-            "can't modify frozen {}: {}",
-            val.get_real_class_name(self),
-            self.val_tos(val),
-        )));
-    }
-
-    ///
-    /// Set LoadError with message "can't load '*file*'".
-    ///
-    pub(crate) fn err_cant_load(&mut self, err: Option<std::io::Error>, path: &std::path::Path) {
-        self.set_error(MonorubyErr::loaderr(match err {
-            Some(err) => format!("can't load {path:?}. {err}"),
-            None => format!("can't load {path:?}"),
-        }));
+        self.set_error(MonorubyErr::cant_modify_frozen(self, val));
     }
 
     pub(crate) fn take_error(&mut self) -> Option<MonorubyErr> {
@@ -528,7 +413,7 @@ impl MonorubyErr {
     ///
     /// Set TypeError with message "can't convert *class of val* into Float".
     ///
-    pub(crate) fn cant_conert_into_float(globals: &Globals, val: Value) -> MonorubyErr {
+    pub(crate) fn cant_convert_into_float(globals: &Globals, val: Value) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
             "can't convert {} into Float",
             val.get_real_class_name(globals)
@@ -581,8 +466,23 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Frozen(msg))
     }
 
+    pub(crate) fn cant_modify_frozen(globals: &Globals, val: Value) -> MonorubyErr {
+        MonorubyErr::frozenerr(format!(
+            "can't modify frozen {}: {}",
+            val.get_real_class_name(globals),
+            globals.val_tos(val),
+        ))
+    }
+
     pub(crate) fn loaderr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Load(msg))
+    }
+
+    pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
+        MonorubyErr::loaderr(match err {
+            Some(err) => format!("can't load {path:?}. {err}"),
+            None => format!("can't load {path:?}"),
+        })
     }
 
     pub(crate) fn internalerr(msg: String) -> MonorubyErr {
