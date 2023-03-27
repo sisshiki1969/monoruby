@@ -137,7 +137,6 @@ impl LoopAnalysis {
             let idx = bb_pos + ofs;
             match self.pc.get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
-                TraceIr::InitBlock { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}

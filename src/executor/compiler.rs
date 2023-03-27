@@ -111,7 +111,7 @@ pub struct Codegen {
     ///
     /// ### in
     /// - rdx: actual number of arguments
-    /// - r13: pc (InitBlock/InitMethod)
+    /// - r13: pc (InitMethod)
     ///
     #[allow(dead_code)]
     wrong_argument: DestLabel,

@@ -7,7 +7,7 @@ impl Codegen {
             movq rbp, rsp;
         );
         match pc.get_ir(fnstore) {
-            TraceIr::InitMethod(fn_info) | TraceIr::InitBlock(fn_info) => {
+            TraceIr::InitMethod(fn_info) => {
                 self.setup_stack(fn_info.stack_offset);
                 self.init_func(&fn_info);
             }

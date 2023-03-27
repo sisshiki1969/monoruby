@@ -647,9 +647,6 @@ impl BcPc {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
-            TraceIr::InitBlock(info) => {
-                format!("init_block {info:?}")
-            }
             TraceIr::CheckLocal(local, disp) => {
                 format!("check_local({:?}) =>:{:05}", local, i as i32 + 1 + disp)
             }
