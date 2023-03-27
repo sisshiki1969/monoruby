@@ -613,9 +613,6 @@ impl Codegen {
             je   l1;
             // rax <- op
             movzxb rax, [rsi + 6];
-            // method-style
-            //cmpb rax, (170u8 as i8);
-            //je   l1;
             // block-style?
             cmpb rax, (172u8 as i8);
             jne  l1;
