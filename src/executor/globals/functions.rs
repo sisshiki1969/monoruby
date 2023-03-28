@@ -119,14 +119,14 @@ impl Funcs {
         id
     }
 
-    fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+    fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
         let info = FuncInfo::new_attr_reader(id, name, ivar_name);
         self.info.push(info);
         id
     }
 
-    fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+    fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         let id = self.next_func_id();
         let info = FuncInfo::new_attr_writer(id, name, ivar_name);
         self.info.push(info);
@@ -430,11 +430,11 @@ impl FnStore {
         self.functions.add_native_func(name, address, arity)
     }
 
-    pub(super) fn add_attr_reader(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+    pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_reader(name, ivar_name)
     }
 
-    pub(super) fn add_attr_writer(&mut self, name: String, ivar_name: IdentId) -> FuncId {
+    pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_writer(name, ivar_name)
     }
 
@@ -610,9 +610,9 @@ impl FuncInfo {
         }
     }
 
-    fn new_attr_reader(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
+    fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(IdentId::get_id_from_string(name)),
+            name: Some(name),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),
@@ -622,9 +622,9 @@ impl FuncInfo {
         }
     }
 
-    fn new_attr_writer(func_id: FuncId, name: String, ivar_name: IdentId) -> Self {
+    fn new_attr_writer(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
         Self {
-            name: Some(IdentId::get_id_from_string(name)),
+            name: Some(name),
             data: FuncData {
                 codeptr: None,
                 pc: BcPc::default(),

@@ -108,8 +108,7 @@ impl Globals {
         visi: Visibility,
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
-        let method_name_str = IdentId::get_name(method_name);
-        let func_id = self.func.add_attr_reader(method_name_str, ivar_name);
+        let func_id = self.func.add_attr_reader(method_name, ivar_name);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name
@@ -126,8 +125,7 @@ impl Globals {
     ) -> IdentId {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let method_name = IdentId::add_assign_postfix(method_name);
-        let method_name_str = IdentId::get_name(method_name);
-        let func_id = self.func.add_attr_writer(method_name_str, ivar_name);
+        let func_id = self.func.add_attr_writer(method_name, ivar_name);
         self.add_method(class_id, method_name, func_id, visi);
         self.class_version_inc();
         method_name
