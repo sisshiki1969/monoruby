@@ -18,6 +18,12 @@ impl std::default::Default for IdentId {
     }
 }
 
+impl std::fmt::Display for IdentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", IdentId::get_name(*self))
+    }
+}
+
 impl From<IdentId> for usize {
     #[inline(always)]
     fn from(id: IdentId) -> usize {
@@ -103,8 +109,13 @@ impl IdentId {
         ID.write().unwrap().get_ident_id_from_string(name)
     }
 
-    pub(crate) fn get_name(id: IdentId) -> String {
+    fn get_name(id: IdentId) -> String {
         ID.read().unwrap().get_name(id).to_string()
+    }
+
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    pub(crate) fn append_to(self, s: &mut String) {
+        ID.read().unwrap().append_to(self, s);
     }
 
     ///
@@ -208,6 +219,11 @@ impl IdentifierTable {
 
     fn get_name(&self, id: IdentId) -> &str {
         &self.table[id.to_usize() - 1]
+    }
+
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    fn append_to(&self, id: IdentId, s: &mut String) {
+        s.push_str(self.table[id.to_usize() - 1].as_str());
     }
 
     ///

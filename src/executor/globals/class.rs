@@ -89,7 +89,7 @@ impl ClassId {
         }
         let class = self.get_obj(globals);
         match globals.class[self].name {
-            Some(id) => IdentId::get_name(id),
+            Some(id) => id.to_string(),
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().get()),
                 Some(base) => format!("#<Class:{}>", globals.val_tos(base)),

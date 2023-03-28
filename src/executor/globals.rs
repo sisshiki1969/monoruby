@@ -305,7 +305,7 @@ impl Globals {
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => IdentId::get_name(id),
+            RV::Symbol(id) => id.to_string(),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => s,
                 Err(_) => format!("{:?}", s),
@@ -340,7 +340,7 @@ impl Globals {
             RV::Integer(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
-            RV::Symbol(id) => format!(":{}", IdentId::get_name(id)),
+            RV::Symbol(id) => format!(":{id}"),
             RV::String(s) => match String::from_utf8(s.to_vec()) {
                 Ok(s) => format!("{:?}", s),
                 Err(_) => format!("{:?}", s),
@@ -409,7 +409,7 @@ impl Globals {
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(val).into_iter() {
-                s += &format!(" {}={}", IdentId::get_name(id), self.val_inspect(v));
+                s += &format!(" {id}={}", self.val_inspect(v));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
@@ -554,7 +554,7 @@ impl Globals {
         eprintln!(
             "    name:[{}] block:{} outer:{} {:?}",
             match self[func_id].name() {
-                Some(name) => IdentId::get_name(name),
+                Some(name) => name.to_string(),
                 None => "<unnamed>".to_string(),
             },
             match block {

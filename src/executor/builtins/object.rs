@@ -248,7 +248,7 @@ fn respond_to(
 ) -> Result<Value> {
     let name = match arg[0].unpack() {
         RV::Symbol(id) => id,
-        RV::String(b) => IdentId::get_id_from_string(String::from_utf8_lossy(b).into_owned()),
+        RV::String(b) => IdentId::get_id(String::from_utf8_lossy(b).as_ref()),
         _ => unimplemented!(),
     };
     Ok(Value::bool(
@@ -367,7 +367,7 @@ fn instance_variable_defined(
 ) -> Result<Value> {
     let id = match arg[0].unpack() {
         RV::Symbol(sym) => sym,
-        RV::String(s) => IdentId::get_id_from_string(String::from_utf8_lossy(s).into_owned()),
+        RV::String(s) => IdentId::get_id(String::from_utf8_lossy(s).as_ref()),
         _ => return Err(MonorubyErr::is_not_symbol_nor_string(globals, arg[0])),
     };
     let b = globals.get_ivar(lfp.self_val(), id).is_some();

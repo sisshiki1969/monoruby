@@ -230,7 +230,7 @@ impl Executor {
             for ((class_id, name), count) in v {
                 eprintln!(
                     "{:20} {:15} {:10}",
-                    IdentId::get_name(*name),
+                    name.to_string(),
                     class_id.get_name(globals),
                     count
                 );
@@ -663,7 +663,7 @@ impl BcPc {
                 )
             }
             TraceIr::Integer(reg, num) => format!("{:?} = {}: i32", reg, num),
-            TraceIr::Symbol(reg, id) => format!("{:?} = :{}", reg, IdentId::get_name(id)),
+            TraceIr::Symbol(reg, id) => format!("{:?} = :{id}", reg),
             TraceIr::Range {
                 ret,
                 start,
@@ -706,9 +706,10 @@ impl BcPc {
                 } = &globals.func[id];
                 let mut const_name = if *toplevel { "::" } else { "" }.to_string();
                 for c in prefix {
-                    const_name += &format!("{}::", IdentId::get_name(*c));
+                    c.append_to(&mut const_name);
+                    const_name += "::";
                 }
-                const_name += &IdentId::get_name(*name);
+                name.append_to(&mut const_name);
                 let op1 = format!("{:?} = const[{}]", reg, const_name);
                 format!(
                     "{:36} [{}]",
@@ -720,7 +721,7 @@ impl BcPc {
                 )
             }
             TraceIr::StoreConst(reg, id) => {
-                format!("const[{}] = {:?}", IdentId::get_name(id), reg)
+                format!("const[{id}] = {:?}", reg)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
                 format!("{:?} = block_arg({outer})", dst)
@@ -733,27 +734,25 @@ impl BcPc {
             }
             TraceIr::LoadIvar(reg, id, class_id, ivar_id) => {
                 format!(
-                    "{:?} = {}: {}[{:?}]",
+                    "{:?} = {id}: {}[{:?}]",
                     reg,
-                    IdentId::get_name(id),
                     class_id.get_name(globals),
                     ivar_id,
                 )
             }
             TraceIr::StoreIvar(reg, id, class_id, ivar_id) => {
                 format!(
-                    "{}: {}[{:?}] = {:?}",
-                    IdentId::get_name(id),
+                    "{id}: {}[{:?}] = {:?}",
                     class_id.get_name(globals),
                     ivar_id,
                     reg
                 )
             }
             TraceIr::LoadGvar { dst: ret, name } => {
-                format!("{:?} = ${}", ret, IdentId::get_name(name),)
+                format!("{:?} = ${name}", ret)
             }
             TraceIr::StoreGvar { src, name } => {
-                format!("${} = {:?}", IdentId::get_name(name), src)
+                format!("${name} = {:?}", src)
             }
             TraceIr::LoadSvar { dst: ret, id } => {
                 // 0 => $&
@@ -884,15 +883,13 @@ impl BcPc {
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
-                let name = IdentId::get_name(name);
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.call {}()", ret.ret_str(), recv, name,)
+                    format!("{} = {:?}.call {name}()", ret.ret_str(), recv)
                 } else {
                     format!(
-                        "{} = {:?}.call {}({:?}; {}){}",
+                        "{} = {:?}.call {name}({:?}; {}){}",
                         ret.ret_str(),
                         recv,
-                        name,
                         args,
                         len,
                         if has_splat { "*" } else { "" }
@@ -947,22 +944,19 @@ impl BcPc {
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
-                let name = IdentId::get_name(name);
                 let op1 = if len == 0 {
                     format!(
-                        "{} = {:?}.call {}(&{:?} kw:{:?})",
+                        "{} = {:?}.call {name}(&{:?} kw:{:?})",
                         ret.ret_str(),
                         recv,
-                        name,
                         args,
                         args + 1
                     )
                 } else {
                     format!(
-                        "{} = {:?}.call {}({:?}; {} &{:?} kw:{:?}){}",
+                        "{} = {:?}.call {name}({:?}; {} &{:?} kw:{:?}){}",
                         ret.ret_str(),
                         recv,
-                        name,
                         args + 2,
                         len,
                         args,
@@ -986,15 +980,12 @@ impl BcPc {
             }
             TraceIr::MethodArgs(..) => return None,
             TraceIr::MethodDef { name, func_id } => {
-                let name = IdentId::get_name(name);
-                format!("method_def {:?}: {:?}", name, func_id)
+                format!("method_def {name}: {:?}", func_id)
             }
             TraceIr::SingletonMethodDef { obj, name, func_id } => {
-                let name = IdentId::get_name(name);
                 format!(
-                    "singleton_method_def {}.{:?}: {:?}",
+                    "singleton_method_def {}.{name}: {:?}",
                     obj.ret_str(),
-                    name,
                     func_id
                 )
             }
@@ -1004,18 +995,15 @@ impl BcPc {
                 name,
                 func_id,
             } => {
-                let name = IdentId::get_name(name);
                 format!(
-                    "{} = class_def {:?} < {}: {:?}",
+                    "{} = class_def {name} < {}: {:?}",
                     ret.ret_str(),
-                    name,
                     superclass.ret_str(),
                     func_id
                 )
             }
             TraceIr::ModuleDef { ret, name, func_id } => {
-                let name = IdentId::get_name(name);
-                format!("{} = module_def {:?}: {:?}", ret.ret_str(), name, func_id)
+                format!("{} = module_def {name}: {:?}", ret.ret_str(), func_id)
             }
             TraceIr::SingletonClassDef { ret, base, func_id } => {
                 format!(

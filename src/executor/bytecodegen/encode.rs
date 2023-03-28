@@ -326,7 +326,7 @@ impl IrContext {
                 store.add_callsite(name, arg_num, SlotId(0), HashMap::default(), splat_pos);
             }
         }
-        for f in std::mem::take(&mut self.functions) {
+        for f in self.functions {
             let sourceinfo = self.sourceinfo.clone();
             match f {
                 Functions::Method { name, info } => {

@@ -286,8 +286,7 @@ impl MonorubyErr {
 impl MonorubyErr {
     pub(crate) fn method_not_found(globals: &Globals, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "undefined method `{}' for {}:{}",
-            IdentId::get_name(name),
+            "undefined method `{name}' for {}:{}",
             obj.to_s(globals),
             obj.get_real_class_name(globals)
         )))
@@ -299,8 +298,7 @@ impl MonorubyErr {
         class: ClassId,
     ) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "undefined method `{}' for {}",
-            IdentId::get_name(name),
+            "undefined method `{name}' for {}",
             class.get_name(globals)
         )))
     }
@@ -311,8 +309,7 @@ impl MonorubyErr {
         obj: Value,
     ) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "private method `{}' called for {}:{}",
-            IdentId::get_name(name),
+            "private method `{name}' called for {}:{}",
             obj.to_s(globals),
             obj.get_real_class_name(globals)
         )))
@@ -354,8 +351,7 @@ impl MonorubyErr {
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::UninitConst(format!(
-            "uninitialized constant {}",
-            IdentId::get_name(name)
+            "uninitialized constant {name}"
         )))
     }
 
@@ -384,10 +380,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {
-        MonorubyErr::typeerr(format!(
-            "superclass mismatch for class {}",
-            IdentId::get_name(name)
-        ))
+        MonorubyErr::typeerr(format!("superclass mismatch for class {name}"))
     }
 
     ///

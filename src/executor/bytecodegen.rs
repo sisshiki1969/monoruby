@@ -422,10 +422,8 @@ impl IrContext {
                 .get(&name)
                 .unwrap_or_else(|| {
                     panic!(
-                        "Bytecodegen: dynamic local was not found. {outer} {} {:?} {:?}",
-                        IdentId::get_name(name),
-                        self.outer_locals,
-                        self.locals
+                        "Bytecodegen: dynamic local was not found. {outer} {name} {:?} {:?}",
+                        self.outer_locals, self.locals
                     )
                 }),
         )
@@ -806,7 +804,7 @@ impl IrContext {
                 && !safe_nav =>
             {
                 let recv = self.gen_expr_reg(receiver.clone())?;
-                let method = IdentId::get_id(&format!("{method}="));
+                let method = IdentId::get_id_from_string(format!("{method}="));
                 LvalueKind::Send { recv, method }
             }
             NodeKind::SpecialVar(id) => {

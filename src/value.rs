@@ -628,8 +628,7 @@ impl Value {
         match self.unpack() {
             RV::Symbol(sym) => return Ok(sym),
             RV::String(s) => {
-                let s = String::from_utf8_lossy(s).into_owned();
-                return Ok(IdentId::get_id_from_string(s));
+                return Ok(IdentId::get_id(String::from_utf8_lossy(s).as_ref()));
             }
             _ => {}
         }

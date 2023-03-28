@@ -8,10 +8,7 @@ impl Globals {
 
     pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
         if self.class[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
-            eprintln!(
-                "warning: already initialized constant {}",
-                IdentId::get_name(name)
-            )
+            eprintln!("warning: already initialized constant {name}")
         }
     }
 

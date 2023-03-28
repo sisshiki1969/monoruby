@@ -662,7 +662,7 @@ impl FuncInfo {
             "{:?} name:{} bc:{:?} meta:{:?} {:?}",
             info.id(),
             match self.name {
-                Some(name) => IdentId::get_name(name),
+                Some(name) => name.to_string(),
                 None => "<ANONYMOUS>".to_string(),
             },
             BcPcBase::new(info),
@@ -847,7 +847,7 @@ impl ISeqInfo {
     /// get name.
     pub(crate) fn name(&self) -> String {
         match &self.name {
-            Some(name) => IdentId::get_name(*name),
+            Some(name) => name.to_string(),
             None => "<unnamed>".to_string(),
         }
     }
