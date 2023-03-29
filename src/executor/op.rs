@@ -71,7 +71,7 @@ pub(super) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
 
 // TODO: support rhs < 0.
 pub(super) extern "C" fn pow_values(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -112,7 +112,7 @@ pub(super) extern "C" fn pow_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         _ => {
-            return interp.invoke_method(globals, IdentId::_POW, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -126,7 +126,7 @@ binop_values!(
 );
 
 pub(super) extern "C" fn div_values(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -196,7 +196,7 @@ pub(super) extern "C" fn div_values(
             Value::new_float(lhs.div(&rhs))
         }
         _ => {
-            return interp.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -206,7 +206,7 @@ macro_rules! int_binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<$op _values>](
-                interp: &mut Executor,
+                vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -217,7 +217,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
                     _ => {
-                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -237,7 +237,7 @@ int_binop_values!(
 );
 
 pub(super) extern "C" fn shr_values(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -258,14 +258,14 @@ pub(super) extern "C" fn shr_values(
             }
         }
         _ => {
-            return interp.invoke_method(globals, IdentId::_SHR, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs]);
         }
     };
     Some(v)
 }
 
 pub(super) extern "C" fn shl_values(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -286,7 +286,7 @@ pub(super) extern "C" fn shl_values(
             }
         }
         _ => {
-            return interp.invoke_method(globals, IdentId::_SHL, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -318,7 +318,7 @@ macro_rules! cmp_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _values>](
-                interp: &mut Executor,
+                vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -334,7 +334,7 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     _ => {
-                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(Value::bool(b))
@@ -358,7 +358,7 @@ macro_rules! eq_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
             pub(super) extern "C" fn [<cmp_ $op _values>](
-                interp: &mut Executor,
+                vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
                 rhs: Value
@@ -375,7 +375,7 @@ macro_rules! eq_values {
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
                     _ => {
-                        return interp.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
                 };
                 Some(Value::bool(b))
@@ -391,7 +391,7 @@ macro_rules! eq_values {
 eq_values!((eq, IdentId::_EQ), (ne, IdentId::_NEQ));
 
 pub(super) extern "C" fn cmp_teq_values(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
@@ -408,14 +408,14 @@ pub(super) extern "C" fn cmp_teq_values(
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
         _ => {
-            return interp.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs]);
         }
     };
     Some(Value::bool(b))
 }
 
 pub(super) extern "C" fn neg_value(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
 ) -> Option<Value> {
@@ -427,7 +427,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::new_float(-lhs),
         RV::BigInt(lhs) => Value::new_bigint(-lhs),
         _ => {
-            return interp.invoke_method(globals, IdentId::_UMINUS, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[]);
         }
     };
     Some(v)
@@ -500,7 +500,7 @@ pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize
 }
 
 pub extern "C" fn vm_get_constant(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
@@ -510,7 +510,7 @@ pub extern "C" fn vm_get_constant(
     if *cached_version == const_version {
         return *val;
     };
-    match executor.find_constant(globals, site_id) {
+    match vm.find_constant(globals, site_id) {
         Ok(val) => {
             globals.func[site_id].cache = (const_version, Some(val));
             Some(val)

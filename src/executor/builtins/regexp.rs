@@ -87,7 +87,7 @@ fn regexp_match(
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
     let given = arg[0].expect_string(globals)?;
-    let res = match RegexpInner::find_one(vm, globals, regex, &given).unwrap() {
+    let res = match RegexpInner::find_one(vm, regex, &given)? {
         Some(mat) => Value::new_integer(mat.start() as i64),
         None => Value::nil(),
     };

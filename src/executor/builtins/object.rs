@@ -459,7 +459,7 @@ fn kernel_integer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 fn require(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
@@ -468,9 +468,7 @@ fn require(
     let feature = arg[0].expect_string(globals)?;
     let path = std::path::Path::new(&feature);
     let (file_body, path) = globals.load_lib(path)?;
-    executor
-        .eval_script(globals, file_body, &path)
-        .ok_or_else(|| globals.take_error().unwrap())?;
+    vm.eval_script(globals, file_body, &path)?;
     Ok(Value::bool(true))
 }
 
@@ -481,21 +479,19 @@ fn require(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
 fn require_relative(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
     _: usize,
 ) -> Result<Value> {
-    let mut path = globals.current_source_path(executor);
+    let mut path = globals.current_source_path(vm);
     path.pop();
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
     path.extend(&feature);
     path.set_extension("rb");
     let (file_body, path) = globals.load_lib(&path)?;
-    executor
-        .eval_script(globals, file_body, &path)
-        .ok_or_else(|| globals.take_error().unwrap())?;
+    vm.eval_script(globals, file_body, &path)?;
     Ok(Value::bool(true))
 }
 
@@ -534,7 +530,7 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 fn system(
-    _executor: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
@@ -563,7 +559,7 @@ fn system(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 fn command(
-    _executor: &mut Executor,
+    _vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
@@ -589,7 +585,7 @@ fn command(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
 fn abort(
-    _executor: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,

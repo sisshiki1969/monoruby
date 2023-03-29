@@ -336,15 +336,14 @@ impl Globals {
         obj: Value,
         func_name: IdentId,
         is_func_call: bool,
-    ) -> Option<FuncId> {
+    ) -> Result<FuncId> {
         let class_id = obj.class();
         match self.check_method_for_class(class_id, func_name) {
             Some(entry) => {
                 match entry.visibility {
                     Visibility::Private => {
                         if !is_func_call {
-                            self.err_private_method_called(func_name, obj);
-                            return None;
+                            return Err(MonorubyErr::private_method_called(self, func_name, obj));
                         }
                     }
                     Visibility::Protected => {
@@ -355,12 +354,9 @@ impl Globals {
                     }
                     _ => {}
                 }
-                Some(entry.func_id())
+                Ok(entry.func_id())
             }
-            None => {
-                self.err_method_not_found(func_name, obj);
-                None
-            }
+            None => Err(MonorubyErr::method_not_found(self, func_name, obj)),
         }
     }
 

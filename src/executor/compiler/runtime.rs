@@ -17,18 +17,24 @@ pub(super) extern "C" fn find_method(
     recv_reg: u16,
 ) -> Option<FuncDataPtr> {
     let func_name = globals.func[callid].name.unwrap();
-    let func_id = globals.find_method(receiver, func_name, recv_reg == 0)?;
+    let func_id = match globals.find_method(receiver, func_name, recv_reg == 0) {
+        Ok(id) => id,
+        Err(err) => {
+            globals.set_error(err);
+            return None;
+        }
+    };
     let func_data = globals.compile_on_demand(func_id);
     Some(func_data.as_ptr())
 }
 
 pub(super) extern "C" fn get_classdef_data<'a>(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &'a mut Globals,
     func_id: FuncId,
     self_value: Module,
 ) -> &'a FuncData {
-    let current_func = executor.method_func_id();
+    let current_func = vm.method_func_id();
     let mut lexical_context = globals[current_func].as_ruby_func().lexical_context.clone();
     lexical_context.push(self_value);
     globals[func_id].as_ruby_func_mut().lexical_context = lexical_context;
@@ -36,22 +42,21 @@ pub(super) extern "C" fn get_classdef_data<'a>(
 }
 
 pub(super) extern "C" fn get_super_data(
-    executor: &Executor,
+    vm: &Executor,
     globals: &mut Globals,
     self_val: Value,
 ) -> Option<FuncDataPtr> {
-    let func_id = executor.method_func_id();
+    let func_id = vm.method_func_id();
     let func_name = globals.func[func_id].name().unwrap();
     let super_id = globals.find_super(self_val, func_name)?.func_id();
     let func_data = globals.compile_on_demand(super_id);
     Some(func_data.as_ptr())
 }
 
-pub(super) extern "C" fn get_yield_data(executor: &Executor, globals: &mut Globals) -> BlockData {
-    executor
-        .cfp()
+pub(super) extern "C" fn get_yield_data(vm: &Executor, globals: &mut Globals) -> BlockData {
+    vm.cfp()
         .get_block()
-        .map(|bh| executor.get_block_data(globals, bh))
+        .map(|bh| vm.get_block_data(globals, bh))
         .unwrap_or_default()
 }
 
@@ -294,7 +299,7 @@ pub(super) struct ClassIdSlot {
 }
 
 pub(super) extern "C" fn get_index(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
     index: Value,
@@ -315,7 +320,7 @@ pub(super) extern "C" fn get_index(
         _ => {}
     }
     class_slot.idx = index.class();
-    interp.invoke_method(globals, IdentId::_INDEX, base, &[index])
+    vm.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 
 pub(super) extern "C" fn get_array_integer_index(base: Value, index: i64) -> Option<Value> {
@@ -323,7 +328,7 @@ pub(super) extern "C" fn get_array_integer_index(base: Value, index: i64) -> Opt
 }
 
 pub(super) extern "C" fn set_index(
-    interp: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     index: Value,
@@ -348,7 +353,7 @@ pub(super) extern "C" fn set_index(
         _ => {}
     }
     class_slot.idx = index.class();
-    interp.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
+    vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 
 pub(super) extern "C" fn set_array_integer_index(
@@ -372,11 +377,11 @@ pub(super) extern "C" fn set_array_integer_index(
 /// rax: Option<Value>
 ///
 pub(super) extern "C" fn get_constant(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
 ) -> Option<Value> {
-    match executor.find_constant(globals, site_id) {
+    match vm.find_constant(globals, site_id) {
         Ok(val) => Some(val),
         Err(err) => {
             globals.set_error(err);
@@ -389,12 +394,12 @@ pub(super) extern "C" fn get_constant(
 /// Set Constant.
 ///
 pub(super) extern "C" fn set_constant(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     val: Value,
 ) {
-    executor.set_constant(globals, name, val)
+    vm.set_constant(globals, name, val)
 }
 
 ///
@@ -448,29 +453,29 @@ pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, va
 /// id: 1 -> $'
 /// id: 100 + n -> $<n> (n >= 1)
 ///
-pub(super) extern "C" fn get_special_var(executor: &Executor, id: u32) -> Value {
+pub(super) extern "C" fn get_special_var(vm: &Executor, id: u32) -> Value {
     if id == 0 {
         // $&
-        executor.sp_last_match.unwrap_or_default()
+        vm.sp_last_match.unwrap_or_default()
     } else if id == 1 {
         // $'
-        executor.sp_post_match.unwrap_or_default()
+        vm.sp_post_match.unwrap_or_default()
     } else if id >= 100 {
         // $1, $2, ..
-        executor.get_special_matches(id as i64 - 100)
+        vm.get_special_matches(id as i64 - 100)
     } else {
         unreachable!()
     }
 }
 
 pub(super) extern "C" fn define_class(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     superclass: Option<Value>,
     is_module: u32,
 ) -> Option<Value> {
-    match executor.define_class(globals, name, superclass, is_module) {
+    match vm.define_class(globals, name, superclass, is_module) {
         Ok(val) => Some(val),
         Err(err) => {
             globals.set_error(err);
@@ -480,21 +485,21 @@ pub(super) extern "C" fn define_class(
 }
 
 pub(super) extern "C" fn define_singleton_class(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
 ) -> Option<Value> {
     let self_val = globals.get_singleton(base);
-    executor.push_class_context(self_val.class_id());
+    vm.push_class_context(self_val.class_id());
     Some(self_val.as_val())
 }
 
-pub(super) extern "C" fn pop_class_context(executor: &mut Executor, _globals: &mut Globals) {
-    executor.pop_class_context();
+pub(super) extern "C" fn pop_class_context(vm: &mut Executor, _globals: &mut Globals) {
+    vm.pop_class_context();
 }
 
 pub(super) extern "C" fn define_method(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
@@ -503,8 +508,8 @@ pub(super) extern "C" fn define_method(
         class_id,
         module_function,
         visibility,
-    } = executor.get_class_context();
-    let current_func = executor.method_func_id();
+    } = vm.get_class_context();
+    let current_func = vm.method_func_id();
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     globals.add_method(class_id, name, func, visibility);
@@ -515,13 +520,13 @@ pub(super) extern "C" fn define_method(
 }
 
 pub(super) extern "C" fn singleton_define_method(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
     obj: Value,
 ) {
-    let current_func = executor.method_func_id();
+    let current_func = vm.method_func_id();
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     let class_id = globals.get_singleton(obj).class_id();
@@ -584,7 +589,7 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
 }
 
 pub(super) extern "C" fn get_error_location(
-    _interp: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
@@ -602,8 +607,8 @@ pub(super) extern "C" fn get_error_location(
     globals.push_error_location(loc, sourceinfo);
 }
 
-pub extern "C" fn _dump_stacktrace(executor: &mut Executor, globals: &mut Globals) {
-    let mut cfp = executor.cfp();
+pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {
+    let mut cfp = vm.cfp();
     eprintln!("-----begin stacktrace");
     unsafe {
         for i in 0..16 {

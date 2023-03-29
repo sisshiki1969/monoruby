@@ -12,10 +12,6 @@ impl Globals {
         self.set_error(MonorubyErr::method_not_found(self, name, obj))
     }
 
-    pub(crate) fn err_private_method_called(&mut self, name: IdentId, obj: Value) {
-        self.set_error(MonorubyErr::private_method_called(self, name, obj))
-    }
-
     /*pub(crate) fn err_protected_method_called(&mut self, name: IdentId, obj: Value) {
         self.set_error(MonorubyErr::method_not_found(format!(
             "protected method `{}' called for {}:{}",
@@ -62,10 +58,6 @@ impl Globals {
             return Ok(());
         }
         Err(MonorubyErr::wrong_number_of_arg_min(given, min))
-    }
-
-    pub(crate) fn err_internal(&mut self, msg: String) {
-        self.set_error(MonorubyErr::internalerr(msg));
     }
 
     ///

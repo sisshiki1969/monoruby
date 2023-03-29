@@ -259,20 +259,19 @@ impl RegexpInner {
     /// Returns `Match`s.
     pub(crate) fn find_one<'a>(
         vm: &mut Executor,
-        globals: &mut Globals,
         re: &Regex,
         given: &'a str,
-    ) -> Option<Option<Match<'a>>> {
+    ) -> Result<Option<Match<'a>>> {
         match re.captures(given) {
-            Ok(None) => Some(None),
+            Ok(None) => Ok(None),
             Ok(Some(captures)) => {
                 vm.get_captures(&captures, given);
-                Some(captures.get(0))
+                Ok(captures.get(0))
             }
-            Err(err) => {
-                globals.err_internal(format!("Capture failed. {:?}", err));
-                None
-            }
+            Err(err) => Err(MonorubyErr::internalerr(format!(
+                "Capture failed. {:?}",
+                err
+            ))),
         }
     }
 

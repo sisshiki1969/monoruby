@@ -161,8 +161,7 @@ impl Executor {
         let mut executor = Self::default();
         let path = std::path::Path::new("startup/startup.rb");
         let code = include_str!("../startup/startup.rb").to_string();
-        if executor.eval_script(globals, code, path).is_none() {
-            let err = globals.take_error().unwrap();
+        if let Err(err) = executor.eval_script(globals, code, path) {
             err.show_error_message_and_all_loc();
             panic!("error occurred in startup.");
         };
@@ -265,17 +264,10 @@ impl Executor {
         globals: &mut Globals,
         code: String,
         path: &std::path::Path,
-    ) -> Option<Value> {
-        match globals
+    ) -> Result<Value> {
+        globals
             .compile_script(code, path)
             .and_then(|fid| self.eval(globals, fid))
-        {
-            Ok(v) => Some(v),
-            Err(err) => {
-                globals.set_error(err);
-                None
-            }
-        }
     }
 
     fn push_class_context(&mut self, class_id: ClassId) {
@@ -343,7 +335,13 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        let func_id = globals.find_method(receiver, method, false)?;
+        let func_id = match globals.find_method(receiver, method, false) {
+            Ok(id) => id,
+            Err(err) => {
+                globals.set_error(err);
+                return None;
+            }
+        };
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
     }

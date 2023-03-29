@@ -162,10 +162,7 @@ impl Globals {
 
     pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
         let mut executor = Executor::init(self);
-        match executor.eval_script(self, code.to_string(), path) {
-            Some(val) => Ok(val),
-            None => Err(self.take_error().unwrap()),
-        }
+        executor.eval_script(self, code.to_string(), path)
     }
 
     pub(super) fn compile_script(

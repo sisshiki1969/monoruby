@@ -451,7 +451,7 @@ type UsingXmm = Vec<Xmm>;
 
 #[cfg(feature = "log-jit")]
 extern "C" fn log_deoptimize(
-    _interp: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     func_id: FuncId,
     pc: BcPc,

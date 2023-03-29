@@ -20,7 +20,7 @@ impl std::default::Default for IdentId {
 
 impl std::fmt::Display for IdentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", IdentId::get_name(*self))
+        write!(f, "{}", self.get_name())
     }
 }
 
@@ -91,28 +91,46 @@ impl IdentId {
 }
 
 impl IdentId {
+    ///
+    /// Get an inner id as u32.
+    ///
     pub(crate) fn get(&self) -> u32 {
         self.0.get()
     }
 
+    ///
+    /// Get an inner id as usize.
+    ///
     fn to_usize(self) -> usize {
         self.0.get() as usize
     }
 }
 
 impl IdentId {
+    ///
+    /// Get *IdentId* from &str.
+    ///
     pub(crate) fn get_id(name: &str) -> IdentId {
-        ID.write().unwrap().get_ident_id(name)
+        ID.write().unwrap().get_id(name)
     }
 
+    ///
+    /// Get *IdentId* from String.
+    ///
     pub(crate) fn get_id_from_string(name: String) -> IdentId {
-        ID.write().unwrap().get_ident_id_from_string(name)
+        ID.write().unwrap().get_id_from_string(name)
     }
 
-    fn get_name(id: IdentId) -> String {
-        ID.read().unwrap().get_name(id).to_string()
+    ///
+    /// Get name as String from *self*.
+    ///
+    fn get_name(&self) -> String {
+        ID.read().unwrap().get_name(*self).to_string()
     }
 
+    ///
+    /// Append the name of *self* to *s*.
+    ///
     #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
     pub(crate) fn append_to(self, s: &mut String) {
         ID.read().unwrap().append_to(self, s);
@@ -149,7 +167,6 @@ impl IdentifierTable {
             rev_table: HashMap::default(),
             table: vec![String::new(); 40],
         };
-        //table.set_ident_id("<null>", IdentId::from(0));
         table.set_ident_id("initialize", IdentId::INITIALIZE);
         table.set_ident_id("Object", IdentId::OBJECT);
         table.set_ident_id("new", IdentId::NEW);
@@ -193,7 +210,7 @@ impl IdentifierTable {
         self.table[id.to_usize() - 1] = name.to_string();
     }
 
-    fn get_ident_id(&mut self, name: &str) -> IdentId {
+    fn get_id(&mut self, name: &str) -> IdentId {
         match self.rev_table.get(name) {
             Some(id) => *id,
             None => {
@@ -205,7 +222,7 @@ impl IdentifierTable {
         }
     }
 
-    fn get_ident_id_from_string(&mut self, name: String) -> IdentId {
+    fn get_id_from_string(&mut self, name: String) -> IdentId {
         match self.rev_table.get(&name) {
             Some(id) => *id,
             None => {
@@ -217,10 +234,16 @@ impl IdentifierTable {
         }
     }
 
+    ///
+    /// Get the name as &str from *self*.
+    ///
     fn get_name(&self, id: IdentId) -> &str {
         &self.table[id.to_usize() - 1]
     }
 
+    ///
+    /// Append the name of *self* to *s*.
+    ///
     #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
     fn append_to(&self, id: IdentId, s: &mut String) {
         s.push_str(self.table[id.to_usize() - 1].as_str());
@@ -233,7 +256,7 @@ impl IdentifierTable {
     ///
     fn add_ivar_prefix(&mut self, id: IdentId) -> IdentId {
         let ivar_name = format!("@{}", self.table[id.to_usize() - 1]);
-        self.get_ident_id_from_string(ivar_name)
+        self.get_id_from_string(ivar_name)
     }
 
     ///
@@ -243,6 +266,6 @@ impl IdentifierTable {
     ///
     fn add_assign_postfix(&mut self, id: IdentId) -> IdentId {
         let method_name = format!("{}=", self.table[id.to_usize() - 1]);
-        self.get_ident_id_from_string(method_name)
+        self.get_id_from_string(method_name)
     }
 }

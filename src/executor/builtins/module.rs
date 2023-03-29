@@ -236,20 +236,13 @@ fn include(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 fn private(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    change_visi(
-        executor,
-        globals,
-        lfp.self_val(),
-        arg,
-        len,
-        Visibility::Private,
-    )
+    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Private)
 }
 
 /// ### Module#protected
@@ -258,20 +251,13 @@ fn private(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 fn protected(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    change_visi(
-        executor,
-        globals,
-        lfp.self_val(),
-        arg,
-        len,
-        Visibility::Protected,
-    )
+    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Protected)
 }
 
 /// ### Module#public
@@ -280,24 +266,17 @@ fn protected(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 fn public(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    change_visi(
-        executor,
-        globals,
-        lfp.self_val(),
-        arg,
-        len,
-        Visibility::Public,
-    )
+    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Public)
 }
 
 fn change_visi(
-    executor: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     arg: Arg,
@@ -305,7 +284,7 @@ fn change_visi(
     visi: Visibility,
 ) -> Result<Value> {
     if len == 0 {
-        executor.set_context_visibility(visi);
+        vm.set_context_visibility(visi);
         return Ok(Value::nil());
     }
     let class_id = self_val.as_class().class_id();
