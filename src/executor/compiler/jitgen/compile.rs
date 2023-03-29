@@ -77,7 +77,7 @@ impl Codegen {
                 call rax;
             );
             self.xmm_restore(&xmm_using);
-            self.handle_error(pc);
+            self.jit_handle_error(pc);
         }
         self.jit.bind_label(exit);
     }
@@ -122,7 +122,7 @@ impl Codegen {
             };
             self.xmm_restore(&xmm_using);
         }
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         self.store_rax(ret);
     }
 
@@ -169,7 +169,7 @@ impl Codegen {
             };
             self.xmm_restore(&xmm_using);
         }
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
     }
 
     pub(super) fn jit_class_def(
@@ -180,6 +180,7 @@ impl Codegen {
         name: IdentId,
         func_id: FuncId,
         is_module: bool,
+        pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
@@ -208,7 +209,8 @@ impl Codegen {
             movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
         };
-        self.jit_class_def_sub(func_id, ret);
+        self.jit_handle_error(pc);
+        self.jit_class_def_sub(func_id, ret, pc);
         self.xmm_restore(&xmm_using);
     }
 
@@ -218,6 +220,7 @@ impl Codegen {
         ret: SlotId,
         base: SlotId,
         func_id: FuncId,
+        pc: BcPc,
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
@@ -228,15 +231,13 @@ impl Codegen {
             movq rax, (runtime::define_singleton_class);
             call rax;  // rax <- self: Value
         };
-        self.jit_class_def_sub(func_id, ret);
+        self.jit_handle_error(pc);
+        self.jit_class_def_sub(func_id, ret, pc);
         self.xmm_restore(&xmm_using);
     }
 
-    fn jit_class_def_sub(&mut self, func_id: FuncId, ret: SlotId) {
-        let jit_return = self.vm_return;
+    fn jit_class_def_sub(&mut self, func_id: FuncId, ret: SlotId, pc: BcPc) {
         monoasm! { self.jit,
-            testq rax, rax; // rax: Option<Value>
-            jeq  jit_return;
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
             movl rdx, (func_id.get());  // rdx <- func_id
@@ -258,20 +259,19 @@ impl Codegen {
             xorq rdx, rdx;
         }
         self.call_rax();
-        monoasm! {self.jit,
-            testq rax, rax;
-            jeq jit_return;
-        };
         if !ret.is_zero() {
             self.store_rax(ret);
         }
         // pop class context.
-        monoasm!(self.jit,
+        monoasm! {self.jit,
+            movq r13, rax;
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
             movq rax, (runtime::pop_class_context);
             call rax;
-        );
+            movq rax, r13;
+        }
+        self.jit_handle_error(pc);
     }
 }
 

@@ -410,7 +410,7 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         self.jit.bind_label(exit);
         if !ret.is_zero() {
             self.store_rax(ret);
@@ -519,7 +519,7 @@ impl Codegen {
             movq [rbx], rdi;
         );
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
         }
@@ -582,7 +582,7 @@ impl Codegen {
                         movl rsi, (callid.get());
                     }
                     self.handle_arguments();
-                    self.handle_error(pc);
+                    self.jit_handle_error(pc);
                 }
             }
             _ => {}
@@ -597,7 +597,7 @@ impl Codegen {
         );
         self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
         }
@@ -649,7 +649,7 @@ impl Codegen {
             movq rcx, r13;
         }
         self.handle_arguments();
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         monoasm! { self.jit,
             // argument registers:
             //   rdx: args len
@@ -666,7 +666,7 @@ impl Codegen {
         };
         self.call_rax();
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         if !ret.is_zero() {
             self.store_rax(ret);
         }

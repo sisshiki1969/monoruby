@@ -106,6 +106,6 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
     }
 }

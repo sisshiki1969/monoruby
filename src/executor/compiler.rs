@@ -491,6 +491,14 @@ impl Codegen {
         self.pop_frame();
     }
 
+    fn vm_handle_error(&mut self) {
+        let entry_return = self.vm_return;
+        monoasm! { self.jit,
+            testq rax, rax;
+            jeq  entry_return;
+        };
+    }
+
     ///
     /// calculate an offset of stack pointer.
     ///

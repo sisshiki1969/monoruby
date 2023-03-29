@@ -501,7 +501,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         self.generic_cmp(kind, ctx);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         monoasm!(self.jit,
             orq  rax, 0x10;
             cmpq rax, (FALSE_VALUE);
@@ -697,7 +697,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
-        self.handle_error(pc);
+        self.jit_handle_error(pc);
         self.store_rax(ret);
     }
 }

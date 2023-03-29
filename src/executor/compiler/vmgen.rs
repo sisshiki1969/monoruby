@@ -459,14 +459,6 @@ impl Codegen {
         };
     }
 
-    fn vm_handle_error(&mut self) {
-        let entry_return = self.vm_return;
-        monoasm! { self.jit,
-            testq rax, rax;
-            jeq  entry_return;
-        };
-    }
-
     ///
     /// Get absolute address of the register.
     /// #### args
@@ -1187,11 +1179,8 @@ impl Codegen {
     }
 
     fn class_def_sub(&mut self) {
-        let vm_return = self.vm_return;
+        self.vm_handle_error();
         monoasm! { self.jit,
-            testq rax, rax; // rax: Option<Value>
-            jeq  vm_return;
-
             pushq r13;
             pushq r15;
 
@@ -1219,9 +1208,8 @@ impl Codegen {
         monoasm! { self.jit,
             popq r15;
             popq r13;
-            testq rax, rax;
-            jeq vm_return;
         };
+        self.vm_handle_error();
         let exit = self.jit.label();
         self.vm_store_r15_if_nonzero(exit);
         // pop class context.

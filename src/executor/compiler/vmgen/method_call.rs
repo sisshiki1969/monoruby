@@ -28,7 +28,6 @@ impl Codegen {
     pub(super) fn vm_method_call(&mut self, with_block: bool, has_splat: bool) -> CodePtr {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
-        let vm_return = self.vm_return;
         let class_version = self.class_version;
         //      -16    -12    -8     -4
         //      +------+------+------+------+
@@ -51,15 +50,16 @@ impl Codegen {
 
         self.jit.select_page(1);
         monoasm!(self.jit,
-        slow_path:
+            slow_path:
             movq rdi, r12;
             movq rsi, [rsp + 8];  // rsi: CallSiteId
             movq rdx, [rsp]; // rcx: receiver:Value
             movzxw rcx, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
-            testq rax, rax;
-            jeq vm_return;
+        );
+        self.vm_handle_error();
+        monoasm!(self.jit,
             movq [r13 + 8], rax;    // FuncData
             movl [r13 - 8], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
@@ -97,21 +97,21 @@ impl Codegen {
     pub(super) fn vm_super(&mut self) -> CodePtr {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
-        let vm_return = self.vm_return;
         let class_version = self.class_version;
 
         let label = self.vm_method_call_main(slow_path, exec, false, false);
 
         self.jit.select_page(1);
         monoasm!(self.jit,
-        slow_path:
+            slow_path:
             movq rdi, rbx;
             movq rsi, r12;  // rsi: CallSiteId
             movq rdx, [rsp]; // rcx: receiver:Value
             movq rax, (runtime::get_super_data);
             call rax;   // rax <- Option<&FuncData>
-            testq rax, rax;
-            jeq vm_return;
+        );
+        self.vm_handle_error();
+        monoasm!(self.jit,
             movq [r13 + 8], rax;    // FuncData
             movl [r13 - 8], r15;    // ClassId of receiver
             movl rdi, [rip + class_version];
@@ -132,7 +132,6 @@ impl Codegen {
     ) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        let vm_return = self.vm_return;
         let class_version = self.class_version;
         //      -16    -12    -8     -4
         //      +------+------+------+------+
@@ -203,10 +202,7 @@ impl Codegen {
             movl rsi, [r13 - 16]; // CallSiteId
         }
         self.handle_arguments();
-        monoasm! { self.jit,
-            testq rax, rax;
-            jeq vm_return;
-        };
+        self.vm_handle_error();
         monoasm! { self.jit,
             // argument registers:
             //   rdi: args len
@@ -228,9 +224,8 @@ impl Codegen {
             popq r13;   // pop pc
             popq r15;   // pop %ret
             addq r13, 16;
-            testq rax, rax;
-            jeq vm_return;
         };
+        self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label
@@ -251,7 +246,6 @@ impl Codegen {
     pub(super) fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        let vm_return = self.vm_return;
         let no_block = self.no_block;
         // r15: %ret
         // rdi: %args
@@ -290,10 +284,7 @@ impl Codegen {
             movl rsi, [r13 - 8];    // CallSiteId
         }
         self.handle_arguments();
-        monoasm! { self.jit,
-            testq rax, rax;
-            jeq vm_return;
-        };
+        self.vm_handle_error();
         monoasm! { self.jit,
             // argument registers:
             //   rdx: args len
@@ -313,9 +304,8 @@ impl Codegen {
         monoasm! { self.jit,
             popq r13;   // pop pc
             popq r15;   // pop %ret
-            testq rax, rax;
-            jeq vm_return;
         };
+        self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label

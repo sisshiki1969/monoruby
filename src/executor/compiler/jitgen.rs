@@ -999,7 +999,7 @@ impl Codegen {
                         call rax;
                     };
                     self.xmm_restore(&xmm_using);
-                    self.handle_error(pc);
+                    self.jit_handle_error(pc);
                     self.store_rax(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
@@ -1173,7 +1173,7 @@ impl Codegen {
                             self.load_rdi(src);
                             self.call_unop(neg_value as _);
                             self.xmm_restore(&xmm_using);
-                            self.handle_error(pc);
+                            self.jit_handle_error(pc);
                             self.store_rax(ret);
                         }
                     }
@@ -1248,7 +1248,7 @@ impl Codegen {
                         let deopt = self.gen_side_deopt(pc, &ctx);
                         self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
-                        self.handle_error(pc);
+                        self.jit_handle_error(pc);
                         self.store_rax(ret);
                     } else {
                         self.writeback_binary(&mut ctx, &mode);
@@ -1258,7 +1258,7 @@ impl Codegen {
                         } else {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
-                            self.handle_error(pc);
+                            self.jit_handle_error(pc);
                             self.store_rax(ret);
                         }
                     }
@@ -1317,7 +1317,7 @@ impl Codegen {
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
-                    self.handle_error(pc);
+                    self.jit_handle_error(pc);
                 }
                 TraceIr::MethodCall {
                     ret,
@@ -1447,13 +1447,13 @@ impl Codegen {
                     name,
                     func_id,
                 } => {
-                    self.jit_class_def(&ctx, ret, superclass, name, func_id, false);
+                    self.jit_class_def(&ctx, ret, superclass, name, func_id, false, pc);
                 }
                 TraceIr::ModuleDef { ret, name, func_id } => {
-                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id, true);
+                    self.jit_class_def(&ctx, ret, SlotId::new(0), name, func_id, true, pc);
                 }
                 TraceIr::SingletonClassDef { ret, base, func_id } => {
-                    self.jit_singleton_class_def(&ctx, ret, base, func_id);
+                    self.jit_singleton_class_def(&ctx, ret, base, func_id, pc);
                 }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
@@ -1557,7 +1557,7 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn handle_error(&mut self, pc: BcPc) {
+    fn jit_handle_error(&mut self, pc: BcPc) {
         let jit_return = self.vm_return;
         if self.jit.get_page() == 0 {
             let error = self.jit.label();
