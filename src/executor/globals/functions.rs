@@ -694,6 +694,8 @@ pub(crate) struct ISeqInfo {
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
+    /// Exception handling map.
+    pub(in crate::executor) exception_map: Vec<(std::ops::Range<BcPc>, BcPc)>,
     /// the name of arguments.
     pub(in crate::executor) args: ArgumentsInfo,
     /// outer local variables. (dynamic_locals, block_param)
@@ -747,6 +749,7 @@ impl ISeqInfo {
             name,
             bytecode: None,
             sourcemap: vec![],
+            exception_map: vec![],
             args: args.clone(),
             outer_locals,
             literals: vec![],

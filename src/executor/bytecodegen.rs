@@ -2,7 +2,8 @@ use super::*;
 use num::BigInt;
 use paste::paste;
 use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, SourceInfoRef, UnOp,
+    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, RescueEntry,
+    SourceInfoRef, UnOp,
 };
 
 mod binary;
@@ -183,6 +184,8 @@ pub(crate) struct IrContext {
     non_temp_num: u16,
     /// Source info.
     sourceinfo: SourceInfoRef,
+    /// Exception jump table.
+    exception_table: Vec<(std::ops::Range<usize>, usize)>,
     /// Call site info.
     callsites: Vec<CallSite>,
     /// Offset of call site info.
@@ -275,6 +278,7 @@ impl IrContext {
             temp_num: 0,
             non_temp_num: 0,
             sourceinfo: info.sourceinfo.clone(),
+            exception_table: vec![],
             callsites: vec![],
             callsite_offset,
             functions: vec![],
@@ -1293,23 +1297,63 @@ impl IrContext {
                 else_,
                 ensure,
             } => {
-                if !rescue.is_empty() {
-                    /*return Err(MonorubyErr::unsupported_feature(
-                        "rescue clause is not supported.",
-                        loc,
-                        self.sourceinfo.clone(),
-                    ));*/
-                    eprintln!("rescue clause is not supported.");
-                };
+                let ensure_label = self.new_label();
 
-                if let Some(box else_) = else_ {
-                    self.gen_expr(body, UseMode::NotUse)?;
-                    self.gen_expr(else_, use_mode)?;
+                let body_use = if else_.is_some() {
+                    UseMode::NotUse
+                } else if ensure.is_some() && use_mode.is_ret() {
+                    UseMode::Use
                 } else {
-                    self.gen_expr(body, use_mode)?;
+                    use_mode
+                };
+                let rescue_use = if ensure.is_some() && use_mode.is_ret() {
+                    UseMode::Use
+                } else {
+                    use_mode
+                };
+                let body_start = self.new_label();
+                let body_end = self.new_label();
+                self.apply_label(body_start);
+                self.gen_expr(body, body_use)?;
+                self.apply_label(body_end);
+                if !rescue.is_empty() {
+                    eprintln!("rescue clause is not supported.");
+                    let else_label = self.new_label();
+                    self.emit_br(else_label);
+                    let rescue_start = self.new_label();
+                    self.apply_label(rescue_start);
+                    for RescueEntry {
+                        exception_list,
+                        assign,
+                        box body,
+                    } in rescue
+                    {
+                        let old = self.temp;
+                        self.gen_expr(body, rescue_use)?;
+                        self.emit_br(ensure_label);
+                        self.temp = old;
+                    }
+                    self.exception_table
+                        .push((body_start..body_end, rescue_start));
+                    self.apply_label(else_label);
+                } else {
+                    if let Some(else_) = else_ {
+                        return Err(MonorubyErr::syntax(
+                            "else without rescue is useless. (SyntaxError)".to_string(),
+                            else_.loc,
+                            self.sourceinfo.clone(),
+                        ));
+                    }
                 }
+                if let Some(box else_) = else_ {
+                    self.gen_expr(else_, rescue_use)?;
+                }
+                self.apply_label(ensure_label);
                 if let Some(box ensure) = ensure {
                     self.gen_expr(ensure, UseMode::NotUse)?;
+                    if use_mode.is_ret() {
+                        self.emit_ret(None);
+                    }
                 }
                 return Ok(());
             }

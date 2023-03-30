@@ -1,7 +1,13 @@
-      str0 = "bar"
-      res = (str0[2,1])
-      for __i in 0..7 do
-          res2 = (str0[2,1])
-          __assert(res, res2)
-      end
-      res
+puts begin
+    puts "body"
+    100
+rescue
+    puts "rescue"
+    150
+else
+    puts "else"
+    200
+ensure
+    puts "ensure"
+    250
+end

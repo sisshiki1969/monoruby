@@ -350,6 +350,13 @@ impl IrContext {
         info.non_temp_num = self.non_temp_num;
         info.literals = self.literals;
         info.set_bytecode(ops);
+
+        for (range, dest) in self.exception_table {
+            let start = info.get_bytecode_address(range.start);
+            let end = info.get_bytecode_address(range.end);
+            let dest = info.get_bytecode_address(dest);
+            info.exception_map.push((start..end, dest));
+        }
         info.sourcemap = locs;
         Ok(())
     }
