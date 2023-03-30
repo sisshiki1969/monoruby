@@ -458,7 +458,7 @@ extern "C" fn log_deoptimize(
     v: Option<Value>,
 ) {
     let name = globals[func_id].as_ruby_func().name();
-    let bc_begin = globals[func_id].as_ruby_func().get_bytecode_address(0);
+    let bc_begin = globals[func_id].as_ruby_func().get_pc(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
     if let TraceIr::LoopEnd = pc.get_ir(&globals.func) {
@@ -1558,7 +1558,7 @@ impl Codegen {
 
 impl Codegen {
     fn jit_handle_error(&mut self, pc: BcPc) {
-        let jit_return = self.vm_return;
+        let raise = self.vm_raise;
         if self.jit.get_page() == 0 {
             let error = self.jit.label();
             monoasm!(self.jit,
@@ -1569,7 +1569,7 @@ impl Codegen {
             monoasm!(self.jit,
             error:
                 movq r13, ((pc + 1).get_u64());
-                jmp  jit_return;
+                jmp  raise;
             );
             self.jit.select_page(0);
         } else {
@@ -1578,7 +1578,7 @@ impl Codegen {
                 testq rax, rax; // Option<Value>
                 jne  cont;
                 movq r13, ((pc + 1).get_u64());
-                jmp  jit_return;
+                jmp  raise;
             cont:
             );
         }

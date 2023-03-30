@@ -116,6 +116,51 @@ impl Codegen {
 
         self.vm_entry = entry;
 
+        let wrong_argument = self.jit.label();
+        monoasm! {self.jit,
+        wrong_argument:
+            movq rdi, r12;
+            movl rsi, rdx;  // given
+            movzxw rdx, [r13 - 8];  // min
+            movzxw rcx, [r13 - 14];  // max
+            movq rax, (runtime::err_wrong_number_of_arguments_range);
+            call rax;
+        }
+        self.wrong_argument = wrong_argument;
+
+        let vm_raise = self.jit.label();
+        let leave = self.jit.label();
+        monoasm! { self.jit,
+        vm_raise:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (LBP_META)];
+            movq rcx, r13;
+            subq rcx, 16;
+            movq rax, (runtime::handle_error);
+            call rax;
+            testq rax, rax;
+            je  leave;
+            movq r13, rax;
+        }
+        self.fetch_and_dispatch();
+        monoasm! {self.jit,
+        leave:
+            leave;
+            ret;
+        }
+        self.vm_raise = vm_raise;
+
+        let div_by_zero = self.jit.label();
+        monoasm!(self.jit,
+        div_by_zero:
+            movq rdi, r12;
+            movq rax, (runtime::err_divide_by_zero);
+            call rax;
+            jmp vm_raise;
+        );
+        self.div_by_zero = div_by_zero;
+
         //BcOp::Ret
         let ret = self.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -650,6 +695,14 @@ impl Codegen {
         monoasm! { self.jit,
             movl  [r13 - 8], (int_class);
             movl  [r13 - 4], (int_class);
+        };
+    }
+
+    fn vm_handle_error(&mut self) {
+        let raise = self.vm_raise;
+        monoasm! { self.jit,
+            testq rax, rax;
+            jeq  raise;
         };
     }
 

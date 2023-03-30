@@ -529,53 +529,66 @@ impl Executor {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-struct BcPcBase(*const Bc);
+struct BcPcBase(std::ptr::NonNull<Bc>);
 
 impl std::ops::Add<usize> for BcPcBase {
     type Output = BcPc;
     fn add(self, rhs: usize) -> BcPc {
-        BcPc(unsafe { self.0.add(rhs) })
+        BcPc::new(unsafe { self.as_ptr().add(rhs) })
     }
 }
 
 impl std::ops::Add<InstId> for BcPcBase {
     type Output = BcPc;
     fn add(self, rhs: InstId) -> BcPc {
-        BcPc(unsafe { self.0.offset(rhs.0 as isize) })
+        BcPc(unsafe { std::ptr::NonNull::new(self.as_ptr().offset(rhs.0 as isize)).unwrap() })
     }
 }
 
 impl BcPcBase {
+    #[cfg(feature = "emit-bc")]
     pub(super) fn new(func: &ISeqInfo) -> Self {
-        BcPcBase(func.bytecode_top())
+        BcPcBase(std::ptr::NonNull::new(func.bytecode_top() as _).unwrap())
+    }
+
+    fn as_ptr(&self) -> *mut Bc {
+        self.0.as_ptr()
     }
 }
 
 ///
 /// Program counter
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
-struct BcPc(*const Bc);
+struct BcPc(std::ptr::NonNull<Bc>);
 
 impl BcPc {
+    fn new(ptr: *mut Bc) -> Self {
+        Self(std::ptr::NonNull::new(ptr).unwrap())
+    }
+
+    fn as_ptr(&self) -> *mut Bc {
+        self.0.as_ptr()
+    }
+
     pub(crate) fn from(bc: &Bc) -> Self {
-        Self(bc as *const _)
+        Self(std::ptr::NonNull::from(bc))
     }
 
     pub(crate) fn get_u64(self) -> u64 {
-        self.0 as _
+        self.0.as_ptr() as _
     }
 
     pub(crate) fn write2(self, data: u64) {
-        unsafe { *((self.0 as *mut u64).add(1)) = data }
+        unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 }
 
 impl std::ops::Sub<BcPcBase> for BcPc {
     type Output = usize;
     fn sub(self, rhs: BcPcBase) -> usize {
-        let offset = unsafe { self.0.offset_from(rhs.0) };
+        let offset = unsafe { self.as_ptr().offset_from(rhs.as_ptr()) };
         assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
         offset as usize
     }
@@ -584,7 +597,7 @@ impl std::ops::Sub<BcPcBase> for BcPc {
 impl std::ops::Sub<BcPc> for BcPc {
     type Output = usize;
     fn sub(self, rhs: BcPc) -> usize {
-        let offset = unsafe { self.0.offset_from(rhs.0) };
+        let offset = unsafe { self.as_ptr().offset_from(rhs.as_ptr()) };
         assert!(offset >= 0, "self:{:?} rhs:{:?}", self, rhs);
         offset as usize
     }
@@ -593,35 +606,29 @@ impl std::ops::Sub<BcPc> for BcPc {
 impl std::ops::Add<isize> for BcPc {
     type Output = BcPc;
     fn add(self, rhs: isize) -> BcPc {
-        BcPc(unsafe { self.0.offset(rhs) })
+        BcPc::new(unsafe { self.as_ptr().offset(rhs) })
     }
 }
 
 impl std::ops::Sub<isize> for BcPc {
     type Output = BcPc;
     fn sub(self, rhs: isize) -> BcPc {
-        BcPc(unsafe { self.0.offset(-rhs) })
+        BcPc::new(unsafe { self.as_ptr().offset(-rhs) })
     }
 }
 
 impl std::ops::AddAssign<i32> for BcPc {
     fn add_assign(&mut self, offset: i32) {
         unsafe {
-            *self = BcPc(self.0.offset(offset as isize));
+            *self = BcPc::new(self.as_ptr().offset(offset as isize));
         }
-    }
-}
-
-impl std::default::Default for BcPc {
-    fn default() -> Self {
-        Self(std::ptr::null())
     }
 }
 
 impl std::ops::Deref for BcPc {
     type Target = Bc;
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.0 }
+        unsafe { self.0.as_ref() }
     }
 }
 
@@ -1319,10 +1326,18 @@ struct FuncData {
     /// metadata of this function.
     meta: Meta,
     /// the address of program counter
-    pc: BcPc,
+    pc: Option<BcPc>,
 }
 
 impl FuncData {
+    fn pc(&self) -> BcPc {
+        self.pc.unwrap()
+    }
+
+    fn set_pc(&mut self, pc: BcPc) {
+        self.pc = Some(pc);
+    }
+
     fn set_reg_num(&mut self, reg_num: i64) {
         self.meta.set_reg_num(reg_num);
     }

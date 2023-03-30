@@ -588,23 +588,30 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     Some(Value::nil())
 }
 
-pub(super) extern "C" fn get_error_location(
+pub(super) extern "C" fn handle_error(
     _vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
-) {
+) -> Option<BcPc> {
     let func_info = &globals[meta.func_id()];
-    let bc_base = func_info.data.pc;
-    let normal_info = match &func_info.kind {
-        FuncKind::ISeq(info) => info,
-        FuncKind::Builtin { .. } => return,
-        FuncKind::AttrReader { .. } => return,
-        FuncKind::AttrWriter { .. } => return,
-    };
-    let sourceinfo = normal_info.sourceinfo.clone();
-    let loc = normal_info.sourcemap[pc - bc_base];
-    globals.push_error_location(loc, sourceinfo);
+    match &func_info.kind {
+        FuncKind::ISeq(info) => {
+            // check exception table.
+            if let Some(dest) = info.get_exception_dest(pc) {
+                let _ = globals.take_error();
+                return Some(dest);
+            };
+            let bc_base = func_info.data.pc();
+            let sourceinfo = info.sourceinfo.clone();
+            let loc = info.sourcemap[pc - bc_base];
+            globals.push_error_location(loc, sourceinfo);
+        }
+        FuncKind::Builtin { .. } => {}
+        FuncKind::AttrReader { .. } => {}
+        FuncKind::AttrWriter { .. } => {}
+    }
+    None
 }
 
 pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {

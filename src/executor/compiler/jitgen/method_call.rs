@@ -316,12 +316,12 @@ impl Codegen {
             movl [r13 - 8], r15;
             jmp method_resolved;
         );
-        let entry_return = self.vm_return;
+        let raise = self.vm_raise;
         // raise error.
         self.jit.bind_label(raise);
         monoasm!(self.jit,
             movq r13, ((pc + 2).get_u64());
-            jmp entry_return;
+            jmp raise;
         );
         self.jit.select_page(0);
     }
@@ -593,7 +593,7 @@ impl Codegen {
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
             // set pc.
-            movq r13, (func_data.pc.get_u64());
+            movq r13, (func_data.pc().get_u64());
         );
         self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);

@@ -101,7 +101,7 @@ pub struct Codegen {
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
     pub(super) entry_point: EntryPoint,
-    vm_return: DestLabel,
+    vm_raise: DestLabel,
     f64_to_val: DestLabel,
     heap_to_f64: DestLabel,
     div_by_zero: DestLabel,
@@ -138,11 +138,7 @@ impl Codegen {
         let const_version = jit.const_i64(1);
         let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let entry_panic = jit.label();
-        let jit_return = jit.label();
-        let vm_return = jit.label();
-        let div_by_zero = jit.label();
         let no_block = jit.label();
-        let wrong_argument = jit.label();
         let heap_to_f64 = jit.label();
         let splat = jit.label();
         monoasm!(&mut jit,
@@ -155,25 +151,6 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (runtime::panic);
             jmp rax;
-        vm_return:
-            movq r15, rax;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rdx, [r14 - (LBP_META)];
-            movq rcx, r13;
-            subq rcx, 8;
-            movq rax, (runtime::get_error_location);
-            call rax;
-            // restore return value
-            movq rax, r15;
-        jit_return:
-            leave;
-            ret;
-        div_by_zero:
-            movq rdi, r12;
-            movq rax, (runtime::err_divide_by_zero);
-            call rax;
-            xorq rax, rax;
             leave;
             ret;
         no_block:
@@ -183,14 +160,6 @@ impl Codegen {
             xorq rax, rax;
             leave;
             ret;
-        wrong_argument:
-            movq rdi, r12;
-            movl rsi, rdx;  // given
-            movzxw rdx, [r13 - 8];  // min
-            movzxw rcx, [r13 - 14];  // max
-            movq rax, (runtime::err_wrong_number_of_arguments_range);
-            call rax;
-            jmp  vm_return;
         heap_to_f64:
             // we must save rdi for log_optimize.
             subq rsp, 128;
@@ -269,12 +238,12 @@ impl Codegen {
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            vm_return,
+            vm_raise: entry_panic,
             f64_to_val: entry_panic,
             heap_to_f64,
-            div_by_zero,
+            div_by_zero: entry_panic,
             no_block,
-            wrong_argument,
+            wrong_argument: entry_panic,
             dispatch,
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
@@ -489,14 +458,6 @@ impl Codegen {
             call (codeptr - src_point - 5);
         );
         self.pop_frame();
-    }
-
-    fn vm_handle_error(&mut self) {
-        let entry_return = self.vm_return;
-        monoasm! { self.jit,
-            testq rax, rax;
-            jeq  entry_return;
-        };
     }
 
     ///
