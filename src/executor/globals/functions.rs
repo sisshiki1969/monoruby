@@ -695,7 +695,7 @@ pub(crate) struct ISeqInfo {
     /// Source map.
     pub sourcemap: Vec<Loc>,
     /// Exception handling map.
-    exception_map: Vec<(std::ops::Range<BcPc>, BcPc)>,
+    exception_map: Vec<(std::ops::Range<BcPc>, BcPc, Option<SlotId>)>,
     /// the name of arguments.
     pub(in crate::executor) args: ArgumentsInfo,
     /// outer local variables. (dynamic_locals, block_param)
@@ -872,18 +872,29 @@ impl ISeqInfo {
         }
     }
 
-    pub(in crate::executor) fn get_exception_dest(&self, pc: BcPc) -> Option<BcPc> {
-        self.exception_map.iter().rev().find_map(|(range, dest)| {
-            if range.contains(&pc) {
-                Some(*dest)
-            } else {
-                None
-            }
-        })
+    pub(in crate::executor) fn get_exception_dest(
+        &self,
+        pc: BcPc,
+    ) -> Option<(BcPc, Option<SlotId>)> {
+        self.exception_map
+            .iter()
+            .rev()
+            .find_map(|(range, dest, err_reg)| {
+                if range.contains(&pc) {
+                    Some((*dest, *err_reg))
+                } else {
+                    None
+                }
+            })
     }
 
-    pub(in crate::executor) fn exception_push(&mut self, range: std::ops::Range<BcPc>, dest: BcPc) {
-        self.exception_map.push((range, dest));
+    pub(in crate::executor) fn exception_push(
+        &mut self,
+        range: std::ops::Range<BcPc>,
+        dest: BcPc,
+        err_reg: Option<SlotId>,
+    ) {
+        self.exception_map.push((range, dest, err_reg));
     }
 
     /// get bytecode length.

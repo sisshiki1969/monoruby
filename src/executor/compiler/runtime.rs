@@ -598,7 +598,7 @@ pub(super) extern "C" fn handle_error(
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             // check exception table.
-            if let Some(dest) = info.get_exception_dest(pc) {
+            if let Some((dest, err_reg)) = info.get_exception_dest(pc) {
                 let _ = globals.take_error();
                 return Some(dest);
             };

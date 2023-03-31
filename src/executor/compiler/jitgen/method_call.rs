@@ -318,8 +318,8 @@ impl Codegen {
         );
         let raise = self.vm_raise;
         // raise error.
-        self.jit.bind_label(raise);
         monoasm!(self.jit,
+        raise:
             movq r13, ((pc + 2).get_u64());
             jmp raise;
         );
