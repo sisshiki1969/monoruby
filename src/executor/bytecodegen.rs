@@ -1342,8 +1342,8 @@ impl IrContext {
                             let lhs = self.eval_lvalue(&assign)?;
                             let loc = assign.loc;
                             let src = self.next_reg().into();
-                            self.emit_integer(None, 42);
-                            self.pop();
+                            //self.emit_integer(None, 42);
+                            //self.pop();
                             self.gen_assign(src, lhs, loc);
                             Some(src)
                         } else {

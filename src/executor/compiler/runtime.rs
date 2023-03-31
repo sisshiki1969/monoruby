@@ -589,7 +589,7 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
 }
 
 pub(super) extern "C" fn handle_error(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
@@ -599,7 +599,14 @@ pub(super) extern "C" fn handle_error(
         FuncKind::ISeq(info) => {
             // check exception table.
             if let Some((dest, err_reg)) = info.get_exception_dest(pc) {
-                let _ = globals.take_error();
+                let err = globals.take_error().unwrap();
+                if let Some(err_reg) = err_reg {
+                    unsafe {
+                        vm.cfp()
+                            .lfp()
+                            .set_register(err_reg.0 as usize, Value::new_float(1.02));
+                    }
+                }
                 return Some(dest);
             };
             let bc_base = func_info.data.pc();
