@@ -180,12 +180,26 @@ impl Executor {
         self.lfp_top >= lfp && lfp > self.cfp.unwrap()
     }
 
+    fn temp_len(&self) -> usize {
+        self.temp_stack.len()
+    }
+
     fn temp_push(&mut self, val: Value) {
         self.temp_stack.push(val);
     }
 
-    fn temp_clear(&mut self) {
-        self.temp_stack.clear()
+    fn temp_append(&mut self, mut v: Vec<Value>) -> usize {
+        let len = self.temp_stack.len();
+        self.temp_stack.append(&mut v);
+        len
+    }
+
+    fn temp_clear(&mut self, len: usize) {
+        self.temp_stack.truncate(len);
+    }
+
+    fn temp_tear(&mut self, len: usize) -> Vec<Value> {
+        self.temp_stack.drain(len..).collect()
     }
 }
 

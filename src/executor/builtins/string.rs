@@ -599,10 +599,9 @@ fn split(
         };
         match lfp.block() {
             Some(b) => {
-                let tmp = Value::new_array_from_vec(v.clone());
-                vm.temp_push(tmp);
+                let t = vm.temp_append(v.clone());
                 vm.invoke_block_iter1(globals, b, v.into_iter())?;
-                vm.temp_clear();
+                vm.temp_clear(t);
                 Ok(lfp.self_val())
             }
             None => Ok(Value::new_array_from_vec(v)),

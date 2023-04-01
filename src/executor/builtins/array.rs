@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "map", map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
 }
@@ -273,6 +274,37 @@ fn each(
     Ok(lfp.self_val())
 }
 
+/// ### Array#map
+///
+/// - map {|item| ... } -> [object]
+/// - [NOT SUPPORTED] map -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
+fn map(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let ary = lfp.self_val();
+    let block_handler = if let Some(block) = lfp.block() {
+        block
+    } else {
+        return Err(MonorubyErr::no_block_given());
+    };
+    let data = vm.get_block_data(globals, block_handler);
+    let t = vm.temp_len();
+    for i in ary.as_array().iter() {
+        let v = vm.invoke_block(globals, data.clone(), &[*i])?;
+        vm.temp_push(v);
+    }
+    let v = vm.temp_tear(t);
+    let res = Value::new_array_from_vec(v);
+
+    Ok(res)
+}
+
 ///
 /// #### Enumerable#detect
 ///
@@ -432,6 +464,18 @@ mod test {
           x += y
         end
         x
+        "##,
+        );
+    }
+
+    #[test]
+    fn map() {
+        run_test(
+            r##"
+        x = 10
+        [2, 3, 4, 5, 6, 7, 8].map do |y|
+          x + y
+        end
         "##,
         );
     }
