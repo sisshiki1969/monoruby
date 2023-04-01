@@ -42,7 +42,7 @@ fn class_new(
 /// !! We must call Object#initialize.
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let obj = allocate(vm, globals, lfp, arg, 0)?;
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, dbg!(len))?;
+    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)
 }
 

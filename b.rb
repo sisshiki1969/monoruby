@@ -1,10 +1,9 @@
 $x = []
-begin
     begin
         $x << 50
         1/0
         $x << 100
-    rescue => c
+    rescue 3 => c
         $x << 150
     else
         $x << 200
@@ -13,8 +12,5 @@ begin
         1/0
         $x << 300
     end
-rescue => d
-    $x << d.to_s
-end
 
 puts $x

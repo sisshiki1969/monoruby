@@ -185,7 +185,12 @@ pub(crate) struct IrContext {
     /// Source info.
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
-    exception_table: Vec<(std::ops::Range<usize>, usize, Option<BcReg>)>,
+    exception_table: Vec<(
+        std::ops::Range<usize>,
+        usize,
+        Option<BcReg>,
+        Option<(BcReg, usize, (Loc, SourceInfoRef))>,
+    )>,
     /// Call site info.
     callsites: Vec<CallSite>,
     /// Offset of call site info.
@@ -488,7 +493,7 @@ impl IrContext {
             Some(ret) => ret,
             None => self.pop().into(),
         };
-        assert_eq!(0, self.temp);
+        //assert_eq!(0, self.temp);
         self.emit(BcIr::Ret(ret), Loc::default());
     }
 
@@ -1328,6 +1333,7 @@ impl IrContext {
                     self.emit_br(else_label);
                     let rescue_start = self.new_label();
                     let mut err_reg = None;
+                    let mut ex_reg = None;
                     self.apply_label(rescue_start);
                     assert_eq!(1, rescue.len());
                     for RescueEntry {
@@ -1336,25 +1342,34 @@ impl IrContext {
                         box body,
                     } in rescue
                     {
-                        assert!(exception_list.is_empty());
                         let old = self.temp;
-                        err_reg = if let Some(box assign) = assign {
+                        if !exception_list.is_empty() {
+                            let start: BcReg = self.next_reg().into();
+                            let len = exception_list.len();
+                            let mut loc = exception_list[0].loc;
+                            for ex in exception_list {
+                                loc = loc.merge(ex.loc);
+                                self.gen_expr(ex, UseMode::Use)?;
+                            }
+                            ex_reg = Some((start, len, (loc, self.sourceinfo.clone())));
+                        };
+                        if let Some(box assign) = assign {
                             let lhs = self.eval_lvalue(&assign)?;
                             let loc = assign.loc;
                             let src = self.next_reg().into();
-                            //self.emit_integer(None, 42);
-                            //self.pop();
                             self.gen_assign(src, lhs, loc);
-                            Some(src)
-                        } else {
-                            None
+                            err_reg = Some(src);
                         };
                         self.gen_expr(body, rescue_use)?;
                         self.emit_br(ensure_label);
                         self.temp = old;
                     }
-                    self.exception_table
-                        .push((body_start..body_end, rescue_start, err_reg));
+                    self.exception_table.push((
+                        body_start..body_end,
+                        rescue_start,
+                        err_reg,
+                        ex_reg,
+                    ));
                     self.apply_label(else_label);
                 } else {
                     if let Some(else_) = else_ {

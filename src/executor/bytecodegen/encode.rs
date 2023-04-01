@@ -350,12 +350,13 @@ impl IrContext {
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
         info.set_bytecode(ops);
-        for (range, dest, err_reg) in std::mem::take(&mut self.exception_table) {
+        for (range, dest, err_reg, ex_reg) in std::mem::take(&mut self.exception_table) {
             let start = info.get_pc(self.labels[range.start].unwrap().0 as usize);
             let end = info.get_pc(self.labels[range.end].unwrap().0 as usize);
             let dest = info.get_pc(self.labels[dest].unwrap().0 as usize);
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
-            info.exception_push(start..end, dest, err_reg);
+            let ex_reg = ex_reg.map(|(reg, len, loc)| (self.get_index(&reg), len, loc));
+            info.exception_push(start..end, dest, err_reg, ex_reg);
         }
 
         info.sourcemap = locs;

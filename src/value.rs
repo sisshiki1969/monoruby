@@ -608,6 +608,13 @@ impl Value {
         }
     }
 
+    pub(crate) fn expect_class_or_module_rescue(&self) -> Result<ClassId> {
+        match self.is_class_or_module() {
+            Some(class) => Ok(class),
+            None => Err(MonorubyErr::is_not_class_nor_module_rescue()),
+        }
+    }
+
     pub(crate) fn expect_class(&self, globals: &mut Globals) -> Result<ClassId> {
         match self.is_class() {
             Some(class) => Ok(class),

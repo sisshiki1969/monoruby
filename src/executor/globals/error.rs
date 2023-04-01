@@ -378,6 +378,10 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!("{name} is not a class nor a module",))
     }
 
+    pub(crate) fn is_not_class_nor_module_rescue() -> MonorubyErr {
+        MonorubyErr::typeerr(format!("class or module required for rescue clause",))
+    }
+
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
         MonorubyErr::typeerr(format!("{name} is not a class"))
     }

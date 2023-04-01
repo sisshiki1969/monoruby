@@ -167,7 +167,7 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
                 .split('\n')
                 .last()
                 .unwrap();
-            let nodes = Parser::parse_program(dbg!(res).to_string(), PathBuf::new())
+            let nodes = Parser::parse_program(res.to_string(), PathBuf::new())
                 .unwrap()
                 .node;
 

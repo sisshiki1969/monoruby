@@ -38,7 +38,6 @@ impl IrContext {
                 self.sourceinfo.clone(),
             ));
         }
-        assert!(!arglist.delegate);
         let has_splat = arglist.splat;
         let with_block = arglist.block.is_some();
 
