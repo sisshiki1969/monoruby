@@ -29,7 +29,7 @@ fn now(
     _len: usize,
 ) -> Result<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
-    let time_info = TimeInfo::Local(t);
+    let time_info = TimeInner::Local(t);
     Ok(Value::new_time(time_info))
 }
 
@@ -62,8 +62,8 @@ fn to_s(
     _len: usize,
 ) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
-        TimeInfo::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
-        TimeInfo::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
+        TimeInner::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
+        TimeInner::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
     Ok(Value::new_string(s))
@@ -84,8 +84,8 @@ fn strftime(
     let mut fmt = arg[0].expect_string(globals)?;
     fmt = fmt.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
-        TimeInfo::Local(t) => t.format(&fmt).to_string(),
-        TimeInfo::UTC(t) => {
+        TimeInner::Local(t) => t.format(&fmt).to_string(),
+        TimeInner::UTC(t) => {
             let fmt = fmt + " UTC";
             t.format(&fmt).to_string()
         }
@@ -122,28 +122,28 @@ fn sub(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TimeInfo {
+pub enum TimeInner {
     Local(DateTime<FixedOffset>),
     UTC(DateTime<Utc>),
 }
 
-impl std::ops::Sub<Self> for TimeInfo {
+impl std::ops::Sub<Self> for TimeInner {
     type Output = Duration;
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (TimeInfo::Local(t), TimeInfo::Local(rhs)) => t - rhs,
-            (TimeInfo::Local(t), TimeInfo::UTC(rhs)) => t.with_timezone(&Utc) - rhs,
-            (TimeInfo::UTC(t), TimeInfo::Local(rhs)) => t - rhs.with_timezone(&Utc),
-            (TimeInfo::UTC(t), TimeInfo::UTC(rhs)) => t - rhs,
+            (TimeInner::Local(t), TimeInner::Local(rhs)) => t - rhs,
+            (TimeInner::Local(t), TimeInner::UTC(rhs)) => t.with_timezone(&Utc) - rhs,
+            (TimeInner::UTC(t), TimeInner::Local(rhs)) => t - rhs.with_timezone(&Utc),
+            (TimeInner::UTC(t), TimeInner::UTC(rhs)) => t - rhs,
         }
     }
 }
 
-impl std::fmt::Display for TimeInfo {
+impl std::fmt::Display for TimeInner {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TimeInfo::Local(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f %z")),
-            TimeInfo::UTC(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f UTC")),
+            TimeInner::Local(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f %z")),
+            TimeInner::UTC(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S.%f UTC")),
         }
     }
 }

@@ -18,7 +18,7 @@ mod regexp;
 mod string;
 mod time;
 
-pub use time::TimeInfo;
+pub use time::TimeInner;
 
 //
 // Builtin methods.
