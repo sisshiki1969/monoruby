@@ -397,11 +397,7 @@ impl FnStore {
         self.inline.get(&func_id)
     }
 
-    pub(super) fn compile_script(
-        &mut self,
-        ast: Node,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
+    pub fn compile_script(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
         let main_fid = self.functions.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
