@@ -1,17 +1,20 @@
-10.times do
-    #c = [0,0,0,0]
-    puts begin
-        puts "body"
+$x = []
+begin
+    begin
+        $x << 50
         1/0
-        100
+        $x << 100
     rescue => c
-        puts "rescue #{c}"
-        150
+        $x << 150
     else
-        puts "else"
-        200
+        $x << 200
     ensure
-        puts "ensure"
-        250
+        $x << 250
+        1/0
+        $x << 300
     end
+rescue => d
+    $x << d.to_s
 end
+
+puts $x

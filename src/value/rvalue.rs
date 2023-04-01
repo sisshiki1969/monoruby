@@ -179,6 +179,7 @@ impl alloc::GC<RValue> for RValue {
             }
             ObjKind::REGEXP => {}
             ObjKind::IO => {}
+            ObjKind::EXCEPTION => {}
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }

@@ -872,16 +872,16 @@ impl ISeqInfo {
         &self,
         pc: BcPc,
     ) -> Option<(BcPc, Option<SlotId>)> {
-        self.exception_map
+        dbg!(&self.exception_map)
             .iter()
-            .rev()
-            .find_map(|(range, dest, err_reg)| {
+            .filter_map(|(range, dest, slot)| {
                 if range.contains(&pc) {
-                    Some((*dest, *err_reg))
+                    Some((*dest, *slot))
                 } else {
                     None
                 }
             })
+            .nth(0)
     }
 
     pub(in crate::executor) fn exception_push(

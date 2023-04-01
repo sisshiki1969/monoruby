@@ -330,7 +330,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn divide_by_zero() -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::DivideByZero, "divide by zero".to_string())
+        MonorubyErr::new(MonorubyErrKind::DivideByZero, "divided by 0".to_string())
     }
 
     pub(crate) fn no_block_given() -> MonorubyErr {
