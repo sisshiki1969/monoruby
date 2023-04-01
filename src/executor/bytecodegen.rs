@@ -136,6 +136,7 @@ struct KeywordArgs {
     kw_pos: BcReg,
     /// Names and positions of keyword arguments.
     kw_args: HashMap<IdentId, usize>,
+    hash_splat_pos: Vec<BcReg>,
 }
 
 #[derive(Debug, Clone)]

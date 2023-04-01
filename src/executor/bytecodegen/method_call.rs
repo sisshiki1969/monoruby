@@ -24,13 +24,6 @@ impl IrContext {
             None => RecvKind::SelfValue,
         };
 
-        if !arglist.hash_splat.is_empty() {
-            return Err(MonorubyErr::unsupported_feature(
-                "hash splat is not supported.",
-                loc,
-                self.sourceinfo.clone(),
-            ));
-        }
         if arglist.delegate {
             return Err(MonorubyErr::unsupported_feature(
                 "argument delegation is not supported.",
@@ -70,10 +63,7 @@ impl IrContext {
         loc: Loc,
     ) -> Result<()> {
         let (callid, args, len) = if let Some(arglist) = arglist {
-            assert!(arglist.hash_splat.is_empty());
             assert!(!arglist.delegate);
-            //let has_splat = arglist.splat;
-            //let with_block = arglist.block.is_some();
             self.handle_arguments(arglist, None, loc)?
         } else {
             let (mother_id, mother_args) = self.mother.as_ref().unwrap();
@@ -89,7 +79,11 @@ impl IrContext {
                 for (id, name) in kw_list.iter().enumerate() {
                     kw_args.insert(*name, id);
                 }
-                Some(KeywordArgs { kw_pos, kw_args })
+                Some(KeywordArgs {
+                    kw_pos,
+                    kw_args,
+                    hash_splat_pos: vec![],
+                })
             };
             let callid = self.add_callsite(None, arg_num, kw, vec![]);
             (callid, args, arg_num)
@@ -172,7 +166,6 @@ impl IrContext {
         is_ret: bool,
         loc: Loc,
     ) -> Result<()> {
-        assert!(arglist.hash_splat.is_empty());
         // TODO: We must check this in parser
         if arglist.delegate {
             return Err(MonorubyErr::syntax(
@@ -217,18 +210,27 @@ impl IrContext {
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
+        let hash_splat = std::mem::take(&mut arglist.hash_splat);
         let (args, arg_len, splat_pos) = self.handle_positional_arguments(arglist, loc)?;
 
-        let kw = if kw_args_list.len() == 0 {
+        let kw = if kw_args_list.len() == 0 && hash_splat.is_empty() {
             None
         } else {
             let mut kw_args = HashMap::default();
             let kw_pos = self.next_reg().into();
+            let mut hash_splat_pos = vec![];
             for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
                 self.push_expr(node)?;
                 kw_args.insert(IdentId::get_id_from_string(name), id);
             }
-            Some(KeywordArgs { kw_pos, kw_args })
+            for node in hash_splat {
+                hash_splat_pos.push(self.push_expr(node)?);
+            }
+            Some(KeywordArgs {
+                kw_pos,
+                kw_args,
+                hash_splat_pos,
+            })
         };
 
         self.temp = old_temp;

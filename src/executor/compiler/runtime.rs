@@ -274,14 +274,33 @@ fn handle_keyword(
     callee_reg: *mut Option<Value>,
 ) {
     let CallSiteInfo {
-        kw_pos, kw_args, ..
+        kw_pos,
+        kw_args,
+        hash_splat_pos,
+        ..
     } = callsite;
     let callee_kw_pos = info.args.pos_num + 1;
+    let mut hash_splat = HashMap::default();
+    for hash in hash_splat_pos {
+        unsafe {
+            let h = *caller_reg.sub(hash.0 as usize);
+            // We must check whether h is a hash.
+            for (k, v) in h.as_hash() {
+                // We must check whether k is a symbol.
+                let k = k.as_symbol();
+                hash_splat.insert(k, v);
+            }
+        }
+    }
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
-            *callee_reg.sub(callee_kw_pos + id) = kw_args
-                .get(param_name)
-                .map(|id| *caller_reg.sub(kw_pos.0 as usize + id));
+            *callee_reg.sub(callee_kw_pos + id) = match kw_args.get(param_name) {
+                Some(id) => Some(*caller_reg.sub(kw_pos.0 as usize + id)),
+                None => match hash_splat.get(param_name) {
+                    Some(v) => Some(*v),
+                    None => None,
+                },
+            }
         }
     }
 }

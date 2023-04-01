@@ -265,6 +265,7 @@ pub struct CallSiteInfo {
     pub kw_args: HashMap<IdentId, usize>,
     /// Positions of splat arguments.
     pub splat_pos: Vec<usize>,
+    pub(crate) hash_splat_pos: Vec<SlotId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,6 +454,7 @@ impl FnStore {
         kw_pos: SlotId,
         kw_args: HashMap<IdentId, usize>,
         splat_pos: Vec<usize>,
+        hash_splat_pos: Vec<SlotId>,
     ) {
         self.callsite_info.push(CallSiteInfo {
             name,
@@ -460,6 +462,7 @@ impl FnStore {
             kw_pos,
             kw_args,
             splat_pos,
+            hash_splat_pos,
         })
     }
 

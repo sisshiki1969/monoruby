@@ -319,11 +319,27 @@ impl IrContext {
             splat_pos,
         } in std::mem::take(&mut self.callsites)
         {
-            if let Some(KeywordArgs { kw_pos, kw_args }) = kw {
+            if let Some(KeywordArgs {
+                kw_pos,
+                kw_args,
+                hash_splat_pos,
+            }) = kw
+            {
                 let pos = self.get_index(&kw_pos);
-                store.add_callsite(name, arg_num, pos, kw_args, splat_pos);
+                let hash_splat_pos = hash_splat_pos
+                    .into_iter()
+                    .map(|r| self.get_index(&r))
+                    .collect();
+                store.add_callsite(name, arg_num, pos, kw_args, splat_pos, hash_splat_pos);
             } else {
-                store.add_callsite(name, arg_num, SlotId(0), HashMap::default(), splat_pos);
+                store.add_callsite(
+                    name,
+                    arg_num,
+                    SlotId(0),
+                    HashMap::default(),
+                    splat_pos,
+                    vec![],
+                );
             }
         }
         for f in std::mem::take(&mut self.functions) {

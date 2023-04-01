@@ -254,7 +254,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid].splat_pos);
+        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid]);
 
         monoasm! {self.jit,
             // set meta.
@@ -541,7 +541,7 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid].splat_pos);
+        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid]);
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
@@ -637,7 +637,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         // set arguments
-        self.jit_set_arguments(args, len, true, &fnstore[callid].splat_pos);
+        self.jit_set_arguments(args, len, true, &fnstore[callid]);
 
         monoasm! { self.jit,
             movq rsi, [r13 + (FUNCDATA_OFFSET_PC)];
@@ -694,7 +694,7 @@ impl Codegen {
         method_info: MethodInfo,
         block: Option<SlotId>,
         has_splat: bool,
-        splat_pos: &Vec<usize>,
+        callsite: &CallSiteInfo,
     ) {
         let MethodInfo {
             recv, args, len, ..
@@ -704,7 +704,7 @@ impl Codegen {
         monoasm!(self.jit,
             movq [rsp - (16 + LBP_SELF)], rax;
         );
-        self.jit_set_arguments(args, len, has_splat, splat_pos);
+        self.jit_set_arguments(args, len, has_splat, callsite);
         // set block
         if let Some(block) = block {
             self.load_rax(block);
@@ -734,7 +734,7 @@ impl Codegen {
         args: SlotId,
         len: u16,
         has_splat: bool,
-        splat_pos: &Vec<usize>,
+        callsite: &CallSiteInfo,
     ) {
         // set arguments
         if has_splat {
@@ -745,7 +745,7 @@ impl Codegen {
             );
             for i in 0..len {
                 let reg = args + i;
-                if splat_pos.contains(&(i as usize)) {
+                if callsite.splat_pos.contains(&(i as usize)) {
                     self.load_rdi(reg);
                     monoasm! {self.jit,
                         movq rsi, r15;
