@@ -381,6 +381,7 @@ impl Codegen {
     ///
     /// ### destroy
     /// - caller save registers
+    ///
     fn execute_gc(&mut self) {
         let alloc_flag = self.alloc_flag;
         let gc = self.jit.label();
@@ -406,13 +407,14 @@ impl Codegen {
     /// Push control frame and set outer.
     ///
     /// ### destroy
-    /// - rsi
+    /// - rdi, rsi
+    ///
     fn push_frame(&mut self) {
         monoasm!(self.jit,
             // push cfp
-            movq rsi, [rbx];
-            movq [rsp - (16 + BP_PREV_CFP)], rsi;
+            movq rdi, [rbx];
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
+            movq [rsi], rdi;
             movq [rbx], rsi;
         );
     }
