@@ -344,6 +344,10 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
+    pub(crate) fn new_exception(err: MonorubyErr) -> Self {
+        RValue::new_exception(err).pack()
+    }
+
     pub(crate) fn new_time(time: TimeInner) -> Self {
         RValue::new_time(time).pack()
     }
@@ -703,6 +707,7 @@ impl Value {
         self.rvalue().as_range()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn as_io(&self) -> &IoInner {
         assert_eq!(ObjKind::IO, self.rvalue().kind());
         self.rvalue().as_io()

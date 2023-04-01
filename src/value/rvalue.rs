@@ -364,6 +364,9 @@ impl RValue {
                     ObjKind::IO => ObjKind {
                         io: self.kind.io.clone(),
                     },
+                    ObjKind::EXCEPTION => ObjKind {
+                        exception: self.kind.exception.clone(),
+                    },
                     _ => unreachable!("clone()"),
                 }
             },
@@ -515,6 +518,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_exception(err: MonorubyErr) -> Self {
+        RValue {
+            flags: RVFlag::new(EXCEPTION_CLASS, ObjKind::EXCEPTION),
+            kind: ObjKind::exception(err),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
             flags: RVFlag::new(IO_CLASS, ObjKind::IO),
@@ -655,6 +666,10 @@ impl RValue {
         unsafe { &self.kind.range }
     }
 
+    pub fn as_exception(&self) -> &ExceptionInner {
+        unsafe { &self.kind.exception }
+    }
+
     pub(super) fn as_hash(&self) -> &HashInner {
         unsafe { &self.kind.hash }
     }
@@ -667,7 +682,7 @@ impl RValue {
         unsafe { &self.kind.regexp }
     }
 
-    pub(super) fn as_io(&self) -> &IoInner {
+    pub fn as_io(&self) -> &IoInner {
         unsafe { &self.kind.io }
     }
 
@@ -747,6 +762,7 @@ pub union ObjKind {
     time: ManuallyDrop<TimeInner>,
     array: ManuallyDrop<ArrayInner>,
     range: ManuallyDrop<RangeInner>,
+    exception: ManuallyDrop<Box<ExceptionInner>>,
     proc: ManuallyDrop<BlockData>,
     hash: ManuallyDrop<HashInner>,
     regexp: ManuallyDrop<RegexpInner>,
@@ -765,11 +781,17 @@ impl ObjKind {
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
-    //pub const SPLAT: u8 = 10;
+    pub const EXCEPTION: u8 = 10;
     pub const PROC: u8 = 11;
     pub const HASH: u8 = 12;
     pub const REGEXP: u8 = 13;
     pub const IO: u8 = 14;
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct ExceptionInner {
+    pub err: MonorubyErr,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -850,6 +872,12 @@ impl ObjKind {
                 end,
                 exclude_end: u32::from(exclude_end),
             }),
+        }
+    }
+
+    fn exception(err: MonorubyErr) -> Self {
+        Self {
+            exception: ManuallyDrop::new(Box::new(ExceptionInner { err })),
         }
     }
 

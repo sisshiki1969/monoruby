@@ -21,6 +21,7 @@ pub const HASH_CLASS: ClassId = ClassId::new(14);
 pub const REGEXP_CLASS: ClassId = ClassId::new(15);
 pub const MODULE_CLASS: ClassId = ClassId::new(16);
 pub const IO_CLASS: ClassId = ClassId::new(17);
+pub const EXCEPTION_CLASS: ClassId = ClassId::new(18);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -65,6 +66,7 @@ impl std::fmt::Debug for ClassId {
             15 => write!(f, "REGEXP"),
             16 => write!(f, "MODULE"),
             17 => write!(f, "IO"),
+            18 => write!(f, "EXCEPTION"),
             n => write!(f, "ClassId({n})"),
         }
     }

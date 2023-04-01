@@ -94,7 +94,7 @@ pub enum MonorubyErrKind {
     Syntax(ParseErrKind),
     Syntax2(String),
     Unimplemented(String),
-    UninitConst(String),
+    Name(String),
     DivideByZero,
     LocalJump(String),
     Range(String),
@@ -148,29 +148,51 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self) -> String {
+        format!("{} ({})", self.to_string(), self.get_type())
+    }
+
+    pub fn to_string(&self) -> String {
         match &self.kind {
-            /*MonorubyErrKind::UndefinedLocal(ident) => {
-                format!("undefined local variable or method `{}'", ident)
-            }*/
-            MonorubyErrKind::NotMethod(msg) => format!("{msg} (NoMethodError)"),
-            MonorubyErrKind::Arguments(msg) => format!("{msg} (ArgumentError)"),
+            MonorubyErrKind::NotMethod(msg) => msg.to_string(),
+            MonorubyErrKind::Arguments(msg) => msg.to_string(),
             MonorubyErrKind::Syntax(kind) => match kind {
                 ParseErrKind::SyntaxError(msg) => msg.to_string(),
                 ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
             },
             MonorubyErrKind::Syntax2(msg) => msg.to_string(),
             MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
-            MonorubyErrKind::UninitConst(msg) => msg.to_string(),
-            MonorubyErrKind::DivideByZero => "divided by 0 (ZeroDivisionError)".to_string(),
-            MonorubyErrKind::LocalJump(msg) => format!("{msg} (LocalJumpError)"),
-            MonorubyErrKind::Range(msg) => format!("{msg} (RangeError)"),
-            MonorubyErrKind::Type(msg) => format!("{msg} (TypeError)"),
-            MonorubyErrKind::Index(msg) => format!("{msg} (IndexError)"),
-            MonorubyErrKind::Frozen(msg) => format!("{msg} (FrozenError)"),
-            MonorubyErrKind::Load(msg) => format!("{msg} (LoadError)"),
+            MonorubyErrKind::Name(msg) => msg.to_string(),
+            MonorubyErrKind::DivideByZero => "divided by 0".to_string(),
+            MonorubyErrKind::LocalJump(msg) => msg.to_string(),
+            MonorubyErrKind::Range(msg) => msg.to_string(),
+            MonorubyErrKind::Type(msg) => msg.to_string(),
+            MonorubyErrKind::Index(msg) => msg.to_string(),
+            MonorubyErrKind::Frozen(msg) => msg.to_string(),
+            MonorubyErrKind::Load(msg) => msg.to_string(),
             MonorubyErrKind::Internal(msg) => msg.to_string(),
-            MonorubyErrKind::Regex(msg) => format!("{msg} (RegexError)"),
-            MonorubyErrKind::Runtime(msg) => format!("{msg} (RuntimeError)"),
+            MonorubyErrKind::Regex(msg) => msg.to_string(),
+            MonorubyErrKind::Runtime(msg) => msg.to_string(),
+        }
+    }
+
+    fn get_type(&self) -> &str {
+        match &self.kind {
+            MonorubyErrKind::NotMethod(_) => "NoMethodError",
+            MonorubyErrKind::Arguments(_) => "ArgumentError",
+            MonorubyErrKind::Syntax(_) => "SyntaxError",
+            MonorubyErrKind::Syntax2(_) => "SyntaxError",
+            MonorubyErrKind::Unimplemented(_) => "Unimplemented",
+            MonorubyErrKind::Name(_) => "NameError",
+            MonorubyErrKind::DivideByZero => "ZeroDivisionError",
+            MonorubyErrKind::LocalJump(_) => "LocalJumpError",
+            MonorubyErrKind::Range(_) => "RangeError",
+            MonorubyErrKind::Type(_) => "TypeError",
+            MonorubyErrKind::Index(_) => "IndexError",
+            MonorubyErrKind::Frozen(_) => "FrozenError",
+            MonorubyErrKind::Load(_) => "LoadError",
+            MonorubyErrKind::Internal(_) => "InternalError",
+            MonorubyErrKind::Regex(_) => "RegexError",
+            MonorubyErrKind::Runtime(_) => "RuntimeError",
         }
     }
 }
@@ -342,7 +364,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::UninitConst(format!(
+        MonorubyErr::new(MonorubyErrKind::Name(format!(
             "uninitialized constant {name}"
         )))
     }

@@ -316,7 +316,8 @@ impl Globals {
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
-                ObjKind::IO => val.as_io().to_string(),
+                ObjKind::IO => rvalue.as_io().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.to_string(),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -351,7 +352,8 @@ impl Globals {
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
-                ObjKind::IO => val.as_io().to_string(),
+                ObjKind::IO => rvalue.as_io().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.get_error_message(),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
