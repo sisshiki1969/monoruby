@@ -18,7 +18,7 @@ mod regexp;
 mod string;
 mod time;
 
-pub use time::TimeInfo;
+pub use time::TimeInner;
 
 //
 // Builtin methods.
@@ -119,6 +119,8 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     );
     let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
     assert_eq!(IO_CLASS, io_class.class_id());
+    let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
+    assert_eq!(EXCEPTION_CLASS, exception_class.class_id());
     let math_class = globals.define_module("Math").class_id();
     let process_class = globals.define_module("Process").class_id();
     let file_class = globals

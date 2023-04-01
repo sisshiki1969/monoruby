@@ -221,6 +221,13 @@ impl LFP {
         *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value)
     }
 
+    ///
+    /// Get a value of register slot *index*.
+    ///
+    pub unsafe fn set_register(&mut self, index: usize, val: Value) {
+        *(self.0.sub(LBP_SELF as usize + 8 * index) as *mut Value) = val;
+    }
+
     fn len_in_bytes(&self) -> usize {
         LBP_SELF as usize + 8 * self.meta().reg_num as usize
     }

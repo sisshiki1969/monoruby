@@ -2,7 +2,8 @@ use super::*;
 use num::BigInt;
 use paste::paste;
 use ruruby_parse::{
-    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, SourceInfoRef, UnOp,
+    ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, RescueEntry,
+    SourceInfoRef, UnOp,
 };
 
 mod binary;
@@ -94,7 +95,7 @@ enum LvalueKind {
     DynamicVar { outer: usize, dst: BcReg },
     Index { base: BcReg, index: BcReg },
     Send { recv: BcReg, method: IdentId },
-    Other,
+    LocalVar { dst: BcReg },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -183,6 +184,13 @@ pub(crate) struct IrContext {
     non_temp_num: u16,
     /// Source info.
     sourceinfo: SourceInfoRef,
+    /// Exception jump table.
+    exception_table: Vec<(
+        std::ops::Range<usize>,
+        usize,
+        Option<BcReg>,
+        Option<(BcReg, usize, (Loc, SourceInfoRef))>,
+    )>,
     /// Call site info.
     callsites: Vec<CallSite>,
     /// Offset of call site info.
@@ -275,6 +283,7 @@ impl IrContext {
             temp_num: 0,
             non_temp_num: 0,
             sourceinfo: info.sourceinfo.clone(),
+            exception_table: vec![],
             callsites: vec![],
             callsite_offset,
             functions: vec![],
@@ -346,8 +355,9 @@ impl IrContext {
     }
 
     /// get the next register id.
-    fn next_reg(&self) -> BcTemp {
-        BcTemp(self.temp)
+    fn next_reg(&mut self) -> BcTemp {
+        self.push();
+        self.pop()
     }
 
     fn push(&mut self) -> BcTemp {
@@ -483,7 +493,7 @@ impl IrContext {
             Some(ret) => ret,
             None => self.pop().into(),
         };
-        assert_eq!(0, self.temp);
+        //assert_eq!(0, self.temp);
         self.emit(BcIr::Ret(ret), Loc::default());
     }
 
@@ -779,7 +789,11 @@ impl IrContext {
                 let name = IdentId::get_id(name);
                 LvalueKind::GlobalVar(name)
             }
-            NodeKind::LocalVar(0, _) => LvalueKind::Other,
+            NodeKind::LocalVar(0, name) | NodeKind::Ident(name) => {
+                let name = IdentId::get_id(name);
+                let dst = self.assign_local(name).into();
+                LvalueKind::LocalVar { dst }
+            }
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
                 let name = IdentId::get_id(ident);
@@ -843,7 +857,9 @@ impl IrContext {
                 let callid = self.add_callsite(method, 1, None, vec![]);
                 self.gen_method_assign(callid, recv, src, loc);
             }
-            LvalueKind::Other => unreachable!(),
+            LvalueKind::LocalVar { dst } => {
+                self.emit_mov(dst, src);
+            }
         }
     }
 
@@ -1293,23 +1309,86 @@ impl IrContext {
                 else_,
                 ensure,
             } => {
-                if !rescue.is_empty() {
-                    /*return Err(MonorubyErr::unsupported_feature(
-                        "rescue clause is not supported.",
-                        loc,
-                        self.sourceinfo.clone(),
-                    ));*/
-                    eprintln!("rescue clause is not supported.");
-                };
+                let ensure_label = self.new_label();
 
-                if let Some(box else_) = else_ {
-                    self.gen_expr(body, UseMode::NotUse)?;
-                    self.gen_expr(else_, use_mode)?;
+                let body_use = if else_.is_some() {
+                    UseMode::NotUse
+                } else if ensure.is_some() && use_mode.is_ret() {
+                    UseMode::Use
                 } else {
-                    self.gen_expr(body, use_mode)?;
+                    use_mode
+                };
+                let rescue_use = if ensure.is_some() && use_mode.is_ret() {
+                    UseMode::Use
+                } else {
+                    use_mode
+                };
+                let body_start = self.new_label();
+                let body_end = self.new_label();
+                self.apply_label(body_start);
+                self.gen_expr(body, body_use)?;
+                self.apply_label(body_end);
+                if !rescue.is_empty() {
+                    let else_label = self.new_label();
+                    self.emit_br(else_label);
+                    let rescue_start = self.new_label();
+                    let mut err_reg = None;
+                    let mut ex_reg = None;
+                    self.apply_label(rescue_start);
+                    assert_eq!(1, rescue.len());
+                    for RescueEntry {
+                        exception_list,
+                        assign,
+                        box body,
+                    } in rescue
+                    {
+                        let old = self.temp;
+                        if !exception_list.is_empty() {
+                            let start: BcReg = self.next_reg().into();
+                            let len = exception_list.len();
+                            let mut loc = exception_list[0].loc;
+                            for ex in exception_list {
+                                loc = loc.merge(ex.loc);
+                                self.gen_expr(ex, UseMode::Use)?;
+                            }
+                            ex_reg = Some((start, len, (loc, self.sourceinfo.clone())));
+                        };
+                        if let Some(box assign) = assign {
+                            let lhs = self.eval_lvalue(&assign)?;
+                            let loc = assign.loc;
+                            let src = self.next_reg().into();
+                            self.gen_assign(src, lhs, loc);
+                            err_reg = Some(src);
+                        };
+                        self.gen_expr(body, rescue_use)?;
+                        self.emit_br(ensure_label);
+                        self.temp = old;
+                    }
+                    self.exception_table.push((
+                        body_start..body_end,
+                        rescue_start,
+                        err_reg,
+                        ex_reg,
+                    ));
+                    self.apply_label(else_label);
+                } else {
+                    if let Some(else_) = else_ {
+                        return Err(MonorubyErr::syntax(
+                            "else without rescue is useless. (SyntaxError)".to_string(),
+                            else_.loc,
+                            self.sourceinfo.clone(),
+                        ));
+                    }
                 }
+                if let Some(box else_) = else_ {
+                    self.gen_expr(else_, rescue_use)?;
+                }
+                self.apply_label(ensure_label);
                 if let Some(box ensure) = ensure {
                     self.gen_expr(ensure, UseMode::NotUse)?;
+                    if use_mode.is_ret() {
+                        self.emit_ret(None);
+                    }
                 }
                 return Ok(());
             }
@@ -1828,7 +1907,7 @@ impl IrContext {
         // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
             if let Some(local) = self.is_assign_local(&lhs) {
-                assert_eq!(LvalueKind::Other, kind);
+                assert!(matches!(kind, LvalueKind::LocalVar { .. }));
                 self.emit_mov(local.into(), temp_reg.into());
             } else {
                 let src = temp_reg.into();
@@ -1868,14 +1947,11 @@ impl IrContext {
             let name = IdentId::get_id(&param[0].1);
             let counter = self.assign_local(name);
             let break_pos = self.new_label();
-            self.loops.push((
-                LoopKind::For,
-                break_pos,
-                match use_value {
-                    true => Some(self.next_reg().into()),
-                    false => None,
-                },
-            ));
+            let ret_reg = match use_value {
+                true => Some(self.next_reg().into()),
+                false => None,
+            };
+            self.loops.push((LoopKind::For, break_pos, ret_reg));
             // +------+
             // | iter | (when use_value)
             // +------+
@@ -1954,14 +2030,11 @@ impl IrContext {
         let cond_pos = self.new_label();
         let succ_pos = self.new_label();
         let break_pos = self.new_label();
-        self.loops.push((
-            LoopKind::While,
-            break_pos,
-            match use_value {
-                true => Some(self.next_reg().into()),
-                false => None,
-            },
-        ));
+        let ret_reg = match use_value {
+            true => Some(self.next_reg().into()),
+            false => None,
+        };
+        self.loops.push((LoopKind::While, break_pos, ret_reg));
         let loc = body.loc;
         self.apply_label(cond_pos);
         self.emit(BcIr::LoopStart, loc);
@@ -1990,14 +2063,11 @@ impl IrContext {
     ) -> Result<()> {
         let loop_pos = self.new_label();
         let break_pos = self.new_label();
-        self.loops.push((
-            LoopKind::While,
-            break_pos,
-            match use_value {
-                true => Some(self.next_reg().into()),
-                false => None,
-            },
-        ));
+        let ret_reg = match use_value {
+            true => Some(self.next_reg().into()),
+            false => None,
+        };
+        self.loops.push((LoopKind::While, break_pos, ret_reg));
         let loc = body.loc;
         self.apply_label(loop_pos);
         self.emit(BcIr::LoopStart, loc);

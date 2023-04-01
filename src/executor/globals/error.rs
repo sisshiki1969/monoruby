@@ -84,43 +84,49 @@ impl Globals {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
     pub kind: MonorubyErrKind,
+    pub msg: String,
     pub loc: Vec<(Loc, SourceInfoRef)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
-    NotMethod(String),
-    Arguments(String),
-    Syntax(ParseErrKind),
-    Syntax2(String),
-    Unimplemented(String),
-    UninitConst(String),
+    NotMethod,
+    Arguments,
+    Syntax,
+    Unimplemented,
+    Name,
     DivideByZero,
-    LocalJump(String),
-    Range(String),
-    Type(String),
-    Index(String),
-    Frozen(String),
-    Load(String),
-    Internal(String),
-    Regex(String),
-    Runtime(String),
+    LocalJump,
+    Range,
+    Type,
+    Index,
+    Frozen,
+    Load,
+    Internal,
+    Regex,
+    Runtime,
 }
 
 impl MonorubyErr {
-    fn new(kind: MonorubyErrKind) -> Self {
-        MonorubyErr { kind, loc: vec![] }
-    }
-
-    fn new_with_loc(kind: MonorubyErrKind, loc: Loc, sourceinfo: SourceInfoRef) -> Self {
+    fn new(kind: MonorubyErrKind, msg: String) -> Self {
         MonorubyErr {
             kind,
-            loc: vec![(loc, sourceinfo)],
+            msg,
+            loc: vec![],
         }
     }
 
-    pub fn is_eof(&self) -> bool {
-        self.kind == MonorubyErrKind::Syntax(ParseErrKind::UnexpectedEOF)
+    fn new_with_loc(
+        kind: MonorubyErrKind,
+        msg: String,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        MonorubyErr {
+            kind,
+            msg,
+            loc: vec![(loc, sourceinfo)],
+        }
     }
 
     pub fn show_all_loc(&self) {
@@ -148,41 +154,38 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self) -> String {
+        format!("{} ({})", self.msg, self.get_type())
+    }
+
+    fn get_type(&self) -> &str {
         match &self.kind {
-            /*MonorubyErrKind::UndefinedLocal(ident) => {
-                format!("undefined local variable or method `{}'", ident)
-            }*/
-            MonorubyErrKind::NotMethod(msg) => format!("{msg} (NoMethodError)"),
-            MonorubyErrKind::Arguments(msg) => format!("{msg} (ArgumentError)"),
-            MonorubyErrKind::Syntax(kind) => match kind {
-                ParseErrKind::SyntaxError(msg) => msg.to_string(),
-                ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
-            },
-            MonorubyErrKind::Syntax2(msg) => msg.to_string(),
-            MonorubyErrKind::Unimplemented(msg) => msg.to_string(),
-            MonorubyErrKind::UninitConst(msg) => msg.to_string(),
-            MonorubyErrKind::DivideByZero => "divided by 0 (ZeroDivisionError)".to_string(),
-            MonorubyErrKind::LocalJump(msg) => format!("{msg} (LocalJumpError)"),
-            MonorubyErrKind::Range(msg) => format!("{msg} (RangeError)"),
-            MonorubyErrKind::Type(msg) => format!("{msg} (TypeError)"),
-            MonorubyErrKind::Index(msg) => format!("{msg} (IndexError)"),
-            MonorubyErrKind::Frozen(msg) => format!("{msg} (FrozenError)"),
-            MonorubyErrKind::Load(msg) => format!("{msg} (LoadError)"),
-            MonorubyErrKind::Internal(msg) => msg.to_string(),
-            MonorubyErrKind::Regex(msg) => format!("{msg} (RegexError)"),
-            MonorubyErrKind::Runtime(msg) => format!("{msg} (RuntimeError)"),
+            MonorubyErrKind::NotMethod => "NoMethodError",
+            MonorubyErrKind::Arguments => "ArgumentError",
+            MonorubyErrKind::Syntax => "SyntaxError",
+            MonorubyErrKind::Unimplemented => "Unimplemented",
+            MonorubyErrKind::Name => "NameError",
+            MonorubyErrKind::DivideByZero => "ZeroDivisionError",
+            MonorubyErrKind::LocalJump => "LocalJumpError",
+            MonorubyErrKind::Range => "RangeError",
+            MonorubyErrKind::Type => "TypeError",
+            MonorubyErrKind::Index => "IndexError",
+            MonorubyErrKind::Frozen => "FrozenError",
+            MonorubyErrKind::Load => "LoadError",
+            MonorubyErrKind::Internal => "InternalError",
+            MonorubyErrKind::Regex => "RegexError",
+            MonorubyErrKind::Runtime => "RuntimeError",
         }
     }
 }
 
 // Parser level errors.
 impl MonorubyErr {
-    pub(crate) fn parse(error: ParseErr) -> MonorubyErr {
-        MonorubyErr::new_with_loc(
-            MonorubyErrKind::Syntax(error.kind),
-            error.loc,
-            error.source_info,
-        )
+    pub fn parse(error: ParseErr) -> MonorubyErr {
+        let msg = match error.kind {
+            ParseErrKind::SyntaxError(msg) => msg.to_string(),
+            ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
+        };
+        MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, error.loc, error.source_info)
     }
 }
 
@@ -194,7 +197,8 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!("unsupported parameter kind {param:?}")),
+            MonorubyErrKind::Unimplemented,
+            format!("unsupported parameter kind {param:?}"),
             loc,
             sourceinfo,
         )
@@ -202,7 +206,8 @@ impl MonorubyErr {
 
     pub(crate) fn unsupported_lhs(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!("unsupported lhs {:?}", lhs.kind)),
+            MonorubyErrKind::Unimplemented,
+            format!("unsupported lhs {:?}", lhs.kind),
             lhs.loc,
             sourceinfo,
         )
@@ -210,10 +215,8 @@ impl MonorubyErr {
 
     pub(crate) fn unsupported_block_param(lhs: &Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!(
-                "unsupported block parameter type {:?}",
-                lhs.kind
-            )),
+            MonorubyErrKind::Unimplemented,
+            format!("unsupported block parameter type {:?}", lhs.kind),
             lhs.loc,
             sourceinfo,
         )
@@ -221,7 +224,8 @@ impl MonorubyErr {
 
     pub(crate) fn unsupported_node(expr: Node, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(format!("unsupported nodekind {:?}", expr.kind)),
+            MonorubyErrKind::Unimplemented,
+            format!("unsupported nodekind {:?}", expr.kind),
             expr.loc,
             sourceinfo,
         )
@@ -233,18 +237,15 @@ impl MonorubyErr {
         sourceinfo: SourceInfoRef,
     ) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented(msg.to_string()),
+            MonorubyErrKind::Unimplemented,
+            msg.to_string(),
             loc,
             sourceinfo,
         )
     }
 
     pub(crate) fn syntax(msg: String, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
-        MonorubyErr::new_with_loc(
-            MonorubyErrKind::Syntax(ParseErrKind::SyntaxError(msg)),
-            loc,
-            sourceinfo,
-        )
+        MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, loc, sourceinfo)
     }
 
     pub(crate) fn cant_set_variable(id: usize, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
@@ -267,7 +268,8 @@ impl MonorubyErr {
 
     pub(crate) fn escape_from_eval(loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         MonorubyErr::new_with_loc(
-            MonorubyErrKind::Syntax2("can't escape from eval.".to_string()),
+            MonorubyErrKind::Syntax,
+            "can't escape from eval.".to_string(),
             loc,
             sourceinfo,
         )
@@ -277,11 +279,14 @@ impl MonorubyErr {
 // Executor level errors.
 impl MonorubyErr {
     pub(crate) fn method_not_found(globals: &Globals, name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "undefined method `{name}' for {}:{}",
-            obj.to_s(globals),
-            obj.get_real_class_name(globals)
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::NotMethod,
+            format!(
+                "undefined method `{name}' for {}:{}",
+                obj.to_s(globals),
+                obj.get_real_class_name(globals)
+            ),
+        )
     }
 
     pub(crate) fn method_not_found_for_class(
@@ -289,10 +294,10 @@ impl MonorubyErr {
         name: IdentId,
         class: ClassId,
     ) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "undefined method `{name}' for {}",
-            class.get_name(globals)
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::NotMethod,
+            format!("undefined method `{name}' for {}", class.get_name(globals)),
+        )
     }
 
     pub(crate) fn private_method_called(
@@ -300,34 +305,39 @@ impl MonorubyErr {
         name: IdentId,
         obj: Value,
     ) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::NotMethod(format!(
-            "private method `{name}' called for {}:{}",
-            obj.to_s(globals),
-            obj.get_real_class_name(globals)
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::NotMethod,
+            format!(
+                "private method `{name}' called for {}:{}",
+                obj.to_s(globals),
+                obj.get_real_class_name(globals)
+            ),
+        )
     }
 
     pub(crate) fn wrong_arguments(expected: usize, given: usize) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Arguments(format!(
-            "wrong number of arguments (given {given}, expected {expected})"
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::Arguments,
+            format!("wrong number of arguments (given {given}, expected {expected})"),
+        )
     }
 
     pub(crate) fn bad_range(start: Value, end: Value) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Arguments(format!(
-            "bad value for range. start:{:?} end:{:?}",
-            start, end
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::Arguments,
+            format!("bad value for range. start:{:?} end:{:?}", start, end),
+        )
     }
 
     pub(crate) fn divide_by_zero() -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::DivideByZero)
+        MonorubyErr::new(MonorubyErrKind::DivideByZero, "divided by 0".to_string())
     }
 
     pub(crate) fn no_block_given() -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::LocalJump(
+        MonorubyErr::new(
+            MonorubyErrKind::LocalJump,
             "no block given (yield).".to_string(),
-        ))
+        )
     }
 
     /*pub(crate) fn range(msg: String) -> MonorubyErr {
@@ -335,20 +345,21 @@ impl MonorubyErr {
     }*/
 
     pub(crate) fn char_out_of_range(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Range(format!(
-            "{} out of char range",
-            globals.val_tos(val)
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::Range,
+            format!("{} out of char range", globals.val_tos(val)),
+        )
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::UninitConst(format!(
-            "uninitialized constant {name}"
-        )))
+        MonorubyErr::new(
+            MonorubyErrKind::Name,
+            format!("uninitialized constant {name}"),
+        )
     }
 
     pub(crate) fn typeerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Type(msg))
+        MonorubyErr::new(MonorubyErrKind::Type, msg)
     }
 
     pub(crate) fn no_implicit_conversion(
@@ -365,6 +376,10 @@ impl MonorubyErr {
 
     pub(crate) fn is_not_class_nor_module(name: String) -> MonorubyErr {
         MonorubyErr::typeerr(format!("{name} is not a class nor a module",))
+    }
+
+    pub(crate) fn is_not_class_nor_module_rescue() -> MonorubyErr {
+        MonorubyErr::typeerr(format!("class or module required for rescue clause",))
     }
 
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
@@ -406,7 +421,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn argumenterr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Arguments(msg))
+        MonorubyErr::new(MonorubyErrKind::Arguments, msg)
     }
 
     pub(crate) fn zero_width_padding() -> MonorubyErr {
@@ -437,7 +452,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn indexerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Index(msg))
+        MonorubyErr::new(MonorubyErrKind::Index, msg)
     }
 
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {
@@ -448,7 +463,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn frozenerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Frozen(msg))
+        MonorubyErr::new(MonorubyErrKind::Frozen, msg)
     }
 
     pub(crate) fn cant_modify_frozen(globals: &Globals, val: Value) -> MonorubyErr {
@@ -460,7 +475,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn loaderr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Load(msg))
+        MonorubyErr::new(MonorubyErrKind::Load, msg)
     }
 
     pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
@@ -471,15 +486,15 @@ impl MonorubyErr {
     }
 
     pub(crate) fn internalerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Internal(msg))
+        MonorubyErr::new(MonorubyErrKind::Internal, msg)
     }
 
     pub(crate) fn regexerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Regex(msg))
+        MonorubyErr::new(MonorubyErrKind::Regex, msg)
     }
 
     pub(crate) fn runtimeerr(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Runtime(msg))
+        MonorubyErr::new(MonorubyErrKind::Runtime, msg)
     }
 }
 

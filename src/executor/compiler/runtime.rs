@@ -588,23 +588,46 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     Some(Value::nil())
 }
 
-pub(super) extern "C" fn get_error_location(
-    _vm: &mut Executor,
+pub(super) extern "C" fn handle_error(
+    vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
-) {
+) -> Option<BcPc> {
     let func_info = &globals[meta.func_id()];
-    let bc_base = func_info.data.pc;
-    let normal_info = match &func_info.kind {
-        FuncKind::ISeq(info) => info,
-        FuncKind::Builtin { .. } => return,
-        FuncKind::AttrReader { .. } => return,
-        FuncKind::AttrWriter { .. } => return,
-    };
-    let sourceinfo = normal_info.sourceinfo.clone();
-    let loc = normal_info.sourcemap[pc - bc_base];
-    globals.push_error_location(loc, sourceinfo);
+    match &func_info.kind {
+        FuncKind::ISeq(info) => {
+            // check exception table.
+            let mut lfp = vm.cfp().lfp();
+            if let Some((dest, err_reg, ex)) = info.get_exception_dest(pc) {
+                if let Some((ex_slot, len, loc)) = ex {
+                    let ex_slot = ex_slot.0 as usize;
+                    for slot in ex_slot..(ex_slot + len) {
+                        let v = unsafe { lfp.register(slot) };
+                        if let Err(mut err) = v.expect_class_or_module_rescue() {
+                            err.loc.push(loc);
+                            globals.set_error(err);
+                            return None;
+                        }
+                    }
+                }
+                let err = globals.take_error().unwrap();
+                let err_val = Value::new_exception(err);
+                if let Some(err_reg) = err_reg {
+                    unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
+                }
+                return Some(dest);
+            };
+            let bc_base = func_info.data.pc();
+            let sourceinfo = info.sourceinfo.clone();
+            let loc = info.sourcemap[pc - bc_base];
+            globals.push_error_location(loc, sourceinfo);
+        }
+        FuncKind::Builtin { .. } => {}
+        FuncKind::AttrReader { .. } => {}
+        FuncKind::AttrWriter { .. } => {}
+    }
+    None
 }
 
 pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {

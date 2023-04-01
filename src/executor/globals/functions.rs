@@ -397,11 +397,7 @@ impl FnStore {
         self.inline.get(&func_id)
     }
 
-    pub(super) fn compile_script(
-        &mut self,
-        ast: Node,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
+    pub fn compile_script(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
         let main_fid = self.functions.add_method(
             Some(IdentId::get_id("/main")),
             BlockInfo {
@@ -491,8 +487,8 @@ impl FnStore {
         IrContext::compile_func(func_id, self)?;
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
-        let pc = info.get_bytecode_address(0);
-        self[func_id].data.pc = pc;
+        let pc = info.get_pc(0);
+        self[func_id].data.set_pc(pc);
         self[func_id].data.set_reg_num(regs as i64);
         Ok(())
     }
@@ -552,7 +548,7 @@ impl FuncInfo {
             name,
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::vm_method(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
@@ -571,7 +567,7 @@ impl FuncInfo {
             name: None,
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::vm_method(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
@@ -588,7 +584,7 @@ impl FuncInfo {
             name,
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::vm_classdef(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
@@ -601,7 +597,7 @@ impl FuncInfo {
             name: Some(IdentId::get_id_from_string(name)),
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::native(func_id, reg_num),
             },
             kind: FuncKind::Builtin {
@@ -615,7 +611,7 @@ impl FuncInfo {
             name: Some(name),
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::native(func_id, 0),
             },
             kind: FuncKind::AttrReader { ivar_name },
@@ -627,7 +623,7 @@ impl FuncInfo {
             name: Some(name),
             data: FuncData {
                 codeptr: None,
-                pc: BcPc::default(),
+                pc: None,
                 meta: Meta::native(func_id, 1),
             },
             kind: FuncKind::AttrWriter { ivar_name },
@@ -694,6 +690,13 @@ pub(crate) struct ISeqInfo {
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
     /// Source map.
     pub sourcemap: Vec<Loc>,
+    /// Exception handling map.
+    exception_map: Vec<(
+        std::ops::Range<BcPc>,                         // range of capturing exception
+        BcPc,                                          // destination pc
+        Option<SlotId>,                                // a slot where an error object is assigned
+        Option<(SlotId, usize, (Loc, SourceInfoRef))>, // exception classes: (start, len, position in the code)
+    )>,
     /// the name of arguments.
     pub(in crate::executor) args: ArgumentsInfo,
     /// outer local variables. (dynamic_locals, block_param)
@@ -747,6 +750,7 @@ impl ISeqInfo {
             name,
             bytecode: None,
             sourcemap: vec![],
+            exception_map: vec![],
             args: args.clone(),
             outer_locals,
             literals: vec![],
@@ -787,9 +791,9 @@ impl ISeqInfo {
     }
 
     /// get bytecode address.
-    pub(in crate::executor) fn get_bytecode_address(&self, index: usize) -> BcPc {
+    /*pub(in crate::executor) fn get_bytecode_address(&self, index: usize) -> BcPc {
         BcPcBase::new(self) + index
-    }
+    }*/
 
     /// get a number of registers.
     pub(crate) fn total_reg_num(&self) -> usize {
@@ -869,12 +873,43 @@ impl ISeqInfo {
         }
     }
 
+    pub(in crate::executor) fn get_exception_dest(
+        &self,
+        pc: BcPc,
+    ) -> Option<(
+        BcPc,
+        Option<SlotId>,
+        Option<(SlotId, usize, (Loc, SourceInfoRef))>,
+    )> {
+        self.exception_map
+            .iter()
+            .filter_map(|(range, dest, slot, ex)| {
+                if range.contains(&pc) {
+                    Some((*dest, *slot, ex.clone()))
+                } else {
+                    None
+                }
+            })
+            .nth(0)
+    }
+
+    pub(in crate::executor) fn exception_push(
+        &mut self,
+        range: std::ops::Range<BcPc>,
+        dest: BcPc,
+        err_reg: Option<SlotId>,
+        ex_reg: Option<(SlotId, usize, (Loc, SourceInfoRef))>,
+    ) {
+        self.exception_map.push((range, dest, err_reg, ex_reg));
+    }
+
     /// get bytecode length.
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode().len()
     }
 
     /// get bytecode address.
+    #[cfg(feature = "emit-bc")]
     pub(crate) fn bytecode_top(&self) -> *const Bc {
         self.bytecode().as_ptr()
     }

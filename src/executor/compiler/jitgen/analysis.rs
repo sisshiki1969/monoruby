@@ -8,7 +8,7 @@ pub(super) struct LoopAnalysis {
     loop_level: usize,
     backedge_info: Option<RegInfo>,
     return_info: Option<RegInfo>,
-    pc: BcPc,
+    pc: Option<BcPc>,
 }
 
 impl LoopAnalysis {
@@ -87,7 +87,7 @@ impl LoopAnalysis {
             loop_level: 0,
             backedge_info: None,
             return_info: None,
-            pc: BcPc::default(),
+            pc: None,
         }
     }
 
@@ -133,9 +133,9 @@ impl LoopAnalysis {
         bb_pos: usize,
     ) -> Option<RegInfo> {
         for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
-            self.pc = BcPc::from(pc);
+            self.pc = Some(BcPc::from(pc));
             let idx = bb_pos + ofs;
-            match self.pc.get_ir(fnstore) {
+            match self.pc.unwrap().get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}

@@ -151,6 +151,15 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
         .output();
 
     let res = match &output {
+        Err(err) => {
+            panic!("Error occured in executing Ruby. {:?}", err);
+        }
+        Ok(output) if !output.status.success() => {
+            panic!(
+                "Error occured in executing Ruby. {}",
+                std::str::from_utf8(&output.stderr).unwrap()
+            );
+        }
         Ok(output) => {
             let res = std::str::from_utf8(&output.stdout)
                 .unwrap()
@@ -163,9 +172,6 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
                 .node;
 
             Value::from_ast(&nodes, globals)
-        }
-        Err(err) => {
-            panic!("Error occured in executing Ruby. {:?}", err);
         }
     };
     #[cfg(debug_assertions)]
@@ -1975,6 +1981,62 @@ mod test {
               end
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn rescue() {
+        run_test(
+            r#"
+            begin
+              100
+            end
+        "#,
+        );
+        run_test(
+            r#"
+            begin
+              100
+            rescue
+            else
+              200
+            end
+        "#,
+        );
+        run_test(
+            r#"
+            begin
+              100
+            rescue
+            else
+              200
+            ensure
+              300
+            end
+        "#,
+        );
+        run_test(
+            r#"
+            $x = []
+            begin
+                begin
+                    $x << 50
+                    1/0
+                    $x << 100
+                rescue => c
+                    $x << 150
+                else
+                    $x << 200
+                ensure
+                    $x << 250
+                    1/0
+                    $x << 300
+                end
+            rescue => d
+                $x << d.to_s
+            end        
+            $x
+        "#,
         );
     }
 }

@@ -344,7 +344,11 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
-    pub(crate) fn new_time(time: TimeInfo) -> Self {
+    pub(crate) fn new_exception(err: MonorubyErr) -> Self {
+        RValue::new_exception(err).pack()
+    }
+
+    pub(crate) fn new_time(time: TimeInner) -> Self {
         RValue::new_time(time).pack()
     }
 
@@ -522,12 +526,12 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_hash(&self) -> &HashInfo {
+    pub(crate) fn as_hash(&self) -> &HashInner {
         assert_eq!(ObjKind::HASH, self.rvalue().kind());
         self.rvalue().as_hash()
     }
 
-    pub(crate) fn is_hash(&self) -> Option<&HashInfo> {
+    pub(crate) fn is_hash(&self) -> Option<&HashInner> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
             ObjKind::HASH => Some(rv.as_hash()),
@@ -535,7 +539,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_hash_mut(&mut self) -> &mut HashInfo {
+    pub(crate) fn as_hash_mut(&mut self) -> &mut HashInner {
         assert_eq!(ObjKind::HASH, self.rvalue().kind());
         self.rvalue_mut().as_hash_mut()
     }
@@ -580,14 +584,14 @@ impl Value {
         Module::new(*self)
     }
 
-    pub(crate) fn as_time(&self) -> &TimeInfo {
+    pub(crate) fn as_time(&self) -> &TimeInner {
         match self.rvalue().kind() {
             ObjKind::TIME => self.rvalue().as_time(),
             _ => unreachable!(),
         }
     }
 
-    pub(crate) fn is_range(&self) -> Option<&Range> {
+    pub(crate) fn is_range(&self) -> Option<&RangeInner> {
         match self.rvalue().kind() {
             ObjKind::RANGE => Some(self.rvalue().as_range()),
             _ => None,
@@ -601,6 +605,13 @@ impl Value {
                 let name = globals.val_tos(*self);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
+        }
+    }
+
+    pub(crate) fn expect_class_or_module_rescue(&self) -> Result<ClassId> {
+        match self.is_class_or_module() {
+            Some(class) => Ok(class),
+            None => Err(MonorubyErr::is_not_class_nor_module_rescue()),
         }
     }
 
@@ -698,11 +709,12 @@ impl Value {
         *self.rvalue_mut() = RValue::new_string(replace);
     }
 
-    pub(crate) fn as_range(&self) -> &Range {
+    pub(crate) fn as_range(&self) -> &RangeInner {
         assert_eq!(ObjKind::RANGE, self.rvalue().kind());
         self.rvalue().as_range()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn as_io(&self) -> &IoInner {
         assert_eq!(ObjKind::IO, self.rvalue().kind());
         self.rvalue().as_io()

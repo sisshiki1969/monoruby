@@ -1,3 +1,4 @@
+use ruruby_parse::ParseErrKind;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -47,26 +48,39 @@ fn main() {
                 } else {
                     code.clone()
                 };
-                let main_fid = match globals.compile_script_with_binding(
+
+                let main_fid = match ruruby_parse::Parser::parse_program_binding(
                     buf.clone(),
-                    std::path::Path::new(&format!("(irm):{script_line}")),
+                    std::path::Path::new(&format!("(irm):{script_line}")).into(),
                     context.clone(),
+                    None,
                 ) {
-                    Ok((fid, collector)) => {
+                    Ok(res) => {
+                        let collector = res.lvar_collector;
+                        let fid = match globals.func.compile_script(res.node, res.source_info) {
+                            Ok(id) => id,
+                            Err(err) => {
+                                err.show_error_message_and_all_loc();
+                                cont_mode = false;
+                                continue;
+                            }
+                        };
                         context = Some(collector);
                         fid
                     }
                     Err(err) => {
-                        if err.is_eof() {
+                        if err.kind == ParseErrKind::UnexpectedEOF {
                             rl.add_history_entry(code.as_str()).unwrap();
                             cont_mode = true;
                         } else {
+                            let err = MonorubyErr::parse(err);
                             err.show_error_message_and_all_loc();
                             cont_mode = false;
-                        };
+                        }
                         continue;
                     }
                 };
+
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
                 match interp.eval(&mut globals, main_fid) {

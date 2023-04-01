@@ -179,6 +179,7 @@ impl alloc::GC<RValue> for RValue {
             }
             ObjKind::REGEXP => {}
             ObjKind::IO => {}
+            ObjKind::EXCEPTION => {}
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -364,6 +365,9 @@ impl RValue {
                     ObjKind::IO => ObjKind {
                         io: self.kind.io.clone(),
                     },
+                    ObjKind::EXCEPTION => ObjKind {
+                        exception: self.kind.exception.clone(),
+                    },
                     _ => unreachable!("clone()"),
                 }
             },
@@ -515,6 +519,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_exception(err: MonorubyErr) -> Self {
+        RValue {
+            flags: RVFlag::new(EXCEPTION_CLASS, ObjKind::EXCEPTION),
+            kind: ObjKind::exception(err),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
             flags: RVFlag::new(IO_CLASS, ObjKind::IO),
@@ -535,7 +547,7 @@ impl RValue {
         Self::new_io(IoInner::stderr())
     }
 
-    pub(super) fn new_time(time: TimeInfo) -> Self {
+    pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
             flags: RVFlag::new(TIME_CLASS, ObjKind::TIME),
             kind: ObjKind::time(time),
@@ -651,15 +663,19 @@ impl RValue {
         unsafe { &mut self.kind.array }
     }
 
-    pub(super) fn as_range(&self) -> &Range {
+    pub(super) fn as_range(&self) -> &RangeInner {
         unsafe { &self.kind.range }
     }
 
-    pub(super) fn as_hash(&self) -> &HashInfo {
+    pub fn as_exception(&self) -> &ExceptionInner {
+        unsafe { &self.kind.exception }
+    }
+
+    pub(super) fn as_hash(&self) -> &HashInner {
         unsafe { &self.kind.hash }
     }
 
-    pub(super) fn as_hash_mut(&mut self) -> &mut HashInfo {
+    pub(super) fn as_hash_mut(&mut self) -> &mut HashInner {
         unsafe { &mut self.kind.hash }
     }
 
@@ -667,7 +683,7 @@ impl RValue {
         unsafe { &self.kind.regexp }
     }
 
-    pub(super) fn as_io(&self) -> &IoInner {
+    pub fn as_io(&self) -> &IoInner {
         unsafe { &self.kind.io }
     }
 
@@ -675,7 +691,7 @@ impl RValue {
         unsafe { &self.kind.proc }
     }
 
-    pub(crate) fn as_time(&self) -> &TimeInfo {
+    pub(crate) fn as_time(&self) -> &TimeInner {
         unsafe { &self.kind.time }
     }
 
@@ -744,11 +760,12 @@ pub union ObjKind {
     bignum: ManuallyDrop<BigInt>,
     float: f64,
     string: ManuallyDrop<StringInner>,
-    time: ManuallyDrop<TimeInfo>,
+    time: ManuallyDrop<TimeInner>,
     array: ManuallyDrop<ArrayInner>,
-    range: ManuallyDrop<Range>,
+    range: ManuallyDrop<RangeInner>,
+    exception: ManuallyDrop<Box<ExceptionInner>>,
     proc: ManuallyDrop<BlockData>,
-    hash: ManuallyDrop<HashInfo>,
+    hash: ManuallyDrop<HashInner>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
 }
@@ -765,22 +782,28 @@ impl ObjKind {
     pub const TIME: u8 = 7;
     pub const ARRAY: u8 = 8;
     pub const RANGE: u8 = 9;
-    //pub const SPLAT: u8 = 10;
+    pub const EXCEPTION: u8 = 10;
     pub const PROC: u8 = 11;
     pub const HASH: u8 = 12;
     pub const REGEXP: u8 = 13;
     pub const IO: u8 = 14;
 }
 
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct ExceptionInner {
+    pub err: MonorubyErr,
+}
+
 #[derive(Debug, Clone, PartialEq, Hash)]
 #[repr(C)]
-pub struct Range {
+pub struct RangeInner {
     pub start: Value,
     pub end: Value,
     pub exclude_end: u32,
 }
 
-impl Range {
+impl RangeInner {
     pub(crate) fn eql(&self, other: &Self) -> bool {
         self.start.eql(&other.start)
             && self.end.eql(&other.end)
@@ -845,7 +868,7 @@ impl ObjKind {
 
     fn range(start: Value, end: Value, exclude_end: bool) -> Self {
         Self {
-            range: ManuallyDrop::new(Range {
+            range: ManuallyDrop::new(RangeInner {
                 start,
                 end,
                 exclude_end: u32::from(exclude_end),
@@ -853,9 +876,15 @@ impl ObjKind {
         }
     }
 
+    fn exception(err: MonorubyErr) -> Self {
+        Self {
+            exception: ManuallyDrop::new(Box::new(ExceptionInner { err })),
+        }
+    }
+
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashInfo::new(map)),
+            hash: ManuallyDrop::new(HashInner::new(map)),
         }
     }
 
@@ -871,7 +900,7 @@ impl ObjKind {
         }
     }
 
-    fn time(info: TimeInfo) -> Self {
+    fn time(info: TimeInner) -> Self {
         Self {
             time: ManuallyDrop::new(info),
         }

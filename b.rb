@@ -1,7 +1,16 @@
-      str0 = "bar"
-      res = (str0[2,1])
-      for __i in 0..7 do
-          res2 = (str0[2,1])
-          __assert(res, res2)
-      end
-      res
+$x = []
+    begin
+        $x << 50
+        1/0
+        $x << 100
+    rescue 3 => c
+        $x << 150
+    else
+        $x << 200
+    ensure
+        $x << 250
+        1/0
+        $x << 300
+    end
+
+puts $x

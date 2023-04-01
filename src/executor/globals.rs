@@ -176,22 +176,6 @@ impl Globals {
         }
     }
 
-    pub fn compile_script_with_binding(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-        context: Option<LvarCollector>,
-    ) -> Result<(FuncId, LvarCollector)> {
-        match Parser::parse_program_binding(code, path.into(), context, None) {
-            Ok(res) => {
-                let collector = res.lvar_collector;
-                let fid = self.func.compile_script(res.node, res.source_info)?;
-                Ok((fid, collector))
-            }
-            Err(err) => Err(MonorubyErr::parse(err)),
-        }
-    }
-
     pub(crate) fn flush_stdout(&mut self) {
         self.stdout.flush().unwrap();
     }
@@ -316,7 +300,8 @@ impl Globals {
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
-                ObjKind::IO => val.as_io().to_string(),
+                ObjKind::IO => rvalue.as_io().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.msg.clone(),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -351,7 +336,8 @@ impl Globals {
                 ObjKind::PROC => self.proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
-                ObjKind::IO => val.as_io().to_string(),
+                ObjKind::IO => rvalue.as_io().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.get_error_message(),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }
