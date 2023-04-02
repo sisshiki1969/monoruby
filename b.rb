@@ -1,5 +1,17 @@
-def f(x,y,a:100,b:200,c:300,d:400)
-    [a,b,c,d,x,y]
+res = []
+for i in 0..10
+    begin
+        x = 50.0 + i
+        1/0
+        x = 100.0
+    rescue => c
+        res << x
+        x = 150.0
+    else
+        x = 200.0
+    ensure
+        x = 300.0
+    end
 end
-
-puts f(1,2,**{c:3,d:2},d:4,a:1)
+res << x
+puts res
