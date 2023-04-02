@@ -1,4 +1,3 @@
-require 'benchmark'
 def fib n
   if n < 3
     1
@@ -7,6 +6,4 @@ def fib n
   end
 end
 
-Benchmark.bm do |x|
-  x.report { fib 35 }
-end
+puts fib 40

@@ -22,6 +22,7 @@ This project still remains in alpha stage. Currently, functionalities described 
 - if-then-elsif-end statement
 - for-in statement
 - while/until statement and postfix while/until modifier
+- begin-rescue=ensure statement
 - Object-oriented features
   - classes: Object, Integer, Float, String, Symbol, Class, Array, Hash, Proc, ..
   - superclass and singleton class and methods
@@ -31,6 +32,7 @@ This project still remains in alpha stage. Currently, functionalities described 
   - optional parameter
   - rest parameter
   - block parameter
+  - keyword parameter
 - garbage collection
 
 ## Benchmark
@@ -78,7 +80,10 @@ This project still remains in alpha stage. Currently, functionalities described 
 ## How to run
 
 To build monoruby, You'll need installation of Rust.
-Please be aware that **only nightly version of Rust works** for monoruby.
+Please be aware that **only nightly Rust works** for monoruby.
+
+[Check here to install Rust](https://www.rust-lang.org/ja/tools/install),
+and [see here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
 
 To run ruby program file on monoruby,
 
@@ -92,13 +97,13 @@ or
 > cargo run --release -- test.rb
 ```
 
-one liner
+one liner.
 
 ```sh
 > cargo run -- -e "puts 100"
 ```
 
-You can launch REPL.
+And also, you can launch REPL.
 
 ```sh
 > cargo run --bin irm
@@ -108,4 +113,18 @@ or
 
 ```sh
 > ./irm.sh
+```
+
+## how to install
+
+To install monoruby,
+
+```sh
+> cargo install --path .
+```
+
+Now, you can play with monoruby.
+
+```sh
+> monoruby test.rb
 ```

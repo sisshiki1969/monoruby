@@ -180,11 +180,6 @@ pub(super) extern "C" fn handle_invoker_arguments(
             // required + optional + rest
             handle_req_opt_rest(info, arg_num, callee_reg);
             // keyword
-            /*let CallSiteInfo {
-                name: _,
-                kw_pos,
-                kw_args,
-            } = &globals.func[callid];*/
             let params = &info.args.keyword_names;
             let callee_kw_pos = info.args.pos_num + 1;
             for (id, _) in params.iter().enumerate() {
