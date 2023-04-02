@@ -32,7 +32,7 @@ impl Codegen {
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
-        self.get_constant(id, pc, ctx);
+        self.get_constant(ctx, id, pc);
         monoasm!(self.jit,
             movq [rip + cached_value], rax;
             movq rdi, [rip + global_const_version];
@@ -70,7 +70,7 @@ impl Codegen {
 
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
-        self.get_constant(id, pc, ctx);
+        self.get_constant(ctx, id, pc);
         monoasm!(self.jit,
             movq [rip + cached_value], rax;
             movq rdi, rax;
@@ -95,7 +95,7 @@ impl Codegen {
         self.store_rax(dst);
     }
 
-    fn get_constant(&mut self, id: ConstSiteId, pc: BcPc, ctx: &BBContext) {
+    fn get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
@@ -106,6 +106,6 @@ impl Codegen {
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
     }
 }

@@ -447,8 +447,6 @@ impl MergeInfo {
     }
 }
 
-type UsingXmm = Vec<Xmm>;
-
 #[cfg(feature = "log-jit")]
 extern "C" fn log_deoptimize(
     _vm: &mut Executor,
@@ -999,7 +997,7 @@ impl Codegen {
                         call rax;
                     };
                     self.xmm_restore(&xmm_using);
-                    self.jit_handle_error(pc);
+                    self.jit_handle_error(&ctx, pc);
                     self.store_rax(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
@@ -1173,7 +1171,7 @@ impl Codegen {
                             self.load_rdi(src);
                             self.call_unop(neg_value as _);
                             self.xmm_restore(&xmm_using);
-                            self.jit_handle_error(pc);
+                            self.jit_handle_error(&ctx, pc);
                             self.store_rax(ret);
                         }
                     }
@@ -1248,7 +1246,7 @@ impl Codegen {
                         let deopt = self.gen_side_deopt(pc, &ctx);
                         self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         self.integer_cmp(kind);
-                        self.jit_handle_error(pc);
+                        self.jit_handle_error(&ctx, pc);
                         self.store_rax(ret);
                     } else {
                         self.writeback_binary(&mut ctx, &mode);
@@ -1258,7 +1256,7 @@ impl Codegen {
                         } else {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
-                            self.jit_handle_error(pc);
+                            self.jit_handle_error(&ctx, pc);
                             self.store_rax(ret);
                         }
                     }
@@ -1317,7 +1315,7 @@ impl Codegen {
                         call rax;
                     );
                     self.xmm_restore(&xmm_using);
-                    self.jit_handle_error(pc);
+                    self.jit_handle_error(&ctx, pc);
                 }
                 TraceIr::MethodCall {
                     ret,
@@ -1557,8 +1555,9 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn jit_handle_error(&mut self, pc: BcPc) {
+    fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
         let raise = self.vm_raise;
+        let wb = ctx.get_write_back();
         if self.jit.get_page() == 0 {
             let error = self.jit.label();
             monoasm!(self.jit,
@@ -1567,7 +1566,10 @@ impl Codegen {
             );
             self.jit.select_page(1);
             monoasm!(self.jit,
-            error:
+                error:
+            );
+            self.gen_write_back(wb);
+            monoasm!(self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;
             );
@@ -1577,6 +1579,9 @@ impl Codegen {
             monoasm!(self.jit,
                 testq rax, rax; // Option<Value>
                 jne  cont;
+            );
+            self.gen_write_back(wb);
+            monoasm!(self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;
             cont:

@@ -92,9 +92,8 @@ impl Codegen {
                 self.store_rax(ret);
             }
             BinOpK::Mul | BinOpK::Div | BinOpK::Rem => {
-                let xmm_using = ctx.get_xmm_using();
                 self.load_binary_args_with_mode(&mode);
-                self.generic_binop(ret, kind.generic_func() as _, xmm_using, pc);
+                self.generic_binop(ctx, ret, kind.generic_func() as _, pc);
             }
             _ => {
                 self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
@@ -370,8 +369,7 @@ impl Codegen {
         kind: BinOpK,
         ret: SlotId,
     ) {
-        let xmm_using = ctx.get_xmm_using();
-        self.generic_binop(ret, kind.generic_func() as _, xmm_using, pc);
+        self.generic_binop(ctx, ret, kind.generic_func() as _, pc);
     }
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
@@ -501,7 +499,7 @@ impl Codegen {
         pc: BcPc,
     ) {
         self.generic_cmp(kind, ctx);
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
         monoasm!(self.jit,
             orq  rax, 0x10;
             cmpq rax, (FALSE_VALUE);
@@ -693,11 +691,12 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn generic_binop(&mut self, ret: SlotId, func: usize, xmm_using: UsingXmm, pc: BcPc) {
+    fn generic_binop(&mut self, ctx: &BBContext, ret: SlotId, func: usize, pc: BcPc) {
+        let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.call_binop(func);
         self.xmm_restore(&xmm_using);
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
         self.store_rax(ret);
     }
 }

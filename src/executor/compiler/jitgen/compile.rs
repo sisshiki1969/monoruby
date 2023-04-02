@@ -77,7 +77,7 @@ impl Codegen {
                 call rax;
             );
             self.xmm_restore(&xmm_using);
-            self.jit_handle_error(pc);
+            self.jit_handle_error(ctx, pc);
         }
         self.jit.bind_label(exit);
     }
@@ -122,7 +122,7 @@ impl Codegen {
             };
             self.xmm_restore(&xmm_using);
         }
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
         self.store_rax(ret);
     }
 
@@ -169,7 +169,7 @@ impl Codegen {
             };
             self.xmm_restore(&xmm_using);
         }
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
     }
 
     pub(super) fn jit_class_def(
@@ -209,8 +209,8 @@ impl Codegen {
             movq rax, (runtime::define_class);
             call rax;  // rax <- self: Value
         };
-        self.jit_handle_error(pc);
-        self.jit_class_def_sub(func_id, ret, pc);
+        self.jit_handle_error(ctx, pc);
+        self.jit_class_def_sub(ctx, func_id, ret, pc);
         self.xmm_restore(&xmm_using);
     }
 
@@ -231,12 +231,12 @@ impl Codegen {
             movq rax, (runtime::define_singleton_class);
             call rax;  // rax <- self: Value
         };
-        self.jit_handle_error(pc);
-        self.jit_class_def_sub(func_id, ret, pc);
+        self.jit_handle_error(ctx, pc);
+        self.jit_class_def_sub(ctx, func_id, ret, pc);
         self.xmm_restore(&xmm_using);
     }
 
-    fn jit_class_def_sub(&mut self, func_id: FuncId, ret: SlotId, pc: BcPc) {
+    fn jit_class_def_sub(&mut self, ctx: &BBContext, func_id: FuncId, ret: SlotId, pc: BcPc) {
         monoasm! { self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
@@ -271,7 +271,7 @@ impl Codegen {
             call rax;
             movq rax, r13;
         }
-        self.jit_handle_error(pc);
+        self.jit_handle_error(ctx, pc);
     }
 }
 
