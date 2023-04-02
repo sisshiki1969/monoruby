@@ -162,7 +162,7 @@ pub(crate) struct IrContext {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
-    mother: Option<(FuncId, ArgumentsInfo)>,
+    mother: Option<(FuncId, ParamsInfo)>,
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
@@ -266,7 +266,7 @@ impl IrContext {
 impl IrContext {
     fn new(
         info: &ISeqInfo,
-        mother: Option<(FuncId, ArgumentsInfo)>,
+        mother: Option<(FuncId, ParamsInfo)>,
         callsite_offset: usize,
         functions_offset: usize,
     ) -> Self {

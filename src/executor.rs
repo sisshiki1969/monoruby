@@ -1432,7 +1432,7 @@ mod test {
 /// Parameters information in *ISeqInfo*.
 ///
 #[derive(Debug, Clone, Default, PartialEq)]
-struct ArgumentsInfo {
+struct ParamsInfo {
     required_num: usize,
     // required + optional
     reqopt_num: usize,

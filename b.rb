@@ -1,5 +1,5 @@
-def f(a:100, b:200, c:300)
-    puts a,b,c
+def f(x,y,a:100,b:200,c:300,d:400)
+    [a,b,c,d,x,y]
 end
 
-f(**{c:30, a:10})
+puts f(1,2,**{c:3,d:2},d:4,a:1)

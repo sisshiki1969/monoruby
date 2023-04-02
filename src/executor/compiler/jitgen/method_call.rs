@@ -547,14 +547,15 @@ impl Codegen {
         let callee_func_id = func_data.meta.func_id();
         match &fnstore[callee_func_id].kind {
             FuncKind::ISeq(info) => {
-                if info.is_block_style && info.reqopt_num() > 1 && fnstore[callid].arg_num == 1 {
+                let callsite = &fnstore[callid];
+                if info.is_block_style && info.reqopt_num() > 1 && callsite.arg_num == 1 {
                     self.single_arg_expand();
                 }
                 if info.pos_num() == info.req_num() {
                     if info.key_num() != 0 {
                         let CallSiteInfo {
                             kw_pos, kw_args, ..
-                        } = &fnstore[callid];
+                        } = callsite;
                         let callee_kw_pos = info.args.pos_num + 1;
                         for (callee, param_name) in info.args.keyword_names.iter().enumerate() {
                             let callee_ofs = (callee_kw_pos as i64 + callee as i64) * 8 + LBP_SELF;
@@ -575,6 +576,21 @@ impl Codegen {
                             }
                         }
                         // TODO: We must care about a rest keyword paramter.
+                    }
+                    if !callsite.hash_splat_pos.is_empty() {
+                        monoasm! {self.jit,
+                            lea  rcx, [rsp - (16 + LBP_SELF)];
+                            subq rsp, 4088;
+                            pushq rdi;
+                            movq rdi, rbx;
+                            movq rsi, r12;
+                            movl rdx, (callid.get());
+                            movl r8, (callee_func_id.get());
+                            movq rax, (runtime::jit_handle_hash_splat);
+                            call rax;
+                            popq rdi;
+                            addq rsp, 4088;
+                        }
                     }
                 } else {
                     monoasm! {self.jit,

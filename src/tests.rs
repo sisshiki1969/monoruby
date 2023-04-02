@@ -2039,4 +2039,52 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn rest_discard() {
+        run_test_with_prelude(
+            r#"
+            [f(1,2), f(1,2,3,4,5)]
+        "#,
+            r#"
+            def f(a,b,*)
+              [a,b]
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn hash_splat() {
+        run_test_with_prelude(
+            r#"
+            f(1,2,d:4,a:1,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,a:100,b:200,c:300,d:400)
+              [a,b,c,d,x,y]
+            end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            f(1,2,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,a:100,b:200,c:300,d:400)
+              [a,b,c,d,x,y]
+            end
+        "#,
+        );
+        run_test_with_prelude(
+            r#"
+            f(1,2,**{c:3,b:2})
+        "#,
+            r#"
+            def f(x,y,b:200,c:300)
+              [b,c,x,y]
+            end
+        "#,
+        );
+    }
 }

@@ -103,7 +103,7 @@ impl Funcs {
     fn add_method_iseq(
         &mut self,
         name: Option<IdentId>,
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
@@ -138,7 +138,7 @@ impl Funcs {
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
         sourceinfo: &SourceInfoRef,
-    ) -> Result<ArgumentsInfo> {
+    ) -> Result<ParamsInfo> {
         let BlockInfo {
             params, box body, ..
         } = info;
@@ -183,7 +183,7 @@ impl Funcs {
                     optional_info.push(OptionalInfo { local, initializer });
                 }
                 ParamKind::Rest(name) => {
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    args_names.push(name.map(|n| IdentId::get_id_from_string(n)));
                     assert_eq!(0, rest);
                     rest = 1;
                 }
@@ -225,7 +225,7 @@ impl Funcs {
             optional_info,
             for_param_info,
         ));
-        Ok(ArgumentsInfo {
+        Ok(ParamsInfo {
             args_names,
             keyword_names,
             pos_num: reqopt_num + rest,
@@ -542,7 +542,7 @@ impl FuncInfo {
     fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
         func_id: Option<FuncId>,
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
@@ -562,7 +562,7 @@ impl FuncInfo {
         func_id: Option<FuncId>,
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let info = ISeqInfo::new_block(func_id, mother, outer, args, sourceinfo);
@@ -582,7 +582,7 @@ impl FuncInfo {
         func_id: Option<FuncId>,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_method(func_id, name, ArgumentsInfo::default(), sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), sourceinfo);
         Self {
             name,
             data: FuncData {
@@ -701,7 +701,7 @@ pub(crate) struct ISeqInfo {
         Option<(SlotId, usize, (Loc, SourceInfoRef))>, // exception classes: (start, len, position in the code)
     )>,
     /// the name of arguments.
-    pub(in crate::executor) args: ArgumentsInfo,
+    pub(in crate::executor) args: ParamsInfo,
     /// outer local variables. (dynamic_locals, block_param)
     pub outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
     /// literal values. (for GC)
@@ -743,7 +743,7 @@ impl ISeqInfo {
         mother: Option<FuncId>,
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
         is_block: bool,
     ) -> Self {
@@ -769,7 +769,7 @@ impl ISeqInfo {
         id: Option<FuncId>,
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         Self::new(id, Some(mother), outer.1, None, args, sourceinfo, true)
@@ -778,7 +778,7 @@ impl ISeqInfo {
     pub(in crate::executor) fn new_method(
         id: Option<FuncId>,
         name: Option<IdentId>,
-        args: ArgumentsInfo,
+        args: ParamsInfo,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         Self::new(id, id, vec![], name, args, sourceinfo, false)

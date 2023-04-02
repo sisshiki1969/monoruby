@@ -280,26 +280,57 @@ fn handle_keyword(
         ..
     } = callsite;
     let callee_kw_pos = info.args.pos_num + 1;
-    let mut hash_splat = HashMap::default();
-    for hash in hash_splat_pos {
+    for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         unsafe {
-            let h = *caller_reg.sub(hash.0 as usize);
-            // We must check whether h is a hash.
-            for (k, v) in h.as_hash() {
-                // We must check whether k is a symbol.
-                let k = k.as_symbol();
-                hash_splat.insert(k, v);
+            let ptr = callee_reg.sub(callee_kw_pos + id);
+            match kw_args.get(param_name) {
+                Some(id) => *ptr = Some(*caller_reg.sub(kw_pos.0 as usize + id)),
+                None => *ptr = None,
             }
         }
     }
+    for h in hash_splat_pos
+        .iter()
+        .map(|pos| unsafe { *caller_reg.sub(pos.0 as usize) })
+    {
+        for (id, param_name) in info.args.keyword_names.iter().enumerate() {
+            unsafe {
+                let ptr = callee_reg.sub(callee_kw_pos + id);
+                let sym = Value::new_symbol(*param_name);
+                if let Some(v) = h.as_hash().get(sym) {
+                    if (*ptr).is_some() {
+                        eprintln!(
+                            " warning: key :{} is duplicated and overwritten",
+                            param_name
+                        );
+                    }
+                    *ptr = Some(v);
+                }
+            }
+        }
+    }
+}
+
+pub(super) extern "C" fn jit_handle_hash_splat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    callee_reg: *mut Option<Value>,
+    callee_func_id: FuncId,
+) {
+    let lfp = vm.cfp().lfp();
+    let callsite = &globals.func[callid];
+    let CallSiteInfo { hash_splat_pos, .. } = callsite;
+    let info = globals.func[callee_func_id].as_ruby_func();
+    let callee_kw_pos = info.args.pos_num + 1;
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
-        unsafe {
-            *callee_reg.sub(callee_kw_pos + id) = match kw_args.get(param_name) {
-                Some(id) => Some(*caller_reg.sub(kw_pos.0 as usize + id)),
-                None => match hash_splat.get(param_name) {
-                    Some(v) => Some(*v),
-                    None => None,
-                },
+        for hash in hash_splat_pos {
+            unsafe {
+                let h = lfp.register(hash.0 as usize);
+                // We must check whether h is a hash.
+                if let Some(v) = h.as_hash().get(Value::new_symbol(*param_name)) {
+                    *callee_reg.sub(callee_kw_pos + id) = Some(v);
+                }
             }
         }
     }
