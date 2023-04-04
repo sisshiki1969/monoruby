@@ -1425,6 +1425,11 @@ impl IrContext {
                 }
                 return Ok(());
             }
+            NodeKind::Defined(box node) => {
+                assert!(matches!(node.kind, NodeKind::Yield(_)));
+                self.emit_nil(None);
+                self.emit(BcIr::Defined, loc);
+            }
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
         match use_mode {

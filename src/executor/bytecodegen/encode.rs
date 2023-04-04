@@ -58,7 +58,6 @@ impl IrContext {
                     let op1 = self.get_index(reg);
                     Bc::from(enc_wl(17, op1.0, name.get()))
                 }
-
                 BcIr::CheckLocal(local, dst) => {
                     let op1 = self.get_index(local);
                     let dst = self.labels[*dst].unwrap().0 as i32;
@@ -114,6 +113,7 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
+                BcIr::Defined => Bc::from(enc_www(64, 0, 0, 0)),
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(src);

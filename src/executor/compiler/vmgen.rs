@@ -230,6 +230,7 @@ impl Codegen {
         self.dispatch[33] = self.vm_method_call(true, false);
         self.dispatch[34] = self.vm_super();
 
+        self.dispatch[64] = self.vm_defined();
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -1013,6 +1014,12 @@ impl Codegen {
             addq rax, 0b10;
         };
         self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
         self.fetch_and_dispatch();
         label
     }

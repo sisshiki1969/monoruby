@@ -122,6 +122,7 @@ pub(super) enum BcIr {
         new: BcReg,
         old: BcReg,
     },
+    Defined,
     LoopStart,
     LoopEnd,
 }
@@ -545,6 +546,7 @@ pub(super) enum TraceIr {
         new: SlotId,
         old: SlotId,
     },
+    Defined,
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -605,7 +607,7 @@ impl TraceIr {
     pub(crate) fn from_bc(pc: BcPc, fnstore: &FnStore) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
-        if opcode & 0x80 == 0 {
+        if opcode & 0xffc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
                 1 => Self::SingletonMethodDef {
@@ -746,6 +748,7 @@ impl TraceIr {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
+                64 => Self::Defined,
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),

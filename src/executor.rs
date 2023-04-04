@@ -1041,6 +1041,7 @@ impl BcPc {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
+            TraceIr::Defined => "defined?".to_string(),
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
