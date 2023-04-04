@@ -174,12 +174,8 @@ impl Codegen {
                 }
             }
             BinOpK::Div => {
-                let div_by_zero = self.div_by_zero;
                 if ret == rhs {
                     monoasm!(self.jit,
-                        movq  rax, xmm(ret);
-                        testq  rax, rax;
-                        jeq   div_by_zero;
                         movq  xmm0, xmm(lhs);
                         divsd xmm0, xmm(ret);
                         movq  xmm(ret), xmm0;
@@ -187,9 +183,6 @@ impl Codegen {
                 } else {
                     self.xmm_mov(flhs, fret);
                     monoasm!(self.jit,
-                        movq  rax, xmm(rhs);
-                        testq rax, rax;
-                        jz    div_by_zero;
                         divsd xmm(ret), xmm(rhs);
                     );
                 }
@@ -242,17 +235,10 @@ impl Codegen {
                 );
             }
             BinOpK::Div => {
-                if rhs == 0 {
-                    let div_by_zero = self.div_by_zero;
-                    monoasm!(self.jit,
-                        jmp   div_by_zero;
-                    )
-                } else {
-                    self.xmm_mov(flhs, fret);
-                    monoasm!(self.jit,
-                        divsd xmm(ret), [rip + rhs_label];
-                    )
-                }
+                self.xmm_mov(flhs, fret);
+                monoasm!(self.jit,
+                    divsd xmm(ret), [rip + rhs_label];
+                )
             }
             BinOpK::Exp => {
                 let lhs = flhs.enc();
@@ -324,22 +310,15 @@ impl Codegen {
                 }
             }
             BinOpK::Div => {
-                let div_by_zero = self.div_by_zero;
                 if ret != rhs {
                     monoasm!(self.jit,
                         movq  xmm(ret), [rip + lhs];
-                        movq  rax, xmm(rhs);
-                        testq rax, rax;
-                        jeq   div_by_zero;
                         divsd xmm(ret), xmm(rhs);
                     );
                 } else {
                     monoasm!(self.jit,
-                        movq  rax, xmm(ret);
-                        testq rax, rax;
-                        jeq   div_by_zero;
+                        movq  xmm0, xmm(ret);
                         movq  xmm(ret), [rip + lhs];
-                        movq  xmm0, rax;
                         divsd xmm(ret), xmm0;
                     );
                 }

@@ -222,13 +222,11 @@ mod test {
     #[test]
     fn test0_err() {
         for lhs in [
-            "4.77",
+            "0",
             "690426",
             "24829482958347598570210950349530597028472983429873",
         ] {
-            for rhs in ["0", "0.0"] {
-                run_test_error(&format!("{} / {}", lhs, rhs));
-            }
+            run_test_error(&format!("{lhs} / 0"));
         }
         run_test_error(
             r#"
