@@ -2129,4 +2129,22 @@ mod test {
         "#,
         );
     }
+
+    #[test]
+    fn defined() {
+        run_test_with_prelude(
+            r#"
+            $x = []
+            f{}
+            f
+            f{}
+            $x
+        "#,
+            r#"
+            def f
+                5.times { $x << (defined? yield) }
+            end
+        "#,
+        );
+    }
 }

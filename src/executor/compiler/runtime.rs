@@ -602,6 +602,14 @@ pub(super) extern "C" fn alias_method(
     Some(Value::nil())
 }
 
+pub(super) extern "C" fn defined(vm: &mut Executor, globals: &mut Globals, ty: u16) -> Value {
+    if vm.cfp().outermost_lfp().block().is_some() {
+        Value::new_string_from_str("yield")
+    } else {
+        Value::nil()
+    }
+}
+
 // error handling
 
 pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {

@@ -122,7 +122,10 @@ pub(super) enum BcIr {
         new: BcReg,
         old: BcReg,
     },
-    Defined,
+    Defined {
+        ret: Option<BcReg>,
+        ty: u16,
+    },
     LoopStart,
     LoopEnd,
 }
@@ -546,7 +549,10 @@ pub(super) enum TraceIr {
         new: SlotId,
         old: SlotId,
     },
-    Defined,
+    Defined {
+        ret: SlotId,
+        ty: u16,
+    },
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -748,7 +754,10 @@ impl TraceIr {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
-                64 => Self::Defined,
+                64 => Self::Defined {
+                    ret: SlotId::new(op1),
+                    ty: op2,
+                },
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),

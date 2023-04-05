@@ -1426,9 +1426,10 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Defined(box node) => {
+                eprintln!("{:?}", node.kind);
                 assert!(matches!(node.kind, NodeKind::Yield(_)));
-                self.emit_nil(None);
-                self.emit(BcIr::Defined, loc);
+                let ret = Some(self.push().into());
+                self.emit(BcIr::Defined { ret, ty: 0 }, loc);
             }
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }

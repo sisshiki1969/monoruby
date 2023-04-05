@@ -56,7 +56,7 @@ impl CFP {
     ///
     /// Get outermost LFP.
     ///
-    fn outermost_lfp(&self) -> LFP {
+    pub fn outermost_lfp(&self) -> LFP {
         match self.lfp().outer() {
             Some(dfp) => dfp.outermost().lfp(),
             None => self.lfp(),

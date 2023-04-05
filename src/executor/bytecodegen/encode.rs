@@ -113,7 +113,13 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
-                BcIr::Defined => Bc::from(enc_www(64, 0, 0, 0)),
+                BcIr::Defined { ret, ty } => {
+                    let op1 = match ret {
+                        None => SlotId::new(0),
+                        Some(ret) => self.get_index(ret),
+                    };
+                    Bc::from(enc_www(64, op1.0, *ty, 0))
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(src);

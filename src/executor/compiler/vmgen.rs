@@ -1020,6 +1020,15 @@ impl Codegen {
 
     fn vm_defined(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movl rdx, rdi;
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined);
+            call rax;
+        };
+        self.vm_store_r15();
         self.fetch_and_dispatch();
         label
     }
