@@ -2146,5 +2146,28 @@ mod test {
             end
         "#,
         );
+        run_test(r#"defined? 10"#);
+        run_test(r#"defined? 100000000000000000000000000000000000000000000000000000000"#);
+        run_test(r#"defined? 5.5"#);
+        run_test(r#"defined? 5i"#);
+        run_test(r#"defined? :a"#);
+        run_test(r#"defined? "abs""#);
+        run_test(r#"defined? /abs/"#);
+        run_test(r#"defined? AA..ZZ"#);
+        run_test(r#"defined? ({a:AA, b:BB})"#);
+        run_test(r#"defined? `ls -a`"#);
+        run_test(r#"defined? nil"#);
+        run_test(r#"defined? self"#);
+        run_test(r#"defined? true"#);
+        run_test(r#"defined? false"#);
+        run_test(r#"defined? break"#);
+        run_test(r#"defined? return"#);
+        run_test(r#"defined? next"#);
+        run_test(r#"defined? a=z"#);
+        run_test(r#"defined? a+=z"#);
+        run_test(r#"defined? (def f;end)"#);
+        run_test(r#"defined? (def self.f;end)"#);
+        run_test(r#"defined? (class F;end)"#);
+        run_test(r#"defined? (class << obj F;end)"#);
     }
 }

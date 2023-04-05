@@ -7,6 +7,7 @@ use ruruby_parse::{
 };
 
 mod binary;
+mod defined;
 mod encode;
 mod method_call;
 
@@ -1426,10 +1427,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Defined(box node) => {
-                eprintln!("{:?}", node.kind);
-                assert!(matches!(node.kind, NodeKind::Yield(_)));
-                let ret = Some(self.push().into());
-                self.emit(BcIr::Defined { ret, ty: 0 }, loc);
+                self.gen_defined(node, loc)?;
             }
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
