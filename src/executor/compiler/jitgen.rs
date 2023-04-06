@@ -1453,16 +1453,26 @@ impl Codegen {
                 TraceIr::SingletonClassDef { ret, base, func_id } => {
                     self.jit_singleton_class_def(&ctx, ret, base, func_id, pc);
                 }
-                TraceIr::Defined { ret, ty } => {
+                TraceIr::DefinedYield { ret } => {
                     self.write_back_slot(&mut ctx, ret);
                     monoasm! { self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
-                        movl rdx, (ty);
-                        movq rax, (runtime::defined);
+                        lea  rdx, [r14 - (conv(ret))];
+                        movq rax, (runtime::defined_yield);
                         call rax;
                     };
-                    self.store_rax(ret);
+                }
+                TraceIr::DefinedConst { ret, siteid } => {
+                    self.write_back_slot(&mut ctx, ret);
+                    monoasm! { self.jit,
+                        movq rdi, rbx;  // &mut Interp
+                        movq rsi, r12;  // &mut Globals
+                        lea  rdx, [r14 - (conv(ret))];
+                        movl rcx, (siteid.0);
+                        movq rax, (runtime::defined_const);
+                        call rax;
+                    };
                 }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);

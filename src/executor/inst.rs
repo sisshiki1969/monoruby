@@ -31,7 +31,12 @@ pub(super) enum BcIr {
     },
     Index(BcReg, BcReg, BcReg),      // ret, base, index
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
-    LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
+    LoadConst {
+        ret: BcReg,
+        toplevel: bool,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
     StoreConst(BcReg, IdentId),
     LoadGvar {
         ret: BcReg,
@@ -122,9 +127,14 @@ pub(super) enum BcIr {
         new: BcReg,
         old: BcReg,
     },
-    Defined {
+    DefinedYield {
         ret: Option<BcReg>,
-        ty: u16,
+    },
+    DefinedConst {
+        ret: BcReg,
+        toplevel: bool,
+        prefix: Vec<IdentId>,
+        name: IdentId,
     },
     LoopStart,
     LoopEnd,
@@ -216,6 +226,13 @@ impl Bc {
                     + ((num1 as u64) << 16)
                     + (num0 as u64),
             ),
+        }
+    }
+
+    pub(crate) fn from_u32(op1: u64, op2: u32) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(op2 as u64),
         }
     }
 
@@ -549,9 +566,12 @@ pub(super) enum TraceIr {
         new: SlotId,
         old: SlotId,
     },
-    Defined {
+    DefinedYield {
         ret: SlotId,
-        ty: u16,
+    },
+    DefinedConst {
+        ret: SlotId,
+        siteid: ConstSiteId,
     },
     /// loop start marker
     LoopStart(u32),
@@ -754,9 +774,12 @@ impl TraceIr {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
-                64 => Self::Defined {
+                64 => Self::DefinedYield {
                     ret: SlotId::new(op1),
-                    ty: op2,
+                },
+                65 => Self::DefinedConst {
+                    ret: SlotId::new(op1),
+                    siteid: ConstSiteId(pc.op2.0 as u32),
                 },
                 128 => Self::Not {
                     ret: SlotId::new(op1),

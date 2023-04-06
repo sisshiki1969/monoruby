@@ -285,6 +285,30 @@ mod test {
         [@a, b]
         "##,
         );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2,3])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2,3,4])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = 100)
+        [a,b,c,d]
+        "##,
+        );
     }
 
     #[test]
@@ -2169,5 +2193,10 @@ mod test {
         run_test(r#"defined? (def self.f;end)"#);
         run_test(r#"defined? (class F;end)"#);
         run_test(r#"defined? (class << obj F;end)"#);
+        run_test(r#"a=10; defined? a"#);
+        run_test(r#"@a=10; defined? @a"#);
+        run_test(r#"$a=10; defined? $a"#);
+        run_test(r#"C=10; defined? C"#);
+        run_test(r#"defined? C"#);
     }
 }

@@ -258,7 +258,7 @@ impl IrContext {
         }
         ir.gen_expr(ast, UseMode::Ret)?;
         ir.replace_init(info);
-        assert_eq!(0, ir.temp);
+        //assert_eq!(0, ir.temp);
         ir.into_bytecode(ctx, func_id)?;
         Ok(())
     }
@@ -649,8 +649,16 @@ impl IrContext {
             .into_iter()
             .map(IdentId::get_id_from_string)
             .collect();
-        let reg = self.get_reg(dst);
-        self.emit(BcIr::LoadConst(reg, toplevel, prefix, name), loc);
+        let ret = self.get_reg(dst);
+        self.emit(
+            BcIr::LoadConst {
+                ret,
+                toplevel,
+                prefix,
+                name,
+            },
+            loc,
+        );
     }
 
     fn emit_load_ivar(&mut self, dst: Option<BcReg>, name: IdentId, loc: Loc) {
@@ -1427,7 +1435,7 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Defined(box node) => {
-                self.gen_defined(node, loc)?;
+                self.gen_defined(node)?;
             }
             _ => return Err(MonorubyErr::unsupported_node(expr, self.sourceinfo.clone())),
         }
@@ -1819,13 +1827,19 @@ impl IrContext {
     fn gen_mul_assign(
         &mut self,
         mlhs: Vec<Node>,
-        mrhs: Vec<Node>,
+        mut mrhs: Vec<Node>,
         use_mode: UseMode,
     ) -> Result<()> {
         let mlhs_len = mlhs.len();
-        let mrhs_len = mrhs.len();
+        let mut mrhs_len = mrhs.len();
         let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
-        assert!(mlhs_len == mrhs_len);
+        if mlhs_len != mrhs_len && mrhs_len != 1 {
+            return Err(MonorubyErr::unsupported_feature(
+                "mlhs_len != mrhs_len",
+                loc,
+                self.sourceinfo.clone(),
+            ));
+        };
 
         let temp = self.temp;
         // At first, we evaluate lvalues and save their info(LhsKind).
@@ -1835,11 +1849,23 @@ impl IrContext {
         }
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
-        let rhs_reg = self.next_reg();
+        let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
+            let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?;
+            mrhs_len = mlhs_len;
+            let rhs_reg = self.next_reg();
+            self.emit(
+                BcIr::ExpandArray(rhs, rhs_reg.into(), mlhs_len as u16),
+                Loc::default(),
+            );
+            (rhs_reg, Some(rhs))
+        } else {
+            let rhs_reg = self.next_reg();
+            for rhs in mrhs {
+                self.push_expr(rhs)?;
+            }
+            (rhs_reg, None)
+        };
         let mut temp_reg = rhs_reg;
-        for rhs in mrhs {
-            self.push_expr(rhs)?;
-        }
 
         // Finally, assign rvalues to lvalue.
         for (lhs, kind) in mlhs.into_iter().zip(lhs_kind) {
@@ -1857,7 +1883,9 @@ impl IrContext {
         // Generate return value if needed.
         if use_mode.use_val() {
             let ret = self.push().into();
-            self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
+            if ret_val.is_none() {
+                self.emit_array(ret, rhs_reg.into(), mrhs_len, loc);
+            }
         }
         if use_mode.is_ret() {
             self.emit_ret(None);

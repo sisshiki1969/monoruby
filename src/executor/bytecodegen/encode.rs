@@ -27,8 +27,13 @@ impl IrContext {
                     let op1 = self.get_index(reg);
                     Bc::from(enc_wl(9, op1.0, name.get()))
                 }
-                BcIr::LoadConst(reg, toplevel, prefix, name) => {
-                    let op1 = self.get_index(reg);
+                BcIr::LoadConst {
+                    ret,
+                    toplevel,
+                    prefix,
+                    name,
+                } => {
+                    let op1 = self.get_index(ret);
                     let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
                     Bc::from(enc_wl(10, op1.0, op2.0))
                 }
@@ -113,12 +118,22 @@ impl IrContext {
                         -1i32 as u32,
                     )
                 }
-                BcIr::Defined { ret, ty } => {
+                BcIr::DefinedYield { ret } => {
                     let op1 = match ret {
                         None => SlotId::new(0),
                         Some(ret) => self.get_index(ret),
                     };
-                    Bc::from(enc_www(64, op1.0, *ty, 0))
+                    Bc::from(enc_www(64, op1.0, 0, 0))
+                }
+                BcIr::DefinedConst {
+                    ret,
+                    toplevel,
+                    prefix,
+                    name,
+                } => {
+                    let op1 = self.get_index(ret);
+                    let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
+                    Bc::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);

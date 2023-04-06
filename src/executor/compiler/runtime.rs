@@ -116,14 +116,13 @@ pub(super) extern "C" fn concatenate_string(
     Value::new_string(res)
 }
 
-pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize {
+pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     match src.is_array() {
         Some(ary) => {
             if len <= ary.len() {
                 for i in 0..len {
                     unsafe { *dst.sub(i) = ary[i] }
                 }
-                len
             } else {
                 for i in 0..ary.len() {
                     unsafe { *dst.sub(i) = ary[i] }
@@ -131,12 +130,13 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -
                 for i in ary.len()..len {
                     unsafe { *dst.sub(i) = Value::nil() }
                 }
-                ary.len()
             }
         }
         None => {
             unsafe { *dst = src };
-            1
+            for i in 1..len {
+                unsafe { *dst.sub(i) = Value::nil() }
+            }
         }
     }
 }
@@ -602,11 +602,20 @@ pub(super) extern "C" fn alias_method(
     Some(Value::nil())
 }
 
-pub(super) extern "C" fn defined(vm: &mut Executor, globals: &mut Globals, ty: u16) -> Value {
-    if vm.cfp().outermost_lfp().block().is_some() {
-        Value::new_string_from_str("yield")
-    } else {
-        Value::nil()
+pub(super) extern "C" fn defined_const(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    site_id: ConstSiteId,
+) {
+    if vm.find_constant(globals, site_id).is_err() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals, reg: *mut Value) {
+    if vm.cfp().outermost_lfp().block().is_none() {
+        unsafe { *reg = Value::nil() }
     }
 }
 
