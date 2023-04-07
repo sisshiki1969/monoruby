@@ -686,8 +686,8 @@ pub(super) extern "C" fn handle_error(
                     }
                 }
                 let err = globals.take_error().unwrap();
-                let err_val = Value::new_exception(err);
                 if let Some(err_reg) = err_reg {
+                    let err_val = Value::new_exception(err);
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
                 }
                 return Some(dest);

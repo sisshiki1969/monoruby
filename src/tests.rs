@@ -2201,5 +2201,7 @@ mod test {
         run_test(r#"$a=10; defined? $a"#);
         run_test(r#"C=10; defined? C"#);
         run_test(r#"defined? C"#);
+        run_test(r#"defined? [1,2].map{}.to_s"#);
+        run_test(r#"defined? [1,2].map{}.zxzxz"#);
     }
 }

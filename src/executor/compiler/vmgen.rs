@@ -492,7 +492,7 @@ impl Codegen {
             addq r13, 16;
             movzxw rax, [r13 - 10]; // rax <- :0
             // dispatch
-            testq rax, 0x80;
+            testq rax, 0xc0;
             jeq l1;
             movq rax, [r15 + rax * 8];
             movsxw rsi, [r13 - 16];    // rsi <- :3

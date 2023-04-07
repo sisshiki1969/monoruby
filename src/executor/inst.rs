@@ -793,7 +793,7 @@ impl TraceIr {
                 },
                 66 => Self::DefinedMethod {
                     ret: SlotId::new(op1),
-                    recv: SlotId::new(op1),
+                    recv: SlotId::new(op2),
                     name: IdentId::from(pc.op2.0 as u32),
                 },
                 128 => Self::Not {
