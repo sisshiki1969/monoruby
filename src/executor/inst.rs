@@ -128,12 +128,17 @@ pub(super) enum BcIr {
         old: BcReg,
     },
     DefinedYield {
-        ret: Option<BcReg>,
+        ret: BcReg,
     },
     DefinedConst {
         ret: BcReg,
         toplevel: bool,
         prefix: Vec<IdentId>,
+        name: IdentId,
+    },
+    DefinedMethod {
+        ret: BcReg,
+        recv: BcReg,
         name: IdentId,
     },
     LoopStart,
@@ -573,6 +578,11 @@ pub(super) enum TraceIr {
         ret: SlotId,
         siteid: ConstSiteId,
     },
+    DefinedMethod {
+        ret: SlotId,
+        recv: SlotId,
+        name: IdentId,
+    },
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -780,6 +790,11 @@ impl TraceIr {
                 65 => Self::DefinedConst {
                     ret: SlotId::new(op1),
                     siteid: ConstSiteId(pc.op2.0 as u32),
+                },
+                66 => Self::DefinedMethod {
+                    ret: SlotId::new(op1),
+                    recv: SlotId::new(op1),
+                    name: IdentId::from(pc.op2.0 as u32),
                 },
                 128 => Self::Not {
                     ret: SlotId::new(op1),

@@ -119,10 +119,7 @@ impl IrContext {
                     )
                 }
                 BcIr::DefinedYield { ret } => {
-                    let op1 = match ret {
-                        None => SlotId::new(0),
-                        Some(ret) => self.get_index(ret),
-                    };
+                    let op1 = self.get_index(ret);
                     Bc::from(enc_www(64, op1.0, 0, 0))
                 }
                 BcIr::DefinedConst {
@@ -134,6 +131,11 @@ impl IrContext {
                     let op1 = self.get_index(ret);
                     let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
                     Bc::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
+                }
+                BcIr::DefinedMethod { ret, recv, name } => {
+                    let op1 = self.get_index(ret);
+                    let op2 = self.get_index(recv);
+                    Bc::from_u32(enc_www(66, op1.0, op2.0, 0), name.get())
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);

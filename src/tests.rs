@@ -137,9 +137,9 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
     tmp_file
         .write_all(
             format!(
-                r#"a = ({});
+                r#"____a = ({});
               puts;
-              p(a)"#,
+              p(____a)"#,
                 code
             )
             .as_bytes(),
@@ -2194,6 +2194,9 @@ mod test {
         run_test(r#"defined? (class F;end)"#);
         run_test(r#"defined? (class << obj F;end)"#);
         run_test(r#"a=10; defined? a"#);
+        run_test(r#"defined? a"#);
+        run_test(r#"a=""; defined? 1+a"#);
+        run_test(r#"defined? puts"#);
         run_test(r#"@a=10; defined? @a"#);
         run_test(r#"$a=10; defined? $a"#);
         run_test(r#"C=10; defined? C"#);

@@ -138,7 +138,9 @@ impl LoopAnalysis {
             match self.pc.unwrap().get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { .. } => {}
-                TraceIr::DefinedYield { ret } | TraceIr::DefinedConst { ret, .. } => {
+                TraceIr::DefinedYield { ret }
+                | TraceIr::DefinedConst { ret, .. }
+                | TraceIr::DefinedMethod { ret, .. } => {
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::MethodDef { .. } => {}

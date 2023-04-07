@@ -613,6 +613,18 @@ pub(super) extern "C" fn defined_const(
     }
 }
 
+pub(super) extern "C" fn defined_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    recv: Value,
+    name: IdentId,
+) {
+    if globals.find_method(recv, name, false).is_err() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
 pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals, reg: *mut Value) {
     if vm.cfp().outermost_lfp().block().is_none() {
         unsafe { *reg = Value::nil() }

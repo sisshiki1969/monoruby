@@ -6,13 +6,13 @@ impl IrContext {
         let reg = self.next_reg().into();
         self.emit_string(None, res.to_string());
         let exit_label = self.new_label();
-        self.check_defined(&node, exit_label, reg)?;
+        self.check_defined(node, exit_label, reg)?;
         self.apply_label(exit_label);
         Ok(())
     }
 
-    fn check_defined(&mut self, node: &Node, exit_label: usize, reg: BcReg) -> Result<()> {
-        match &node.kind {
+    fn check_defined(&mut self, node: Node, exit_label: usize, reg: BcReg) -> Result<()> {
+        match node.kind {
             NodeKind::Array(v, ..) | NodeKind::CompStmt(v) => {
                 for n in v {
                     self.check_defined(n, exit_label, reg)?
@@ -25,20 +25,53 @@ impl IrContext {
                 self.check_defined(l, exit_label, reg)?;
                 self.check_defined(r, exit_label, reg)?;
             }
-            NodeKind::FuncCall { arglist, .. } => {
-                for n in &arglist.args {
+            NodeKind::Ident(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit(
+                    BcIr::DefinedMethod {
+                        ret: reg,
+                        recv: BcReg::Self_,
+                        name,
+                    },
+                    node.loc,
+                );
+            }
+            NodeKind::FuncCall {
+                method, arglist, ..
+            } => {
+                let name = IdentId::get_id_from_string(method);
+                for n in arglist.args {
                     self.check_defined(n, exit_label, reg)?
                 }
+                self.emit(
+                    BcIr::DefinedMethod {
+                        ret: reg,
+                        recv: BcReg::Self_,
+                        name,
+                    },
+                    node.loc,
+                );
             }
             NodeKind::MethodCall {
                 receiver: box r,
+                method,
                 arglist,
                 ..
             } => {
-                self.check_defined(r, exit_label, reg)?;
-                for n in &arglist.args {
+                let name = IdentId::get_id_from_string(method);
+                self.check_defined(r.clone(), exit_label, reg)?;
+                for n in arglist.args {
                     self.check_defined(n, exit_label, reg)?;
                 }
+                let recv = self.gen_temp_expr(r)?;
+                self.emit(
+                    BcIr::DefinedMethod {
+                        ret: reg,
+                        recv,
+                        name,
+                    },
+                    node.loc,
+                );
             }
             NodeKind::Index {
                 base: box b,
@@ -46,11 +79,11 @@ impl IrContext {
             } => {
                 self.check_defined(b, exit_label, reg)?;
                 for n in v {
-                    self.check_defined(&n, exit_label, reg)?;
+                    self.check_defined(n, exit_label, reg)?;
                 }
             }
             NodeKind::Yield(_) => {
-                self.emit(BcIr::DefinedYield { ret: Some(reg) }, node.loc);
+                self.emit(BcIr::DefinedYield { ret: reg }, node.loc);
             }
             NodeKind::Const {
                 toplevel,
@@ -58,13 +91,13 @@ impl IrContext {
                 prefix,
                 name,
             } => {
-                let name = IdentId::get_id(name);
+                let name = IdentId::get_id_from_string(name);
                 let prefix = prefix.iter().map(|s| IdentId::get_id(s)).collect();
                 let ret = reg;
                 self.emit(
                     BcIr::DefinedConst {
                         ret,
-                        toplevel: *toplevel,
+                        toplevel,
                         prefix,
                         name,
                     },

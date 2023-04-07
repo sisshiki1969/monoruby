@@ -1057,6 +1057,9 @@ impl BcPc {
                 name.append_to(&mut const_name);
                 format!("{} = defined?(constant) {const_name}", ret.ret_str())
             }
+            TraceIr::DefinedMethod { ret, recv, name } => {
+                format!("{} = defined?(method) {:?}.{:?}", ret.ret_str(), recv, name)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
