@@ -141,6 +141,14 @@ pub(super) enum BcIr {
         recv: BcReg,
         name: IdentId,
     },
+    DefinedGvar {
+        ret: BcReg,
+        name: IdentId,
+    },
+    DefinedIvar {
+        ret: BcReg,
+        name: IdentId,
+    },
     LoopStart,
     LoopEnd,
 }
@@ -583,6 +591,14 @@ pub(super) enum TraceIr {
         recv: SlotId,
         name: IdentId,
     },
+    DefinedGvar {
+        ret: SlotId,
+        name: IdentId,
+    },
+    DefinedIvar {
+        ret: SlotId,
+        name: IdentId,
+    },
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -794,6 +810,14 @@ impl TraceIr {
                 66 => Self::DefinedMethod {
                     ret: SlotId::new(op1),
                     recv: SlotId::new(op2),
+                    name: IdentId::from(pc.op2.0 as u32),
+                },
+                67 => Self::DefinedGvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(pc.op2.0 as u32),
+                },
+                68 => Self::DefinedIvar {
+                    ret: SlotId::new(op1),
                     name: IdentId::from(pc.op2.0 as u32),
                 },
                 128 => Self::Not {

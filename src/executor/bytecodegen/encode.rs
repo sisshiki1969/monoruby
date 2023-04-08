@@ -137,6 +137,14 @@ impl IrContext {
                     let op2 = self.get_index(recv);
                     Bc::from_u32(enc_www(66, op1.0, op2.0, 0), name.get())
                 }
+                BcIr::DefinedGvar { ret, name } => {
+                    let op1 = self.get_index(ret);
+                    Bc::from_u32(enc_www(67, op1.0, 0, 0), name.get())
+                }
+                BcIr::DefinedIvar { ret, name } => {
+                    let op1 = self.get_index(ret);
+                    Bc::from_u32(enc_www(68, op1.0, 0, 0), name.get())
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(src);

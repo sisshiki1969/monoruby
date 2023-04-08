@@ -484,7 +484,7 @@ pub(super) extern "C" fn set_instance_var(
 /// rax: Value
 ///
 pub(super) extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
-    globals.get_gvar(name)
+    globals.get_gvar(name).unwrap_or_default()
 }
 
 pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
@@ -609,6 +609,29 @@ pub(super) extern "C" fn defined_const(
     site_id: ConstSiteId,
 ) {
     if vm.find_constant(globals, site_id).is_err() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_gvar(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    name: IdentId,
+) {
+    if globals.get_gvar(name).is_none() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_ivar(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    name: IdentId,
+) {
+    let self_val = vm.cfp().lfp().self_val();
+    if globals.get_ivar(self_val, name).is_none() {
         unsafe { *reg = Value::nil() }
     }
 }

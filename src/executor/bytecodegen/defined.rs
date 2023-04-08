@@ -111,11 +111,16 @@ impl IrContext {
                 );
             }
             NodeKind::LocalVar(..) => {}
-            NodeKind::InstanceVar(..) => {}
-            NodeKind::GlobalVar(..) => {}
+            NodeKind::InstanceVar(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit(BcIr::DefinedIvar { ret, name }, node.loc);
+            }
+            NodeKind::GlobalVar(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit(BcIr::DefinedGvar { ret, name }, node.loc);
+            }
             NodeKind::SpecialVar(..) => {}
-            NodeKind::ClassVar(..) => {}
-            NodeKind::Super(_) | NodeKind::Lambda(_) => {
+            NodeKind::ClassVar(..) | NodeKind::Super(_) | NodeKind::Lambda(_) => {
                 return Err(MonorubyErr::unsupported_node(
                     node.clone(),
                     self.sourceinfo.clone(),

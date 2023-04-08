@@ -188,11 +188,8 @@ impl Globals {
         self.global_vars.insert(name, val);
     }
 
-    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Value {
-        match self.global_vars.get(&name) {
-            Some(val) => *val,
-            None => Value::nil(),
-        }
+    pub(crate) fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
+        self.global_vars.get(&name).cloned()
     }
     pub(crate) fn current_source_path(&self, executor: &Executor) -> PathBuf {
         let source_func_id = executor.cfp().get_source_pos();

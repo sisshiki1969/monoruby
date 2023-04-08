@@ -1486,6 +1486,28 @@ impl Codegen {
                         call rax;
                     };
                 }
+                TraceIr::DefinedGvar { ret, name } => {
+                    self.write_back_slot(&mut ctx, ret);
+                    monoasm! { self.jit,
+                        movq rdi, rbx;  // &mut Interp
+                        movq rsi, r12;  // &mut Globals
+                        lea  rdx, [r14 - (conv(ret))];
+                        movl rcx, (name.get());
+                        movq rax, (runtime::defined_gvar);
+                        call rax;
+                    };
+                }
+                TraceIr::DefinedIvar { ret, name } => {
+                    self.write_back_slot(&mut ctx, ret);
+                    monoasm! { self.jit,
+                        movq rdi, rbx;  // &mut Interp
+                        movq rsi, r12;  // &mut Globals
+                        lea  rdx, [r14 - (conv(ret))];
+                        movl rcx, (name.get());
+                        movq rax, (runtime::defined_ivar);
+                        call rax;
+                    };
+                }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
                     self.load_rax(lhs);

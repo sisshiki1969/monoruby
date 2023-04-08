@@ -1060,6 +1060,12 @@ impl BcPc {
             TraceIr::DefinedMethod { ret, recv, name } => {
                 format!("{} = defined?(method) {:?}.{}", ret.ret_str(), recv, name)
             }
+            TraceIr::DefinedGvar { ret, name } => {
+                format!("{} = defined?(gvar) {}", ret.ret_str(), name)
+            }
+            TraceIr::DefinedIvar { ret, name } => {
+                format!("{} = defined?(ivar) {}", ret.ret_str(), name)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,
