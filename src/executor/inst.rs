@@ -31,7 +31,12 @@ pub(super) enum BcIr {
     },
     Index(BcReg, BcReg, BcReg),      // ret, base, index
     StoreIndex(BcReg, BcReg, BcReg), // src, base, index
-    LoadConst(BcReg, bool, Vec<IdentId>, IdentId),
+    LoadConst {
+        ret: BcReg,
+        toplevel: bool,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
     StoreConst(BcReg, IdentId),
     LoadGvar {
         ret: BcReg,
@@ -121,6 +126,28 @@ pub(super) enum BcIr {
     AliasMethod {
         new: BcReg,
         old: BcReg,
+    },
+    DefinedYield {
+        ret: BcReg,
+    },
+    DefinedConst {
+        ret: BcReg,
+        toplevel: bool,
+        prefix: Vec<IdentId>,
+        name: IdentId,
+    },
+    DefinedMethod {
+        ret: BcReg,
+        recv: BcReg,
+        name: IdentId,
+    },
+    DefinedGvar {
+        ret: BcReg,
+        name: IdentId,
+    },
+    DefinedIvar {
+        ret: BcReg,
+        name: IdentId,
     },
     LoopStart,
     LoopEnd,
@@ -212,6 +239,13 @@ impl Bc {
                     + ((num1 as u64) << 16)
                     + (num0 as u64),
             ),
+        }
+    }
+
+    pub(crate) fn from_u32(op1: u64, op2: u32) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(op2 as u64),
         }
     }
 
@@ -545,6 +579,26 @@ pub(super) enum TraceIr {
         new: SlotId,
         old: SlotId,
     },
+    DefinedYield {
+        ret: SlotId,
+    },
+    DefinedConst {
+        ret: SlotId,
+        siteid: ConstSiteId,
+    },
+    DefinedMethod {
+        ret: SlotId,
+        recv: SlotId,
+        name: IdentId,
+    },
+    DefinedGvar {
+        ret: SlotId,
+        name: IdentId,
+    },
+    DefinedIvar {
+        ret: SlotId,
+        name: IdentId,
+    },
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
@@ -605,7 +659,7 @@ impl TraceIr {
     pub(crate) fn from_bc(pc: BcPc, fnstore: &FnStore) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
-        if opcode & 0x80 == 0 {
+        if opcode & 0xffc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {
                 1 => Self::SingletonMethodDef {
@@ -746,6 +800,26 @@ impl TraceIr {
         } else {
             let (op1, op2, op3) = dec_www(op);
             match opcode {
+                64 => Self::DefinedYield {
+                    ret: SlotId::new(op1),
+                },
+                65 => Self::DefinedConst {
+                    ret: SlotId::new(op1),
+                    siteid: ConstSiteId(pc.op2.0 as u32),
+                },
+                66 => Self::DefinedMethod {
+                    ret: SlotId::new(op1),
+                    recv: SlotId::new(op2),
+                    name: IdentId::from(pc.op2.0 as u32),
+                },
+                67 => Self::DefinedGvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(pc.op2.0 as u32),
+                },
+                68 => Self::DefinedIvar {
+                    ret: SlotId::new(op1),
+                    name: IdentId::from(pc.op2.0 as u32),
+                },
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),

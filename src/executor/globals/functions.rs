@@ -668,6 +668,18 @@ impl FuncInfo {
             self.data.meta,
             self.kind
         );
+        eprintln!(
+            "{:?}",
+            info.exception_map
+                .iter()
+                .map(|(range, dest, _, _)| {
+                    let start = info.get_pc_index(Some(range.start));
+                    let end = info.get_pc_index(Some(range.end));
+                    let dest = info.get_pc_index(Some(*dest));
+                    (start..end, dest)
+                })
+                .collect::<Vec<_>>()
+        );
         let bb_info = info.get_bb_info();
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);

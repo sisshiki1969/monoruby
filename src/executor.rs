@@ -1041,6 +1041,31 @@ impl BcPc {
             TraceIr::AliasMethod { new, old } => {
                 format!("alias_method({:?}<-{:?})", new, old)
             }
+            TraceIr::DefinedYield { ret } => format!("{} = defined?(yield)", ret.ret_str()),
+            TraceIr::DefinedConst { ret, siteid } => {
+                let ConstSiteInfo {
+                    name,
+                    prefix,
+                    toplevel,
+                    ..
+                } = &globals.func[siteid];
+                let mut const_name = if *toplevel { "::" } else { "" }.to_string();
+                for c in prefix {
+                    c.append_to(&mut const_name);
+                    const_name += "::";
+                }
+                name.append_to(&mut const_name);
+                format!("{} = defined?(constant) {const_name}", ret.ret_str())
+            }
+            TraceIr::DefinedMethod { ret, recv, name } => {
+                format!("{} = defined?(method) {:?}.{}", ret.ret_str(), recv, name)
+            }
+            TraceIr::DefinedGvar { ret, name } => {
+                format!("{} = defined?(gvar) {}", ret.ret_str(), name)
+            }
+            TraceIr::DefinedIvar { ret, name } => {
+                format!("{} = defined?(ivar) {}", ret.ret_str(), name)
+            }
             TraceIr::LoopStart(count) => format!(
                 "loop_start counter={} jit-addr={:016x}",
                 count,

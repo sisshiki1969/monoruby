@@ -146,13 +146,7 @@ pub(super) extern "C" fn div_values(
             }
             Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
         }
-        (RV::Integer(lhs), RV::Float(rhs)) => {
-            if rhs.is_zero() {
-                globals.err_divide_by_zero();
-                return None;
-            }
-            Value::new_float((lhs as f64).div(&rhs))
-        }
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).div(&rhs)),
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
                 globals.err_divide_by_zero();
@@ -167,34 +161,10 @@ pub(super) extern "C" fn div_values(
             }
             Value::new_bigint(lhs.div_floor(rhs))
         }
-        (RV::BigInt(lhs), RV::Float(rhs)) => {
-            if rhs.is_zero() {
-                globals.err_divide_by_zero();
-                return None;
-            }
-            Value::new_float((lhs.to_f64().unwrap()).div(&rhs))
-        }
-        (RV::Float(lhs), RV::Integer(rhs)) => {
-            if rhs.is_zero() {
-                globals.err_divide_by_zero();
-                return None;
-            }
-            Value::new_float(lhs.div(&(rhs as f64)))
-        }
-        (RV::Float(lhs), RV::BigInt(rhs)) => {
-            if rhs.is_zero() {
-                globals.err_divide_by_zero();
-                return None;
-            }
-            Value::new_float(lhs.div(&rhs.to_f64().unwrap()))
-        }
-        (RV::Float(lhs), RV::Float(rhs)) => {
-            if rhs.is_zero() {
-                globals.err_divide_by_zero();
-                return None;
-            }
-            Value::new_float(lhs.div(&rhs))
-        }
+        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float((lhs.to_f64().unwrap()).div(&rhs)),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.div(&(rhs as f64))),
+        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.div(&rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.div(&rhs)),
         _ => {
             return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
         }

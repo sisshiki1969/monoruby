@@ -230,6 +230,11 @@ impl Codegen {
         self.dispatch[33] = self.vm_method_call(true, false);
         self.dispatch[34] = self.vm_super();
 
+        self.dispatch[64] = self.vm_defined_yield();
+        self.dispatch[65] = self.vm_defined_const();
+        self.dispatch[66] = self.vm_defined_method();
+        self.dispatch[67] = self.vm_defined_gvar();
+        self.dispatch[68] = self.vm_defined_ivar();
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -489,7 +494,7 @@ impl Codegen {
             addq r13, 16;
             movzxw rax, [r13 - 10]; // rax <- :0
             // dispatch
-            testq rax, 0x80;
+            testq rax, 0xc0;
             jeq l1;
             movq rax, [r15 + rax * 8];
             movsxw rsi, [r13 - 16];    // rsi <- :3
@@ -1013,6 +1018,82 @@ impl Codegen {
             addq rax, 0b10;
         };
         self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_yield(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, r15;
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_yield);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_const(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, r15;
+            movl rcx, [r13 - 8];
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_const);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_gvar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, r15;
+            movl rcx, [r13 - 8];
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_gvar);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_ivar(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rdx, r15;
+            movl rcx, [r13 - 8];
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_ivar);
+            call rax;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_defined_method(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        self.vm_get_rdi();
+        monoasm! { self.jit,
+            movq rdx, r15;
+            movq rcx, rdi;
+            movl r8, [r13 - 8];
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq rax, (runtime::defined_method);
+            call rax;
+        };
         self.fetch_and_dispatch();
         label
     }

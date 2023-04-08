@@ -335,17 +335,17 @@ impl Globals {
     ///
     pub(in crate::executor) fn find_method(
         &mut self,
-        obj: Value,
+        recv: Value,
         func_name: IdentId,
         is_func_call: bool,
     ) -> Result<FuncId> {
-        let class_id = obj.class();
+        let class_id = recv.class();
         match self.check_method_for_class(class_id, func_name) {
             Some(entry) => {
                 match entry.visibility {
                     Visibility::Private => {
                         if !is_func_call {
-                            return Err(MonorubyErr::private_method_called(self, func_name, obj));
+                            return Err(MonorubyErr::private_method_called(self, func_name, recv));
                         }
                     }
                     Visibility::Protected => {
@@ -358,7 +358,7 @@ impl Globals {
                 }
                 Ok(entry.func_id())
             }
-            None => Err(MonorubyErr::method_not_found(self, func_name, obj)),
+            None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
         }
     }
 

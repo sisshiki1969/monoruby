@@ -149,7 +149,14 @@ impl LoopAnalysis {
                         return Some(reg_info);
                     }
                 }
-                TraceIr::Integer(ret, ..) | TraceIr::Symbol(ret, ..) | TraceIr::Nil(ret) => {
+                TraceIr::DefinedYield { ret }
+                | TraceIr::DefinedConst { ret, .. }
+                | TraceIr::DefinedGvar { ret, .. }
+                | TraceIr::DefinedIvar { ret, .. }
+                | TraceIr::DefinedMethod { ret, .. }
+                | TraceIr::Integer(ret, ..)
+                | TraceIr::Symbol(ret, ..)
+                | TraceIr::Nil(ret) => {
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::Literal(dst, val) => {

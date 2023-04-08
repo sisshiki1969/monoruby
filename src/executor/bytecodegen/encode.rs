@@ -27,8 +27,13 @@ impl IrContext {
                     let op1 = self.get_index(reg);
                     Bc::from(enc_wl(9, op1.0, name.get()))
                 }
-                BcIr::LoadConst(reg, toplevel, prefix, name) => {
-                    let op1 = self.get_index(reg);
+                BcIr::LoadConst {
+                    ret,
+                    toplevel,
+                    prefix,
+                    name,
+                } => {
+                    let op1 = self.get_index(ret);
                     let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
                     Bc::from(enc_wl(10, op1.0, op2.0))
                 }
@@ -58,7 +63,6 @@ impl IrContext {
                     let op1 = self.get_index(reg);
                     Bc::from(enc_wl(17, op1.0, name.get()))
                 }
-
                 BcIr::CheckLocal(local, dst) => {
                     let op1 = self.get_index(local);
                     let dst = self.labels[*dst].unwrap().0 as i32;
@@ -113,6 +117,33 @@ impl IrContext {
                         ClassId::new(0),
                         -1i32 as u32,
                     )
+                }
+                BcIr::DefinedYield { ret } => {
+                    let op1 = self.get_index(ret);
+                    Bc::from(enc_www(64, op1.0, 0, 0))
+                }
+                BcIr::DefinedConst {
+                    ret,
+                    toplevel,
+                    prefix,
+                    name,
+                } => {
+                    let op1 = self.get_index(ret);
+                    let op2 = store.add_constsite(*name, prefix.clone(), *toplevel);
+                    Bc::from_u32(enc_www(65, op1.0, 0, 0), op2.0)
+                }
+                BcIr::DefinedMethod { ret, recv, name } => {
+                    let op1 = self.get_index(ret);
+                    let op2 = self.get_index(recv);
+                    Bc::from_u32(enc_www(66, op1.0, op2.0, 0), name.get())
+                }
+                BcIr::DefinedGvar { ret, name } => {
+                    let op1 = self.get_index(ret);
+                    Bc::from_u32(enc_www(67, op1.0, 0, 0), name.get())
+                }
+                BcIr::DefinedIvar { ret, name } => {
+                    let op1 = self.get_index(ret);
+                    Bc::from_u32(enc_www(68, op1.0, 0, 0), name.get())
                 }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);

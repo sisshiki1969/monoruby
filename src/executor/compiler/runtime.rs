@@ -116,14 +116,13 @@ pub(super) extern "C" fn concatenate_string(
     Value::new_string(res)
 }
 
-pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -> usize {
+pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     match src.is_array() {
         Some(ary) => {
             if len <= ary.len() {
                 for i in 0..len {
                     unsafe { *dst.sub(i) = ary[i] }
                 }
-                len
             } else {
                 for i in 0..ary.len() {
                     unsafe { *dst.sub(i) = ary[i] }
@@ -131,12 +130,13 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) -
                 for i in ary.len()..len {
                     unsafe { *dst.sub(i) = Value::nil() }
                 }
-                ary.len()
             }
         }
         None => {
             unsafe { *dst = src };
-            1
+            for i in 1..len {
+                unsafe { *dst.sub(i) = Value::nil() }
+            }
         }
     }
 }
@@ -484,7 +484,7 @@ pub(super) extern "C" fn set_instance_var(
 /// rax: Value
 ///
 pub(super) extern "C" fn get_global_var(globals: &mut Globals, name: IdentId) -> Value {
-    globals.get_gvar(name)
+    globals.get_gvar(name).unwrap_or_default()
 }
 
 pub(super) extern "C" fn set_global_var(globals: &mut Globals, name: IdentId, val: Value) {
@@ -602,6 +602,58 @@ pub(super) extern "C" fn alias_method(
     Some(Value::nil())
 }
 
+pub(super) extern "C" fn defined_const(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    site_id: ConstSiteId,
+) {
+    if vm.find_constant(globals, site_id).is_err() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_gvar(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    name: IdentId,
+) {
+    if globals.get_gvar(name).is_none() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_ivar(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    name: IdentId,
+) {
+    let self_val = vm.cfp().lfp().self_val();
+    if globals.get_ivar(self_val, name).is_none() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    reg: *mut Value,
+    recv: Value,
+    name: IdentId,
+) {
+    if globals.find_method(recv, name, false).is_err() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
+pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals, reg: *mut Value) {
+    if vm.cfp().outermost_lfp().block().is_none() {
+        unsafe { *reg = Value::nil() }
+    }
+}
+
 // error handling
 
 pub(super) extern "C" fn unimplemented_inst(_: &mut Executor, _: &mut Globals, opcode: u64) {
@@ -657,8 +709,8 @@ pub(super) extern "C" fn handle_error(
                     }
                 }
                 let err = globals.take_error().unwrap();
-                let err_val = Value::new_exception(err);
                 if let Some(err_reg) = err_reg {
+                    let err_val = Value::new_exception(err);
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
                 }
                 return Some(dest);

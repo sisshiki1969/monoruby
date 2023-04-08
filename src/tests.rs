@@ -137,9 +137,9 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
     tmp_file
         .write_all(
             format!(
-                r#"a = ({});
+                r#"____a = ({});
               puts;
-              p(a)"#,
+              p(____a)"#,
                 code
             )
             .as_bytes(),
@@ -222,13 +222,11 @@ mod test {
     #[test]
     fn test0_err() {
         for lhs in [
-            "4.77",
+            "0",
             "690426",
             "24829482958347598570210950349530597028472983429873",
         ] {
-            for rhs in ["0", "0.0"] {
-                run_test_error(&format!("{} / {}", lhs, rhs));
-            }
+            run_test_error(&format!("{lhs} / 0"));
         }
         run_test_error(
             r#"
@@ -285,6 +283,30 @@ mod test {
         a = foo[0] = bar
         b = (x, foo[0] = bar, 0)
         [@a, b]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2,3])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = [1,2,3,4])
+        [a,b,c,d]
+        "##,
+        );
+        run_test(
+            r##"
+        d = (a,b,c = 100)
+        [a,b,c,d]
         "##,
         );
     }
@@ -2130,5 +2152,58 @@ mod test {
             end
         "#,
         );
+    }
+
+    #[test]
+    fn defined() {
+        run_test_with_prelude(
+            r#"
+            $x = []
+            f{}
+            f
+            f{}
+            $x
+        "#,
+            r#"
+            def f
+                5.times { $x << (defined? yield) }
+            end
+        "#,
+        );
+        run_test(r#"defined? 10"#);
+        run_test(r#"defined? 100000000000000000000000000000000000000000000000000000000"#);
+        run_test(r#"defined? 5.5"#);
+        run_test(r#"defined? 5i"#);
+        run_test(r#"defined? :a"#);
+        run_test(r#"defined? "abs""#);
+        run_test(r#"defined? /abs/"#);
+        run_test(r#"defined? AA..ZZ"#);
+        run_test(r#"defined? ({a:AA, b:BB})"#);
+        run_test(r#"defined? `ls -a`"#);
+        run_test(r#"defined? nil"#);
+        run_test(r#"defined? self"#);
+        run_test(r#"defined? true"#);
+        run_test(r#"defined? false"#);
+        run_test(r#"defined? break"#);
+        run_test(r#"defined? return"#);
+        run_test(r#"defined? next"#);
+        run_test(r#"defined? a=z"#);
+        run_test(r#"defined? a+=z"#);
+        run_test(r#"defined? (def f;end)"#);
+        run_test(r#"defined? (def self.f;end)"#);
+        run_test(r#"defined? (class F;end)"#);
+        run_test(r#"defined? (class << obj F;end)"#);
+        run_test(r#"a=10; defined? a"#);
+        run_test(r#"defined? a"#);
+        run_test(r#"a=""; defined? 1+a"#);
+        run_test(r#"defined? puts"#);
+        run_test(r#"defined? @a"#);
+        run_test(r#"@a=10; defined? @a"#);
+        run_test(r#"defined? $a"#);
+        run_test(r#"$a=10; defined? $a"#);
+        run_test(r#"C=10; defined? C"#);
+        run_test(r#"defined? C"#);
+        run_test(r#"defined? [1,2].map{}.to_s"#);
+        run_test(r#"defined? [1,2].map{}.zxzxz"#);
     }
 }
