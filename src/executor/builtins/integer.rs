@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", to_f, 0, InlineMethod::IntegerTof);
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
 }
 
 /// ### Integer#times
@@ -168,6 +169,23 @@ fn to_i(
     _len: usize,
 ) -> Result<Value> {
     Ok(lfp.self_val())
+}
+
+///
+/// ### Integer#+
+///
+/// - self + other -> Numeric
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    Globals::check_number_of_arguments(len, 1..=1)?;
+    match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
+        Some(val) => Ok(val),
+        None => {
+            let err = globals.take_error().unwrap();
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]

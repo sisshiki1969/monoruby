@@ -32,6 +32,11 @@ macro_rules! binop_values {
                     (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).$op(&rhs)),
                     (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().$op(&rhs)),
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
+                    (RV::Integer(_), _) | (RV::BigInt(_), _) | (RV::Float(_), _) => {
+                        let err = MonorubyErr::no_implicit_conversion(&globals, rhs, INTEGER_CLASS);
+                        globals.set_error(err);
+                        return None;
+                    }
                     _ => {
                         return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }

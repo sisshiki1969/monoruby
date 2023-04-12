@@ -2195,7 +2195,7 @@ mod test {
         run_test(r#"defined? (class << obj F;end)"#);
         run_test(r#"a=10; defined? a"#);
         run_test(r#"defined? a"#);
-        //run_test(r#"a=""; defined? 1+a"#);
+        run_test(r#"a=""; defined? 1+a"#);
         run_test(r#"defined? puts"#);
         run_test(r#"defined? @a"#);
         run_test(r#"@a=10; defined? @a"#);
@@ -2209,5 +2209,7 @@ mod test {
         run_test(r#"a = []; defined? a[1]"#);
         run_test(r#"defined? (a[1]=5)"#);
         run_test(r#"a = []; defined? (a[1]=5)"#);
+        run_test(r#"defined?(1+(2+3))"#);
+        run_test(r#"defined? 1+(2+3)"#);
     }
 }
