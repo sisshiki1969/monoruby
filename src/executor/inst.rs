@@ -80,9 +80,9 @@ pub(super) enum BcIr {
     BinOp(BinOpK, BcReg, BinopMode),      // kind, ret, (lhs, rhs)
     Cmp(CmpKind, BcReg, BinopMode, bool), // kind, dst, (lhs, rhs), optimizable
     Mov(BcReg, BcReg),                    // dst, offset
-    CheckLocal(BcReg, usize),
-    Br(usize),
-    CondBr(BcReg, usize, bool, BrKind),
+    CheckLocal(BcReg, Label),
+    Br(Label),
+    CondBr(BcReg, Label, bool, BrKind),
     Ret(BcReg),
     MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)

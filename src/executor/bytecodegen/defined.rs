@@ -15,7 +15,7 @@ impl IrContext {
         Ok(())
     }
 
-    fn check_defined(&mut self, node: Node, nil_label: usize, ret: BcReg, top: bool) -> Result<()> {
+    fn check_defined(&mut self, node: Node, nil_label: Label, ret: BcReg, top: bool) -> Result<()> {
         match node.kind {
             NodeKind::MulAssign(lhs, rhs) => {
                 if lhs.len() == 1 && rhs.len() == 1 {

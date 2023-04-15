@@ -73,6 +73,9 @@ impl std::fmt::Debug for BcLocal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) struct Label(usize);
+
 #[derive(Debug, Clone, PartialEq)]
 enum LoopKind {
     For,
@@ -169,7 +172,7 @@ pub(crate) struct IrContext {
     /// destination labels.
     labels: Vec<Option<InstId>>,
     /// loop information.
-    loops: Vec<(LoopKind, usize, Option<BcReg>)>, // (kind, label for exit, return register)
+    loops: Vec<(LoopKind, Label, Option<BcReg>)>, // (kind, label for exit, return register)
     /// local variables.
     locals: HashMap<IdentId, u16>,
     /// outer local variables. (dynamic_locals, block_param)
@@ -188,8 +191,8 @@ pub(crate) struct IrContext {
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
     exception_table: Vec<(
-        std::ops::Range<usize>,
-        usize,
+        std::ops::Range<Label>,
+        Label,
         Option<BcReg>,
         Option<(BcReg, usize, (Loc, SourceInfoRef))>,
     )>,
@@ -201,6 +204,13 @@ pub(crate) struct IrContext {
     functions: Vec<Functions>,
     /// Offset of func info.
     functions_offset: usize,
+}
+
+impl std::ops::Index<Label> for IrContext {
+    type Output = InstId;
+    fn index(&self, index: Label) -> &Self::Output {
+        self.labels[index.0].as_ref().unwrap()
+    }
 }
 
 impl IrContext {
@@ -474,16 +484,16 @@ impl IrContext {
 //
 impl IrContext {
     /// get new destination label.
-    fn new_label(&mut self) -> usize {
+    fn new_label(&mut self) -> Label {
         let label = self.labels.len();
         self.labels.push(None);
-        label
+        Label(label)
     }
 
     /// apply current instruction pointer to the destination label.
-    fn apply_label(&mut self, label: usize) {
+    fn apply_label(&mut self, label: Label) {
         let pos = InstId(self.ir.len() as u32);
-        self.labels[label] = Some(pos);
+        self.labels[label.0] = Some(pos);
     }
 
     fn emit(&mut self, op: BcIr, loc: Loc) {
@@ -510,11 +520,11 @@ impl IrContext {
         self.emit_mov(dst.into(), src);
     }
 
-    fn emit_br(&mut self, jmp_pos: usize) {
+    fn emit_br(&mut self, jmp_pos: Label) {
         self.emit(BcIr::Br(jmp_pos), Loc::default());
     }
 
-    fn emit_condbr(&mut self, cond: BcReg, jmp_pos: usize, jmp_if_true: bool, optimizable: bool) {
+    fn emit_condbr(&mut self, cond: BcReg, jmp_pos: Label, jmp_if_true: bool, optimizable: bool) {
         self.emit(
             BcIr::CondBr(
                 cond,
@@ -530,7 +540,7 @@ impl IrContext {
         );
     }
 
-    fn emit_check_local(&mut self, local: BcReg, else_pos: usize) {
+    fn emit_check_local(&mut self, local: BcReg, else_pos: Label) {
         self.emit(BcIr::CheckLocal(local, else_pos), Loc::default());
     }
 

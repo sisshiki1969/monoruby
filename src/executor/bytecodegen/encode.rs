@@ -7,8 +7,8 @@ impl IrContext {
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
             let op = match inst {
                 BcIr::Br(dst) => {
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let op1 = dst - idx as i32 - 1;
+                    let dst = self[*dst].to_usize();
+                    let op1 = dst as isize - idx as isize - 1;
                     Bc::from(enc_l(3, op1 as u32))
                 }
                 BcIr::Integer(reg, num) => {
@@ -42,9 +42,9 @@ impl IrContext {
                     Bc::from(enc_wl(11, op1.0, name.get()))
                 }
                 BcIr::CondBr(reg, dst, optimizable, kind) => {
-                    let dst = self.labels[*dst].unwrap().0 as i32;
+                    let dst = self[*dst].to_usize();
                     let op1 = self.get_index(reg);
-                    let op2 = dst - idx as i32 - 1;
+                    let op2 = dst as isize - idx as isize - 1;
                     let kind = *kind as u16;
                     let op = enc_wl(
                         if *optimizable { 12 + kind } else { 4 + kind },
@@ -65,8 +65,8 @@ impl IrContext {
                 }
                 BcIr::CheckLocal(local, dst) => {
                     let op1 = self.get_index(local);
-                    let dst = self.labels[*dst].unwrap().0 as i32;
-                    let op2 = dst - idx as i32 - 1;
+                    let dst = self[*dst].to_usize();
+                    let op2 = dst as isize - idx as isize - 1;
                     Bc::from(enc_wl(20, op1.0, op2 as u32))
                 }
                 BcIr::BlockArgProxy(dst, outer) => {
@@ -398,9 +398,9 @@ impl IrContext {
         info.literals = std::mem::take(&mut self.literals);
         info.set_bytecode(ops);
         for (range, dest, err_reg, ex_reg) in std::mem::take(&mut self.exception_table) {
-            let start = info.get_pc(self.labels[range.start].unwrap().0 as usize);
-            let end = info.get_pc(self.labels[range.end].unwrap().0 as usize);
-            let dest = info.get_pc(self.labels[dest].unwrap().0 as usize);
+            let start = info.get_pc(self[range.start].to_usize());
+            let end = info.get_pc(self[range.end].to_usize());
+            let dest = info.get_pc(self[dest].to_usize());
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
             let ex_reg = ex_reg.map(|(reg, len, loc)| (self.get_index(&reg), len, loc));
             info.exception_push(start..end, dest, err_reg, ex_reg);

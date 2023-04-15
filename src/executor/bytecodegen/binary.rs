@@ -147,7 +147,7 @@ impl IrContext {
         &mut self,
         lhs: Node,
         rhs: BcReg,
-        cont_pos: usize,
+        cont_pos: Label,
         jmp_if_true: bool,
     ) -> Result<()> {
         let loc = lhs.loc;
@@ -164,7 +164,7 @@ impl IrContext {
         &mut self,
         jmp_if_true: bool,
         cond: Node,
-        else_pos: usize,
+        else_pos: Label,
     ) -> Result<()> {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
@@ -196,7 +196,7 @@ impl IrContext {
         jmp_if_true: bool,
         lhs: Node,
         rhs: Node,
-        else_pos: usize,
+        else_pos: Label,
     ) -> Result<()> {
         self.gen_opt_condbr(jmp_if_true, lhs, else_pos)?;
         self.gen_opt_condbr(jmp_if_true, rhs, else_pos)
@@ -207,7 +207,7 @@ impl IrContext {
         jmp_if_true: bool,
         lhs: Node,
         rhs: Node,
-        else_pos: usize,
+        else_pos: Label,
     ) -> Result<()> {
         let cont_pos = self.new_label();
         self.gen_opt_condbr(!jmp_if_true, lhs, cont_pos)?;

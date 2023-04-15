@@ -1206,11 +1206,17 @@ impl std::fmt::Debug for DynVar {
 /// ID of instruction.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-struct InstId(pub u32);
+pub(crate) struct InstId(u32);
 
 impl std::fmt::Debug for InstId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, ":{:05}", self.0)
+    }
+}
+
+impl InstId {
+    pub(crate) fn to_usize(&self) -> usize {
+        self.0 as usize
     }
 }
 
