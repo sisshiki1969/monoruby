@@ -76,12 +76,6 @@ impl std::fmt::Debug for BcLocal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) struct Label(usize);
 
-#[derive(Debug, Clone, PartialEq)]
-enum LoopKind {
-    For,
-    While,
-}
-
 fn is_smi(node: &Node) -> Option<i16> {
     if let NodeKind::Integer(i) = &node.kind {
         if *i == *i as i16 as i64 {
@@ -161,6 +155,13 @@ enum Functions {
     },
 }
 
+#[derive(Debug, Clone)]
+struct LoopInfo {
+    break_dest: Label,
+    next_dest: Label,
+    ret: Option<BcReg>,
+}
+
 #[derive(Debug)]
 pub(crate) struct IrContext {
     /// ID of this function.
@@ -172,7 +173,7 @@ pub(crate) struct IrContext {
     /// destination labels.
     labels: Vec<Option<InstId>>,
     /// loop information.
-    loops: Vec<(LoopKind, Label, Option<BcReg>)>, // (kind, label for exit, return register)
+    loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// local variables.
     locals: HashMap<IdentId, u16>,
     /// outer local variables. (dynamic_locals, block_param)
@@ -354,6 +355,14 @@ impl IrContext {
             info,
         });
         FuncId::new(id as _)
+    }
+
+    fn loop_push(&mut self, break_dest: Label, next_dest: Label, ret: Option<BcReg>) {
+        self.loops.push(LoopInfo {
+            break_dest,
+            next_dest,
+            ret,
+        });
     }
 }
 
@@ -1112,22 +1121,26 @@ impl IrContext {
                 box else_,
             } => {
                 let else_pos = self.new_label();
-                let succ_pos = self.new_label();
                 self.gen_opt_condbr(false, cond, else_pos)?;
                 self.gen_expr(then_, use_mode)?;
-                match use_mode {
-                    UseMode::Ret => {}
-                    UseMode::NotUse => {
-                        self.emit_br(succ_pos);
+                if else_.is_empty() {
+                    self.apply_label(else_pos);
+                } else {
+                    let succ_pos = self.new_label();
+                    match use_mode {
+                        UseMode::Ret => {}
+                        UseMode::NotUse => {
+                            self.emit_br(succ_pos);
+                        }
+                        UseMode::Use => {
+                            self.emit_br(succ_pos);
+                            self.pop();
+                        }
                     }
-                    UseMode::Use => {
-                        self.emit_br(succ_pos);
-                        self.pop();
-                    }
+                    self.apply_label(else_pos);
+                    self.gen_expr(else_, use_mode)?;
+                    self.apply_label(succ_pos);
                 }
-                self.apply_label(else_pos);
-                self.gen_expr(else_, use_mode)?;
-                self.apply_label(succ_pos);
                 return Ok(());
             }
             NodeKind::While {
@@ -1232,17 +1245,33 @@ impl IrContext {
                 return Ok(());
             }
             NodeKind::Break(box val) => {
-                let (_kind, break_pos, ret_reg) = match self.loops.last() {
-                    Some(data) => data.clone(),
+                let LoopInfo {
+                    break_dest, ret, ..
+                } = match self.loops.last().cloned() {
+                    Some(data) => data,
                     None => {
                         return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
                     }
                 };
-                if let Some(reg) = ret_reg {
+                if let Some(reg) = ret {
                     let temp = self.gen_temp_expr(val)?;
                     self.emit_mov(reg, temp)
                 }
-                self.emit(BcIr::Br(break_pos), loc);
+                self.emit(BcIr::Br(break_dest), loc);
+                return Ok(());
+            }
+            NodeKind::Next(box val) => {
+                let LoopInfo { next_dest, ret, .. } = match self.loops.last().cloned() {
+                    Some(data) => data,
+                    None => {
+                        return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
+                    }
+                };
+                if let Some(reg) = ret {
+                    let temp = self.gen_temp_expr(val)?;
+                    self.emit_mov(reg, temp)
+                }
+                self.emit(BcIr::Br(next_dest), loc);
                 return Ok(());
             }
             NodeKind::Return(box expr) => {
@@ -1921,12 +1950,13 @@ impl IrContext {
         {
             let name = IdentId::get_id(&param[0].1);
             let counter = self.assign_local(name);
-            let break_pos = self.new_label();
-            let ret_reg = match use_value {
+            let break_dest = self.new_label();
+            let next_dest = self.new_label();
+            let ret = match use_value {
                 true => Some(self.next_reg().into()),
                 false => None,
             };
-            self.loops.push((LoopKind::For, break_pos, ret_reg));
+            self.loop_push(break_dest, next_dest, ret);
             // +------+
             // | iter | (when use_value)
             // +------+
@@ -1973,6 +2003,7 @@ impl IrContext {
             self.pop(); // pop *dst*
 
             self.gen_expr(*body.body, UseMode::NotUse)?;
+            self.apply_label(next_dest);
 
             self.emit(
                 BcIr::BinOp(
@@ -1988,7 +2019,7 @@ impl IrContext {
             self.pop(); // pop *end*
 
             self.loops.pop().unwrap();
-            self.apply_label(break_pos);
+            self.apply_label(break_dest);
             self.emit(BcIr::LoopEnd, loc);
         } else {
             let use_mode = if use_value {
@@ -2002,27 +2033,27 @@ impl IrContext {
     }
 
     fn gen_while(&mut self, cond_op: bool, cond: Node, body: Node, use_value: bool) -> Result<()> {
-        let cond_pos = self.new_label();
+        let loop_start = self.new_label();
         let succ_pos = self.new_label();
-        let break_pos = self.new_label();
-        let ret_reg = match use_value {
+        let loop_exit = self.new_label();
+        let ret = match use_value {
             true => Some(self.next_reg().into()),
             false => None,
         };
-        self.loops.push((LoopKind::While, break_pos, ret_reg));
+        self.loop_push(loop_exit, loop_start, ret);
         let loc = body.loc;
-        self.apply_label(cond_pos);
+        self.apply_label(loop_start);
         self.emit(BcIr::LoopStart, loc);
         self.gen_opt_condbr(!cond_op, cond, succ_pos)?;
         self.gen_expr(body, UseMode::NotUse)?;
-        self.emit_br(cond_pos);
+        self.emit_br(loop_start);
         self.apply_label(succ_pos);
 
         if use_value {
             self.emit_nil(None);
         }
         self.loops.pop().unwrap();
-        self.apply_label(break_pos);
+        self.apply_label(loop_exit);
         self.emit(BcIr::LoopEnd, loc);
 
         Ok(())
@@ -2037,23 +2068,25 @@ impl IrContext {
         use_value: bool,
     ) -> Result<()> {
         let loop_pos = self.new_label();
-        let break_pos = self.new_label();
-        let ret_reg = match use_value {
+        let break_dest = self.new_label();
+        let next_dest = self.new_label();
+        let ret = match use_value {
             true => Some(self.next_reg().into()),
             false => None,
         };
-        self.loops.push((LoopKind::While, break_pos, ret_reg));
+        self.loop_push(break_dest, next_dest, ret);
         let loc = body.loc;
         self.apply_label(loop_pos);
         self.emit(BcIr::LoopStart, loc);
         self.gen_expr(body, UseMode::NotUse)?;
+        self.apply_label(next_dest);
         self.gen_opt_condbr(cond_op, cond, loop_pos)?;
 
         if use_value {
             self.emit_nil(None);
         }
         self.loops.pop().unwrap();
-        self.apply_label(break_pos);
+        self.apply_label(break_dest);
         self.emit(BcIr::LoopEnd, loc);
 
         Ok(())

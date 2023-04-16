@@ -239,8 +239,8 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::For { .. }
         | NodeKind::Case { .. }
         | NodeKind::Break(_)
-        | NodeKind::Return(_)
         | NodeKind::Next(_)
+        | NodeKind::Return(_)
         | NodeKind::ClassDef { .. }
         | NodeKind::SingletonClassDef { .. }
         | NodeKind::MethodDef(..)

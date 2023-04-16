@@ -23,6 +23,20 @@ pub fn run_test(code: &str) {
     assert!(Value::eq(interp_val, ruby_res));
 }
 
+pub fn run_test_once(code: &str) {
+    let wrapped = format!(
+        r##"
+      ({0})
+  "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let ruby_res = run_ruby(code, &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}
+
 pub fn run_tests(code: &[String]) {
     let code = format!("[{}]", code.join(", "));
     let wrapped = format!(
@@ -894,11 +908,37 @@ mod test {
         run_test(
             r#"
             a=1
+            x=0
             b=while a<2500 do
+            if a==100 then break a end
+                x=x+a
                 a=a+1
-                if a == 100 then break a end
             end
-            b
+            [a,b,x]
+            "#,
+        );
+        run_test_once(
+            r#"
+            a=1
+            x=0
+            b=while a<4 do
+                a=a+1
+                if a==2 then next a end
+                x=x+a
+            end
+            [a,b,x]
+            "#,
+        );
+        run_test(
+            r#"
+            a=1
+            x=0
+            b=until a>=2500 do
+                if a==100 then break a end
+                x=x+a
+                a=a+1
+            end
+            [a,b,x]
             "#,
         );
     }
