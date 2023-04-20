@@ -53,14 +53,14 @@ impl JitContext {
     ) -> Self {
         let bb_info = func.get_bb_info();
         let mut labels = HashMap::default();
-        bb_info.into_iter().enumerate().for_each(|(idx, elem)| {
+        bb_info.iter().enumerate().for_each(|(idx, elem)| {
             if elem.is_some() {
                 labels.insert(idx, codegen.jit.label());
             }
         });
         Self {
             labels,
-            bb_info: func.get_bb_info(),
+            bb_info,
             bb_pos: start_pos,
             loop_count: 0,
             is_loop,

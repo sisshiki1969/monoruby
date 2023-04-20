@@ -1,1 +1,1 @@
-cargo run -- -I ../yjit-bench/harness ../yjit-bench/benchmarks/fib.rb
+cargo run --features emit-bc -- -I ../yjit-bench/harness ../yjit-bench/benchmarks/fib.rb 2> err.txt

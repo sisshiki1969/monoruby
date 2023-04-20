@@ -2060,6 +2060,14 @@ mod test {
             end
         "#,
         );
+        run_test_once(
+            r#"
+            begin
+              100
+            rescue
+            end
+        "#,
+        );
         run_test(
             r#"
             begin

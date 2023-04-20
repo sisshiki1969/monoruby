@@ -1123,7 +1123,7 @@ impl IrContext {
                 let else_pos = self.new_label();
                 self.gen_opt_condbr(false, cond, else_pos)?;
                 self.gen_expr(then_, use_mode)?;
-                if else_.is_empty() {
+                if else_.is_empty() && use_mode == UseMode::NotUse {
                     self.apply_label(else_pos);
                 } else {
                     let succ_pos = self.new_label();
@@ -1311,7 +1311,9 @@ impl IrContext {
                 self.apply_label(body_end);
                 if !rescue.is_empty() {
                     let else_label = self.new_label();
-                    self.emit_br(else_label);
+                    if !body_use.is_ret() {
+                        self.emit_br(else_label);
+                    }
                     let rescue_start = self.new_label();
                     let mut err_reg = None;
                     let mut ex_reg = None;
@@ -1342,7 +1344,9 @@ impl IrContext {
                             err_reg = Some(src);
                         };
                         self.gen_expr(body, rescue_use)?;
-                        self.emit_br(ensure_label);
+                        if !rescue_use.is_ret() {
+                            self.emit_br(ensure_label);
+                        }
                         self.temp = old;
                     }
                     self.exception_table.push((
