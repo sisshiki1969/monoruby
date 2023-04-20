@@ -549,6 +549,11 @@ mod test {
     }
 
     #[test]
+    fn test_if() {
+        run_test("if false then 100 end")
+    }
+
+    #[test]
     fn test_class_def2() {
         run_test(
             r#"
