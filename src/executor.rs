@@ -1413,7 +1413,7 @@ extern "C" fn exec_jit_recompile(
     let codeptr = exec_jit_compile(globals, func_id, self_value);
     let target = globals[func_id].data.codeptr.unwrap();
     let offset = codeptr - target - 5;
-    unsafe { *(target.as_ptr().add(1) as *mut i32) = offset as i32 };
+    unsafe { *(target.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
     codeptr
 }
 

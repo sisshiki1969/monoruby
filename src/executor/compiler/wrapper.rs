@@ -201,6 +201,7 @@ impl Codegen {
     }
 }
 
+#[allow(improper_ctypes_definitions)]
 pub extern "C" fn wrapper(
     vm: &mut Executor,
     globals: &mut Globals,

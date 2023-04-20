@@ -1,7 +1,7 @@
 #![feature(box_patterns)]
 #![feature(int_roundings)]
 #![feature(const_option)]
-#![feature(once_cell)]
+#![feature(lazy_cell)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
 #![feature(result_flattening)]
