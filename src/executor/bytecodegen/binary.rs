@@ -98,6 +98,49 @@ impl IrContext {
     );
     gen_ops!((rem, Rem));
 
+    fn gen_singular(&mut self, dst: Option<BcReg>, lhs: Node) -> Result<(BcReg, BcReg)> {
+        let lhs = self.gen_temp_expr(lhs)?;
+        let dst = match dst {
+            None => self.push().into(),
+            Some(local) => local,
+        };
+        Ok((dst, lhs))
+    }
+
+    fn gen_binary(
+        &mut self,
+        dst: Option<BcReg>,
+        lhs: Node,
+        rhs: Node,
+    ) -> Result<(BcReg, BcReg, BcReg)> {
+        let (lhs, rhs) = self.gen_binary_temp_expr(lhs, rhs)?;
+        let dst = match dst {
+            None => self.push().into(),
+            Some(local) => local,
+        };
+        Ok((dst, lhs, rhs))
+    }
+
+    fn gen_cmp(
+        &mut self,
+        dst: Option<BcReg>,
+        kind: CmpKind,
+        lhs: Node,
+        rhs: Node,
+        optimizable: bool,
+        loc: Loc,
+    ) -> Result<BcReg> {
+        let (dst, mode) = if let Some(i) = is_smi(&rhs) {
+            let (dst, lhs) = self.gen_singular(dst, lhs)?;
+            (dst, BinopMode::RI(lhs, i))
+        } else {
+            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
+            (dst, BinopMode::RR(lhs, rhs))
+        };
+        self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
+        Ok(dst)
+    }
+
     fn gen_land(&mut self, dst: Option<BcReg>, lhs: Node, rhs: Node) -> Result<BcReg> {
         let exit_pos = self.new_label();
         let dst = match dst {

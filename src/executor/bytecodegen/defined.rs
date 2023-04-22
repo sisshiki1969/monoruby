@@ -3,14 +3,14 @@ use super::*;
 impl IrContext {
     pub(super) fn gen_defined(&mut self, node: Node) -> Result<()> {
         let res = defined_str(&node);
-        let reg = self.next_reg().into();
-        self.emit_string(None, res.to_string());
+        let reg = self.push().into();
+        self.emit_string(reg, res.to_string());
         let exit_label = self.new_label();
         let nil_label = self.new_label();
         self.check_defined(node, nil_label, reg, true)?;
         self.emit_br(exit_label);
         self.apply_label(nil_label);
-        self.emit_nil(Some(reg));
+        self.emit_nil(reg);
         self.apply_label(exit_label);
         Ok(())
     }

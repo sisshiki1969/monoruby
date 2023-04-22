@@ -263,7 +263,7 @@ impl IrContext {
             if let Some(box init) = initializer {
                 ir.gen_store_expr(local, init)?;
             } else {
-                ir.emit_nil(Some(local));
+                ir.emit_nil(local);
             }
             ir.apply_label(next);
         }
@@ -553,46 +553,36 @@ impl IrContext {
         self.emit(BcIr::CheckLocal(local, else_pos), Loc::default());
     }
 
-    fn emit_nil(&mut self, dst: Option<BcReg>) {
-        let reg = match dst {
-            Some(dst) => dst,
-            None => self.push().into(),
-        };
-        self.emit(BcIr::Nil(reg), Loc::default());
+    fn emit_nil(&mut self, dst: BcReg) {
+        self.emit(BcIr::Nil(dst), Loc::default());
     }
 
-    fn emit_literal(&mut self, dst: Option<BcReg>, v: Value) {
-        let reg = self.get_reg(dst);
+    fn emit_literal(&mut self, dst: BcReg, v: Value) {
         self.literals.push(v);
-        self.emit(BcIr::Literal(reg, v), Loc::default());
+        self.emit(BcIr::Literal(dst, v), Loc::default());
     }
 
-    fn emit_integer(&mut self, dst: Option<BcReg>, i: i64) {
+    fn emit_integer(&mut self, dst: BcReg, i: i64) {
         if let Ok(i) = i32::try_from(i) {
-            let reg = match dst {
-                Some(local) => local,
-                None => self.push().into(),
-            };
-            self.emit(BcIr::Integer(reg, i), Loc::default());
+            self.emit(BcIr::Integer(dst, i), Loc::default());
         } else {
             self.emit_literal(dst, Value::new_integer(i));
         }
     }
 
-    fn emit_bigint(&mut self, dst: Option<BcReg>, bigint: BigInt) {
+    fn emit_bigint(&mut self, dst: BcReg, bigint: BigInt) {
         self.emit_literal(dst, Value::new_bigint(bigint));
     }
 
-    fn emit_float(&mut self, dst: Option<BcReg>, f: f64) {
+    fn emit_float(&mut self, dst: BcReg, f: f64) {
         self.emit_literal(dst, Value::new_float(f));
     }
 
-    fn emit_symbol(&mut self, dst: Option<BcReg>, sym: IdentId) {
-        let reg = self.get_reg(dst);
-        self.emit(BcIr::Symbol(reg, sym), Loc::default());
+    fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
+        self.emit(BcIr::Symbol(dst, sym), Loc::default());
     }
 
-    fn emit_string(&mut self, dst: Option<BcReg>, s: String) {
+    fn emit_string(&mut self, dst: BcReg, s: String) {
         self.emit_literal(dst, Value::new_string(s));
     }
 
@@ -609,50 +599,6 @@ impl IrContext {
             },
             loc,
         );
-    }
-
-    fn gen_array(&mut self, ret: Option<BcReg>, nodes: Vec<Node>, loc: Loc) -> Result<()> {
-        let (src, len, _) = self.gen_args(nodes)?;
-        self.popn(len);
-        let ret = self.get_reg(ret);
-        self.emit_array(ret, src, len, loc);
-        Ok(())
-    }
-
-    fn gen_hash(&mut self, ret: Option<BcReg>, nodes: Vec<(Node, Node)>, loc: Loc) -> Result<()> {
-        let len = nodes.len();
-        let old_reg = self.temp;
-        let args = self.next_reg();
-        for (k, v) in nodes {
-            self.push_expr(k)?;
-            self.push_expr(v)?;
-        }
-        self.temp = old_reg;
-        let ret = self.get_reg(ret);
-        self.emit_hash(ret, args.into(), len, loc);
-        Ok(())
-    }
-
-    fn gen_range(
-        &mut self,
-        ret: Option<BcReg>,
-        start: Node,
-        end: Node,
-        exclude_end: bool,
-        loc: Loc,
-    ) -> Result<()> {
-        let ret = self.get_reg(ret);
-        let (start, end) = self.gen_binary_temp_expr(start, end)?;
-        self.emit(
-            BcIr::Range {
-                ret,
-                start,
-                end,
-                exclude_end,
-            },
-            loc,
-        );
-        Ok(())
     }
 
     fn emit_load_const(
@@ -716,6 +662,57 @@ impl IrContext {
 
     fn emit_not(&mut self, ret: BcReg, src: BcReg, loc: Loc) {
         self.emit(BcIr::Not { ret, src }, loc);
+    }
+
+    fn push_nil(&mut self) {
+        let reg = self.push().into();
+        self.emit_nil(reg);
+    }
+
+    fn push_symbol(&mut self, sym: IdentId) {
+        let reg = self.push().into();
+        self.emit_symbol(reg, sym);
+    }
+
+    fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
+        let (src, len, _) = self.gen_args(nodes)?;
+        self.popn(len);
+        self.emit_array(ret, src, len, loc);
+        Ok(())
+    }
+
+    fn gen_hash(&mut self, ret: BcReg, nodes: Vec<(Node, Node)>, loc: Loc) -> Result<()> {
+        let len = nodes.len();
+        let old_reg = self.temp;
+        let args = self.next_reg();
+        for (k, v) in nodes {
+            self.push_expr(k)?;
+            self.push_expr(v)?;
+        }
+        self.temp = old_reg;
+        self.emit_hash(ret, args.into(), len, loc);
+        Ok(())
+    }
+
+    fn gen_range(
+        &mut self,
+        ret: BcReg,
+        start: Node,
+        end: Node,
+        exclude_end: bool,
+        loc: Loc,
+    ) -> Result<()> {
+        let (start, end) = self.gen_binary_temp_expr(start, end)?;
+        self.emit(
+            BcIr::Range {
+                ret,
+                start,
+                end,
+                exclude_end,
+            },
+            loc,
+        );
+        Ok(())
     }
 
     fn gen_index(&mut self, ret: Option<BcReg>, base: Node, index: Node, loc: Loc) -> Result<()> {
@@ -927,37 +924,29 @@ impl IrContext {
         }
         let loc = expr.loc;
         match expr.kind {
-            NodeKind::Nil => self.emit_nil(None),
-            NodeKind::Bool(b) => self.emit_literal(None, Value::bool(b)),
-            NodeKind::SelfValue => self.emit_temp_mov(BcReg::Self_),
-            NodeKind::Integer(i) => {
-                self.emit_integer(None, i);
+            NodeKind::Nil
+            | NodeKind::Bool(_)
+            | NodeKind::SelfValue
+            | NodeKind::Integer(_)
+            | NodeKind::Symbol(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::String(_)
+            | NodeKind::Array(..)
+            | NodeKind::Hash(..)
+            | NodeKind::Range { .. }
+            | NodeKind::RegExp(_, true)
+            | NodeKind::UnOp(..)
+            | NodeKind::Const { .. }
+            | NodeKind::InstanceVar(_)
+            | NodeKind::GlobalVar(_)
+            | NodeKind::SpecialVar(_) => {
+                let ret = self.push().into();
+                self.gen_store_expr(ret, expr)?;
             }
-            NodeKind::Symbol(sym) => {
-                let sym = IdentId::get_id_from_string(sym);
-                self.emit_symbol(None, sym);
+            NodeKind::BinOp(op, box lhs, box rhs) => {
+                self.gen_binop(op, lhs, rhs, None, loc)?;
             }
-            NodeKind::Bignum(bigint) => self.emit_bigint(None, bigint),
-            NodeKind::Float(f) => self.emit_float(None, f),
-            NodeKind::String(s) => self.emit_string(None, s),
-            NodeKind::Array(_, true)
-            | NodeKind::Hash(_, true)
-            | NodeKind::Range { is_const: true, .. } => {
-                let val = Value::from_ast2(&expr);
-                self.emit_literal(None, val);
-            }
-            NodeKind::RegExp(nodes, true) => {
-                let val = self.const_regexp(nodes, loc)?;
-                self.emit_literal(None, val);
-            }
-            NodeKind::Array(nodes, false) => self.gen_array(None, nodes, loc)?,
-            NodeKind::Hash(nodes, false) => self.gen_hash(None, nodes, loc)?,
-            NodeKind::Range {
-                box start,
-                box end,
-                exclude_end,
-                is_const: false,
-            } => self.gen_range(None, start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -983,30 +972,6 @@ impl IrContext {
                     ));
                 };
             }
-            NodeKind::UnOp(op, box rhs) => match op {
-                UnOp::Neg => {
-                    match rhs.kind {
-                        //NodeKind::Integer(i) => self.gen_integer(ctx, info, None, -i),
-                        NodeKind::Float(f) => self.emit_float(None, -f),
-                        _ => {
-                            self.push_expr(rhs)?;
-                            self.emit_neg(None, loc);
-                        }
-                    };
-                }
-                UnOp::Not => {
-                    let src = self.push_expr(rhs)?;
-                    let ret = self.push().into();
-                    self.emit_not(ret, src, loc);
-                }
-                _ => {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("unsupported unop. {:?}", op),
-                        loc,
-                        self.sourceinfo.clone(),
-                    ))
-                }
-            },
             NodeKind::AssignOp(op, box lhs, box rhs) => {
                 if let Some(local) = self.is_refer_local(&lhs) {
                     self.gen_binop(op, lhs, rhs, Some(local.into()), loc)?;
@@ -1024,9 +989,6 @@ impl IrContext {
                 self.temp = temp;
                 self.handle_mode(use_mode, src);
                 return Ok(());
-            }
-            NodeKind::BinOp(op, box lhs, box rhs) => {
-                self.gen_binop(op, lhs, rhs, None, loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
                 if mlhs.len() == 1 && mrhs.len() == 1 {
@@ -1058,25 +1020,7 @@ impl IrContext {
                 let src = self.refer_dynamic_local(outer, name).into();
                 self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
             }
-            NodeKind::Const {
-                toplevel,
-                name,
-                parent: _,
-                prefix,
-            } => {
-                self.emit_load_const(None, toplevel, name, prefix, loc);
-            }
-            NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_id_from_string(name);
-                self.emit_load_ivar(None, name, loc);
-            }
-            NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_id_from_string(name);
-                self.emit_load_gvar(None, name, loc);
-            }
-            NodeKind::SpecialVar(id) => {
-                self.emit_load_svar(None, id as u32, loc);
-            }
+
             NodeKind::MethodCall {
                 box receiver,
                 method,
@@ -1381,7 +1325,7 @@ impl IrContext {
                 let name = IdentId::get_id_from_string(name);
                 self.gen_method_def(name, block, loc)?;
                 if use_mode.use_val() {
-                    self.emit_symbol(None, name);
+                    self.push_symbol(name);
                 }
                 if use_mode.is_ret() {
                     self.emit_ret(None);
@@ -1393,7 +1337,7 @@ impl IrContext {
                 let name = IdentId::get_id_from_string(name);
                 self.gen_singleton_method_def(name, block, loc)?;
                 if use_mode.use_val() {
-                    self.emit_symbol(None, name);
+                    self.push_symbol(name);
                 }
                 if use_mode.is_ret() {
                     self.emit_ret(None);
@@ -1457,8 +1401,8 @@ impl IrContext {
                     (NodeKind::Symbol(new), NodeKind::Symbol(old)) => {
                         let new = IdentId::get_id_from_string(new);
                         let old = IdentId::get_id_from_string(old);
-                        self.emit_symbol(None, new);
-                        self.emit_symbol(None, old);
+                        self.push_symbol(new);
+                        self.push_symbol(old);
                         let old = self.pop().into();
                         let new = self.pop().into();
                         self.emit(BcIr::AliasMethod { new, old }, loc);
@@ -1467,12 +1411,12 @@ impl IrContext {
                 };
                 match use_mode {
                     UseMode::Ret => {
-                        self.emit_nil(None);
+                        self.push_nil();
                         self.emit_ret(None);
                     }
                     UseMode::NotUse => {}
                     UseMode::Use => {
-                        self.emit_nil(None);
+                        self.push_nil();
                     }
                 }
                 return Ok(());
@@ -1497,35 +1441,35 @@ impl IrContext {
     fn gen_store_expr(&mut self, dst: BcReg, rhs: Node) -> Result<()> {
         let loc = rhs.loc;
         match rhs.kind {
-            NodeKind::Nil => self.emit_nil(Some(dst)),
-            NodeKind::Bool(b) => self.emit_literal(Some(dst), Value::bool(b)),
+            NodeKind::Nil => self.emit_nil(dst),
+            NodeKind::Bool(b) => self.emit_literal(dst, Value::bool(b)),
             NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
-            NodeKind::Integer(i) => self.emit_integer(Some(dst), i),
+            NodeKind::Integer(i) => self.emit_integer(dst, i),
             NodeKind::Symbol(sym) => {
                 let sym = IdentId::get_id_from_string(sym);
-                self.emit_symbol(Some(dst), sym)
+                self.emit_symbol(dst, sym)
             }
-            NodeKind::Bignum(bigint) => self.emit_bigint(Some(dst), bigint),
-            NodeKind::Float(f) => self.emit_float(Some(dst), f),
-            NodeKind::String(s) => self.emit_string(Some(dst), s),
-            NodeKind::Array(nodes, false) => self.gen_array(Some(dst), nodes, loc)?,
-            NodeKind::Hash(nodes, false) => self.gen_hash(Some(dst), nodes, loc)?,
+            NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
+            NodeKind::Float(f) => self.emit_float(dst, f),
+            NodeKind::String(s) => self.emit_string(dst, s),
+            NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
+            NodeKind::Hash(nodes, false) => self.gen_hash(dst, nodes, loc)?,
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
                 let val = Value::from_ast2(&rhs);
-                self.emit_literal(Some(dst), val);
+                self.emit_literal(dst, val);
             }
             NodeKind::RegExp(nodes, true) => {
                 let val = self.const_regexp(nodes, loc)?;
-                self.emit_literal(Some(dst), val);
+                self.emit_literal(dst, val);
             }
             NodeKind::Range {
                 box start,
                 box end,
                 exclude_end,
                 is_const: false,
-            } => self.gen_range(Some(dst), start, end, exclude_end, loc)?,
+            } => self.gen_range(dst, start, end, exclude_end, loc)?,
             NodeKind::Index {
                 box base,
                 mut index,
@@ -1553,8 +1497,8 @@ impl IrContext {
             NodeKind::UnOp(op, box rhs) => match op {
                 UnOp::Neg => {
                     match rhs.kind {
-                        NodeKind::Integer(i) => self.emit_integer(Some(dst), -i),
-                        NodeKind::Float(f) => self.emit_float(Some(dst), -f),
+                        NodeKind::Integer(i) => self.emit_integer(dst, -i),
+                        NodeKind::Float(f) => self.emit_float(dst, -f),
                         _ => {
                             self.gen_store_expr(dst, rhs)?;
                             self.emit_neg(Some(dst), loc);
@@ -1599,6 +1543,12 @@ impl IrContext {
                 let local2 = self.refer_local(&ident);
                 self.emit_mov(dst, local2.into());
             }
+            NodeKind::LocalVar(outer, ident) => {
+                let ret = dst.into();
+                let name = IdentId::get_id_from_string(ident);
+                let src = self.refer_dynamic_local(outer, name).into();
+                self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+            }
             NodeKind::Const {
                 toplevel,
                 name,
@@ -1610,6 +1560,13 @@ impl IrContext {
             NodeKind::InstanceVar(name) => {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_ivar(dst.into(), name, loc);
+            }
+            NodeKind::GlobalVar(name) => {
+                let name = IdentId::get_id_from_string(name);
+                self.emit_load_gvar(dst.into(), name, loc);
+            }
+            NodeKind::SpecialVar(id) => {
+                self.emit_load_svar(dst.into(), id as u32, loc);
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -1819,49 +1776,6 @@ enum RecvKind {
 }
 
 impl IrContext {
-    fn gen_binary(
-        &mut self,
-        dst: Option<BcReg>,
-        lhs: Node,
-        rhs: Node,
-    ) -> Result<(BcReg, BcReg, BcReg)> {
-        let (lhs, rhs) = self.gen_binary_temp_expr(lhs, rhs)?;
-        let dst = match dst {
-            None => self.push().into(),
-            Some(local) => local,
-        };
-        Ok((dst, lhs, rhs))
-    }
-
-    fn gen_singular(&mut self, dst: Option<BcReg>, lhs: Node) -> Result<(BcReg, BcReg)> {
-        let lhs = self.gen_temp_expr(lhs)?;
-        let dst = match dst {
-            None => self.push().into(),
-            Some(local) => local,
-        };
-        Ok((dst, lhs))
-    }
-
-    fn gen_cmp(
-        &mut self,
-        dst: Option<BcReg>,
-        kind: CmpKind,
-        lhs: Node,
-        rhs: Node,
-        optimizable: bool,
-        loc: Loc,
-    ) -> Result<BcReg> {
-        let (dst, mode) = if let Some(i) = is_smi(&rhs) {
-            let (dst, lhs) = self.gen_singular(dst, lhs)?;
-            (dst, BinopMode::RI(lhs, i))
-        } else {
-            let (dst, lhs, rhs) = self.gen_binary(dst, lhs, rhs)?;
-            (dst, BinopMode::RR(lhs, rhs))
-        };
-        self.emit(BcIr::Cmp(kind, dst, mode, optimizable), loc);
-        Ok(dst)
-    }
-
     ///
     /// Generate multiple assignment.
     ///
@@ -2054,7 +1968,7 @@ impl IrContext {
         self.apply_label(succ_pos);
 
         if use_value {
-            self.emit_nil(None);
+            self.push_nil();
         }
         self.loops.pop().unwrap();
         self.apply_label(loop_exit);
@@ -2087,7 +2001,7 @@ impl IrContext {
         self.gen_opt_condbr(cond_op, cond, loop_pos)?;
 
         if use_value {
-            self.emit_nil(None);
+            self.push_nil();
         }
         self.loops.pop().unwrap();
         self.apply_label(break_dest);

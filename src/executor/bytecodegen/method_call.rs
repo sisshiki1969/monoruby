@@ -136,7 +136,7 @@ impl IrContext {
         let old_temp = self.temp;
         let arg = self.next_reg();
         self.handle_block(optional_params, block)?;
-        self.emit_nil(None);
+        self.push_nil();
         self.temp = old_temp;
 
         let recv = match recv_kind {
@@ -299,7 +299,7 @@ impl IrContext {
                 }
             }
         } else {
-            self.emit_nil(None);
+            self.push_nil();
         }
         Ok(())
     }
@@ -344,7 +344,8 @@ impl IrContext {
         let mother = self.mother.as_ref().unwrap().0;
         let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
-        self.emit_literal(None, Value::new_integer(block_handler));
+        let dst = self.push().into();
+        self.emit_literal(dst, Value::new_integer(block_handler));
         Ok(())
     }
 
