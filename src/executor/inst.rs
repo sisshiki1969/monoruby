@@ -84,6 +84,7 @@ pub(super) enum BcIr {
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
     Ret(BcReg),
+    MethodRet(BcReg),
     MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     Super(Option<BcReg>, CallSiteId),
@@ -493,6 +494,8 @@ pub(super) enum TraceIr {
     Cmp(CmpKind, SlotId, OpMode, bool),
     /// return(%ret)
     Ret(SlotId),
+    /// method_return(%ret)
+    MethodRet(SlotId),
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
     /// initialize_method
@@ -820,6 +823,8 @@ impl TraceIr {
                     ret: SlotId::new(op1),
                     name: IdentId::from(pc.op2.0 as u32),
                 },
+                80 => Self::Ret(SlotId::new(op1)),
+                81 => Self::MethodRet(SlotId::new(op1)),
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),
@@ -921,7 +926,6 @@ impl TraceIr {
                     args: SlotId::new(op2),
                     len: op3,
                 },
-                175 => Self::Ret(SlotId::new(op1)),
                 176 => Self::Mov(SlotId::new(op1), SlotId::new(op2)),
                 177..=178 => Self::Range {
                     ret: SlotId::new(op1),
@@ -999,7 +1003,7 @@ impl TraceIr {
         if opcode & 0x80 == 0 {
             opcode == 3 // Br
         } else {
-            opcode == 175 // Ret
+            opcode == 80 // Ret
         }
     }
 }

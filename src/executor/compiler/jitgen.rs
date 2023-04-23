@@ -1514,6 +1514,13 @@ impl Codegen {
                     self.epilogue();
                     return false;
                 }
+                TraceIr::MethodRet(lhs) => {
+                    unimplemented!();
+                    //self.write_back_slot(&mut ctx, lhs);
+                    //self.load_rax(lhs);
+                    //self.epilogue();
+                    return false;
+                }
                 TraceIr::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;
                     let dest_idx = (next_idx as i64 + disp as i64) as usize;

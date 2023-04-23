@@ -1,0 +1,2211 @@
+   Compiling monoruby v0.2.0 (/home/monochrome/monoruby)
+    Finished dev [optimized + debuginfo] target(s) in 5.48s
+     Running `target/debug/monoruby -I ../yjit-bench/harness ../yjit-bench/benchmarks/fib.rb`
+------------------------------------
+FuncId(141) name:/main bc:BcPcBase(0x55e6de4c0cb0) meta:kind:VM mode:method FuncId(141) regs:2 ISeq(RubyFuncInfo { id:141 name:/main method:Some(FuncId(141)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 _ = class_def Math < _: FuncId(142)
+ :00002 _ = class_def RbConfig < _: FuncId(143)
+ :00003 %1 = class_def Process < _: FuncId(144)
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(142) name:Math bc:BcPcBase(0x55e6de4c91b0) meta:kind:VM mode:class_def FuncId(142) regs:2 ISeq(RubyFuncInfo { id:142 name:Math method:Some(FuncId(142)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = literal[3.141592653589793]
+ :00002 const[PI] = %1
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(143) name:RbConfig bc:BcPcBase(0x55e6de4c8f10) meta:kind:VM mode:class_def FuncId(143) regs:2 ISeq(RubyFuncInfo { id:143 name:RbConfig method:Some(FuncId(143)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = %0
+ :00002 singleton_method_def %1.ruby: FuncId(145)
+ :00003 %1 = :ruby
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(144) name:Process bc:BcPcBase(0x55e6de4dc310) meta:kind:VM mode:class_def FuncId(144) regs:2 ISeq(RubyFuncInfo { id:144 name:Process method:Some(FuncId(144)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = 0: i32
+ :00002 const[CLOCK_REALTIME] = %1
+ :00003 %1 = 1: i32
+ :00004 const[CLOCK_MONOTONIC] = %1
+ :00005 %1 = 2: i32
+ :00006 const[CLOCK_PROCESS_CPUTIME_ID] = %1
+ :00007 %1 = 3: i32
+ :00008 const[CLOCK_THREAD_CPUTIME_ID] = %1
+ :00009 %1 = 4: i32
+ :00010 const[CLOCK_MONOTONIC_RAW] = %1
+ :00011 %1 = 5: i32
+ :00012 const[CLOCK_REALTIME_COARSE] = %1
+ :00013 %1 = 6: i32
+ :00014 const[CLOCK_MONOTONIC_COARSE] = %1
+ :00015 %1 = 7: i32
+ :00016 const[CLOCK_BOOTTIME] = %1
+ :00017 %1 = 8: i32
+ :00018 const[CLOCK_REALTIME_ALARM] = %1
+ :00019 %1 = 9: i32
+ :00020 const[CLOCK_BOOTTIME_ALARM] = %1
+ :00021 %1 = class_def Tms < _: FuncId(146)
+ :00022 ret %1
+------------------------------------
+------------------------------------
+FuncId(145) name:ruby bc:BcPcBase(0x55e6de4d94f0) meta:kind:VM mode:method FuncId(145) regs:3 ISeq(RubyFuncInfo { id:145 name:ruby method:Some(FuncId(145)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = @ruby: <INVALID>[IvarId(0)]
+ :00002 condbr %1 =>:00008
+ :00003 %2 = literal["ruby -e 'print RbConfig.ruby'"]
+ :00004 %2 = %0.call `(%2; 1)                [<INVALID>]
+ :00006 %1 = %2
+ :00007 @ruby: <INVALID>[IvarId(0)] = %1
++:00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(146) name:Tms bc:BcPcBase(0x55e6de4da1c0) meta:kind:VM mode:class_def FuncId(146) regs:5 ISeq(RubyFuncInfo { id:146 name:Tms method:Some(FuncId(146)) args: 0 non_temp: 0 temp: 4})
+[]
++:00000 init_method reg:4 arg:0 req:0 opt:0 rest:false block:None stack_offset:6
+ :00001 %1 = :utime
+ :00002 %2 = :stime
+ :00003 %3 = :cutime
+ :00004 %4 = :cstime
+ :00005 %1 = %0.call attr_accessor(%1; 4)    [<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(155) name:/main bc:BcPcBase(0x55e6de4bf3e0) meta:kind:VM mode:method FuncId(155) regs:3 ISeq(RubyFuncInfo { id:155 name:/main method:Some(FuncId(155)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = literal["harness"]
+ :00002 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00004 method_def fib: FuncId(156)
+ :00005 %1 = literal[10289153]
+ :00006 %2 = 100: i32
+ :00007 %1 = %0.call run_benchmark(%3; 1 &%1 kw:%2) [<INVALID>]
+ :00009 ret %1
+------------------------------------
+------------------------------------
+FuncId(156) name:fib bc:BcPcBase(0x55e6de4c7580) meta:kind:VM mode:method FuncId(156) regs:4 ISeq(RubyFuncInfo { id:156 name:fib method:Some(FuncId(156)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 _%2 = %1 < 2: i16                    [<INVALID>][<INVALID>]
+ :00002 condnotbr _%2 =>:00004
+ :00003 ret %1
++:00004 %2 = %1 - 1: i16                     [<INVALID>][<INVALID>]
+ :00005 %2 = %0.call fib(%2; 1)              [<INVALID>]
+ :00007 %3 = %1 - 2: i16                     [<INVALID>][<INVALID>]
+ :00008 %3 = %0.call fib(%3; 1)              [<INVALID>]
+ :00010 %2 = %2 + %3                         [<INVALID>][<INVALID>]
+ :00011 ret %2
+------------------------------------
+------------------------------------
+FuncId(157) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4c8c50) meta:kind:VM mode:method FuncId(157) regs:2 ISeq(RubyFuncInfo { id:157 name:<unnamed> method:Some(FuncId(155)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = 32: i32
+ :00002 %1 = %0.call fib(%1; 1)              [<INVALID>]
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(158) name:/main bc:BcPcBase(0x55e6de4df490) meta:kind:VM mode:method FuncId(158) regs:9 ISeq(RubyFuncInfo { id:158 name:/main method:Some(FuncId(158)) args: 0 non_temp: 1 temp: 7})
+[]
++:00000 init_method reg:8 arg:0 req:0 opt:0 rest:false block:None stack_offset:8
+ :00001 %2 = literal["benchmark"]
+ :00002 _ = %0.call require(%2; 1)           [<INVALID>]
+ :00004 %2 = literal["./harness-common"]
+ :00005 _ = %0.call require_relative(%2; 1)  [<INVALID>]
+ :00007 %2 = const[ENV]                      [<INVALID>]
+ :00008 %3 = literal["WARMUP_ITRS"]
+ :00009 %4 = 15: i32
+ :00010 %2 = %2.call fetch(%3; 2)            [<INVALID>]
+ :00012 %2 = %0.call Integer(%2; 1)          [<INVALID>]
+ :00014 const[WARMUP_ITRS] = %2
+ :00015 %2 = const[ENV]                      [<INVALID>]
+ :00016 %3 = literal["MIN_BENCH_ITRS"]
+ :00017 %4 = 10: i32
+ :00018 %2 = %2.call fetch(%3; 2)            [<INVALID>]
+ :00020 %2 = %0.call Integer(%2; 1)          [<INVALID>]
+ :00022 const[MIN_BENCH_ITRS] = %2
+ :00023 %2 = const[ENV]                      [<INVALID>]
+ :00024 %3 = literal["MIN_BENCH_TIME"]
+ :00025 %4 = 10: i32
+ :00026 %2 = %2.call fetch(%3; 2)            [<INVALID>]
+ :00028 %2 = %0.call Integer(%2; 1)          [<INVALID>]
+ :00030 const[MIN_BENCH_TIME] = %2
+ :00031 %2 = literal["data/results-"]
+ :00032 %3 = const[RUBY_ENGINE]              [<INVALID>]
+ :00033 %4 = literal["-"]
+ :00034 %5 = const[RUBY_ENGINE_VERSION]      [<INVALID>]
+ :00035 %6 = literal["-"]
+ :00036 %7 = const[Time]                     [<INVALID>]
+ :00037 %7 = %7.call now()                   [<INVALID>]
+ :00039 %8 = literal["%F-%H%M%S"]
+ :00040 %7 = %7.call strftime(%8; 1)         [<INVALID>]
+ :00042 %8 = literal[".csv"]
+ :00043 %2 = concat(%2; 7)
+ :00044 %1 = %2
+ :00045 %2 = const[File]                     [<INVALID>]
+ :00046 %3 = const[ENV]                      [<INVALID>]
+ :00047 %4 = literal["OUT_CSV_PATH"]
+ :00048 %5 = %1
+ :00049 %3 = %3.call fetch(%4; 2)            [<INVALID>]
+ :00051 %2 = %2.call expand_path(%3; 1)      [<INVALID>]
+ :00053 const[OUT_CSV_PATH] = %2
+ :00054 %2 = const[ENV]                      [<INVALID>]
+ :00055 %3 = literal["RSS_CSV_PATH"]
+ :00056 %2 = %2.[%3]                         [<INVALID>][<INVALID>]
+ :00057 condnotbr %2 =>:00065
+ :00058 %2 = const[File]                     [<INVALID>]
+ :00059 %3 = const[ENV]                      [<INVALID>]
+ :00060 %4 = literal["RSS_CSV_PATH"]
+ :00061 %3 = %3.[%4]                         [<INVALID>][<INVALID>]
+ :00062 %2 = %2.call expand_path(%3; 1)      [<INVALID>]
+ :00064 br =>:00066
++:00065 %2 = nil
++:00066 const[RSS_CSV_PATH] = %2
+ :00067 %2 = literal["mkdir"]
+ :00068 %3 = literal["-p"]
+ :00069 %4 = const[File]                     [<INVALID>]
+ :00070 %5 = const[OUT_CSV_PATH]             [<INVALID>]
+ :00071 %4 = %4.call dirname(%5; 1)          [<INVALID>]
+ :00073 _ = %0.call system(%2; 3)            [<INVALID>]
+ :00075 %2 = const[RUBY_DESCRIPTION]         [<INVALID>]
+ :00076 _ = %0.call puts(%2; 1)              [<INVALID>]
+ :00078 method_def run_benchmark: FuncId(159)
+ :00079 %2 = :run_benchmark
+ :00080 ret %2
+------------------------------------
+------------------------------------
+FuncId(159) name:run_benchmark bc:BcPcBase(0x55e6de4db5a0) meta:kind:VM mode:method FuncId(159) regs:14 ISeq(RubyFuncInfo { id:159 name:run_benchmark method:Some(FuncId(159)) args: 1 non_temp: 8 temp: 5})
+[]
++:00000 init_method reg:13 arg:1 req:1 opt:0 rest:false block:None stack_offset:10
+ :00001 %2 = literal[[]]
+ :00002 %3 = 0: i32
+ :00003 %4 = 0: i32
++:00004 loop_start counter=0 jit-addr=0000000000000000
+ :00005 %9 = const[Benchmark]                [<INVALID>]
+ :00006 %10 = literal[10485761]
+ :00007 %5 = %9.call realtime(&%10 kw:%11)   [<INVALID>]
+ :00009 %4 = %4 + 1: i16                     [<INVALID>][<INVALID>]
+ :00010 %9 = 1000: i16 * %5                  [<INVALID>][<INVALID>]
+ :00011 %6 = %9.call to_i()                  [<INVALID>]
+ :00013 %9 = literal["itr #"]
+ :00014 %10 = %4
+ :00015 %11 = literal[": "]
+ :00016 %12 = %6
+ :00017 %13 = literal["ms"]
+ :00018 %9 = concat(%9; 5)
+ :00019 _ = %0.call puts(%9; 1)              [<INVALID>]
+ :00021 %9 = %2 << %5                        [<INVALID>][<INVALID>]
+ :00022 %3 = %3 + %5                         [<INVALID>][<INVALID>]
+ :00023 %9 = const[WARMUP_ITRS]              [<INVALID>]
+ :00024 %10 = const[MIN_BENCH_ITRS]          [<INVALID>]
+ :00025 %9 = %9 + %10                        [<INVALID>][<INVALID>]
+ :00026 _%9 = %4 >= %9                       [<INVALID>][<INVALID>]
+ :00027 condnotbr _%9 =>:00004
+ :00028 %9 = const[MIN_BENCH_TIME]           [<INVALID>]
+ :00029 _%9 = %3 >= %9                       [<INVALID>][<INVALID>]
+ :00030 condnotbr _%9 =>:00004
+ :00031 loop_end
+ :00032 _ = %0.call return_results(%2; 1)    [<INVALID>]
+ :00034 %10 = const[WARMUP_ITRS]             [<INVALID>]
+ :00035 %11 = -1: i32
+ :00036 %9 = %10 .. %11
+ :00037 %7 = %2.[%9]                         [<INVALID>][<INVALID>]
+ :00038 %9 = %7.call size()                  [<INVALID>]
+ :00040 _%9 = %9 > 1: i16                    [<INVALID>][<INVALID>]
+ :00041 condnotbr _%9 =>:00061
+ :00042 %9 = %7.call sum()                   [<INVALID>]
+ :00044 %10 = %7.call size()                 [<INVALID>]
+ :00046 %9 = %9 / %10                        [<INVALID>][<INVALID>]
+ :00047 %10 = literal[1000.0]
+ :00048 %9 = %9 * %10                        [<INVALID>][<INVALID>]
+ :00049 %8 = %9.call to_i()                  [<INVALID>]
+ :00051 %9 = literal["Average of last "]
+ :00052 %10 = %7.call size()                 [<INVALID>]
+ :00054 %11 = literal[", non-warmup iters: "]
+ :00055 %12 = %8
+ :00056 %13 = literal["ms"]
+ :00057 %9 = concat(%9; 5)
+ :00058 %9 = %0.call puts(%9; 1)             [<INVALID>]
+ :00060 ret %9
++:00061 %9 = nil
+ :00062 ret %9
+------------------------------------
+------------------------------------
+FuncId(160) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4d9de0) meta:kind:VM mode:method FuncId(160) regs:3 ISeq(RubyFuncInfo { id:160 name:<unnamed> method:Some(FuncId(159)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = yield
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(161) name:/main bc:BcPcBase(0x55e6de4dba00) meta:kind:VM mode:method FuncId(161) regs:2 ISeq(RubyFuncInfo { id:161 name:/main method:Some(FuncId(161)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = module_def Benchmark: FuncId(162)
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(162) name:Benchmark bc:BcPcBase(0x55e6de4da4f0) meta:kind:VM mode:class_def FuncId(162) regs:6 ISeq(RubyFuncInfo { id:162 name:Benchmark method:Some(FuncId(162)) args: 0 non_temp: 0 temp: 5})
+[]
++:00000 init_method reg:5 arg:0 req:0 opt:0 rest:false block:None stack_offset:6
+ :00001 %1 = literal["2002-04-25"]
+ :00002 const[BENCHMARK_VERSION] = %1
+ :00003 method_def benchmark: FuncId(163)
+ :00004 method_def bm: FuncId(164)
+ :00005 method_def bmbm: FuncId(165)
+ :00006 method_def measure: FuncId(166)
+ :00007 method_def realtime: FuncId(167)
+ :00008 %1 = :benchmark
+ :00009 %2 = :measure
+ :00010 %3 = :realtime
+ :00011 %4 = :bm
+ :00012 %5 = :bmbm
+ :00013 _ = %0.call module_function(%1; 5)   [<INVALID>]
+ :00015 _ = class_def Job < _: FuncId(168)
+ :00016 _ = class_def Report < _: FuncId(169)
+ :00017 _ = class_def Tms < _: FuncId(170)
+ :00018 %1 = const[Benchmark::Tms::CAPTION]  [<INVALID>]
+ :00019 const[CAPTION] = %1
+ :00020 %1 = const[Benchmark::Tms::FORMAT]   [<INVALID>]
+ :00021 const[FORMAT] = %1
+ :00022 ret %1
+------------------------------------
+------------------------------------
+FuncId(163) name:benchmark bc:BcPcBase(0x55e6de4f4c90) meta:kind:VM mode:method FuncId(163) regs:12 ISeq(RubyFuncInfo { id:163 name:benchmark method:Some(FuncId(163)) args: 4 non_temp: 7 temp: 4})
+[]
++:00000 init_method reg:11 arg:4 req:0 opt:3 rest:true block:None stack_offset:9
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = literal[""]
++:00003 check_local(%2) =>:00005
+ :00004 %2 = nil
++:00005 check_local(%3) =>:00007
+ :00006 %3 = nil
++:00007 %8 = $$stdout
+ :00008 %5 = %8.call sync()                  [<INVALID>]
+ :00010 %8 = $$stdout
+ :00011 %9 = literal[true]
+ :00012 _ = %8.call sync=(%9; 1)             [<INVALID>]
+ :00014 %8 = %2
+ :00015 condbr %8 =>:00018
+ :00016 %2 = 0: i32
+ :00017 %8 = %2
++:00018 %2 = %2 + 1: i16                     [<INVALID>][<INVALID>]
+ :00019 %8 = %3
+ :00020 condbr %8 =>:00023
+ :00021 %3 = const[FORMAT]                   [<INVALID>]
+ :00022 %8 = %3
++:00023 %8 = %1.call empty?()                [<INVALID>]
+ :00025 condnotbr %8 =>:00027
+ :00026 br =>:00032
++:00027 %8 = literal[" "]
+ :00028 %8 = %8 * %2                         [<INVALID>][<INVALID>]
+ :00029 %8 = %8 + %1                         [<INVALID>][<INVALID>]
+ :00030 _ = %0.call print(%8; 1)             [<INVALID>]
++:00032 %8 = const[Report]                   [<INVALID>]
+ :00033 %9 = %2
+ :00034 %10 = %3
+ :00035 %6 = %8.call new(%9; 2)              [<INVALID>]
+ :00037 %8 = yield(%6; 1)
+ :00038 %7 = %8
+ :00039 %9 = const[Array]                    [<INVALID>]
+ :00040 %8 = %9 === %7                       [<INVALID>][<INVALID>]
+ :00041 condnotbr %8 =>:00048
+ :00042 %9 = const[Tms]                      [<INVALID>]
+ :00043 %9 = %7.call grep(%9; 1)             [<INVALID>]
+ :00045 %10 = literal[11206657]
+ :00046 %8 = %9.call each(&%10 kw:%11)       [<INVALID>]
++:00048 %8 = %6.call list()                  [<INVALID>]
+ :00050 %9 = %5.call nil?()                  [<INVALID>]
+ :00052 condnotbr %9 =>:00054
+ :00053 br =>:00057
++:00054 %9 = $$stdout
+ :00055 _ = %9.call sync=(%5; 1)             [<INVALID>]
++:00057 ret %8
+------------------------------------
+------------------------------------
+FuncId(164) name:bm bc:BcPcBase(0x55e6de4bd2f0) meta:kind:VM mode:method FuncId(164) regs:9 ISeq(RubyFuncInfo { id:164 name:bm method:Some(FuncId(164)) args: 3 non_temp: 3 temp: 5})
+[]
++:00000 init_method reg:8 arg:3 req:0 opt:1 rest:true block:Some(3) stack_offset:8
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = 0: i32
++:00003 %4 = block_arg(0)
+ :00004 %5 = const[CAPTION]                  [<INVALID>]
+ :00005 %6 = %1
+ :00006 %7 = const[FORMAT]                   [<INVALID>]
+ :00007 %8 = %2
+ :00008 %4 = %0.call benchmark(%6; 4 &%4 kw:%5)* [<INVALID>]
+ :00010 ret %4
+------------------------------------
+------------------------------------
+FuncId(165) name:bmbm bc:BcPcBase(0x55e6de502850) meta:kind:VM mode:method FuncId(165) regs:9 ISeq(RubyFuncInfo { id:165 name:bmbm method:Some(FuncId(165)) args: 1 non_temp: 4 temp: 4})
+[]
++:00000 init_method reg:8 arg:1 req:0 opt:1 rest:false block:None stack_offset:8
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = 0: i32
++:00003 %5 = const[Job]                      [<INVALID>]
+ :00004 %2 = %5.call new(%1; 1)              [<INVALID>]
+ :00006 _ = yield(%2; 1)
+ :00007 %5 = %2.call width()                 [<INVALID>]
+ :00009 %1 = %5 + 1: i16                     [<INVALID>][<INVALID>]
+ :00010 %5 = $$stdout
+ :00011 %3 = %5.call sync()                  [<INVALID>]
+ :00013 %5 = $$stdout
+ :00014 %6 = literal[true]
+ :00015 _ = %5.call sync=(%6; 1)             [<INVALID>]
+ :00017 %5 = literal["Rehearsal "]
+ :00018 %6 = const[CAPTION]                  [<INVALID>]
+ :00019 %6 = %6.call length()                [<INVALID>]
+ :00021 %6 = %1 + %6                         [<INVALID>][<INVALID>]
+ :00022 %7 = literal["-"]
+ :00023 %5 = %5.call ljust(%6; 2)            [<INVALID>]
+ :00025 _ = %0.call puts(%5; 1)              [<INVALID>]
+ :00027 %5 = %2.call list()                  [<INVALID>]
+ :00029 %6 = literal[11272193]
+ :00030 %7 = const[Tms]                      [<INVALID>]
+ :00031 %7 = %7.call new()                   [<INVALID>]
+ :00033 %5 = %5.call inject(%8; 1 &%6 kw:%7) [<INVALID>]
+ :00035 %6 = literal["total: %tsec"]
+ :00036 %4 = %5.call format(%6; 1)           [<INVALID>]
+ :00038 %5 = literal[" "]
+ :00039 %6 = %4
+ :00040 %7 = literal["\n\n"]
+ :00041 %5 = concat(%5; 3)
+ :00042 %6 = const[CAPTION]                  [<INVALID>]
+ :00043 %6 = %6.call length()                [<INVALID>]
+ :00045 %6 = %1 + %6                         [<INVALID>][<INVALID>]
+ :00046 %6 = %6 + 2: i16                     [<INVALID>][<INVALID>]
+ :00047 %7 = literal["-"]
+ :00048 %5 = %5.call rjust(%6; 2)            [<INVALID>]
+ :00050 _ = %0.call print(%5; 1)             [<INVALID>]
+ :00052 %5 = literal[" "]
+ :00053 %5 = %5 * %1                         [<INVALID>][<INVALID>]
+ :00054 %6 = const[CAPTION]                  [<INVALID>]
+ :00055 %5 = %5 + %6                         [<INVALID>][<INVALID>]
+ :00056 _ = %0.call print(%5; 1)             [<INVALID>]
+ :00058 %5 = %2.call list()                  [<INVALID>]
+ :00060 %6 = literal[11337729]
+ :00061 %5 = %5.call map(&%6 kw:%7)          [<INVALID>]
+ :00063 %6 = %3.call nil?()                  [<INVALID>]
+ :00065 condnotbr %6 =>:00067
+ :00066 br =>:00070
++:00067 %6 = $$stdout
+ :00068 _ = %6.call sync=(%3; 1)             [<INVALID>]
++:00070 ret %5
+------------------------------------
+------------------------------------
+FuncId(166) name:measure bc:BcPcBase(0x55e6de4ff770) meta:kind:VM mode:method FuncId(166) regs:13 ISeq(RubyFuncInfo { id:166 name:measure method:Some(FuncId(166)) args: 1 non_temp: 5 temp: 7})
+[]
++:00000 init_method reg:12 arg:1 req:0 opt:1 rest:false block:None stack_offset:10
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = literal[""]
++:00003 %6 = const[Process]                  [<INVALID>]
+ :00004 %6 = %6.call times()                 [<INVALID>]
+ :00006 %7 = const[Process]                  [<INVALID>]
+ :00007 %8 = const[Process::CLOCK_MONOTONIC] [<INVALID>]
+ :00008 %7 = %7.call clock_gettime(%8; 1)    [<INVALID>]
+ :00010 %2 = %6
+ :00011 %3 = %7
+ :00012 _ = yield
+ :00013 %6 = const[Process]                  [<INVALID>]
+ :00014 %6 = %6.call times()                 [<INVALID>]
+ :00016 %7 = const[Process]                  [<INVALID>]
+ :00017 %8 = const[Process::CLOCK_MONOTONIC] [<INVALID>]
+ :00018 %7 = %7.call clock_gettime(%8; 1)    [<INVALID>]
+ :00020 %4 = %6
+ :00021 %5 = %7
+ :00022 %6 = const[Benchmark::Tms]           [<INVALID>]
+ :00023 %7 = %4.call utime()                 [<INVALID>]
+ :00025 %8 = %2.call utime()                 [<INVALID>]
+ :00027 %7 = %7 - %8                         [<INVALID>][<INVALID>]
+ :00028 %8 = %4.call stime()                 [<INVALID>]
+ :00030 %9 = %2.call stime()                 [<INVALID>]
+ :00032 %8 = %8 - %9                         [<INVALID>][<INVALID>]
+ :00033 %9 = %4.call cutime()                [<INVALID>]
+ :00035 %10 = %2.call cutime()               [<INVALID>]
+ :00037 %9 = %9 - %10                        [<INVALID>][<INVALID>]
+ :00038 %10 = %4.call cstime()               [<INVALID>]
+ :00040 %11 = %2.call cstime()               [<INVALID>]
+ :00042 %10 = %10 - %11                      [<INVALID>][<INVALID>]
+ :00043 %11 = %5 - %3                        [<INVALID>][<INVALID>]
+ :00044 %12 = %1
+ :00045 %6 = %6.call new(%7; 6)              [<INVALID>]
+ :00047 ret %6
+------------------------------------
+------------------------------------
+FuncId(167) name:realtime bc:BcPcBase(0x55e6de4dafe0) meta:kind:VM mode:method FuncId(167) regs:4 ISeq(RubyFuncInfo { id:167 name:realtime method:Some(FuncId(167)) args: 0 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = const[Process]                  [<INVALID>]
+ :00002 %3 = const[Process::CLOCK_MONOTONIC] [<INVALID>]
+ :00003 %1 = %2.call clock_gettime(%3; 1)    [<INVALID>]
+ :00005 _ = yield
+ :00006 %2 = const[Process]                  [<INVALID>]
+ :00007 %3 = const[Process::CLOCK_MONOTONIC] [<INVALID>]
+ :00008 %2 = %2.call clock_gettime(%3; 1)    [<INVALID>]
+ :00010 %2 = %2 - %1                         [<INVALID>][<INVALID>]
+ :00011 ret %2
+------------------------------------
+------------------------------------
+FuncId(168) name:Job bc:BcPcBase(0x55e6de4daf00) meta:kind:VM mode:class_def FuncId(168) regs:3 ISeq(RubyFuncInfo { id:168 name:Job method:Some(FuncId(168)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 method_def initialize: FuncId(174)
+ :00002 method_def item: FuncId(175)
+ :00003 %1 = :report
+ :00004 %2 = :item
+ :00005 alias_method(%1<-%2)
+ :00006 %1 = :list
+ :00007 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00009 %1 = :width
+ :00010 %1 = %0.call attr_reader(%1; 1)      [<INVALID>]
+ :00012 ret %1
+------------------------------------
+------------------------------------
+FuncId(169) name:Report bc:BcPcBase(0x55e6de4bfe20) meta:kind:VM mode:class_def FuncId(169) regs:3 ISeq(RubyFuncInfo { id:169 name:Report method:Some(FuncId(169)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 method_def initialize: FuncId(176)
+ :00002 method_def item: FuncId(177)
+ :00003 %1 = :report
+ :00004 %2 = :item
+ :00005 alias_method(%1<-%2)
+ :00006 %1 = :list
+ :00007 %1 = %0.call attr_reader(%1; 1)      [<INVALID>]
+ :00009 ret %1
+------------------------------------
+------------------------------------
+FuncId(170) name:Tms bc:BcPcBase(0x55e6de4c84c0) meta:kind:VM mode:class_def FuncId(170) regs:2 ISeq(RubyFuncInfo { id:170 name:Tms method:Some(FuncId(170)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = literal["      user     system      total        real\n"]
+ :00002 const[CAPTION] = %1
+ :00003 %1 = literal["%10.6u %10.6y %10.6t %10.6r\n"]
+ :00004 const[FORMAT] = %1
+ :00005 %1 = :utime
+ :00006 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00008 %1 = :stime
+ :00009 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00011 %1 = :cutime
+ :00012 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00014 %1 = :cstime
+ :00015 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00017 %1 = :real
+ :00018 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00020 %1 = :total
+ :00021 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00023 %1 = :label
+ :00024 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00026 method_def initialize: FuncId(178)
+ :00027 method_def add: FuncId(179)
+ :00028 method_def add!: FuncId(180)
+ :00029 method_def +: FuncId(181)
+ :00030 method_def -: FuncId(182)
+ :00031 method_def *: FuncId(183)
+ :00032 method_def /: FuncId(184)
+ :00033 method_def format: FuncId(185)
+ :00034 method_def to_s: FuncId(186)
+ :00035 method_def to_a: FuncId(187)
+ :00036 method_def to_h: FuncId(188)
+ :00037 _ = %0.call protected()              [<INVALID>]
+ :00039 method_def memberwise: FuncId(189)
+ :00040 %1 = :memberwise
+ :00041 ret %1
+------------------------------------
+------------------------------------
+FuncId(171) name:<ANONYMOUS> bc:BcPcBase(0x55e6de507d00) meta:kind:VM mode:method FuncId(171) regs:5 ISeq(RubyFuncInfo { id:171 name:<unnamed> method:Some(FuncId(163)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = dynvar(1, %4)
+ :00002 %2 = %3.call shift()                 [<INVALID>]
+ :00004 condbr %2 =>:00007
+ :00005 %2 = %1.call label()                 [<INVALID>]
++:00007 condbr %2 =>:00009
+ :00008 %2 = literal[""]
++:00009 %3 = dynvar(1, %2)
+ :00010 %2 = %2.call ljust(%3; 1)            [<INVALID>]
+ :00012 %3 = dynvar(1, %3)
+ :00013 %3 = %1.call format(%3; 1)           [<INVALID>]
+ :00015 %2 = %0.call print(%2; 2)            [<INVALID>]
+ :00017 ret %2
+------------------------------------
+------------------------------------
+FuncId(172) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4bfd00) meta:kind:VM mode:method FuncId(172) regs:9 ISeq(RubyFuncInfo { id:172 name:<unnamed> method:Some(FuncId(165)) args: 4 non_temp: 5 temp: 3})
+[]
++:00000 init_method reg:8 arg:4 req:2 opt:0 rest:false block:None stack_offset:8
+ :00001 %3; 2 = expand(%2)
+ :00002 %6 = dynvar(1, %1)
+ :00003 %6 = %3.call ljust(%6; 1)            [<INVALID>]
+ :00005 _ = %0.call print(%6; 1)             [<INVALID>]
+ :00007 %6 = const[Benchmark]                [<INVALID>]
+ :00008 %7 = %4
+ :00009 %5 = %6.call measure(&%7 kw:%8)      [<INVALID>]
+ :00011 %6 = %5.call format()                [<INVALID>]
+ :00013 _ = %0.call print(%6; 1)             [<INVALID>]
+ :00015 %6 = %1 + %5                         [<INVALID>][<INVALID>]
+ :00016 ret %6
+------------------------------------
+------------------------------------
+FuncId(173) name:<ANONYMOUS> bc:BcPcBase(0x55e6de5157a0) meta:kind:VM mode:method FuncId(173) regs:6 ISeq(RubyFuncInfo { id:173 name:<unnamed> method:Some(FuncId(165)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:2 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = const[GC]                       [<INVALID>]
+ :00002 _ = %3.call start()                  [<INVALID>]
+ :00004 %3 = dynvar(1, %1)
+ :00005 %3 = %1.call ljust(%3; 1)            [<INVALID>]
+ :00007 _ = %0.call print(%3; 1)             [<INVALID>]
+ :00009 %3 = const[Benchmark]                [<INVALID>]
+ :00010 %4 = %2
+ :00011 %5 = %1
+ :00012 %3 = %3.call measure(%6; 1 &%4 kw:%5) [<INVALID>]
+ :00014 %4 = literal[12451841]
+ :00015 %3 = %3.call tap(&%4 kw:%5)          [<INVALID>]
+ :00017 ret %3
+------------------------------------
+------------------------------------
+FuncId(174) name:initialize bc:BcPcBase(0x55e6de4be600) meta:kind:VM mode:method FuncId(174) regs:3 ISeq(RubyFuncInfo { id:174 name:initialize method:Some(FuncId(174)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 @width: <INVALID>[IvarId(0)] = %1
+ :00002 %2 = literal[[]]
+ :00003 @list: <INVALID>[IvarId(0)] = %2
+ :00004 ret %2
+------------------------------------
+------------------------------------
+FuncId(175) name:item bc:BcPcBase(0x55e6de4beb10) meta:kind:VM mode:method FuncId(175) regs:8 ISeq(RubyFuncInfo { id:175 name:item method:Some(FuncId(175)) args: 2 non_temp: 3 temp: 4})
+[]
++:00000 init_method reg:7 arg:2 req:0 opt:1 rest:false block:Some(2) stack_offset:7
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = literal[""]
++:00003 %4 = %0.call block_given?()          [<INVALID>]
+ :00005 condnotbr %4 =>:00007
+ :00006 br =>:00011
++:00007 %4 = const[ArgumentError]            [<INVALID>]
+ :00008 %5 = literal["no block"]
+ :00009 _ = %0.call raise(%4; 2)             [<INVALID>]
++:00011 %1 = %1.call to_s()                  [<INVALID>]
+ :00013 %3 = %1.call length()                [<INVALID>]
+ :00015 %4 = @width: <INVALID>[IvarId(0)]
+ :00016 _%4 = %4 < %3                        [<INVALID>][<INVALID>]
+ :00017 condnotbr _%4 =>:00019
+ :00018 @width: <INVALID>[IvarId(0)] = %3
++:00019 %4 = @list: <INVALID>[IvarId(0)]
+ :00020 %6 = %1
+ :00021 %7 = %2
+ :00022 %5 = array[%6; 2]
+ :00023 %4 = %4 << %5                        [<INVALID>][<INVALID>]
+ :00024 %4 = %0
+ :00025 ret %4
+------------------------------------
+------------------------------------
+FuncId(176) name:initialize bc:BcPcBase(0x55e6de4c12d0) meta:kind:VM mode:method FuncId(176) regs:6 ISeq(RubyFuncInfo { id:176 name:initialize method:Some(FuncId(176)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:0 opt:2 rest:false block:None stack_offset:6
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = 0: i32
++:00003 check_local(%2) =>:00005
+ :00004 %2 = nil
++:00005 %3 = %1
+ :00006 %4 = %2
+ :00007 %5 = literal[[]]
+ :00008 @width: <INVALID>[IvarId(0)] = %3
+ :00009 @format: <INVALID>[IvarId(0)] = %4
+ :00010 @list: <INVALID>[IvarId(0)] = %5
+ :00011 %3 = array[%3; 3]
+ :00012 ret %3
+------------------------------------
+------------------------------------
+FuncId(177) name:item bc:BcPcBase(0x55e6de4f8b60) meta:kind:VM mode:method FuncId(177) regs:9 ISeq(RubyFuncInfo { id:177 name:item method:Some(FuncId(177)) args: 3 non_temp: 4 temp: 4})
+[]
++:00000 init_method reg:8 arg:3 req:0 opt:1 rest:true block:Some(3) stack_offset:8
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = literal[""]
++:00003 %5 = %1.call to_s()                  [<INVALID>]
+ :00005 %6 = @width: <INVALID>[IvarId(0)]
+ :00006 %5 = %5.call ljust(%6; 1)            [<INVALID>]
+ :00008 _ = %0.call print(%5; 1)             [<INVALID>]
+ :00010 %5 = @list: <INVALID>[IvarId(0)]
+ :00011 %6 = const[Benchmark]                [<INVALID>]
+ :00012 %7 = block_arg(0)
+ :00013 %8 = %1
+ :00014 %4 = %6.call measure(%9; 1 &%7 kw:%8) [<INVALID>]
+ :00016 %6 = %4
+ :00017 %5 = %5 << %6                        [<INVALID>][<INVALID>]
+ :00018 %5 = @format: <INVALID>[IvarId(0)]
+ :00019 %6 = %2
+ :00020 %5 = %4.call format(%5; 2)*          [<INVALID>]
+ :00022 _ = %0.call print(%5; 1)             [<INVALID>]
+ :00024 ret %4
+------------------------------------
+------------------------------------
+FuncId(178) name:initialize bc:BcPcBase(0x55e6de4c1bd0) meta:kind:VM mode:method FuncId(178) regs:13 ISeq(RubyFuncInfo { id:178 name:initialize method:Some(FuncId(178)) args: 6 non_temp: 6 temp: 6})
+[]
++:00000 init_method reg:12 arg:6 req:0 opt:6 rest:false block:None stack_offset:10
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = literal[0.0]
++:00003 check_local(%2) =>:00005
+ :00004 %2 = literal[0.0]
++:00005 check_local(%3) =>:00007
+ :00006 %3 = literal[0.0]
++:00007 check_local(%4) =>:00009
+ :00008 %4 = literal[0.0]
++:00009 check_local(%5) =>:00011
+ :00010 %5 = literal[0.0]
++:00011 check_local(%6) =>:00013
+ :00012 %6 = nil
++:00013 %7 = %1
+ :00014 %8 = %2
+ :00015 %9 = %3
+ :00016 %10 = %4
+ :00017 %11 = %5
+ :00018 %12 = %6.call to_s()                 [<INVALID>]
+ :00020 @utime: <INVALID>[IvarId(0)] = %7
+ :00021 @stime: <INVALID>[IvarId(0)] = %8
+ :00022 @cutime: <INVALID>[IvarId(0)] = %9
+ :00023 @cstime: <INVALID>[IvarId(0)] = %10
+ :00024 @real: <INVALID>[IvarId(0)] = %11
+ :00025 @label: <INVALID>[IvarId(0)] = %12
+ :00026 %7 = @utime: <INVALID>[IvarId(0)]
+ :00027 %8 = @stime: <INVALID>[IvarId(0)]
+ :00028 %7 = %7 + %8                         [<INVALID>][<INVALID>]
+ :00029 %8 = @cutime: <INVALID>[IvarId(0)]
+ :00030 %7 = %7 + %8                         [<INVALID>][<INVALID>]
+ :00031 %8 = @cstime: <INVALID>[IvarId(0)]
+ :00032 %7 = %7 + %8                         [<INVALID>][<INVALID>]
+ :00033 @total: <INVALID>[IvarId(0)] = %7
+ :00034 ret %7
+------------------------------------
+------------------------------------
+FuncId(179) name:add bc:BcPcBase(0x55e6de5061a0) meta:kind:VM mode:method FuncId(179) regs:6 ISeq(RubyFuncInfo { id:179 name:add method:Some(FuncId(179)) args: 1 non_temp: 1 temp: 4})
+[]
++:00000 init_method reg:5 arg:1 req:0 opt:0 rest:false block:Some(1) stack_offset:6
+ :00001 %2 = %0
+ :00002 %3 = const[Benchmark]                [<INVALID>]
+ :00003 %4 = block_arg(0)
+ :00004 %3 = %3.call measure(&%4 kw:%5)      [<INVALID>]
+ :00006 %2 = %2 + %3                         [<INVALID>][<INVALID>]
+ :00007 ret %2
+------------------------------------
+------------------------------------
+FuncId(180) name:add! bc:BcPcBase(0x55e6de4c8770) meta:kind:VM mode:method FuncId(180) regs:6 ISeq(RubyFuncInfo { id:180 name:add! method:Some(FuncId(180)) args: 1 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:1 req:0 opt:0 rest:false block:Some(1) stack_offset:6
+ :00001 %3 = const[Benchmark]                [<INVALID>]
+ :00002 %4 = block_arg(0)
+ :00003 %2 = %3.call measure(&%4 kw:%5)      [<INVALID>]
+ :00005 %3 = %0.call utime()                 [<INVALID>]
+ :00007 %4 = %2.call utime()                 [<INVALID>]
+ :00009 %3 = %3 + %4                         [<INVALID>][<INVALID>]
+ :00010 @utime: <INVALID>[IvarId(0)] = %3
+ :00011 %3 = %0.call stime()                 [<INVALID>]
+ :00013 %4 = %2.call stime()                 [<INVALID>]
+ :00015 %3 = %3 + %4                         [<INVALID>][<INVALID>]
+ :00016 @stime: <INVALID>[IvarId(0)] = %3
+ :00017 %3 = %0.call cutime()                [<INVALID>]
+ :00019 %4 = %2.call cutime()                [<INVALID>]
+ :00021 %3 = %3 + %4                         [<INVALID>][<INVALID>]
+ :00022 @cutime: <INVALID>[IvarId(0)] = %3
+ :00023 %3 = %0.call cstime()                [<INVALID>]
+ :00025 %4 = %2.call cstime()                [<INVALID>]
+ :00027 %3 = %3 + %4                         [<INVALID>][<INVALID>]
+ :00028 @cstime: <INVALID>[IvarId(0)] = %3
+ :00029 %3 = %0.call real()                  [<INVALID>]
+ :00031 %4 = %2.call real()                  [<INVALID>]
+ :00033 %3 = %3 + %4                         [<INVALID>][<INVALID>]
+ :00034 @real: <INVALID>[IvarId(0)] = %3
+ :00035 %3 = %0
+ :00036 ret %3
+------------------------------------
+------------------------------------
+FuncId(181) name:+ bc:BcPcBase(0x55e6de4c08d0) meta:kind:VM mode:method FuncId(181) regs:4 ISeq(RubyFuncInfo { id:181 name:+ method:Some(FuncId(181)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = :+
+ :00002 %3 = %1
+ :00003 %2 = %0.call memberwise(%2; 2)       [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(182) name:- bc:BcPcBase(0x55e6de4d0490) meta:kind:VM mode:method FuncId(182) regs:4 ISeq(RubyFuncInfo { id:182 name:- method:Some(FuncId(182)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = :-
+ :00002 %3 = %1
+ :00003 %2 = %0.call memberwise(%2; 2)       [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(183) name:* bc:BcPcBase(0x55e6de50a190) meta:kind:VM mode:method FuncId(183) regs:4 ISeq(RubyFuncInfo { id:183 name:* method:Some(FuncId(183)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = :*
+ :00002 %3 = %1
+ :00003 %2 = %0.call memberwise(%2; 2)       [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(184) name:/ bc:BcPcBase(0x55e6de4c33f0) meta:kind:VM mode:method FuncId(184) regs:4 ISeq(RubyFuncInfo { id:184 name:/ method:Some(FuncId(184)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = :/
+ :00002 %3 = %1
+ :00003 %2 = %0.call memberwise(%2; 2)       [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(185) name:format bc:BcPcBase(0x55e6de4c0940) meta:kind:VM mode:method FuncId(185) regs:6 ISeq(RubyFuncInfo { id:185 name:format method:Some(FuncId(185)) args: 2 non_temp: 3 temp: 2})
+[]
++:00000 init_method reg:5 arg:2 req:0 opt:1 rest:true block:None stack_offset:6
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = nil
++:00003 %4 = %1
+ :00004 condbr %4 =>:00006
+ :00005 %4 = const[FORMAT]                   [<INVALID>]
++:00006 %3 = %4.call dup()                   [<INVALID>]
+ :00008 %4 = literal[12517377]
+ :00009 %5 = literal[/(?m)(%[-+.\d]*)n/]
+ :00010 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00012 %4 = literal[12582913]
+ :00013 %5 = literal[/(?m)(%[-+.\d]*)u/]
+ :00014 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00016 %4 = literal[12648449]
+ :00017 %5 = literal[/(?m)(%[-+.\d]*)y/]
+ :00018 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00020 %4 = literal[12713985]
+ :00021 %5 = literal[/(?m)(%[-+.\d]*)U/]
+ :00022 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00024 %4 = literal[12779521]
+ :00025 %5 = literal[/(?m)(%[-+.\d]*)Y/]
+ :00026 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00028 %4 = literal[12845057]
+ :00029 %5 = literal[/(?m)(%[-+.\d]*)t/]
+ :00030 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00032 %4 = literal[12910593]
+ :00033 %5 = literal[/(?m)(%[-+.\d]*)r/]
+ :00034 _ = %3.call gsub!(%6; 1 &%4 kw:%5)   [<INVALID>]
+ :00036 condnotbr %1 =>:00039
+ :00037 %4 = %3 % %2                         [<INVALID>][<INVALID>]
+ :00038 ret %4
++:00039 ret %3
+------------------------------------
+------------------------------------
+FuncId(186) name:to_s bc:BcPcBase(0x55e6de4be220) meta:kind:VM mode:method FuncId(186) regs:2 ISeq(RubyFuncInfo { id:186 name:to_s method:Some(FuncId(186)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = %0.call format()                [<INVALID>]
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(187) name:to_a bc:BcPcBase(0x55e6de4ff6d0) meta:kind:VM mode:method FuncId(187) regs:8 ISeq(RubyFuncInfo { id:187 name:to_a method:Some(FuncId(187)) args: 0 non_temp: 0 temp: 7})
+[]
++:00000 init_method reg:7 arg:0 req:0 opt:0 rest:false block:None stack_offset:7
+ :00001 %2 = @label: <INVALID>[IvarId(0)]
+ :00002 %3 = @utime: <INVALID>[IvarId(0)]
+ :00003 %4 = @stime: <INVALID>[IvarId(0)]
+ :00004 %5 = @cutime: <INVALID>[IvarId(0)]
+ :00005 %6 = @cstime: <INVALID>[IvarId(0)]
+ :00006 %7 = @real: <INVALID>[IvarId(0)]
+ :00007 %1 = array[%2; 6]
+ :00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(188) name:to_h bc:BcPcBase(0x55e6de4bc910) meta:kind:VM mode:method FuncId(188) regs:14 ISeq(RubyFuncInfo { id:188 name:to_h method:Some(FuncId(188)) args: 0 non_temp: 0 temp: 13})
+[]
++:00000 init_method reg:13 arg:0 req:0 opt:0 rest:false block:None stack_offset:10
+ :00001 %2 = :label
+ :00002 %3 = @label: <INVALID>[IvarId(0)]
+ :00003 %4 = :utime
+ :00004 %5 = @utime: <INVALID>[IvarId(0)]
+ :00005 %6 = :stime
+ :00006 %7 = @stime: <INVALID>[IvarId(0)]
+ :00007 %8 = :cutime
+ :00008 %9 = @cutime: <INVALID>[IvarId(0)]
+ :00009 %10 = :cstime
+ :00010 %11 = @cstime: <INVALID>[IvarId(0)]
+ :00011 %12 = :real
+ :00012 %13 = @real: <INVALID>[IvarId(0)]
+ :00013 %1 = hash[%2; 6]
+ :00014 ret %1
+------------------------------------
+------------------------------------
+FuncId(189) name:memberwise bc:BcPcBase(0x55e6de50fca0) meta:kind:VM mode:method FuncId(189) regs:13 ISeq(RubyFuncInfo { id:189 name:memberwise method:Some(FuncId(189)) args: 2 non_temp: 2 temp: 10})
+[]
++:00000 init_method reg:12 arg:2 req:2 opt:0 rest:false block:None stack_offset:10
+ :00001 %4 = %2
+ :00002 %5 = const[Benchmark::Tms]           [<INVALID>]
+ :00003 _%5 = %5 === %4                      [<INVALID>][<INVALID>]
+ :00004 condnotbr _%5 =>:00044
+ :00005 %5 = const[Benchmark::Tms]           [<INVALID>]
+ :00006 %6 = %0.call utime()                 [<INVALID>]
+ :00008 %7 = %1
+ :00009 %8 = %2.call utime()                 [<INVALID>]
+ :00011 %6 = %6.call __send__(%7; 2)         [<INVALID>]
+ :00013 %7 = %0.call stime()                 [<INVALID>]
+ :00015 %8 = %1
+ :00016 %9 = %2.call stime()                 [<INVALID>]
+ :00018 %7 = %7.call __send__(%8; 2)         [<INVALID>]
+ :00020 %8 = %0.call cutime()                [<INVALID>]
+ :00022 %9 = %1
+ :00023 %10 = %2.call cutime()               [<INVALID>]
+ :00025 %8 = %8.call __send__(%9; 2)         [<INVALID>]
+ :00027 %9 = %0.call cstime()                [<INVALID>]
+ :00029 %10 = %1
+ :00030 %11 = %2.call cstime()               [<INVALID>]
+ :00032 %9 = %9.call __send__(%10; 2)        [<INVALID>]
+ :00034 %10 = %0.call real()                 [<INVALID>]
+ :00036 %11 = %1
+ :00037 %12 = %2.call real()                 [<INVALID>]
+ :00039 %10 = %10.call __send__(%11; 2)      [<INVALID>]
+ :00041 %3 = %5.call new(%6; 5)              [<INVALID>]
+ :00043 ret %3
++:00044 %4 = const[Benchmark::Tms]           [<INVALID>]
+ :00045 %5 = %0.call utime()                 [<INVALID>]
+ :00047 %6 = %1
+ :00048 %7 = %2
+ :00049 %5 = %5.call __send__(%6; 2)         [<INVALID>]
+ :00051 %6 = %0.call stime()                 [<INVALID>]
+ :00053 %7 = %1
+ :00054 %8 = %2
+ :00055 %6 = %6.call __send__(%7; 2)         [<INVALID>]
+ :00057 %7 = %0.call cutime()                [<INVALID>]
+ :00059 %8 = %1
+ :00060 %9 = %2
+ :00061 %7 = %7.call __send__(%8; 2)         [<INVALID>]
+ :00063 %8 = %0.call cstime()                [<INVALID>]
+ :00065 %9 = %1
+ :00066 %10 = %2
+ :00067 %8 = %8.call __send__(%9; 2)         [<INVALID>]
+ :00069 %9 = %0.call real()                  [<INVALID>]
+ :00071 %10 = %1
+ :00072 %11 = %2
+ :00073 %9 = %9.call __send__(%10; 2)        [<INVALID>]
+ :00075 %3 = %4.call new(%5; 5)              [<INVALID>]
+ :00077 ret %3
+------------------------------------
+------------------------------------
+FuncId(190) name:<ANONYMOUS> bc:BcPcBase(0x55e6de522ce0) meta:kind:VM mode:method FuncId(190) regs:3 ISeq(RubyFuncInfo { id:190 name:<unnamed> method:Some(FuncId(165)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = %0.call print(%1; 1)            [<INVALID>]
+ :00003 ret %2
+------------------------------------
+------------------------------------
+FuncId(191) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4f7900) meta:kind:VM mode:method FuncId(191) regs:3 ISeq(RubyFuncInfo { id:191 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["s"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call label()                 [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(192) name:<ANONYMOUS> bc:BcPcBase(0x55e6de5237b0) meta:kind:VM mode:method FuncId(192) regs:3 ISeq(RubyFuncInfo { id:192 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["f"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call utime()                 [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(193) name:<ANONYMOUS> bc:BcPcBase(0x55e6de54fa90) meta:kind:VM mode:method FuncId(193) regs:3 ISeq(RubyFuncInfo { id:193 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["f"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call stime()                 [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(194) name:<ANONYMOUS> bc:BcPcBase(0x55e6de51f9c0) meta:kind:VM mode:method FuncId(194) regs:3 ISeq(RubyFuncInfo { id:194 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["f"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call cutime()                [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(195) name:<ANONYMOUS> bc:BcPcBase(0x55e6de522650) meta:kind:VM mode:method FuncId(195) regs:3 ISeq(RubyFuncInfo { id:195 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["f"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call cstime()                [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(196) name:<ANONYMOUS> bc:BcPcBase(0x55e6de5004b0) meta:kind:VM mode:method FuncId(196) regs:3 ISeq(RubyFuncInfo { id:196 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = $1
+ :00002 %2 = literal["f"]
+ :00003 %1 = concat(%1; 2)
+ :00004 %2 = %0.call total()                 [<INVALID>]
+ :00006 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(197) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4c6bc0) meta:kind:VM mode:method FuncId(197) regs:4 ISeq(RubyFuncInfo { id:197 name:<unnamed> method:Some(FuncId(185)) args: 0 non_temp: 0 temp: 3})
+[]
++:00000 init_method reg:3 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = literal["("]
+ :00002 %2 = $1
+ :00003 %3 = literal["f)"]
+ :00004 %1 = concat(%1; 3)
+ :00005 %2 = %0.call real()                  [<INVALID>]
+ :00007 %1 = %1 % %2                         [<INVALID>][<INVALID>]
+ :00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(208) name:/main bc:BcPcBase(0x55e6de52a980) meta:kind:VM mode:method FuncId(208) regs:11 ISeq(RubyFuncInfo { id:208 name:/main method:Some(FuncId(208)) args: 0 non_temp: 3 temp: 7})
+[]
++:00000 init_method reg:10 arg:0 req:0 opt:0 rest:false block:None stack_offset:9
+ :00001 %4 = literal["ruby -e 'print RbConfig.ruby'"]
+ :00002 %4 = %0.call `(%4; 1)                [<INVALID>]
+ :00004 %1 = %4
+ :00005 %4 = const[RbConfig]                 [<INVALID>]
+ :00006 %4 = %4.call ruby()                  [<INVALID>]
+ :00008 _%4 = %1 == %4                       [<INVALID>][<INVALID>]
+ :00009 condnotbr _%4 =>:00011
+ :00010 br =>:00021
++:00011 %4 = literal["The ruby running this script ("]
+ :00012 %5 = const[RbConfig]                 [<INVALID>]
+ :00013 %5 = %5.call ruby()                  [<INVALID>]
+ :00015 %6 = literal[") is not the first ruby in PATH ("]
+ :00016 %7 = %1
+ :00017 %8 = literal[")"]
+ :00018 %4 = concat(%4; 5)
+ :00019 _ = %0.call abort(%4; 1)             [<INVALID>]
++:00021 %4 = const[Random]                   [<INVALID>]
+ :00022 %5 = 1337: i32
+ :00023 _ = %4.call srand(%5; 1)             [<INVALID>]
+ :00025 method_def run_cmd: FuncId(209)
+ :00026 method_def setup_cmds: FuncId(210)
+ :00027 method_def use_gemfile: FuncId(211)
+ :00028 method_def get_rss: FuncId(212)
+ :00029 %4 = literal["data/results-"]
+ :00030 %5 = const[RUBY_ENGINE]              [<INVALID>]
+ :00031 %6 = literal["-"]
+ :00032 %7 = const[RUBY_ENGINE_VERSION]      [<INVALID>]
+ :00033 %8 = literal["-"]
+ :00034 %9 = const[Time]                     [<INVALID>]
+ :00035 %9 = %9.call now()                   [<INVALID>]
+ :00037 %10 = literal["%F-%H%M%S"]
+ :00038 %9 = %9.call strftime(%10; 1)        [<INVALID>]
+ :00040 %10 = literal[".json"]
+ :00041 %4 = concat(%4; 7)
+ :00042 %2 = %4
+ :00043 %4 = const[ENV]                      [<INVALID>]
+ :00044 %5 = literal["RESULT_JSON_PATH"]
+ :00045 %6 = %2
+ :00046 %3 = %4.call fetch(%5; 2)            [<INVALID>]
+ :00048 %4 = const[File]                     [<INVALID>]
+ :00049 %4 = %4.call expand_path(%3; 1)      [<INVALID>]
+ :00051 const[YB_OUTPUT_FILE] = %4
+ :00052 method_def return_results: FuncId(213)
+ :00053 %4 = :return_results
+ :00054 ret %4
+------------------------------------
+------------------------------------
+FuncId(209) name:run_cmd bc:BcPcBase(0x55e6de518260) meta:kind:VM mode:method FuncId(209) regs:4 ISeq(RubyFuncInfo { id:209 name:run_cmd method:Some(FuncId(209)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:0 opt:0 rest:true block:None stack_offset:5
+ :00001 %2 = literal["Command: "]
+ :00002 %3 = literal[" "]
+ :00003 %3 = %1.call join(%3; 1)             [<INVALID>]
+ :00005 %2 = concat(%2; 2)
+ :00006 _ = %0.call puts(%2; 1)              [<INVALID>]
+ :00008 %2 = %0.call system(%1; 1)*          [<INVALID>]
+ :00010 ret %2
+------------------------------------
+------------------------------------
+FuncId(210) name:setup_cmds bc:BcPcBase(0x55e6de50a750) meta:kind:VM mode:method FuncId(210) regs:4 ISeq(RubyFuncInfo { id:210 name:setup_cmds method:Some(FuncId(210)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = literal[14024705]
+ :00002 %2 = %1.call each(&%2 kw:%3)         [<INVALID>]
+ :00004 ret %2
+------------------------------------
+------------------------------------
+FuncId(211) name:use_gemfile bc:BcPcBase(0x55e6de4ffa80) meta:kind:VM mode:method FuncId(211) regs:5 ISeq(RubyFuncInfo { id:211 name:use_gemfile method:Some(FuncId(211)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:0 opt:0 rest:false block:None stack_offset:6
+ :00001 check_local(%1) =>:00003
+ :00002 %1 = nil
++:00003 %3 = literal["bundle check 2> /dev/null || bundle install"]
+ :00004 %4 = %1
+ :00005 %2 = array[%3; 2]
+ :00006 %2 = %2.call compact()               [<INVALID>]
+ :00008 _ = %0.call setup_cmds(%2; 1)        [<INVALID>]
+ :00010 %2 = literal["bundler/setup"]
+ :00011 %2 = %0.call require(%2; 1)          [<INVALID>]
+ :00013 ret %2
+------------------------------------
+------------------------------------
+FuncId(212) name:get_rss bc:BcPcBase(0x55e6de52a5a0) meta:kind:VM mode:method FuncId(212) regs:7 ISeq(RubyFuncInfo { id:212 name:get_rss method:Some(FuncId(212)) args: 0 non_temp: 3 temp: 3})
+[]
++:00000 init_method reg:6 arg:0 req:0 opt:0 rest:false block:None stack_offset:7
+ :00001 %4 = literal["/proc/"]
+ :00002 %5 = const[Process]                  [<INVALID>]
+ :00003 %5 = %5.call pid()                   [<INVALID>]
+ :00005 %6 = literal["/smaps_rollup"]
+ :00006 %4 = concat(%4; 3)
+ :00007 %1 = %4
+ :00008 %4 = const[File]                     [<INVALID>]
+ :00009 %4 = %4.call exist?(%1; 1)           [<INVALID>]
+ :00011 condnotbr %4 =>:00034
+ :00012 %4 = const[File]                     [<INVALID>]
+ :00013 %4 = %4.call read(%1; 1)             [<INVALID>]
+ :00015 %4 = %4.call lines()                 [<INVALID>]
+ :00017 %5 = literal[14090241]
+ :00018 %4 = %4.call detect(&%5 kw:%6)       [<INVALID>]
+ :00020 %5 = literal[":"]
+ :00021 %6 = 2: i32
+ :00022 %4 = %4.call split(%5; 2)            [<INVALID>]
+ :00024 %5 = 1: i32
+ :00025 %4 = %4.[%5]                         [<INVALID>][<INVALID>]
+ :00026 %5 = literal[/(?m)(\d+)/]
+ :00027 %6 = 1: i32
+ :00028 %2 = %4.call [](%5; 2)               [<INVALID>]
+ :00030 %4 = %0.call Integer(%2; 1)          [<INVALID>]
+ :00032 %4 = 1024: i16 * %4                  [<INVALID>][<INVALID>]
+ :00033 ret %4
++:00034 %4 = literal["ps -o rss= -p "]
+ :00035 %5 = const[Process]                  [<INVALID>]
+ :00036 %5 = %5.call pid()                   [<INVALID>]
+ :00038 %4 = concat(%4; 2)
+ :00039 %4 = %0.call `(%4; 1)                [<INVALID>]
+ :00041 %3 = %4
+ :00042 %4 = %0.call Integer(%3; 1)          [<INVALID>]
+ :00044 %4 = 1024: i16 * %4                  [<INVALID>][<INVALID>]
+ :00045 ret %4
+------------------------------------
+------------------------------------
+FuncId(213) name:return_results bc:BcPcBase(0x55e6de527dd0) meta:kind:VM mode:method FuncId(213) regs:11 ISeq(RubyFuncInfo { id:213 name:return_results method:Some(FuncId(213)) args: 1 non_temp: 4 temp: 6})
+[]
++:00000 init_method reg:10 arg:1 req:1 opt:0 rest:false block:None stack_offset:9
+ :00001 %5 = %0.call get_rss()               [<INVALID>]
+ :00003 %2 = %5
+ :00004 %5 = literal["RSS: %.1fMiB"]
+ :00005 %6 = literal[1024.0]
+ :00006 %6 = %2 / %6                         [<INVALID>][<INVALID>]
+ :00007 %7 = literal[1024.0]
+ :00008 %6 = %6 / %7                         [<INVALID>][<INVALID>]
+ :00009 %5 = %5 % %6                         [<INVALID>][<INVALID>]
+ :00010 _ = %0.call puts(%5; 1)              [<INVALID>]
+ :00012 %5 = literal["json"]
+ :00013 _ = %0.call require(%5; 1)           [<INVALID>]
+ :00015 %3 = const[YB_OUTPUT_FILE]           [<INVALID>]
+ :00016 %5 = literal["mkdir"]
+ :00017 %6 = literal["-p"]
+ :00018 %7 = const[File]                     [<INVALID>]
+ :00019 %7 = %7.call dirname(%3; 1)          [<INVALID>]
+ :00021 _ = %0.call system(%5; 3)            [<INVALID>]
+ :00023 %5 = literal["RUBY_DESCRIPTION"]
+ :00024 %6 = const[RUBY_DESCRIPTION]         [<INVALID>]
+ :00025 %7 = literal["values"]
+ :00026 %8 = %1
+ :00027 %9 = literal["rss"]
+ :00028 %10 = %2
+ :00029 %4 = hash[%5; 3]
+ :00030 %5 = const[ENV]                      [<INVALID>]
+ :00031 %6 = literal["RESULT_JSON_PATH"]
+ :00032 %5 = %5.[%6]                         [<INVALID>][<INVALID>]
+ :00033 condnotbr %5 =>:00035
+ :00034 br =>:00040
++:00035 %5 = literal["Writing file "]
+ :00036 %6 = %3
+ :00037 %5 = concat(%5; 2)
+ :00038 _ = %0.call puts(%5; 1)              [<INVALID>]
++:00040 %5 = const[File]                     [<INVALID>]
+ :00041 %6 = %3
+ :00042 %7 = const[JSON]                     [<INVALID>]
+ :00043 %7 = %7.call pretty_generate(%4; 1)  [<INVALID>]
+ :00045 %5 = %5.call write(%6; 2)            [<INVALID>]
+ :00047 ret %5
+------------------------------------
+------------------------------------
+FuncId(214) name:<ANONYMOUS> bc:BcPcBase(0x55e6de51bdd0) meta:kind:VM mode:method FuncId(214) regs:6 ISeq(RubyFuncInfo { id:214 name:<unnamed> method:Some(FuncId(210)) args: 1 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = %0.call run_cmd(%1; 1)          [<INVALID>]
+ :00003 condnotbr %2 =>:00006
+ :00004 %3 = nil
+ :00005 ret %3
++:00006 %3 = literal["Couldn't run setup command for benchmark in "]
+ :00007 %4 = const[Dir]                      [<INVALID>]
+ :00008 %4 = %4.call pwd()                   [<INVALID>]
+ :00010 %4 = %4.call inspect()               [<INVALID>]
+ :00012 %5 = literal["!"]
+ :00013 %3 = concat(%3; 3)
+ :00014 %3 = %0.call raise(%3; 1)            [<INVALID>]
+ :00016 ret %3
+------------------------------------
+------------------------------------
+FuncId(215) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4d9890) meta:kind:VM mode:method FuncId(215) regs:3 ISeq(RubyFuncInfo { id:215 name:<unnamed> method:Some(FuncId(212)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = literal["Rss"]
+ :00002 %2 = %1.call start_with?(%2; 1)      [<INVALID>]
+ :00004 ret %2
+------------------------------------
+mkdir: cannot create directory ‘mkdir’: File exists
+------------------------------------
+FuncId(216) name:/main bc:BcPcBase(0x55e6de546800) meta:kind:VM mode:method FuncId(216) regs:2 ISeq(RubyFuncInfo { id:216 name:/main method:Some(FuncId(216)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = literal["json/common"]
+ :00002 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00004 %1 = module_def JSON: FuncId(217)
+ :00005 ret %1
+------------------------------------
+------------------------------------
+FuncId(217) name:JSON bc:BcPcBase(0x55e6de4c0f50) meta:kind:VM mode:class_def FuncId(217) regs:3 ISeq(RubyFuncInfo { id:217 name:JSON method:Some(FuncId(217)) args: 0 non_temp: 0 temp: 2})
+[(4..8, 8)]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = literal["json/version"]
+ :00002 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00004 %1 = literal["json/ext"]
+ :00005 %1 = %0.call require(%1; 1)          [<INVALID>]
+ :00007 ret %1
+ :00008 %1 = const[LoadError]                [<INVALID>]
+ :00009 %2 = literal["json/pure"]
+ :00010 %2 = %0.call require(%2; 1)          [<INVALID>]
+ :00012 ret %2
+------------------------------------
+------------------------------------
+FuncId(218) name:/main bc:BcPcBase(0x55e6de5b6430) meta:kind:VM mode:method FuncId(218) regs:2 ISeq(RubyFuncInfo { id:218 name:/main method:Some(FuncId(218)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = literal["json/version"]
+ :00002 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00004 %1 = literal["json/generic_object"]
+ :00005 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00007 _ = module_def JSON: FuncId(219)
+ :00008 _ = module_def Kernel: FuncId(220)
+ :00009 %1 = class_def Class < _: FuncId(221)
+ :00010 ret %1
+------------------------------------
+------------------------------------
+FuncId(219) name:JSON bc:BcPcBase(0x55e6de4d83f0) meta:kind:VM mode:class_def FuncId(219) regs:3 ISeq(RubyFuncInfo { id:219 name:JSON method:Some(FuncId(219)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = %0
+ :00002 _ = singleton_class_def << %1: FuncId(222)
+ :00003 %1 = literal["json_class"]
+ :00004 %1 = %1.call freeze()                [<INVALID>]
+ :00006 const[DEFAULT_CREATE_ID] = %1
+ :00007 %1 = :DEFAULT_CREATE_ID
+ :00008 _ = %0.call private_constant(%1; 1)  [<INVALID>]
+ :00010 %1 = literal["JSON.create_id"]
+ :00011 %1 = %1.call freeze()                [<INVALID>]
+ :00013 const[CREATE_ID_TLS_KEY] = %1
+ :00014 %1 = :CREATE_ID_TLS_KEY
+ :00015 _ = %0.call private_constant(%1; 1)  [<INVALID>]
+ :00017 %1 = %0
+ :00018 singleton_method_def %1.create_id=: FuncId(223)
+ :00019 %1 = %0
+ :00020 singleton_method_def %1.create_id: FuncId(224)
+ :00021 %1 = literal[0.0]
+ :00022 %1 = %1 / 0: i16                     [<INVALID>][<INVALID>]
+ :00023 const[NaN] = %1
+ :00024 %1 = literal[1.0]
+ :00025 %1 = %1 / 0: i16                     [<INVALID>][<INVALID>]
+ :00026 const[Infinity] = %1
+ :00027 %1 = const[Infinity]                 [<INVALID>]
+ :00028 %1 = -%1                             [<INVALID>]
+ :00029 const[MinusInfinity] = %1
+ :00030 %1 = const[StandardError]            [<INVALID>]
+ :00031 _ = class_def JSONError < %1: FuncId(225)
+ :00032 %1 = const[JSONError]                [<INVALID>]
+ :00033 _ = class_def ParserError < %1: FuncId(226)
+ :00034 %1 = const[ParserError]              [<INVALID>]
+ :00035 _ = class_def NestingError < %1: FuncId(227)
+ :00036 %1 = const[NestingError]             [<INVALID>]
+ :00037 _ = class_def CircularDatastructure < %1: FuncId(228)
+ :00038 %1 = const[JSONError]                [<INVALID>]
+ :00039 _ = class_def GeneratorError < %1: FuncId(229)
+ :00040 %1 = const[GeneratorError]           [<INVALID>]
+ :00041 const[UnparserError] = %1
+ :00042 %1 = const[JSONError]                [<INVALID>]
+ :00043 _ = class_def MissingUnicodeSupport < %1: FuncId(230)
+ :00044 _ = %0.call module_function()        [<INVALID>]
+ :00046 method_def parse: FuncId(231)
+ :00047 method_def parse!: FuncId(232)
+ :00048 method_def load_file: FuncId(233)
+ :00049 method_def load_file!: FuncId(234)
+ :00050 method_def generate: FuncId(235)
+ :00051 %1 = :unparse
+ :00052 %2 = :generate
+ :00053 alias_method(%1<-%2)
+ :00054 %1 = :unparse
+ :00055 _ = %0.call module_function(%1; 1)   [<INVALID>]
+ :00057 method_def fast_generate: FuncId(236)
+ :00058 %1 = :fast_unparse
+ :00059 %2 = :fast_generate
+ :00060 alias_method(%1<-%2)
+ :00061 %1 = :fast_unparse
+ :00062 _ = %0.call module_function(%1; 1)   [<INVALID>]
+ :00064 method_def pretty_generate: FuncId(237)
+ :00065 %1 = :pretty_unparse
+ :00066 %2 = :pretty_generate
+ :00067 alias_method(%1<-%2)
+ :00068 %1 = :pretty_unparse
+ :00069 _ = %0.call module_function(%1; 1)   [<INVALID>]
+ :00071 %1 = %0
+ :00072 _ = singleton_class_def << %1: FuncId(238)
+ :00073 %1 = %0
+ :00074 %2 = literal[{:max_nesting=>false, :allow_nan=>true, :allow_blank=>true, :create_additions=>true}]
+ :00075 _ = %1.call load_default_options=(%2; 1) [<INVALID>]
+ :00077 method_def load: FuncId(239)
+ :00078 method_def recurse_proc: FuncId(240)
+ :00079 %1 = :restore
+ :00080 %2 = :load
+ :00081 alias_method(%1<-%2)
+ :00082 %1 = :restore
+ :00083 _ = %0.call module_function(%1; 1)   [<INVALID>]
+ :00085 %1 = %0
+ :00086 _ = singleton_class_def << %1: FuncId(241)
+ :00087 %1 = %0
+ :00088 %2 = literal[{:max_nesting=>false, :allow_nan=>true, :escape_slash=>false}]
+ :00089 _ = %1.call dump_default_options=(%2; 1) [<INVALID>]
+ :00091 method_def dump: FuncId(242)
+ :00092 %1 = %0
+ :00093 singleton_method_def %1.iconv: FuncId(243)
+ :00094 %1 = :iconv
+ :00095 ret %1
+------------------------------------
+------------------------------------
+FuncId(220) name:Kernel bc:BcPcBase(0x55e6de5b6310) meta:kind:VM mode:class_def FuncId(220) regs:2 ISeq(RubyFuncInfo { id:220 name:Kernel method:Some(FuncId(220)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 _ = %0.call private()                [<INVALID>]
+ :00003 method_def j: FuncId(244)
+ :00004 method_def jj: FuncId(245)
+ :00005 method_def JSON: FuncId(246)
+ :00006 %1 = :JSON
+ :00007 ret %1
+------------------------------------
+------------------------------------
+FuncId(221) name:Class bc:BcPcBase(0x55e6de4debe0) meta:kind:VM mode:class_def FuncId(221) regs:2 ISeq(RubyFuncInfo { id:221 name:Class method:Some(FuncId(221)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 method_def json_creatable?: FuncId(247)
+ :00002 %1 = :json_creatable?
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(222) name:<ANONYMOUS> bc:BcPcBase(0x55e6de537d20) meta:kind:VM mode:class_def FuncId(222) regs:2 ISeq(RubyFuncInfo { id:222 name:<unnamed> method:Some(FuncId(222)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 method_def []: FuncId(248)
+ :00002 %1 = :parser
+ :00003 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00005 method_def parser=: FuncId(249)
+ :00006 method_def deep_const_get: FuncId(250)
+ :00007 method_def generator=: FuncId(251)
+ :00008 method_def create_fast_state: FuncId(252)
+ :00009 method_def create_pretty_state: FuncId(253)
+ :00010 %1 = :generator
+ :00011 _ = %0.call attr_reader(%1; 1)       [<INVALID>]
+ :00013 %1 = :state
+ :00014 %1 = %0.call attr_accessor(%1; 1)    [<INVALID>]
+ :00016 ret %1
+------------------------------------
+------------------------------------
+FuncId(223) name:create_id= bc:BcPcBase(0x55e6de5a9ef0) meta:kind:VM mode:method FuncId(223) regs:6 ISeq(RubyFuncInfo { id:223 name:create_id= method:Some(FuncId(223)) args: 1 non_temp: 1 temp: 4})
+[]
++:00000 init_method reg:5 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = const[Thread]                   [<INVALID>]
+ :00002 %2 = %2.call current()               [<INVALID>]
+ :00004 %3 = const[CREATE_ID_TLS_KEY]        [<INVALID>]
+ :00005 %4 = %1.call dup()                   [<INVALID>]
+ :00007 %4 = %4.call freeze()                [<INVALID>]
+ :00009 %2:.[%3:] = %4
+ :00010 ret %4
+------------------------------------
+------------------------------------
+FuncId(224) name:create_id bc:BcPcBase(0x55e6de5844f0) meta:kind:VM mode:method FuncId(224) regs:4 ISeq(RubyFuncInfo { id:224 name:create_id method:Some(FuncId(224)) args: 0 non_temp: 0 temp: 3})
+[]
++:00000 init_method reg:3 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = const[Thread]                   [<INVALID>]
+ :00002 %2 = %2.call current()               [<INVALID>]
+ :00004 %3 = const[CREATE_ID_TLS_KEY]        [<INVALID>]
+ :00005 %1 = %2.[%3]                         [<INVALID>][<INVALID>]
+ :00006 condbr %1 =>:00008
+ :00007 %1 = const[DEFAULT_CREATE_ID]        [<INVALID>]
++:00008 ret %1
+------------------------------------
+------------------------------------
+FuncId(225) name:JSONError bc:BcPcBase(0x55e6de586030) meta:kind:VM mode:class_def FuncId(225) regs:2 ISeq(RubyFuncInfo { id:225 name:JSONError method:Some(FuncId(225)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = %0
+ :00002 singleton_method_def %1.wrap: FuncId(254)
+ :00003 %1 = :wrap
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(226) name:ParserError bc:BcPcBase(0x55e6de4d9b10) meta:kind:VM mode:class_def FuncId(226) regs:2 ISeq(RubyFuncInfo { id:226 name:ParserError method:Some(FuncId(226)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(227) name:NestingError bc:BcPcBase(0x55e6de55bbd0) meta:kind:VM mode:class_def FuncId(227) regs:2 ISeq(RubyFuncInfo { id:227 name:NestingError method:Some(FuncId(227)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(228) name:CircularDatastructure bc:BcPcBase(0x55e6de520db0) meta:kind:VM mode:class_def FuncId(228) regs:2 ISeq(RubyFuncInfo { id:228 name:CircularDatastructure method:Some(FuncId(228)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(229) name:GeneratorError bc:BcPcBase(0x55e6de589fc0) meta:kind:VM mode:class_def FuncId(229) regs:2 ISeq(RubyFuncInfo { id:229 name:GeneratorError method:Some(FuncId(229)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(230) name:MissingUnicodeSupport bc:BcPcBase(0x55e6de59e0c0) meta:kind:VM mode:class_def FuncId(230) regs:2 ISeq(RubyFuncInfo { id:230 name:MissingUnicodeSupport method:Some(FuncId(230)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = nil
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(231) name:parse bc:BcPcBase(0x55e6de583920) meta:kind:VM mode:method FuncId(231) regs:5 ISeq(RubyFuncInfo { id:231 name:parse method:Some(FuncId(231)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:1 opt:1 rest:false block:None stack_offset:6
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = literal[{}]
++:00003 %3 = const[Parser]                   [<INVALID>]
+ :00004 %4 = %2
+ :00005 condbr %4 =>:00007
+ :00006 %4 = literal[{}]
++:00007 %3 = %3.call new(%1; 1)              [<INVALID>]
+ :00009 %3 = %3.call parse()                 [<INVALID>]
+ :00011 ret %3
+------------------------------------
+------------------------------------
+FuncId(232) name:parse! bc:BcPcBase(0x55e6de504ba0) meta:kind:VM mode:method FuncId(232) regs:5 ISeq(RubyFuncInfo { id:232 name:parse! method:Some(FuncId(232)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:1 opt:1 rest:false block:None stack_offset:6
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = literal[{}]
++:00003 %3 = literal[{:max_nesting=>false, :allow_nan=>true}]
+ :00004 %2 = %3.call merge(%2; 1)            [<INVALID>]
+ :00006 %3 = const[Parser]                   [<INVALID>]
+ :00007 %4 = %2
+ :00008 condbr %4 =>:00010
+ :00009 %4 = literal[{}]
++:00010 %3 = %3.call new(%1; 1)              [<INVALID>]
+ :00012 %3 = %3.call parse()                 [<INVALID>]
+ :00014 ret %3
+------------------------------------
+------------------------------------
+FuncId(233) name:load_file bc:BcPcBase(0x55e6de58ee10) meta:kind:VM mode:method FuncId(233) regs:5 ISeq(RubyFuncInfo { id:233 name:load_file method:Some(FuncId(233)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:1 opt:1 rest:false block:None stack_offset:6
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = literal[{}]
++:00003 %3 = const[File]                     [<INVALID>]
+ :00004 %3 = %3.call read(%1; 1)             [<INVALID>]
+ :00006 %4 = %2
+ :00007 %3 = %0.call parse(%3; 2)            [<INVALID>]
+ :00009 ret %3
+------------------------------------
+------------------------------------
+FuncId(234) name:load_file! bc:BcPcBase(0x55e6de58a450) meta:kind:VM mode:method FuncId(234) regs:5 ISeq(RubyFuncInfo { id:234 name:load_file! method:Some(FuncId(234)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:1 opt:1 rest:false block:None stack_offset:6
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = literal[{}]
++:00003 %3 = const[File]                     [<INVALID>]
+ :00004 %3 = %3.call read(%1; 1)             [<INVALID>]
+ :00006 %4 = %2
+ :00007 %3 = %0.call parse!(%3; 2)           [<INVALID>]
+ :00009 ret %3
+------------------------------------
+------------------------------------
+FuncId(235) name:generate bc:BcPcBase(0x55e6de50b6d0) meta:kind:VM mode:method FuncId(235) regs:8 ISeq(RubyFuncInfo { id:235 name:generate method:Some(FuncId(235)) args: 2 non_temp: 3 temp: 4})
+[]
++:00000 init_method reg:7 arg:2 req:1 opt:1 rest:false block:None stack_offset:7
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 %4 = const[State]                    [<INVALID>]
+ :00004 _%4 = %4 === %2                      [<INVALID>][<INVALID>]
+ :00005 condnotbr _%4 =>:00011
+ :00006 %4 = %2
+ :00007 %5 = nil
+ :00008 %3 = %4
+ :00009 %2 = %5
+ :00010 br =>:00014
++:00011 %4 = const[State]                    [<INVALID>]
+ :00012 %3 = %4.call new()                   [<INVALID>]
++:00014 condnotbr %2 =>:00039
+ :00015 %4 = :to_hash
+ :00016 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00018 condnotbr %4 =>:00022
+ :00019 %2 = %2.call to_hash()               [<INVALID>]
+ :00021 br =>:00037
++:00022 %4 = :to_h
+ :00023 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00025 condnotbr %4 =>:00029
+ :00026 %2 = %2.call to_h()                  [<INVALID>]
+ :00028 br =>:00037
++:00029 %4 = const[TypeError]                [<INVALID>]
+ :00030 %5 = literal["can't convert "]
+ :00031 %6 = %2.call class()                 [<INVALID>]
+ :00033 %7 = literal[" into Hash"]
+ :00034 %5 = concat(%5; 3)
+ :00035 _ = %0.call raise(%4; 2)             [<INVALID>]
++:00037 %3 = %3.call configure(%2; 1)        [<INVALID>]
++:00039 %4 = %3.call generate(%1; 1)         [<INVALID>]
+ :00041 ret %4
+------------------------------------
+------------------------------------
+FuncId(236) name:fast_generate bc:BcPcBase(0x55e6de4d95e0) meta:kind:VM mode:method FuncId(236) regs:8 ISeq(RubyFuncInfo { id:236 name:fast_generate method:Some(FuncId(236)) args: 2 non_temp: 3 temp: 4})
+[]
++:00000 init_method reg:7 arg:2 req:1 opt:1 rest:false block:None stack_offset:7
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 %4 = const[State]                    [<INVALID>]
+ :00004 _%4 = %4 === %2                      [<INVALID>][<INVALID>]
+ :00005 condnotbr _%4 =>:00011
+ :00006 %4 = %2
+ :00007 %5 = nil
+ :00008 %3 = %4
+ :00009 %2 = %5
+ :00010 br =>:00014
++:00011 %4 = const[JSON]                     [<INVALID>]
+ :00012 %3 = %4.call create_fast_state()     [<INVALID>]
++:00014 condnotbr %2 =>:00039
+ :00015 %4 = :to_hash
+ :00016 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00018 condnotbr %4 =>:00022
+ :00019 %2 = %2.call to_hash()               [<INVALID>]
+ :00021 br =>:00037
++:00022 %4 = :to_h
+ :00023 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00025 condnotbr %4 =>:00029
+ :00026 %2 = %2.call to_h()                  [<INVALID>]
+ :00028 br =>:00037
++:00029 %4 = const[TypeError]                [<INVALID>]
+ :00030 %5 = literal["can't convert "]
+ :00031 %6 = %2.call class()                 [<INVALID>]
+ :00033 %7 = literal[" into Hash"]
+ :00034 %5 = concat(%5; 3)
+ :00035 _ = %0.call raise(%4; 2)             [<INVALID>]
++:00037 _ = %3.call configure(%2; 1)         [<INVALID>]
++:00039 %4 = %3.call generate(%1; 1)         [<INVALID>]
+ :00041 ret %4
+------------------------------------
+------------------------------------
+FuncId(237) name:pretty_generate bc:BcPcBase(0x55e6de5aa330) meta:kind:VM mode:method FuncId(237) regs:8 ISeq(RubyFuncInfo { id:237 name:pretty_generate method:Some(FuncId(237)) args: 2 non_temp: 3 temp: 4})
+[]
++:00000 init_method reg:7 arg:2 req:1 opt:1 rest:false block:None stack_offset:7
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 %4 = const[State]                    [<INVALID>]
+ :00004 _%4 = %4 === %2                      [<INVALID>][<INVALID>]
+ :00005 condnotbr _%4 =>:00011
+ :00006 %4 = %2
+ :00007 %5 = nil
+ :00008 %3 = %4
+ :00009 %2 = %5
+ :00010 br =>:00014
++:00011 %4 = const[JSON]                     [<INVALID>]
+ :00012 %3 = %4.call create_pretty_state()   [<INVALID>]
++:00014 condnotbr %2 =>:00039
+ :00015 %4 = :to_hash
+ :00016 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00018 condnotbr %4 =>:00022
+ :00019 %2 = %2.call to_hash()               [<INVALID>]
+ :00021 br =>:00037
++:00022 %4 = :to_h
+ :00023 %4 = %2.call respond_to?(%4; 1)      [<INVALID>]
+ :00025 condnotbr %4 =>:00029
+ :00026 %2 = %2.call to_h()                  [<INVALID>]
+ :00028 br =>:00037
++:00029 %4 = const[TypeError]                [<INVALID>]
+ :00030 %5 = literal["can't convert "]
+ :00031 %6 = %2.call class()                 [<INVALID>]
+ :00033 %7 = literal[" into Hash"]
+ :00034 %5 = concat(%5; 3)
+ :00035 _ = %0.call raise(%4; 2)             [<INVALID>]
++:00037 _ = %3.call configure(%2; 1)         [<INVALID>]
++:00039 %4 = %3.call generate(%1; 1)         [<INVALID>]
+ :00041 ret %4
+------------------------------------
+------------------------------------
+FuncId(238) name:<ANONYMOUS> bc:BcPcBase(0x55e6de5872d0) meta:kind:VM mode:class_def FuncId(238) regs:2 ISeq(RubyFuncInfo { id:238 name:<unnamed> method:Some(FuncId(238)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = :load_default_options
+ :00002 %1 = %0.call attr_accessor(%1; 1)    [<INVALID>]
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(239) name:load bc:BcPcBase(0x55e6de51f1c0) meta:kind:VM mode:method FuncId(239) regs:8 ISeq(RubyFuncInfo { id:239 name:load method:Some(FuncId(239)) args: 3 non_temp: 5 temp: 2})
+[]
++:00000 init_method reg:7 arg:3 req:1 opt:2 rest:false block:None stack_offset:7
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 check_local(%3) =>:00005
+ :00004 %3 = literal[{}]
++:00005 %6 = %0.call load_default_options()  [<INVALID>]
+ :00007 %4 = %6.call merge(%3; 1)            [<INVALID>]
+ :00009 %6 = :to_str
+ :00010 %6 = %1.call respond_to?(%6; 1)      [<INVALID>]
+ :00012 condnotbr %6 =>:00016
+ :00013 %1 = %1.call to_str()                [<INVALID>]
+ :00015 br =>:00031
++:00016 %6 = :to_io
+ :00017 %6 = %1.call respond_to?(%6; 1)      [<INVALID>]
+ :00019 condnotbr %6 =>:00025
+ :00020 %6 = %1.call to_io()                 [<INVALID>]
+ :00022 %1 = %6.call read()                  [<INVALID>]
+ :00024 br =>:00031
++:00025 %6 = :read
+ :00026 %6 = %1.call respond_to?(%6; 1)      [<INVALID>]
+ :00028 condnotbr %6 =>:00031
+ :00029 %1 = %1.call read()                  [<INVALID>]
++:00031 %6 = :allow_blank
+ :00032 %6 = %4.[%6]                         [<INVALID>][<INVALID>]
+ :00033 condnotbr %6 =>:00041
+ :00034 %6 = %1.call nil?()                  [<INVALID>]
+ :00036 condbr %6 =>:00040
+ :00037 %6 = %1.call empty?()                [<INVALID>]
+ :00039 condnotbr %6 =>:00041
++:00040 %1 = literal["null"]
++:00041 %6 = %1
+ :00042 %7 = %4
+ :00043 %5 = %0.call parse(%6; 2)            [<INVALID>]
+ :00045 condnotbr %2 =>:00050
+ :00046 %6 = %2
+ :00047 %7 = %5
+ :00048 _ = %0.call recurse_proc(%8; 1 &%6 kw:%7) [<INVALID>]
++:00050 ret %5
+------------------------------------
+------------------------------------
+FuncId(240) name:recurse_proc bc:BcPcBase(0x55e6de4da9e0) meta:kind:VM mode:method FuncId(240) regs:7 ISeq(RubyFuncInfo { id:240 name:recurse_proc method:Some(FuncId(240)) args: 2 non_temp: 2 temp: 4})
+[]
++:00000 init_method reg:6 arg:2 req:1 opt:0 rest:false block:Some(2) stack_offset:7
+ :00001 %4 = %1
+ :00002 %5 = const[Array]                    [<INVALID>]
+ :00003 _%5 = %5 === %4                      [<INVALID>][<INVALID>]
+ :00004 condnotbr _%5 =>:00011
+ :00005 %5 = literal[16711681]
+ :00006 _ = %1.call each(&%5 kw:%6)          [<INVALID>]
+ :00008 %3 = %2.call call(%1; 1)             [<INVALID>]
+ :00010 ret %3
++:00011 %5 = const[Hash]                     [<INVALID>]
+ :00012 _%5 = %5 === %4                      [<INVALID>][<INVALID>]
+ :00013 condnotbr _%5 =>:00020
+ :00014 %5 = literal[16777217]
+ :00015 _ = %1.call each(&%5 kw:%6)          [<INVALID>]
+ :00017 %3 = %2.call call(%1; 1)             [<INVALID>]
+ :00019 ret %3
++:00020 %3 = %2.call call(%1; 1)             [<INVALID>]
+ :00022 ret %3
+------------------------------------
+------------------------------------
+FuncId(241) name:<ANONYMOUS> bc:BcPcBase(0x55e6de59df60) meta:kind:VM mode:class_def FuncId(241) regs:2 ISeq(RubyFuncInfo { id:241 name:<unnamed> method:Some(FuncId(241)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = :dump_default_options
+ :00002 %1 = %0.call attr_accessor(%1; 1)    [<INVALID>]
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(242) name:dump bc:BcPcBase(0x55e6de51eeb0) meta:kind:VM mode:method FuncId(242) regs:9 ISeq(RubyFuncInfo { id:242 name:dump method:Some(FuncId(242)) args: 3 non_temp: 5 temp: 3})
+[(5..40, 40)]
++:00000 init_method reg:8 arg:3 req:1 opt:2 rest:false block:None stack_offset:8
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 check_local(%3) =>:00005
+ :00004 %3 = nil
++:00005 condnotbr %2 =>:00022
+ :00006 %6 = %3.call nil?()                  [<INVALID>]
+ :00008 condnotbr %6 =>:00022
+ :00009 %6 = :to_io
+ :00010 %6 = %2.call respond_to?(%6; 1)      [<INVALID>]
+ :00012 condnotbr %6 =>:00015
+ :00013 %2 = %2.call to_io()                 [<INVALID>]
++:00015 %6 = :write
+ :00016 %6 = %2.call respond_to?(%6; 1)      [<INVALID>]
+ :00018 condnotbr %6 =>:00020
+ :00019 br =>:00022
++:00020 %3 = %2
+ :00021 %2 = nil
++:00022 %6 = const[JSON]                     [<INVALID>]
+ :00023 %4 = %6.call dump_default_options()  [<INVALID>]
+ :00025 condnotbr %3 =>:00031
+ :00026 %7 = :max_nesting
+ :00027 %8 = %3
+ :00028 %6 = hash[%7; 1]
+ :00029 %4 = %4.call merge(%6; 1)            [<INVALID>]
++:00031 %6 = %1
+ :00032 %7 = %4
+ :00033 %5 = %0.call generate(%6; 2)         [<INVALID>]
+ :00035 condnotbr %2 =>:00039
+ :00036 _ = %2.call write(%5; 1)             [<INVALID>]
+ :00038 ret %2
++:00039 ret %5
+ :00040 %6 = const[JSON::NestingError]       [<INVALID>]
+ :00041 %7 = const[ArgumentError]            [<INVALID>]
+ :00042 %8 = literal["exceed depth limit"]
+ :00043 %7 = %0.call raise(%7; 2)            [<INVALID>]
+ :00045 ret %7
+------------------------------------
+------------------------------------
+FuncId(243) name:iconv bc:BcPcBase(0x55e6de594450) meta:kind:VM mode:method FuncId(243) regs:6 ISeq(RubyFuncInfo { id:243 name:iconv method:Some(FuncId(243)) args: 3 non_temp: 3 temp: 2})
+[]
++:00000 init_method reg:5 arg:3 req:3 opt:0 rest:false block:None stack_offset:6
+ :00001 %4 = %1
+ :00002 %5 = %2
+ :00003 %4 = %3.call encode(%4; 2)           [<INVALID>]
+ :00005 ret %4
+------------------------------------
+------------------------------------
+FuncId(244) name:j bc:BcPcBase(0x55e6de5b13c0) meta:kind:VM mode:method FuncId(244) regs:4 ISeq(RubyFuncInfo { id:244 name:j method:Some(FuncId(244)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:0 opt:0 rest:true block:None stack_offset:5
+ :00001 %2 = literal[16842753]
+ :00002 _ = %1.call each(&%2 kw:%3)          [<INVALID>]
+ :00004 %2 = nil
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(245) name:jj bc:BcPcBase(0x55e6de5b2c20) meta:kind:VM mode:method FuncId(245) regs:4 ISeq(RubyFuncInfo { id:245 name:jj method:Some(FuncId(245)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:0 opt:0 rest:true block:None stack_offset:5
+ :00001 %2 = literal[16908289]
+ :00002 _ = %1.call each(&%2 kw:%3)          [<INVALID>]
+ :00004 %2 = nil
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(246) name:JSON bc:BcPcBase(0x55e6de4c8000) meta:kind:VM mode:method FuncId(246) regs:6 ISeq(RubyFuncInfo { id:246 name:JSON method:Some(FuncId(246)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:1 opt:0 rest:true block:None stack_offset:6
+ :00001 %3 = :to_str
+ :00002 %3 = %1.call respond_to?(%3; 1)      [<INVALID>]
+ :00004 condnotbr %3 =>:00013
+ :00005 %3 = const[JSON]                     [<INVALID>]
+ :00006 %4 = %1.call to_str()                [<INVALID>]
+ :00008 %5 = %2.call first()                 [<INVALID>]
+ :00010 %3 = %3.call parse(%4; 2)            [<INVALID>]
+ :00012 ret %3
++:00013 %3 = const[JSON]                     [<INVALID>]
+ :00014 %4 = %1
+ :00015 %5 = %2.call first()                 [<INVALID>]
+ :00017 %3 = %3.call generate(%4; 2)         [<INVALID>]
+ :00019 ret %3
+------------------------------------
+------------------------------------
+FuncId(247) name:json_creatable? bc:BcPcBase(0x55e6de587140) meta:kind:VM mode:method FuncId(247) regs:2 ISeq(RubyFuncInfo { id:247 name:json_creatable? method:Some(FuncId(247)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = :json_create
+ :00002 %1 = %0.call respond_to?(%1; 1)      [<INVALID>]
+ :00004 ret %1
+------------------------------------
+------------------------------------
+FuncId(248) name:[] bc:BcPcBase(0x55e6de5a5ce0) meta:kind:VM mode:method FuncId(248) regs:6 ISeq(RubyFuncInfo { id:248 name:[] method:Some(FuncId(248)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:1 opt:1 rest:false block:None stack_offset:6
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = literal[{}]
++:00003 %3 = :to_str
+ :00004 %3 = %1.call respond_to?(%3; 1)      [<INVALID>]
+ :00006 condnotbr %3 =>:00014
+ :00007 %3 = const[JSON]                     [<INVALID>]
+ :00008 %4 = %1.call to_str()                [<INVALID>]
+ :00010 %5 = %2
+ :00011 %3 = %3.call parse(%4; 2)            [<INVALID>]
+ :00013 ret %3
++:00014 %3 = const[JSON]                     [<INVALID>]
+ :00015 %4 = %1
+ :00016 %5 = %2
+ :00017 %3 = %3.call generate(%4; 2)         [<INVALID>]
+ :00019 ret %3
+------------------------------------
+------------------------------------
+FuncId(249) name:parser= bc:BcPcBase(0x55e6de5011d0) meta:kind:VM mode:method FuncId(249) regs:4 ISeq(RubyFuncInfo { id:249 name:parser= method:Some(FuncId(249)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 @parser: <INVALID>[IvarId(0)] = %1
+ :00002 %2 = :Parser
+ :00003 %3 = literal[false]
+ :00004 %2 = %0.call const_defined?(%2; 2)   [<INVALID>]
+ :00006 condnotbr %2 =>:00010
+ :00007 %2 = :Parser
+ :00008 _ = %0.call remove_const(%2; 1)      [<INVALID>]
++:00010 %2 = :Parser
+ :00011 %3 = %1
+ :00012 %2 = %0.call const_set(%2; 2)        [<INVALID>]
+ :00014 ret %2
+------------------------------------
+------------------------------------
+FuncId(250) name:deep_const_get bc:BcPcBase(0x55e6de5a7210) meta:kind:VM mode:method FuncId(250) regs:5 ISeq(RubyFuncInfo { id:250 name:deep_const_get method:Some(FuncId(250)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = %1.call to_s()                  [<INVALID>]
+ :00003 %3 = literal[/(?m)::/]
+ :00004 %2 = %2.call split(%3; 1)            [<INVALID>]
+ :00006 %3 = literal[16973825]
+ :00007 %4 = const[Object]                   [<INVALID>]
+ :00008 %2 = %2.call inject(%5; 1 &%3 kw:%4) [<INVALID>]
+ :00010 ret %2
+------------------------------------
+------------------------------------
+FuncId(251) name:generator= bc:BcPcBase(0x55e6de5233d0) meta:kind:VM mode:method FuncId(251) regs:10 ISeq(RubyFuncInfo { id:251 name:generator= method:Some(FuncId(251)) args: 1 non_temp: 6 temp: 3})
+[]
++:00000 init_method reg:9 arg:1 req:1 opt:0 rest:false block:None stack_offset:8
+ :00001 %7 = $$VERBOSE
+ :00002 %8 = nil
+ :00003 %2 = %7
+ :00004 $$VERBOSE = %8
+ :00005 @generator: <INVALID>[IvarId(0)] = %1
+ :00006 %3 = const[GeneratorMethods]         [<INVALID>]
+ :00007 %7 = %3.call constants()             [<INVALID>]
+ :00009 %8 = literal[17039361]
+ :00010 %9 = nil
+ :00011 _ = %7.call each(&%8 kw:%9)          [<INVALID>]
+ :00013 %7 = %0
+ :00014 %8 = const[State]                    [<INVALID>]
+ :00015 _ = %7.call state=(%8; 1)            [<INVALID>]
+ :00017 %7 = :State
+ :00018 %8 = %0.call state()                 [<INVALID>]
+ :00020 _ = %0.call const_set(%7; 2)         [<INVALID>]
+ :00022 %7 = :SAFE_STATE_PROTOTYPE
+ :00023 %8 = const[State]                    [<INVALID>]
+ :00024 %8 = %8.call new()                   [<INVALID>]
+ :00026 _ = %0.call const_set(%7; 2)         [<INVALID>]
+ :00028 %7 = :FAST_STATE_PROTOTYPE
+ :00029 %8 = %0.call create_fast_state()     [<INVALID>]
+ :00031 _ = %0.call const_set(%7; 2)         [<INVALID>]
+ :00033 %7 = :PRETTY_STATE_PROTOTYPE
+ :00034 %8 = %0.call create_pretty_state()   [<INVALID>]
+ :00036 %7 = %0.call const_set(%7; 2)        [<INVALID>]
+ :00038 $$VERBOSE = %2
+ :00039 ret %7
+------------------------------------
+------------------------------------
+FuncId(252) name:create_fast_state bc:BcPcBase(0x55e6de526de0) meta:kind:VM mode:method FuncId(252) regs:3 ISeq(RubyFuncInfo { id:252 name:create_fast_state method:Some(FuncId(252)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = const[State]                    [<INVALID>]
+ :00002 %2 = literal[{:indent=>"", :space=>"", :object_nl=>"", :array_nl=>"", :max_nesting=>false}]
+ :00003 %1 = %1.call new(%2; 1)              [<INVALID>]
+ :00005 ret %1
+------------------------------------
+------------------------------------
+FuncId(253) name:create_pretty_state bc:BcPcBase(0x55e6de58f960) meta:kind:VM mode:method FuncId(253) regs:3 ISeq(RubyFuncInfo { id:253 name:create_pretty_state method:Some(FuncId(253)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = const[State]                    [<INVALID>]
+ :00002 %2 = literal[{:indent=>"  ", :space=>" ", :object_nl=>"\n", :array_nl=>"\n"}]
+ :00003 %1 = %1.call new(%2; 1)              [<INVALID>]
+ :00005 ret %1
+------------------------------------
+------------------------------------
+FuncId(254) name:wrap bc:BcPcBase(0x55e6de4f8870) meta:kind:VM mode:method FuncId(254) regs:8 ISeq(RubyFuncInfo { id:254 name:wrap method:Some(FuncId(254)) args: 1 non_temp: 2 temp: 5})
+[]
++:00000 init_method reg:7 arg:1 req:1 opt:0 rest:false block:None stack_offset:7
+ :00001 %3 = literal["Wrapped("]
+ :00002 %4 = %1.call class()                 [<INVALID>]
+ :00004 %5 = literal["): "]
+ :00005 %6 = %1.call message()               [<INVALID>]
+ :00007 %6 = %6.call inspect()               [<INVALID>]
+ :00009 %3 = concat(%3; 4)
+ :00010 %2 = %0.call new(%3; 1)              [<INVALID>]
+ :00012 %3 = %1.call backtrace()             [<INVALID>]
+ :00014 _ = %2.call set_backtrace(%3; 1)     [<INVALID>]
+ :00016 ret %2
+------------------------------------
+------------------------------------
+FuncId(255) name:<ANONYMOUS> bc:BcPcBase(0x55e6de58de50) meta:kind:VM mode:method FuncId(255) regs:4 ISeq(RubyFuncInfo { id:255 name:<unnamed> method:Some(FuncId(240)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = block_arg(1)
+ :00002 %3 = %1
+ :00003 %2 = %0.call recurse_proc(%4; 1 &%2 kw:%3) [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(256) name:<ANONYMOUS> bc:BcPcBase(0x55e6de52c790) meta:kind:VM mode:method FuncId(256) regs:5 ISeq(RubyFuncInfo { id:256 name:<unnamed> method:Some(FuncId(240)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:2 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = block_arg(1)
+ :00002 %4 = %1
+ :00003 _ = %0.call recurse_proc(%5; 1 &%3 kw:%4) [<INVALID>]
+ :00005 %3 = block_arg(1)
+ :00006 %4 = %2
+ :00007 %3 = %0.call recurse_proc(%5; 1 &%3 kw:%4) [<INVALID>]
+ :00009 ret %3
+------------------------------------
+------------------------------------
+FuncId(257) name:<ANONYMOUS> bc:BcPcBase(0x55e6de58e010) meta:kind:VM mode:method FuncId(257) regs:5 ISeq(RubyFuncInfo { id:257 name:<unnamed> method:Some(FuncId(244)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = const[JSON]                     [<INVALID>]
+ :00002 %3 = %1
+ :00003 %4 = literal[{:allow_nan=>true, :max_nesting=>false}]
+ :00004 %2 = %2.call generate(%3; 2)         [<INVALID>]
+ :00006 %2 = %0.call puts(%2; 1)             [<INVALID>]
+ :00008 ret %2
+------------------------------------
+------------------------------------
+FuncId(258) name:<ANONYMOUS> bc:BcPcBase(0x55e6de50b250) meta:kind:VM mode:method FuncId(258) regs:5 ISeq(RubyFuncInfo { id:258 name:<unnamed> method:Some(FuncId(245)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = const[JSON]                     [<INVALID>]
+ :00002 %3 = %1
+ :00003 %4 = literal[{:allow_nan=>true, :max_nesting=>false}]
+ :00004 %2 = %2.call pretty_generate(%3; 2)  [<INVALID>]
+ :00006 %2 = %0.call puts(%2; 1)             [<INVALID>]
+ :00008 ret %2
+------------------------------------
+------------------------------------
+FuncId(259) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4dddb0) meta:kind:VM mode:method FuncId(259) regs:10 ISeq(RubyFuncInfo { id:259 name:<unnamed> method:Some(FuncId(250)) args: 2 non_temp: 3 temp: 6})
+[(13..16, 16)]
++:00000 init_method reg:9 arg:2 req:2 opt:0 rest:false block:None stack_offset:8
+ :00001 %4 = %2.call empty?()                [<INVALID>]
+ :00003 condnotbr %4 =>:00005
+ :00004 ret %1
++:00005 %4 = %2
+ :00006 %5 = literal[true]
+ :00007 %4 = %1.call const_defined?(%4; 2)   [<INVALID>]
+ :00009 condnotbr %4 =>:00013
+ :00010 %4 = %1.call const_get(%2; 1)        [<INVALID>]
+ :00012 ret %4
++:00013 %4 = %1.call const_missing(%2; 1)    [<INVALID>]
+ :00015 ret %4
+ :00016 %4 = const[NameError]                [<INVALID>]
+ :00017 %3 = %5
+ :00018 %5 = const[ArgumentError]            [<INVALID>]
+ :00019 %6 = literal["can't get const "]
+ :00020 %7 = dynvar(1, %1)
+ :00021 %8 = literal[": "]
+ :00022 %9 = %3
+ :00023 %6 = concat(%6; 4)
+ :00024 %5 = %0.call raise(%5; 2)            [<INVALID>]
+ :00026 ret %5
+------------------------------------
+------------------------------------
+FuncId(260) name:<ANONYMOUS> bc:BcPcBase(0x55e6de58fa30) meta:kind:VM mode:method FuncId(260) regs:6 ISeq(RubyFuncInfo { id:260 name:<unnamed> method:Some(FuncId(251)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:2 opt:0 rest:false block:None stack_offset:6
+ :00001 dynvar(1, %4) = %1
+ :00002 %3 = dynvar(1, %4)
+ :00003 %3 = %0.call deep_const_get(%3; 1)   [<INVALID>]
+ :00005 dynvar(1, %5) = %3
+ :00006 %3 = dynvar(1, %3)
+ :00007 %4 = dynvar(1, %4)
+ :00008 %3 = %3.call const_get(%4; 1)        [<INVALID>]
+ :00010 dynvar(1, %6) = %3
+ :00011 %3 = dynvar(1, %5)
+ :00012 %4 = literal[17104897]
+ :00013 %3 = %3.call class_eval(&%4 kw:%5)   [<INVALID>]
+ :00015 ret %3
+------------------------------------
+------------------------------------
+FuncId(261) name:<ANONYMOUS> bc:BcPcBase(0x55e6de52b4c0) meta:kind:VM mode:method FuncId(261) regs:4 ISeq(RubyFuncInfo { id:261 name:<unnamed> method:Some(FuncId(251)) args: 0 non_temp: 0 temp: 3})
+[]
++:00000 init_method reg:3 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = literal[false]
+ :00002 %1 = %0.call instance_methods(%1; 1) [<INVALID>]
+ :00004 %2 = literal[17170433]
+ :00005 _ = %1.call each(&%2 kw:%3)          [<INVALID>]
+ :00007 %1 = dynvar(2, %6)
+ :00008 %1 = %0.call include(%1; 1)          [<INVALID>]
+ :00010 ret %1
+------------------------------------
+------------------------------------
+FuncId(262) name:<ANONYMOUS> bc:BcPcBase(0x55e6de51c440) meta:kind:VM mode:method FuncId(262) regs:5 ISeq(RubyFuncInfo { id:262 name:<unnamed> method:Some(FuncId(251)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = %1.call to_s()                  [<INVALID>]
+ :00003 %4 = literal["to_json"]
+ :00004 %2 = %3 == %4                        [<INVALID>][<INVALID>]
+ :00005 condnotbr %2 =>:00008
+ :00006 %2 = %0.call remove_method(%1; 1)    [<INVALID>]
++:00008 ret %2
+------------------------------------
+------------------------------------
+FuncId(263) name:/main bc:BcPcBase(0x55e6de5a5ec0) meta:kind:VM mode:method FuncId(263) regs:2 ISeq(RubyFuncInfo { id:263 name:/main method:Some(FuncId(263)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = module_def JSON: FuncId(264)
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(264) name:JSON bc:BcPcBase(0x55e6de522290) meta:kind:VM mode:class_def FuncId(264) regs:4 ISeq(RubyFuncInfo { id:264 name:JSON method:Some(FuncId(264)) args: 0 non_temp: 0 temp: 3})
+[]
++:00000 init_method reg:3 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = literal["2.6.3"]
+ :00002 const[VERSION] = %1
+ :00003 %1 = const[VERSION]                  [<INVALID>]
+ :00004 %2 = literal[/(?m)\./]
+ :00005 %1 = %1.call split(%2; 1)            [<INVALID>]
+ :00007 %2 = literal[17367041]
+ :00008 %1 = %1.call map(&%2 kw:%3)          [<INVALID>]
+ :00010 const[VERSION_ARRAY] = %1
+ :00011 %1 = const[VERSION_ARRAY]            [<INVALID>]
+ :00012 %2 = 0: i32
+ :00013 %1 = %1.[%2]                         [<INVALID>][<INVALID>]
+ :00014 const[VERSION_MAJOR] = %1
+ :00015 %1 = const[VERSION_ARRAY]            [<INVALID>]
+ :00016 %2 = 1: i32
+ :00017 %1 = %1.[%2]                         [<INVALID>][<INVALID>]
+ :00018 const[VERSION_MINOR] = %1
+ :00019 %1 = const[VERSION_ARRAY]            [<INVALID>]
+ :00020 %2 = 2: i32
+ :00021 %1 = %1.[%2]                         [<INVALID>][<INVALID>]
+ :00022 const[VERSION_BUILD] = %1
+ :00023 ret %1
+------------------------------------
+------------------------------------
+FuncId(265) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4cea50) meta:kind:VM mode:method FuncId(265) regs:3 ISeq(RubyFuncInfo { id:265 name:<unnamed> method:Some(FuncId(264)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = %1.call to_i()                  [<INVALID>]
+ :00003 ret %2
+------------------------------------
+------------------------------------
+FuncId(266) name:/main bc:BcPcBase(0x55e6de560b40) meta:kind:VM mode:method FuncId(266) regs:2 ISeq(RubyFuncInfo { id:266 name:/main method:Some(FuncId(266)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = literal["ostruct"]
+ :00002 _ = %0.call require(%1; 1)           [<INVALID>]
+ :00004 %1 = module_def JSON: FuncId(267)
+ :00005 ret %1
+------------------------------------
+------------------------------------
+FuncId(267) name:JSON bc:BcPcBase(0x55e6de5b61f0) meta:kind:VM mode:class_def FuncId(267) regs:3 ISeq(RubyFuncInfo { id:267 name:JSON method:Some(FuncId(267)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = const[OpenStruct]               [<INVALID>]
+ :00002 %1 = class_def GenericObject < %2: FuncId(268)
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(268) name:GenericObject bc:BcPcBase(0x55e6de516f00) meta:kind:VM mode:class_def FuncId(268) regs:3 ISeq(RubyFuncInfo { id:268 name:GenericObject method:Some(FuncId(268)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = %0
+ :00002 _ = singleton_class_def << %1: FuncId(269)
+ :00003 %1 = %0
+ :00004 %2 = literal[false]
+ :00005 _ = %1.call json_creatable=(%2; 1)   [<INVALID>]
+ :00007 method_def to_hash: FuncId(270)
+ :00008 %1 = :[]
+ :00009 %1 = %0.call method_defined?(%1; 1)  [<INVALID>]
+ :00011 condnotbr %1 =>:00013
+ :00012 br =>:00014
++:00013 method_def []: FuncId(271)
++:00014 %1 = :[]=
+ :00015 %1 = %0.call method_defined?(%1; 1)  [<INVALID>]
+ :00017 condnotbr %1 =>:00019
+ :00018 br =>:00020
++:00019 method_def []=: FuncId(272)
++:00020 method_def |: FuncId(273)
+ :00021 method_def as_json: FuncId(274)
+ :00022 method_def to_json: FuncId(275)
+ :00023 %1 = :to_json
+ :00024 ret %1
+------------------------------------
+------------------------------------
+FuncId(269) name:<ANONYMOUS> bc:BcPcBase(0x55e6de4f50d0) meta:kind:VM mode:class_def FuncId(269) regs:3 ISeq(RubyFuncInfo { id:269 name:<unnamed> method:Some(FuncId(269)) args: 0 non_temp: 0 temp: 2})
+[]
++:00000 init_method reg:2 arg:0 req:0 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = :[]
+ :00002 %2 = :new
+ :00003 alias_method(%1<-%2)
+ :00004 method_def json_creatable?: FuncId(276)
+ :00005 %1 = :json_creatable
+ :00006 _ = %0.call attr_writer(%1; 1)       [<INVALID>]
+ :00008 method_def json_create: FuncId(277)
+ :00009 method_def from_hash: FuncId(278)
+ :00010 method_def load: FuncId(279)
+ :00011 method_def dump: FuncId(280)
+ :00012 %1 = :dump
+ :00013 ret %1
+------------------------------------
+------------------------------------
+FuncId(270) name:to_hash bc:BcPcBase(0x55e6de5878a0) meta:kind:VM mode:method FuncId(270) regs:2 ISeq(RubyFuncInfo { id:270 name:to_hash method:Some(FuncId(270)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = %0.call table()                 [<INVALID>]
+ :00003 ret %1
+------------------------------------
+------------------------------------
+FuncId(271) name:[] bc:BcPcBase(0x55e6de55b640) meta:kind:VM mode:method FuncId(271) regs:3 ISeq(RubyFuncInfo { id:271 name:[] method:Some(FuncId(271)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = %0.call __send__(%1; 1)         [<INVALID>]
+ :00003 ret %2
+------------------------------------
+------------------------------------
+FuncId(272) name:[]= bc:BcPcBase(0x55e6de52bf30) meta:kind:VM mode:method FuncId(272) regs:5 ISeq(RubyFuncInfo { id:272 name:[]= method:Some(FuncId(272)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:2 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = %1
+ :00002 %4 = literal["="]
+ :00003 %3 = concat(%3; 2)
+ :00004 %4 = %2
+ :00005 %3 = %0.call __send__(%3; 2)         [<INVALID>]
+ :00007 ret %3
+------------------------------------
+------------------------------------
+FuncId(273) name:| bc:BcPcBase(0x55e6de58c7e0) meta:kind:VM mode:method FuncId(273) regs:5 ISeq(RubyFuncInfo { id:273 name:| method:Some(FuncId(273)) args: 1 non_temp: 1 temp: 3})
+[]
++:00000 init_method reg:4 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %2 = %0.call class()                 [<INVALID>]
+ :00003 %3 = %1.call to_hash()               [<INVALID>]
+ :00005 %4 = %0.call to_hash()               [<INVALID>]
+ :00007 %3 = %3.call merge(%4; 1)            [<INVALID>]
+ :00009 %2 = %2.[%3]                         [<INVALID>][<INVALID>]
+ :00010 ret %2
+------------------------------------
+------------------------------------
+FuncId(274) name:as_json bc:BcPcBase(0x55e6de4ceae0) meta:kind:VM mode:method FuncId(274) regs:6 ISeq(RubyFuncInfo { id:274 name:as_json method:Some(FuncId(274)) args: 1 non_temp: 1 temp: 4})
+[]
++:00000 init_method reg:5 arg:1 req:0 opt:0 rest:true block:None stack_offset:6
+ :00001 %3 = const[JSON]                     [<INVALID>]
+ :00002 %3 = %3.call create_id()             [<INVALID>]
+ :00004 %4 = %0.call class()                 [<INVALID>]
+ :00006 %4 = %4.call name()                  [<INVALID>]
+ :00008 %2 = hash[%3; 1]
+ :00009 %3 = %0.call to_hash()               [<INVALID>]
+ :00011 %2 = %2.call merge(%3; 1)            [<INVALID>]
+ :00013 ret %2
+------------------------------------
+------------------------------------
+FuncId(275) name:to_json bc:BcPcBase(0x55e6de529960) meta:kind:VM mode:method FuncId(275) regs:4 ISeq(RubyFuncInfo { id:275 name:to_json method:Some(FuncId(275)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:0 opt:0 rest:true block:None stack_offset:5
+ :00001 %2 = %0.call as_json()               [<INVALID>]
+ :00003 %2 = %2.call to_json(%1; 1)*         [<INVALID>]
+ :00005 ret %2
+------------------------------------
+------------------------------------
+FuncId(276) name:json_creatable? bc:BcPcBase(0x55e6de4fed70) meta:kind:VM mode:method FuncId(276) regs:2 ISeq(RubyFuncInfo { id:276 name:json_creatable? method:Some(FuncId(276)) args: 0 non_temp: 0 temp: 1})
+[]
++:00000 init_method reg:1 arg:0 req:0 opt:0 rest:false block:None stack_offset:4
+ :00001 %1 = @json_creatable: <INVALID>[IvarId(0)]
+ :00002 ret %1
+------------------------------------
+------------------------------------
+FuncId(277) name:json_create bc:BcPcBase(0x55e6de592030) meta:kind:VM mode:method FuncId(277) regs:4 ISeq(RubyFuncInfo { id:277 name:json_create method:Some(FuncId(277)) args: 1 non_temp: 1 temp: 2})
+[]
++:00000 init_method reg:3 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %1 = %1.call dup()                   [<INVALID>]
+ :00003 %2 = const[JSON]                     [<INVALID>]
+ :00004 %2 = %2.call create_id()             [<INVALID>]
+ :00006 _ = %1.call delete(%2; 1)            [<INVALID>]
+ :00008 %2 = %0
+ :00009 %2 = %2.[%1]                         [<INVALID>][<INVALID>]
+ :00010 ret %2
+------------------------------------
+------------------------------------
+FuncId(278) name:from_hash bc:BcPcBase(0x55e6de50b9f0) meta:kind:VM mode:method FuncId(278) regs:6 ISeq(RubyFuncInfo { id:278 name:from_hash method:Some(FuncId(278)) args: 1 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:1 req:1 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = :to_hash
+ :00002 %3 = %1.call respond_to?(%3; 1)      [<INVALID>]
+ :00004 condnotbr %3 =>:00014
+ :00005 %3 = %0.call new()                   [<INVALID>]
+ :00007 %2 = %3
+ :00008 %3 = %1.call to_hash()               [<INVALID>]
+ :00010 %4 = literal[18415617]
+ :00011 _ = %3.call each(&%4 kw:%5)          [<INVALID>]
+ :00013 ret %2
++:00014 %3 = :to_ary
+ :00015 %3 = %1.call respond_to?(%3; 1)      [<INVALID>]
+ :00017 condnotbr %3 =>:00024
+ :00018 %3 = %1.call to_ary()                [<INVALID>]
+ :00020 %4 = literal[18481153]
+ :00021 %3 = %3.call map(&%4 kw:%5)          [<INVALID>]
+ :00023 ret %3
++:00024 ret %1
+------------------------------------
+------------------------------------
+FuncId(279) name:load bc:BcPcBase(0x55e6de4d9e40) meta:kind:VM mode:method FuncId(279) regs:11 ISeq(RubyFuncInfo { id:279 name:load method:Some(FuncId(279)) args: 3 non_temp: 4 temp: 6})
+[]
++:00000 init_method reg:10 arg:3 req:1 opt:2 rest:false block:None stack_offset:9
+ :00001 check_local(%2) =>:00003
+ :00002 %2 = nil
++:00003 check_local(%3) =>:00005
+ :00004 %3 = literal[{}]
++:00005 %5 = const[::JSON]                   [<INVALID>]
+ :00006 %6 = %1
+ :00007 %7 = %2
+ :00008 %9 = :object_class
+ :00009 %10 = %0
+ :00010 %8 = hash[%9; 1]
+ :00011 %8 = %3.call merge(%8; 1)            [<INVALID>]
+ :00013 %4 = %5.call load(%6; 3)             [<INVALID>]
+ :00015 %5 = %4.call nil?()                  [<INVALID>]
+ :00017 condnotbr %5 =>:00021
+ :00018 %5 = %0.call new()                   [<INVALID>]
+ :00020 ret %5
++:00021 ret %4
+------------------------------------
+------------------------------------
+FuncId(280) name:dump bc:BcPcBase(0x55e6de513710) meta:kind:VM mode:method FuncId(280) regs:6 ISeq(RubyFuncInfo { id:280 name:dump method:Some(FuncId(280)) args: 2 non_temp: 2 temp: 3})
+[]
++:00000 init_method reg:5 arg:2 req:1 opt:0 rest:true block:None stack_offset:6
+ :00001 %3 = const[::JSON]                   [<INVALID>]
+ :00002 %4 = %1
+ :00003 %5 = %2
+ :00004 %3 = %3.call dump(%4; 2)*            [<INVALID>]
+ :00006 ret %3
+------------------------------------
+------------------------------------
+FuncId(281) name:<ANONYMOUS> bc:BcPcBase(0x55e6de51e950) meta:kind:VM mode:method FuncId(281) regs:5 ISeq(RubyFuncInfo { id:281 name:<unnamed> method:Some(FuncId(278)) args: 2 non_temp: 2 temp: 2})
+[]
++:00000 init_method reg:4 arg:2 req:2 opt:0 rest:false block:None stack_offset:6
+ :00001 %3 = dynvar(1, %2)
+ :00002 %4 = %0.call from_hash(%2; 1)        [<INVALID>]
+ :00004 %3:.[%1:] = %4
+ :00005 ret %4
+------------------------------------
+------------------------------------
+FuncId(282) name:<ANONYMOUS> bc:BcPcBase(0x55e6de5b3020) meta:kind:VM mode:method FuncId(282) regs:3 ISeq(RubyFuncInfo { id:282 name:<unnamed> method:Some(FuncId(278)) args: 1 non_temp: 1 temp: 1})
+[]
++:00000 init_method reg:2 arg:1 req:1 opt:0 rest:false block:None stack_offset:5
+ :00001 %2 = %0.call from_hash(%1; 1)        [<INVALID>]
+ :00003 ret %2
+------------------------------------
+return from block in not supported. (Unimplemented)
+/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/3.3.0+0/ostruct.rb:250
+          return false if mod == ::OpenStruct
+          ^^^^^^

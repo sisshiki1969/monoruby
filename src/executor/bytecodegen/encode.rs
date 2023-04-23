@@ -145,6 +145,14 @@ impl IrContext {
                     let op1 = self.get_index(ret);
                     Bc::from_u32(enc_www(68, op1.0, 0, 0), name.get())
                 }
+                BcIr::Ret(reg) => {
+                    let op1 = self.get_index(reg);
+                    Bc::from(enc_w(80, op1.0))
+                }
+                BcIr::MethodRet(reg) => {
+                    let op1 = self.get_index(reg);
+                    Bc::from(enc_w(81, op1.0))
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(src);
@@ -253,10 +261,6 @@ impl IrContext {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(args);
                     Bc::from(enc_www(174, op1.0, op2.0, *len))
-                }
-                BcIr::Ret(reg) => {
-                    let op1 = self.get_index(reg);
-                    Bc::from(enc_w(175, op1.0))
                 }
                 BcIr::Mov(dst, src) => {
                     let op1 = self.get_index(dst);

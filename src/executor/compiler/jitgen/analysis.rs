@@ -401,6 +401,11 @@ impl LoopAnalysis {
                     self.add_return(&reg_info);
                     return None;
                 }
+                TraceIr::MethodRet(_ret) => {
+                    unimplemented!();
+                    self.add_return(&reg_info);
+                    return None;
+                }
                 TraceIr::Br(disp) => {
                     let dest_idx = ((idx + 1) as i32 + disp) as usize;
                     if disp >= 0 {

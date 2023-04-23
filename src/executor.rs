@@ -889,6 +889,7 @@ impl BcPc {
             }
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
+            TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
                 ret,

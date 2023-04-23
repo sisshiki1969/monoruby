@@ -1,9 +1,8 @@
-def fib n
-  if n < 3
-    1
-  else
-    fib(n-1) + fib(n-2)
-  end
+def f
+  1.times {
+    puts 100
+    return
+  }
 end
 
-puts fib 40
+f

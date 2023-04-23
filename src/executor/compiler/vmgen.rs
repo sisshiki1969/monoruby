@@ -229,12 +229,12 @@ impl Codegen {
         self.dispatch[32] = self.vm_method_call(true, true);
         self.dispatch[33] = self.vm_method_call(true, false);
         self.dispatch[34] = self.vm_super();
-
         self.dispatch[64] = self.vm_defined_yield();
         self.dispatch[65] = self.vm_defined_const();
         self.dispatch[66] = self.vm_defined_method();
         self.dispatch[67] = self.vm_defined_gvar();
         self.dispatch[68] = self.vm_defined_ivar();
+        self.dispatch[80] = ret;
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -282,7 +282,6 @@ impl Codegen {
         self.dispatch[172] = self.vm_init();
         self.dispatch[173] = self.vm_alias_method();
         self.dispatch[174] = self.vm_hash();
-        self.dispatch[175] = ret;
         self.dispatch[176] = mov;
         self.dispatch[177] = self.vm_range(false);
         self.dispatch[178] = self.vm_range(true);

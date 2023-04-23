@@ -310,6 +310,10 @@ impl IrContext {
         ir
     }
 
+    fn is_block(&self) -> bool {
+        !self.outer_locals.is_empty()
+    }
+
     fn add_callsite(
         &mut self,
         name: impl Into<Option<IdentId>>,
@@ -363,6 +367,10 @@ impl IrContext {
             next_dest,
             ret,
         });
+    }
+
+    fn loop_pop(&mut self) {
+        self.loops.pop().unwrap();
     }
 }
 
@@ -516,6 +524,15 @@ impl IrContext {
         };
         //assert_eq!(0, self.temp);
         self.emit(BcIr::Ret(ret), Loc::default());
+    }
+
+    fn emit_method_ret(&mut self, src: Option<BcReg>) {
+        let ret = match src {
+            Some(ret) => ret,
+            None => self.pop().into(),
+        };
+        //assert_eq!(0, self.temp);
+        self.emit(BcIr::MethodRet(ret), Loc::default());
     }
 
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
@@ -1194,7 +1211,18 @@ impl IrContext {
                 } = match self.loops.last().cloned() {
                     Some(data) => data,
                     None => {
-                        return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
+                        if self.is_block() {
+                            return Err(MonorubyErr::unsupported_feature(
+                                "break from block in not supported.",
+                                loc,
+                                self.sourceinfo.clone(),
+                            ));
+                        } else {
+                            return Err(MonorubyErr::escape_from_eval(
+                                loc,
+                                self.sourceinfo.clone(),
+                            ));
+                        }
                     }
                 };
                 if let Some(reg) = ret {
@@ -1208,7 +1236,15 @@ impl IrContext {
                 let LoopInfo { next_dest, ret, .. } = match self.loops.last().cloned() {
                     Some(data) => data,
                     None => {
-                        return Err(MonorubyErr::escape_from_eval(loc, self.sourceinfo.clone()))
+                        if self.is_block() {
+                            assert_ne!(use_mode, UseMode::Use);
+                            return self.gen_return(val);
+                        } else {
+                            return Err(MonorubyErr::escape_from_eval(
+                                loc,
+                                self.sourceinfo.clone(),
+                            ));
+                        }
                     }
                 };
                 if let Some(reg) = ret {
@@ -1218,14 +1254,14 @@ impl IrContext {
                 self.emit(BcIr::Br(next_dest), loc);
                 return Ok(());
             }
-            NodeKind::Return(box expr) => {
-                if let Some(local) = self.is_refer_local(&expr) {
-                    self.emit_ret(Some(local.into()));
+            NodeKind::Return(box val) => {
+                if self.is_block() {
+                    assert_ne!(use_mode, UseMode::Use);
+                    return self.gen_method_return(val);
                 } else {
-                    self.gen_expr(expr, UseMode::Ret)?;
+                    assert_ne!(use_mode, UseMode::Use);
+                    return self.gen_return(val);
                 }
-                assert_ne!(use_mode, UseMode::Use);
-                return Ok(());
             }
             NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(nodes, None, use_mode),
             NodeKind::Begin {
@@ -1936,7 +1972,7 @@ impl IrContext {
             self.apply_label(loop_exit);
             self.pop(); // pop *end*
 
-            self.loops.pop().unwrap();
+            self.loop_pop();
             self.apply_label(break_dest);
             self.emit(BcIr::LoopEnd, loc);
         } else {
@@ -1970,7 +2006,7 @@ impl IrContext {
         if use_value {
             self.push_nil();
         }
-        self.loops.pop().unwrap();
+        self.loop_pop();
         self.apply_label(loop_exit);
         self.emit(BcIr::LoopEnd, loc);
 
@@ -2003,10 +2039,29 @@ impl IrContext {
         if use_value {
             self.push_nil();
         }
-        self.loops.pop().unwrap();
+        self.loop_pop();
         self.apply_label(break_dest);
         self.emit(BcIr::LoopEnd, loc);
 
+        Ok(())
+    }
+
+    fn gen_return(&mut self, val: Node) -> Result<()> {
+        if let Some(local) = self.is_refer_local(&val) {
+            self.emit_ret(Some(local.into()));
+        } else {
+            self.gen_expr(val, UseMode::Ret)?;
+        }
+        Ok(())
+    }
+
+    fn gen_method_return(&mut self, val: Node) -> Result<()> {
+        if let Some(local) = self.is_refer_local(&val) {
+            self.emit_method_ret(Some(local.into()));
+        } else {
+            self.gen_expr(val, UseMode::Use)?;
+            self.emit_method_ret(None);
+        }
         Ok(())
     }
 }
