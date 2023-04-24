@@ -2265,4 +2265,60 @@ mod test {
         run_test(r#"defined?(1+(2+3))"#);
         run_test(r#"defined? 1+(2+3)"#);
     }
+
+    #[test]
+    fn method_return() {
+        run_test_once(
+            r#"
+            $res = [] 
+            def f
+                2.times { |x|
+                    2.times { |y|
+                        $res << [x,y]
+                        return x,y if x+y==1
+                    }
+                    $res << 10
+                }
+                $res << 20
+                nil
+            end
+            [f, $res]
+            "#,
+        )
+    }
+
+    #[test]
+    fn block_break() {
+        run_test_once(
+            r#"
+            $res = [] 
+            def f
+                2.times { |x|
+                    2.times { |y|
+                        $res << [x,y]
+                        break x,y if x+y==1
+                    }
+                    $res << 10
+                }
+                $res << 20
+                nil
+            end
+            [f, $res]
+            "#,
+        );
+        run_test_once(
+            r#"
+            $res = [] 
+            def f
+                3.times { |x|
+                    $res << x
+                    break x if x==1
+                }
+                $res << 10
+                nil
+            end
+            [f, $res]
+            "#,
+        );
+    }
 }

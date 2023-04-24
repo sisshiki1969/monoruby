@@ -535,6 +535,15 @@ impl IrContext {
         self.emit(BcIr::MethodRet(ret), Loc::default());
     }
 
+    fn emit_break(&mut self, src: Option<BcReg>) {
+        let ret = match src {
+            Some(ret) => ret,
+            None => self.pop().into(),
+        };
+        //assert_eq!(0, self.temp);
+        self.emit(BcIr::Break(ret), Loc::default());
+    }
+
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
             self.emit(BcIr::Mov(dst, src), Loc::default());
@@ -1212,11 +1221,8 @@ impl IrContext {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            return Err(MonorubyErr::unsupported_feature(
-                                "break from block in not supported.",
-                                loc,
-                                self.sourceinfo.clone(),
-                            ));
+                            assert_ne!(use_mode, UseMode::Use);
+                            return self.gen_break(val);
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
                                 loc,
@@ -2061,6 +2067,16 @@ impl IrContext {
         } else {
             self.gen_expr(val, UseMode::Use)?;
             self.emit_method_ret(None);
+        }
+        Ok(())
+    }
+
+    fn gen_break(&mut self, val: Node) -> Result<()> {
+        if let Some(local) = self.is_refer_local(&val) {
+            self.emit_break(Some(local.into()));
+        } else {
+            self.gen_expr(val, UseMode::Use)?;
+            self.emit_break(None);
         }
         Ok(())
     }

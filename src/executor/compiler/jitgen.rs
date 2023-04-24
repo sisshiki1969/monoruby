@@ -1514,12 +1514,19 @@ impl Codegen {
                     self.epilogue();
                     return false;
                 }
-                TraceIr::MethodRet(lhs) => {
+                TraceIr::MethodRet(_lhs) => {
                     unimplemented!();
                     //self.write_back_slot(&mut ctx, lhs);
                     //self.load_rax(lhs);
                     //self.epilogue();
-                    return false;
+                    //return false;
+                }
+                TraceIr::Break(_lhs) => {
+                    unimplemented!();
+                    //self.write_back_slot(&mut ctx, lhs);
+                    //self.load_rax(lhs);
+                    //self.epilogue();
+                    //return false;
                 }
                 TraceIr::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;

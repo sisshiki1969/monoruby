@@ -153,6 +153,10 @@ impl IrContext {
                     let op1 = self.get_index(reg);
                     Bc::from(enc_w(81, op1.0))
                 }
+                BcIr::Break(reg) => {
+                    let op1 = self.get_index(reg);
+                    Bc::from(enc_w(82, op1.0))
+                }
                 BcIr::Array(ret, src, len) => {
                     let op1 = self.get_index(ret);
                     let op2 = self.get_index(src);

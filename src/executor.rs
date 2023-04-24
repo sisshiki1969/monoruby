@@ -768,10 +768,10 @@ impl BcPc {
                 )
             }
             TraceIr::LoadGvar { dst: ret, name } => {
-                format!("{:?} = ${name}", ret)
+                format!("{:?} = {name}", ret)
             }
             TraceIr::StoreGvar { src, name } => {
-                format!("${name} = {:?}", src)
+                format!("{name} = {:?}", src)
             }
             TraceIr::LoadSvar { dst: ret, id } => {
                 // 0 => $&
@@ -890,6 +890,7 @@ impl BcPc {
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
+            TraceIr::Break(reg) => format!("break {:?}", reg),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
                 ret,

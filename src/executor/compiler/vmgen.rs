@@ -170,6 +170,48 @@ impl Codegen {
             ret;
         };
 
+        //BcOp::MethodRet
+        let method_ret = self.jit.get_current_address();
+        let cont1 = self.jit.label();
+        let cont2 = self.jit.label();
+        let loop1 = self.jit.label();
+        let loop2 = self.jit.label();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            subq r14, (LBP_OUTER);  // r14 <- dfp
+        loop1:
+            //cmpq [r14], 0;
+            //je   cont1;
+            movq r14, [r14];
+            movq r14, [r14];
+            //jp   loop1;
+        cont1:
+            addq r14, (LBP_OUTER);  // r14 <- outermost lfp
+            movq rax, [rbx];        // rdi <- cfp
+        loop2:
+            cmpq [rax - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
+            je   cont2;
+            movq rax, [rax];
+            jp   loop2;
+        cont2:
+            lea  rbp, [rax + (BP_PREV_CFP)];
+            movq rax, [r15];
+            leave;
+            ret;
+        };
+
+        //BcOp::Break
+        let block_break = self.jit.get_current_address();
+        self.vm_get_addr_r15();
+        monoasm! { self.jit,
+            movq rax, [rbx];
+            movq rax, [rax];    // rax <- caller's cfp
+            lea  rbp, [rax + (BP_PREV_CFP)];
+            movq rax, [r15];
+            leave;
+            ret;
+        };
+
         //BcOp::Mov
         let mov = self.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -235,6 +277,8 @@ impl Codegen {
         self.dispatch[67] = self.vm_defined_gvar();
         self.dispatch[68] = self.vm_defined_ivar();
         self.dispatch[80] = ret;
+        self.dispatch[81] = method_ret;
+        self.dispatch[82] = block_break;
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
