@@ -180,11 +180,10 @@ impl Codegen {
         monoasm! { self.jit,
             subq r14, (LBP_OUTER);  // r14 <- dfp
         loop1:
-            //cmpq [r14], 0;
-            //je   cont1;
+            cmpq [r14], 0;
+            je   cont1;
             movq r14, [r14];
-            movq r14, [r14];
-            //jp   loop1;
+            jmp   loop1;
         cont1:
             addq r14, (LBP_OUTER);  // r14 <- outermost lfp
             movq rax, [rbx];        // rdi <- cfp
@@ -192,9 +191,17 @@ impl Codegen {
             cmpq [rax - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
             je   cont2;
             movq rax, [rax];
-            jp   loop2;
+            jmp   loop2;
         cont2:
             lea  rbp, [rax + (BP_PREV_CFP)];
+            movq [rbx], rax;
+            //movq rdi, r14;
+            //movq rax, (runtime::_dump_reg);
+            //call rax;
+            //movq rdi, rbx;
+            //movq rsi, r12;
+            //movq rax, (runtime::_dump_stacktrace);
+            //call rax;
             movq rax, [r15];
             leave;
             ret;

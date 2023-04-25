@@ -727,6 +727,10 @@ pub(super) extern "C" fn handle_error(
     None
 }
 
+pub extern "C" fn _dump_reg(reg: u64) {
+    eprintln!("{:016x}", reg);
+}
+
 pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {
     let mut cfp = vm.cfp();
     eprintln!("-----begin stacktrace");

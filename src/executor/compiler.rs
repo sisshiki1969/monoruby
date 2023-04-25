@@ -391,7 +391,7 @@ impl Codegen {
     /// Set outer.
     ///
     /// ### in
-    /// - rax: outer_cfp
+    /// - rax: outer_lfp
     ///
     /// ### destroy
     /// - rsi
