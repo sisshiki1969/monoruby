@@ -522,6 +522,49 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Gen code for break in block.
+    ///
+    /// rbp <- bp for a context which called the block.
+    ///
+    fn block_break(&mut self) {
+        monoasm! { self.jit,
+            movq rax, [rbx];
+            movq rax, [rax];    // rax <- caller's cfp
+            lea  rbp, [rax + (BP_PREV_CFP)];
+        };
+    }
+
+    ///
+    /// Gen code for return in block.
+    ///
+    /// rbp <- bp for a method which the block belongs to.
+    ///
+    fn method_return(&mut self) {
+        let cont1 = self.jit.label();
+        let cont2 = self.jit.label();
+        let loop1 = self.jit.label();
+        let loop2 = self.jit.label();
+        monoasm! { self.jit,
+            subq r14, (LBP_OUTER);  // r14 <- dfp
+        loop1:
+            cmpq [r14], 0;
+            je   cont1;
+            movq r14, [r14];
+            jmp   loop1;
+        cont1:
+            addq r14, (LBP_OUTER);  // r14 <- outermost lfp
+            movq rax, [rbx];        // rdi <- cfp
+        loop2:
+            cmpq [rax - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
+            je   cont2;
+            movq rax, [rax];
+            jmp   loop2;
+        cont2:
+            lea  rbp, [rax + (BP_PREV_CFP)];
+        };
+    }
+
     /// Check whether *rdi*(Value) is true or not, and store boolean result (Value) to *rax*.
     ///
     /// #### destoroy

@@ -172,29 +172,10 @@ impl Codegen {
 
         //BcOp::MethodRet
         let method_ret = self.jit.get_current_address();
-        let cont1 = self.jit.label();
-        let cont2 = self.jit.label();
-        let loop1 = self.jit.label();
-        let loop2 = self.jit.label();
         self.vm_get_addr_r15();
+        self.method_return();
         monoasm! { self.jit,
-            subq r14, (LBP_OUTER);  // r14 <- dfp
-        loop1:
-            cmpq [r14], 0;
-            je   cont1;
-            movq r14, [r14];
-            jmp   loop1;
-        cont1:
-            addq r14, (LBP_OUTER);  // r14 <- outermost lfp
-            movq rax, [rbx];        // rdi <- cfp
-        loop2:
-            cmpq [rax - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
-            je   cont2;
-            movq rax, [rax];
-            jmp   loop2;
-        cont2:
-            lea  rbp, [rax + (BP_PREV_CFP)];
-            movq [rbx], rax;
+            //movq [rbx], rax;
             //movq rdi, r14;
             //movq rax, (runtime::_dump_reg);
             //call rax;
@@ -210,10 +191,8 @@ impl Codegen {
         //BcOp::Break
         let block_break = self.jit.get_current_address();
         self.vm_get_addr_r15();
+        self.block_break();
         monoasm! { self.jit,
-            movq rax, [rbx];
-            movq rax, [rax];    // rax <- caller's cfp
-            lea  rbp, [rax + (BP_PREV_CFP)];
             movq rax, [r15];
             leave;
             ret;
