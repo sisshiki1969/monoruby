@@ -522,6 +522,13 @@ impl Codegen {
         );
     }
 
+    fn epilogue(&mut self) {
+        monoasm!(self.jit,
+            leave;
+            ret;
+        );
+    }
+
     ///
     /// Gen code for break in block.
     ///

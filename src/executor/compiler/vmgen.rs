@@ -166,9 +166,8 @@ impl Codegen {
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rax, [r15];
-            leave;
-            ret;
         };
+        self.epilogue();
 
         //BcOp::MethodRet
         let method_ret = self.jit.get_current_address();
@@ -184,9 +183,8 @@ impl Codegen {
             //movq rax, (runtime::_dump_stacktrace);
             //call rax;
             movq rax, [r15];
-            leave;
-            ret;
         };
+        self.epilogue();
 
         //BcOp::Break
         let block_break = self.jit.get_current_address();
@@ -194,9 +192,8 @@ impl Codegen {
         self.block_break();
         monoasm! { self.jit,
             movq rax, [r15];
-            leave;
-            ret;
         };
+        self.epilogue();
 
         //BcOp::Mov
         let mov = self.jit.get_current_address();

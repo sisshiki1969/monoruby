@@ -1510,23 +1510,26 @@ impl Codegen {
                 }
                 TraceIr::Ret(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
+                    self.gen_write_back_locals(&mut ctx);
                     self.load_rax(lhs);
                     self.epilogue();
                     return false;
                 }
-                TraceIr::MethodRet(_lhs) => {
-                    unimplemented!();
-                    //self.write_back_slot(&mut ctx, lhs);
-                    //self.load_rax(lhs);
-                    //self.epilogue();
-                    //return false;
+                TraceIr::MethodRet(lhs) => {
+                    self.write_back_slot(&mut ctx, lhs);
+                    self.gen_write_back_locals(&mut ctx);
+                    self.method_return();
+                    self.load_rax(lhs);
+                    self.epilogue();
+                    return false;
                 }
-                TraceIr::Break(_lhs) => {
-                    unimplemented!();
-                    //self.write_back_slot(&mut ctx, lhs);
-                    //self.load_rax(lhs);
-                    //self.epilogue();
-                    //return false;
+                TraceIr::Break(lhs) => {
+                    self.write_back_slot(&mut ctx, lhs);
+                    self.gen_write_back_locals(&mut ctx);
+                    self.block_break();
+                    self.load_rax(lhs);
+                    self.epilogue();
+                    return false;
                 }
                 TraceIr::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;
@@ -1748,13 +1751,6 @@ impl Codegen {
         let fallback = self.gen_side_deopt(pc, ctx);
         monoasm!(self.jit,
             jmp fallback;
-        );
-    }
-
-    fn epilogue(&mut self) {
-        monoasm!(self.jit,
-            leave;
-            ret;
         );
     }
 
