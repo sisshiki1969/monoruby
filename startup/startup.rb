@@ -45,3 +45,8 @@ class Symbol
     self.to_s.match(other)
   end
 end
+
+class Object
+  def raise
+  end
+end

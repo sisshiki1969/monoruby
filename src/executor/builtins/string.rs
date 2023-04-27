@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "==", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
+    globals.define_builtin_func(STRING_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "[]", index, -1);
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
@@ -94,6 +95,28 @@ fn eq(
         None => false,
     };
     Ok(Value::bool(b))
+}
+
+///
+/// ### String#!=
+///
+/// - self != other -> bool
+///
+/// []
+fn ne(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let lhs = self_.as_str();
+    let b = match arg[0].is_string() {
+        Some(rhs) => rhs == lhs,
+        None => false,
+    };
+    Ok(Value::bool(!b))
 }
 
 fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
