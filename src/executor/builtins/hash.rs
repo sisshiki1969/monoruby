@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
+    globals.define_builtin_func(HASH_CLASS, "each", each, 0);
     globals.define_builtin_func(HASH_CLASS, "has_key?", include, 1);
     globals.define_builtin_func(HASH_CLASS, "include?", include, 1);
     globals.define_builtin_func(HASH_CLASS, "key?", include, 1);
@@ -148,6 +149,7 @@ fn keys(
     Ok(Value::new_array_from_vec(keys))
 }
 
+///
 /// ### Hash#values
 /// - values -> [object]
 ///
@@ -161,6 +163,34 @@ fn values(
 ) -> Result<Value> {
     let keys = lfp.self_val().as_hash().values();
     Ok(Value::new_array_from_vec(keys))
+}
+
+///
+/// ### Hash#each
+///
+/// - each {|key, value| ... } -> self
+/// - each_pair {|key, value| ... } -> self
+/// - [NOT SUPPORTED] each -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each.html]
+fn each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let ary = lfp.self_val();
+    let block_handler = if let Some(block) = lfp.block() {
+        block
+    } else {
+        return Err(MonorubyErr::no_block_given());
+    };
+    let data = vm.get_block_data(globals, block_handler);
+    for (k, v) in ary.as_hash().iter() {
+        vm.invoke_block(globals, data.clone(), &[k, v])?;
+    }
+    Ok(lfp.self_val())
 }
 
 /// ### Hash#has_key?
@@ -290,6 +320,30 @@ mod test {
         );
         run_test("{}");
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
+    }
+
+    #[test]
+    fn each() {
+        run_test(
+            r##"
+        a = []
+        {:a=>1, :b=>2, :c=>3}.each {|k, v|
+            a << k
+            a << v
+        }
+        a
+        "##,
+        );
+    }
+
+    #[test]
+    fn to_h() {
+        run_test(
+            r##"
+        hash = { "a" => 97, "b" => 98 }
+        hash.to_h {|key, value| [key.upcase, value - 32] } # => {"A"=>65, "B"=>66}
+        "##,
+        );
     }
 
     #[test]

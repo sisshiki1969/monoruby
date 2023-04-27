@@ -29,6 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "lines", lines, -0);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(STRING_CLASS, "to_i", to_i, -1);
+    globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
 }
 
 ///
@@ -984,6 +985,24 @@ fn to_i(
     Ok(num)
 }
 
+///
+/// ### String#upcase
+///
+/// - upcase(*options) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
+fn upcase(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let s = self_val.as_str().as_ref().to_uppercase();
+    Ok(Value::new_string_from_vec(s.into_bytes()))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -1227,5 +1246,10 @@ mod test {
         run_test(r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)");
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
+    }
+
+    #[test]
+    fn upcase() {
+        run_test(r"'AkrFju35]['.upcase");
     }
 }

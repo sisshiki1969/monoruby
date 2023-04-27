@@ -23,3 +23,19 @@ class Process
     attr_accessor :utime, :stime, :cutime, :cstime
   end
 end
+
+class Hash
+  # Hash#to_h
+  # to_h -> self
+  # to_h {|key, value| block } -> Hash
+  def to_h
+    h = {}
+    self.each {|k, v|
+      new_kv = yield k, v
+      new_k = new_kv[0]
+      new_v = new_kv[1]
+      h[new_k] = new_v
+    }
+    h
+  end
+end

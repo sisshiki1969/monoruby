@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(MODULE_CLASS, "private", private, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "protected", protected, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "public", public, -1);
+    globals.define_private_builtin_func(MODULE_CLASS, "alias_method", alias_method, 2);
 }
 
 /// ### Module#==
@@ -306,6 +307,24 @@ fn change_visi(
     Ok(res)
 }
 
+/// ### Module#alias_method
+/// - alias_method(new, original) -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
+fn alias_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class().class_id();
+    let new_name = arg[0].expect_symbol_or_string(globals)?;
+    let old_name = arg[1].expect_symbol_or_string(globals)?;
+    globals.alias_method_for_class(class_id, new_name, old_name)?;
+    Ok(Value::new_symbol(new_name))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -519,6 +538,18 @@ mod test {
               public :f
             end
         "#,
+        );
+    }
+
+    #[test]
+    fn alias_method() {
+        run_test_once(
+            r#"
+            class String
+              alias_method :foo, :upcase
+            end
+            "abdG&0[]nim".foo
+            "#,
         );
     }
 }
