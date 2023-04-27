@@ -1518,16 +1518,16 @@ impl Codegen {
                 TraceIr::MethodRet(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
                     self.gen_write_back_locals(&mut ctx);
-                    self.method_return();
                     self.load_rax(lhs);
+                    self.method_return();
                     self.epilogue();
                     return false;
                 }
                 TraceIr::Break(lhs) => {
                     self.write_back_slot(&mut ctx, lhs);
                     self.gen_write_back_locals(&mut ctx);
-                    self.block_break();
                     self.load_rax(lhs);
+                    self.block_break();
                     self.epilogue();
                     return false;
                 }

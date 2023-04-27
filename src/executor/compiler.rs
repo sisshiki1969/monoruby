@@ -536,9 +536,9 @@ impl Codegen {
     ///
     fn block_break(&mut self) {
         monoasm! { self.jit,
-            movq rax, [rbx];
-            movq rax, [rax];    // rax <- caller's cfp
-            lea  rbp, [rax + (BP_PREV_CFP)];
+            movq rdi, [rbx];
+            movq rdi, [rdi];    // rdi <- caller's cfp
+            lea  rbp, [rdi + (BP_PREV_CFP)];
         };
     }
 
@@ -561,14 +561,14 @@ impl Codegen {
             jmp   loop1;
         cont1:
             addq r14, (LBP_OUTER);  // r14 <- outermost lfp
-            movq rax, [rbx];        // rdi <- cfp
+            movq rdi, [rbx];        // rdi <- cfp
         loop2:
-            cmpq [rax - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
+            cmpq [rdi - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
             je   cont2;
-            movq rax, [rax];
+            movq rdi, [rdi];
             jmp   loop2;
         cont2:
-            lea  rbp, [rax + (BP_PREV_CFP)];
+            lea  rbp, [rdi + (BP_PREV_CFP)];
         };
     }
 

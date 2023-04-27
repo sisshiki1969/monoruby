@@ -447,82 +447,62 @@ impl Codegen {
         pc: BcPc,
     ) {
         // rdi : receiver(self)
-        //
-        //       +-------------+
-        //  0x00 |             | <- rsp
-        //       +-------------+-----------------
-        // -0x08 |  prev rbp   |
-        //       +-------------+
-        // -0x10 |  prev cfp   |  control frame
-        //       +-------------+
-        // -0x18 |     lfp     |
-        //       +-------------+-----------------
-        // -0x20 |    outer    |
-        //       +-------------+
-        // -0x28 |    meta     |
-        //       +-------------+
-        // -0x30 |    block    |
-        //       +-------------+
-        // -0x38 |    self     |  local frame
-        //       +-------------+
-        // -0x40 |    arg0     |
-        //       +-------------+
-        // -0xy0 |             | <- rsp
-        //
         let MethodInfo { args, len, .. } = method_info;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rax, (Meta::native(func_id, 0 /* for GC */ as _).get());
-            movq [rsp - (8 + LBP_META)], rax;
-            movq [rsp - (8 + LBP_SELF)], rdi;  // self: Value
-            movq [rsp - (8 + LBP_OUTER)], 0;
+            movq [rsp - (16 + LBP_META)], rax;
+            movq [rsp - (16 + LBP_SELF)], rdi;  // self: Value
+            movq [rsp - (16 + LBP_OUTER)], 0;
         );
         match block {
             Some(block) => {
                 monoasm!(self.jit,
                     movq rax, [r14 - (conv(block))];
-                    movq [rsp - (8 + LBP_BLOCK)], rax;
+                    movq [rsp - (16 + LBP_BLOCK)], rax;
                 );
             }
             None => {
                 monoasm!(self.jit,
-                    movq [rsp - (8 + LBP_BLOCK)], 0;
+                    movq [rsp - (16 + LBP_BLOCK)], 0;
                 );
             }
         }
         monoasm!(self.jit,
             lea  rcx, [r14 - (conv(args))];  // args: *const Value
-            movq r8, (len); // len
         );
         let stack_offset = (LBP_SELF + 31) & !0xf;
+        let entry = self.jit.label();
+        self.push_frame();
         monoasm!(self.jit,
-            // push cfp
-            lea  rdi, [rsp - (8 + BP_PREV_CFP)];
-            movq rax, [rbx];
-            movq [rdi], rax;
-            movq [rbx], rdi;
             // set lfp
-            lea  rdx, [rsp - 8];
-            movq [rsp - (8 + BP_LFP)], rdx;
-            subq rsp, (stack_offset);
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq r9, (abs_address);
-            movq rax, (crate::executor::compiler::wrapper::wrapper);
-            call rax;
-            addq rsp, (stack_offset);
+            lea  rdx, [rsp - 16];
+            movq [rsp - (16 + BP_LFP)], rdx;
+            call entry;
         );
-        monoasm!(self.jit,
-            // pop cfp
-            lea  rdi, [rbp - (BP_PREV_CFP)];
-            movq [rbx], rdi;
-        );
+        self.pop_frame();
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {
             self.store_rax(ret);
         }
+        self.jit.select_page(1);
+        monoasm!(self.jit,
+        entry:
+            pushq rbp;
+            subq rsp, (stack_offset);
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq r8, (len); // len
+            movq r9, (abs_address);
+            movq rax, (crate::executor::compiler::wrapper::wrapper);
+            call rax;
+            addq rsp, (stack_offset);
+            popq rbp;
+            ret;
+        );
+        self.jit.select_page(0);
     }
 
     fn method_call_cached(

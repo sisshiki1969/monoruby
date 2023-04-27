@@ -1004,10 +1004,6 @@ impl TraceIr {
     pub(crate) fn is_terminal(pc: BcPc) -> bool {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
-        if opcode & 0x80 == 0 {
-            opcode == 3 // Br
-        } else {
-            opcode == 80 || opcode == 81 || opcode == 82 // Ret or MethodRet
-        }
+        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 // Br or Ret or MethodRet
     }
 }

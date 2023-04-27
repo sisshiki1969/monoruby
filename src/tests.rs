@@ -2268,56 +2268,64 @@ mod test {
 
     #[test]
     fn method_return() {
-        run_test_once(
+        run_test_with_prelude(
             r#"
             $res = [] 
-            def f
-                2.times { |x|
-                    2.times { |y|
-                        $res << [x,y]
-                        return x,y if x+y==1
-                    }
-                    $res << 10
-                }
-                $res << 20
-                nil
-            end
             [f, $res]
+            "#,
+            r#"
+            def f
+                7.times {
+                    9.times { |x|
+                        9.times { |y|
+                            $res << x+y
+                            return x,y if x+y==11
+                        }
+                        $res << 10
+                    }
+                    $res << 20
+                }
+                $res << 30
+            end
             "#,
         )
     }
 
     #[test]
     fn block_break() {
-        run_test_once(
+        run_test_with_prelude(
             r#"
-            $res = [] 
+            $res = []
+            f
+            $res
+            "#,
+            r#"
             def f
-                2.times { |x|
-                    2.times { |y|
-                        $res << [x,y]
-                        break x,y if x+y==1
+                7.times { |x|
+                    $res << 7.times { |y|
+                        $res << x+y
+                        break x,y if x+y>=5
                     }
-                    $res << 10
+                    $res << 100
                 }
-                $res << 20
-                nil
+                $res << 200
             end
-            [f, $res]
             "#,
         );
-        run_test_once(
+        run_test_with_prelude(
             r#"
-            $res = [] 
+            $res = []
+            f
+            $res
+            "#,
+            r#"
             def f
-                3.times { |x|
+                $res << 12.times { |x|
                     $res << x
-                    break x if x==1
+                    break x if x==9
                 }
-                $res << 10
-                nil
+                $res << 100
             end
-            [f, $res]
             "#,
         );
     }

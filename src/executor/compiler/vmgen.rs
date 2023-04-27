@@ -171,27 +171,19 @@ impl Codegen {
 
         //BcOp::MethodRet
         let method_ret = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         self.method_return();
         monoasm! { self.jit,
-            //movq [rbx], rax;
-            //movq rdi, r14;
-            //movq rax, (runtime::_dump_reg);
-            //call rax;
-            //movq rdi, rbx;
-            //movq rsi, r12;
-            //movq rax, (runtime::_dump_stacktrace);
-            //call rax;
-            movq rax, [r15];
+            movq rax, r15;
         };
         self.epilogue();
 
         //BcOp::Break
         let block_break = self.jit.get_current_address();
-        self.vm_get_addr_r15();
+        self.vm_get_r15();
         self.block_break();
         monoasm! { self.jit,
-            movq rax, [r15];
+            movq rax, r15;
         };
         self.epilogue();
 

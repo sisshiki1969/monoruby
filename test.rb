@@ -1,8 +1,8 @@
 $res = []
 def f
-  3.times { |x|
+  10.times { |x|
       $res << x
-      return x if x == 2
+      return x if x == 8
   }
   $res << 20
   nil
