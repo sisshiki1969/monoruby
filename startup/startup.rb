@@ -39,3 +39,9 @@ class Hash
     h
   end
 end
+
+class Symbol
+  def match(other)
+    self.to_s.match(other)
+  end
+end
