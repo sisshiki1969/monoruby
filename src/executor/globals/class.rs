@@ -268,7 +268,7 @@ impl Globals {
 
     pub(crate) fn include_module(&mut self, mut class: Module, module: Module) {
         let module = module.make_iclass(class.superclass());
-        class.change_superclass(Some(module));
+        class.change_superclass(module);
     }
 
     ///
@@ -359,6 +359,23 @@ impl Globals {
                 Ok(entry.func_id())
             }
             None => Err(MonorubyErr::method_not_found(self, func_name, recv)),
+        }
+    }
+
+    ///
+    /// Check whether public/protected method *name* is defined for *class_id* or its superclasses.
+    ///
+    pub(in crate::executor) fn method_defined(
+        &mut self,
+        class_id: ClassId,
+        func_name: IdentId,
+    ) -> bool {
+        match self.check_method_for_class(class_id, func_name) {
+            Some(entry) => match entry.visibility {
+                Visibility::Private => false,
+                _ => true,
+            },
+            None => false,
         }
     }
 

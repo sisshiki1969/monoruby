@@ -36,9 +36,15 @@ fn write(
             ));
         }
     };
-    let mut file = File::create(name).unwrap();
+    let mut file = match File::create(&name) {
+        Ok(file) => file,
+        Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
+    };
     let bytes = arg[1].to_s(globals).into_bytes();
-    file.write_all(&bytes).unwrap();
+    match file.write_all(&bytes) {
+        Ok(_) => {}
+        Err(err) => return Err(MonorubyErr::runtimeerr(err.to_string())),
+    };
     Ok(Value::new_integer(bytes.len() as i64))
 }
 

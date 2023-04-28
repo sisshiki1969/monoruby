@@ -40,6 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "block_given?", block_given, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
@@ -168,6 +169,22 @@ fn print(
         globals.write_stdout(&v.to_bytes(globals));
     }
     Ok(Value::nil())
+}
+
+///
+/// ### Kernel.#block_given?
+///
+/// - block_given? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
+fn block_given(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
 }
 
 ///
@@ -627,6 +644,24 @@ mod test {
         run_test2("nil.inspect");
         run_test2("Time.singleton_class.to_s");
         run_test2(r#"File.write("/tmp/foo", "woo")"#);
+    }
+
+    #[test]
+    fn block_given() {
+        run_test_with_prelude(
+            r##"
+            [check, check {}]
+        "##,
+            r##"
+        def check
+            if block_given?
+                "Block is given."
+            else
+                "Block isn't given."
+            end
+        end
+        "##,
+        );
     }
 
     #[test]

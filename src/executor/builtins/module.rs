@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
     globals.define_builtin_func(MODULE_CLASS, "attr_accessor", attr_accessor, -1);
     globals.define_builtin_func(MODULE_CLASS, "include", include, -1);
+    globals.define_builtin_func(MODULE_CLASS, "method_defined?", method_defined, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "module_function", module_function, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "private", private, -1);
     globals.define_private_builtin_func(MODULE_CLASS, "protected", protected, -1);
@@ -305,6 +306,22 @@ fn change_visi(
     globals.change_method_visibility_for_class(class_id, &names, visi);
     let res = Value::new_array_from_iter(arg.iter(len));
     Ok(res)
+}
+
+/// ### Module#method_defined?
+/// - method_defined?(name, inherit=true) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
+fn method_defined(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class().class_id();
+    let func_name = arg[0].expect_symbol_or_string(globals)?;
+    Ok(Value::bool(globals.method_defined(class_id, func_name)))
 }
 
 /// ### Module#alias_method

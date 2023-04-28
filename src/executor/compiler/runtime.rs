@@ -649,7 +649,7 @@ pub(super) extern "C" fn defined_method(
 }
 
 pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals, reg: *mut Value) {
-    if vm.cfp().outermost_lfp().block().is_none() {
+    if !vm.cfp().block_given() {
         unsafe { *reg = Value::nil() }
     }
 }

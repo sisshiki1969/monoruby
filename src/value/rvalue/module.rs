@@ -60,7 +60,7 @@ impl Module {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ModuleType {
     RealClass,
     Singleton(Value),
@@ -101,8 +101,8 @@ impl ModuleInner {
         self.superclass.map(|m| m.class_id())
     }
 
-    pub fn change_superclass(&mut self, superclass: Option<Module>) {
-        self.superclass = superclass;
+    pub fn change_superclass(&mut self, superclass: Module) {
+        self.superclass = Some(superclass);
     }
 
     pub fn class_type(&self) -> ModuleType {

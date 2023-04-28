@@ -704,7 +704,7 @@ impl RValue {
     /// Pack `self` into `Value`(64-bit data representation).
     ///
     /// This method consumes `self` and allocates it on the heap, returning `Value`,
-    /// a wrapped raw pointer.  
+    /// a wrapped raw pointer.
     pub(crate) fn pack(self) -> Value {
         let ptr = alloc::ALLOC.with(|alloc| alloc.borrow_mut().alloc(self));
         Value::from_ptr(ptr)
