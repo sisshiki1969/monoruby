@@ -468,8 +468,8 @@ fn kernel_integer(
     ))
 }
 
-fn load(vm: &mut Executor, globals: &mut Globals, path: std::path::PathBuf) -> Result<Value> {
-    if let Some(file_body) = globals.load_lib(&path)? {
+fn load(vm: &mut Executor, globals: &mut Globals, file_name: std::path::PathBuf) -> Result<Value> {
+    if let Some((file_body, path)) = globals.load_lib(&file_name)? {
         vm.eval_script(globals, file_body, &path)?;
         Ok(Value::bool(true))
     } else {
@@ -491,8 +491,8 @@ fn require(
     _: usize,
 ) -> Result<Value> {
     let feature = arg[0].expect_string(globals)?;
-    let path = std::path::PathBuf::from(feature);
-    load(vm, globals, path)
+    let file_name = std::path::PathBuf::from(feature);
+    load(vm, globals, file_name)
 }
 
 ///
@@ -508,12 +508,12 @@ fn require_relative(
     arg: Arg,
     _: usize,
 ) -> Result<Value> {
-    let mut path = globals.current_source_path(vm);
-    path.pop();
+    let mut file_name = globals.current_source_path(vm);
+    file_name.pop();
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
-    path.extend(&feature);
-    path.set_extension("rb");
-    load(vm, globals, path)
+    file_name.extend(&feature);
+    file_name.set_extension("rb");
+    load(vm, globals, file_name)
 }
 
 fn prepare_command_arg(input: String) -> (String, Vec<String>) {

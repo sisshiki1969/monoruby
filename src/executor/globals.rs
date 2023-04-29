@@ -198,23 +198,26 @@ impl Globals {
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 
-    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Result<Option<String>> {
-        if !self.loaded_features.insert(path.to_path_buf()) {
-            return Ok(None);
-        }
+    pub(crate) fn load_lib(
+        &mut self,
+        file_name: &std::path::Path,
+    ) -> Result<Option<(String, std::path::PathBuf)>> {
         for lib in self.lib_directories.clone() {
             let mut lib = std::path::PathBuf::from(lib);
-            lib.push(path);
+            lib.push(file_name);
             lib.set_extension("rb");
             if lib.exists() {
-                return self.load_file(&lib);
+                if !self.loaded_features.insert(lib.clone()) {
+                    return Ok(None);
+                }
+                return self.load_file(lib);
             }
             lib.set_extension("so");
             if lib.exists() {
                 eprintln!("Warning: currently, can not require .so file. {:?}", lib);
             }
         }
-        Err(MonorubyErr::cant_load(None, path))
+        Err(MonorubyErr::cant_load(None, file_name))
     }
 
     /// ## ABI of JIT-compiled code.
@@ -264,16 +267,19 @@ impl Globals {
         unsafe { *self.codegen.class_version_addr }
     }
 
-    fn load_file(&mut self, path: &std::path::Path) -> Result<Option<String>> {
+    fn load_file(
+        &mut self,
+        path: std::path::PathBuf,
+    ) -> Result<Option<(String, std::path::PathBuf)>> {
         let mut file_body = String::new();
-        let err = match std::fs::OpenOptions::new().read(true).open(path) {
+        let err = match std::fs::OpenOptions::new().read(true).open(&path) {
             Ok(mut file) => match file.read_to_string(&mut file_body) {
-                Ok(_) => return Ok(Some(file_body)),
+                Ok(_) => return Ok(Some((file_body, path))),
                 Err(err) => err,
             },
             Err(err) => err,
         };
-        Err(MonorubyErr::cant_load(Some(err), path))
+        Err(MonorubyErr::cant_load(Some(err), &path))
     }
 }
 
