@@ -672,11 +672,11 @@ impl FuncInfo {
             "{:?}",
             info.exception_map
                 .iter()
-                .map(|(range, dest, _, _)| {
+                .map(|(range, dest, err_reg, ex)| {
                     let start = info.get_pc_index(Some(range.start));
                     let end = info.get_pc_index(Some(range.end));
                     let dest = info.get_pc_index(Some(*dest));
-                    (start..end, dest)
+                    (start..end, dest, err_reg, ex)
                 })
                 .collect::<Vec<_>>()
         );

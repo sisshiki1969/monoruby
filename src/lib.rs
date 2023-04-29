@@ -16,8 +16,9 @@ mod value;
 // use alloc::*;
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
-use id_table::*;
+use fxhash::FxHashSet as HashSet;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
+use id_table::*;
 use value::*;
 
 pub use value::rvalue::RegexpInner;

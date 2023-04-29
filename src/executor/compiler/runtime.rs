@@ -701,11 +701,12 @@ pub(super) extern "C" fn handle_error(
                     let ex_slot = ex_slot.0 as usize;
                     for slot in ex_slot..(ex_slot + len) {
                         let v = unsafe { lfp.register(slot) };
-                        if let Err(mut err) = v.expect_class_or_module_rescue() {
+                        dbg!(v);
+                        /*if let Err(mut err) = v.expect_class_or_module_rescue() {
                             err.loc.push(loc);
                             globals.set_error(err);
                             return None;
-                        }
+                        }*/
                     }
                 }
                 let err = globals.take_error().unwrap();

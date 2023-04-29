@@ -70,6 +70,7 @@ pub struct Globals {
     pub lib_directories: Vec<String>,
     /// standard PRNG
     pub random: Prng,
+    loaded_features: HashSet<PathBuf>,
     #[cfg(feature = "log-jit")]
     /// stats for deoptimization
     pub(crate) deopt_stats: HashMap<(FuncId, usize), usize>,
@@ -118,6 +119,7 @@ impl Globals {
             stdout: BufWriter::new(stdout()),
             lib_directories: vec![],
             random: Prng::new(),
+            loaded_features: HashSet::default(),
             #[cfg(feature = "log-jit")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "log-jit")]
@@ -196,11 +198,13 @@ impl Globals {
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 
-    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Result<(String, PathBuf)> {
+    pub(crate) fn load_lib(&mut self, path: &std::path::Path) -> Result<Option<String>> {
+        if !self.loaded_features.insert(path.to_path_buf()) {
+            return Ok(None);
+        }
         for lib in self.lib_directories.clone() {
             let mut lib = std::path::PathBuf::from(lib);
             lib.push(path);
-            //if lib.is_absolute() {
             lib.set_extension("rb");
             if lib.exists() {
                 return self.load_file(&lib);
@@ -209,7 +213,6 @@ impl Globals {
             if lib.exists() {
                 eprintln!("Warning: currently, can not require .so file. {:?}", lib);
             }
-            //}
         }
         Err(MonorubyErr::cant_load(None, path))
     }
@@ -261,11 +264,11 @@ impl Globals {
         unsafe { *self.codegen.class_version_addr }
     }
 
-    fn load_file(&mut self, path: &std::path::Path) -> Result<(String, PathBuf)> {
+    fn load_file(&mut self, path: &std::path::Path) -> Result<Option<String>> {
         let mut file_body = String::new();
         let err = match std::fs::OpenOptions::new().read(true).open(path) {
             Ok(mut file) => match file.read_to_string(&mut file_body) {
-                Ok(_) => return Ok((file_body, path.into())),
+                Ok(_) => return Ok(Some(file_body)),
                 Err(err) => err,
             },
             Err(err) => err,

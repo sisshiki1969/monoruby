@@ -57,3 +57,12 @@ class Module
   def private_constant(*x)
   end
 end
+
+class ScriptError < Exception
+end
+
+class LoadError < ScriptError
+end
+
+class StandardError < Exception
+end
