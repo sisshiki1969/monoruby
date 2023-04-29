@@ -72,7 +72,7 @@ fn allocate(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let obj = Value::new_object(class_id);
     Ok(obj)
 }

@@ -482,7 +482,7 @@ impl Executor {
                 globals.define_class(name, Some(superclass), parent, is_module == 1)
             }
         };
-        self.push_class_context(self_val.class_id());
+        self.push_class_context(self_val.id());
         Ok(self_val.as_val())
     }
 }

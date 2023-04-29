@@ -37,7 +37,7 @@ fn eq(
         Some(class) => class,
         None => return Ok(Value::bool(false)),
     };
-    let lhs = lfp.self_val().as_class().class_id();
+    let lhs = lfp.self_val().as_class_id();
     Ok(Value::bool(lhs == rhs))
 }
 
@@ -52,7 +52,7 @@ fn teq(
     arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class().class_id();
+    let class = lfp.self_val().as_class_id();
     Ok(Value::bool(arg[0].is_kind_of(globals, class)))
 }
 
@@ -67,7 +67,7 @@ fn tos(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class_name = lfp.self_val().as_class().class_id().get_name(globals);
+    let class_name = lfp.self_val().as_class_id().get_name(globals);
     let res = Value::new_string(class_name);
     Ok(res)
 }
@@ -83,7 +83,7 @@ fn constants(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let iter = globals
         .get_constant_names(class_id)
         .into_iter()
@@ -106,7 +106,7 @@ fn instance_methods(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let iter = globals
         .get_method_names(class_id)
         .into_iter()
@@ -126,7 +126,7 @@ fn attr_reader(
     len: usize,
 ) -> Result<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -148,7 +148,7 @@ fn attr_writer(
     len: usize,
 ) -> Result<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -170,7 +170,7 @@ fn attr_accessor(
     len: usize,
 ) -> Result<Value> {
     let mut ary = ArrayInner::new();
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
@@ -197,7 +197,7 @@ fn module_function(
         vm.set_module_function();
         Ok(Value::nil())
     } else {
-        let class_id = lfp.self_val().as_class().class_id();
+        let class_id = lfp.self_val().as_class_id();
         let visi = vm.context_visibility();
         for v in arg.iter(len) {
             let name = v.expect_symbol_or_string(globals)?;
@@ -289,7 +289,7 @@ fn change_visi(
         vm.set_context_visibility(visi);
         return Ok(Value::nil());
     }
-    let class_id = self_val.as_class().class_id();
+    let class_id = self_val.as_class_id();
     let mut names = vec![];
     if let Some(ary) = arg[0].is_array() {
         if len == 1 {
@@ -317,9 +317,10 @@ fn method_defined(
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class().class_id();
+    Globals::check_number_of_arguments(len, 1..=1)?;
+    let class_id = lfp.self_val().as_class_id();
     let func_name = arg[0].expect_symbol_or_string(globals)?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))
 }
@@ -335,7 +336,7 @@ fn alias_method(
     arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().as_class().class_id();
+    let class_id = lfp.self_val().as_class_id();
     let new_name = arg[0].expect_symbol_or_string(globals)?;
     let old_name = arg[1].expect_symbol_or_string(globals)?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
@@ -568,5 +569,38 @@ mod test {
             "abdG&0[]nim".foo
             "#,
         );
+    }
+
+    #[test]
+    fn method_defined() {
+        run_test_once(
+            r#"
+        module A
+          def method1()  end
+          def protected_method1()  end
+          protected :protected_method1
+        end
+        class B
+          def method2()  end
+          def private_method2()  end
+          private :private_method2
+        end
+        class C < B
+          include A
+          def method3()  end
+        end
+        x = []
+        x << A.method_defined?(:method1)              #=> true
+        x << C.method_defined?("method1")             #=> true
+        x << C.method_defined?("method2")             #=> true
+        # x << C.method_defined? "method2", true      #=> true
+        # x << C.method_defined? "method2", false     #=> false
+        x << C.method_defined?("method3")             #=> true
+        x << C.method_defined?("protected_method1")   #=> true
+        x << C.method_defined?("method4")             #=> false
+        x << C.method_defined?("private_method2")     #=> false
+        x
+        "#,
+        )
     }
 }

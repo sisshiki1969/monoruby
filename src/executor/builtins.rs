@@ -29,106 +29,106 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
         OBJECT_CLASS,
         globals
             .define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS)
-            .class_id()
+            .id()
     );
     let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS);
-    assert_eq!(MODULE_CLASS, module.class_id());
+    assert_eq!(MODULE_CLASS, module.id());
     assert_eq!(
         CLASS_CLASS,
         globals
             .define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         NIL_CLASS,
         globals
             .define_builtin_class_under_obj("NilClass", NIL_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         TRUE_CLASS,
         globals
             .define_builtin_class_under_obj("TrueClass", TRUE_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         FALSE_CLASS,
         globals
             .define_builtin_class_under_obj("FalseClass", FALSE_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         INTEGER_CLASS,
         globals
             .define_builtin_class_under_obj("Integer", INTEGER_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         FLOAT_CLASS,
         globals
             .define_builtin_class_under_obj("Float", FLOAT_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         STRING_CLASS,
         globals
             .define_builtin_class_under_obj("String", STRING_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         SYMBOL_CLASS,
         globals
             .define_builtin_class_under_obj("Symbol", SYMBOL_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         TIME_CLASS,
         globals
             .define_builtin_class_under_obj("Time", TIME_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         ARRAY_CLASS,
         globals
             .define_builtin_class_under_obj("Array", ARRAY_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         RANGE_CLASS,
         globals
             .define_builtin_class_under_obj("Range", RANGE_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         PROC_CLASS,
         globals
             .define_builtin_class_under_obj("Proc", PROC_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         HASH_CLASS,
         globals
             .define_builtin_class_under_obj("Hash", HASH_CLASS)
-            .class_id()
+            .id()
     );
     assert_eq!(
         REGEXP_CLASS,
         globals
             .define_builtin_class_under_obj("Regexp", REGEXP_CLASS)
-            .class_id()
+            .id()
     );
     let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
-    assert_eq!(IO_CLASS, io_class.class_id());
+    assert_eq!(IO_CLASS, io_class.id());
     let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
-    assert_eq!(EXCEPTION_CLASS, exception_class.class_id());
-    let math_class = globals.define_module("Math").class_id();
-    let process_class = globals.define_module("Process").class_id();
+    assert_eq!(EXCEPTION_CLASS, exception_class.id());
+    let math_class = globals.define_module("Math").id();
+    let process_class = globals.define_module("Process").id();
     let file_class = globals
         .define_class_by_str("File", io_class, OBJECT_CLASS)
-        .class_id();
+        .id();
     let random_class = globals
         .define_class_by_str("Random", OBJECT_CLASS.get_obj(globals), OBJECT_CLASS)
-        .class_id();
+        .id();
 
     object::init(globals);
     integer::init(globals);

@@ -62,7 +62,7 @@ fn new(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class().class_id();
+    let class = lfp.self_val().as_class_id();
     let map = IndexMap::default();
     let obj = Value::new_hash_with_class(map, class);
     Ok(obj)

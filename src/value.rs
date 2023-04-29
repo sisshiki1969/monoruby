@@ -118,13 +118,13 @@ impl Value {
     }
 
     pub(crate) fn get_real_class_name(self, globals: &Globals) -> String {
-        self.real_class(globals).class_id().get_name(globals)
+        self.real_class(globals).id().get_name(globals)
     }
 
     pub(crate) fn is_kind_of(self, globals: &Globals, class: ClassId) -> bool {
         let mut obj_class = Some(self.real_class(globals));
         while let Some(obj_class_inner) = obj_class {
-            if obj_class_inner.class_id() == class {
+            if obj_class_inner.id() == class {
                 return true;
             }
             obj_class = obj_class_inner.superclass();
@@ -555,7 +555,7 @@ impl Value {
     pub(crate) fn is_class_or_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
-            ObjKind::CLASS | ObjKind::MODULE => Some(rv.as_class().class_id()),
+            ObjKind::CLASS | ObjKind::MODULE => Some(rv.as_class_id()),
             _ => None,
         }
     }
@@ -563,7 +563,7 @@ impl Value {
     pub(crate) fn is_class(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
-            ObjKind::CLASS => Some(rv.as_class().class_id()),
+            ObjKind::CLASS => Some(rv.as_class_id()),
             _ => None,
         }
     }
@@ -571,7 +571,7 @@ impl Value {
     pub(crate) fn is_module(&self) -> Option<ClassId> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
-            ObjKind::MODULE => Some(rv.as_class().class_id()),
+            ObjKind::MODULE => Some(rv.as_class_id()),
             _ => None,
         }
     }
@@ -582,6 +582,10 @@ impl Value {
             ObjKind::CLASS | ObjKind::MODULE,
         ));
         Module::new(*self)
+    }
+
+    pub(crate) fn as_class_id(&self) -> ClassId {
+        self.as_class().id()
     }
 
     pub(crate) fn as_time(&self) -> &TimeInner {

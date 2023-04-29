@@ -45,7 +45,7 @@ impl Globals {
         let func_id = self.func.add_builtin_func(name.to_string(), address, arity);
         let name_id = IdentId::get_id(name);
         self.add_method(class_id, name_id, func_id, Visibility::Private);
-        let class_id = self.get_metaclass(class_id).class_id();
+        let class_id = self.get_metaclass(class_id).id();
         self.add_method(class_id, name_id, func_id, Visibility::Public);
         func_id
     }
@@ -70,7 +70,7 @@ impl Globals {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
-        let class_id = self.get_metaclass(class_id).class_id();
+        let class_id = self.get_metaclass(class_id).id();
         self.define_builtin_func(class_id, name, address, arity)
     }
 
@@ -81,7 +81,7 @@ impl Globals {
         address: BuiltinFn,
         arity: i32,
     ) -> FuncId {
-        let class_id = self.get_singleton(obj).class_id();
+        let class_id = self.get_singleton(obj).id();
         self.define_builtin_func(class_id, name, address, arity)
     }
 

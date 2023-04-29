@@ -289,7 +289,7 @@ impl Globals {
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.kind() {
-                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class().class_id().get_name(self),
+                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_tos(val),
@@ -325,7 +325,7 @@ impl Globals {
                 Err(_) => format!("{:?}", s),
             },
             RV::Object(rvalue) => match rvalue.kind() {
-                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class().class_id().get_name(self),
+                ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
@@ -346,7 +346,7 @@ impl Globals {
         end: Value,
         exclude_end: bool,
     ) -> Result<Value> {
-        if start.real_class(self).class_id() != end.real_class(self).class_id() {
+        if start.real_class(self).id() != end.real_class(self).id() {
             return Err(MonorubyErr::bad_range(start, end));
         }
         Ok(Value::new_range(start, end, exclude_end))
@@ -373,7 +373,7 @@ impl Globals {
         } else {
             format!(
                 "#<{}:0x{:016x}>",
-                val.real_class(self).class_id().get_name(self),
+                val.real_class(self).id().get_name(self),
                 val.rvalue().id()
             )
         }

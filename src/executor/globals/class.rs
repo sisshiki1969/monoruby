@@ -225,18 +225,17 @@ impl Globals {
                 None => CLASS_CLASS.get_obj(self),
             };
             let mut original_obj = original_obj.as_val();
-            let mut singleton =
-                self.new_singleton_class(super_singleton, original_obj, class.class_id());
-            original_obj.change_class(singleton.class_id());
-            let class_class = if class.class_id() == original {
-                singleton.class_id()
+            let mut singleton = self.new_singleton_class(super_singleton, original_obj, class.id());
+            original_obj.change_class(singleton.id());
+            let class_class = if class.id() == original {
+                singleton.id()
             } else {
-                self.get_class_obj(class.class_id()).class_id()
+                self.get_class_obj(class.id()).id()
             };
             singleton.change_class(class_class);
             #[cfg(debug_assertions)]
             {
-                assert_eq!(singleton.class_id(), original_obj.class());
+                assert_eq!(singleton.id(), original_obj.class());
                 assert_eq!(Some(original_obj), singleton.is_singleton());
             }
             singleton
@@ -255,13 +254,13 @@ impl Globals {
         if org_class.is_singleton().is_some() {
             return org_class;
         }
-        let mut singleton = self.new_singleton_class(org_class, obj, org_class.class_id());
-        obj.change_class(singleton.class_id());
+        let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
+        obj.change_class(singleton.id());
         let singleton_meta = org_class.get_real_class().as_val().class();
         singleton.change_class(singleton_meta);
         #[cfg(debug_assertions)]
         {
-            assert_eq!(singleton.class_id(), obj.class());
+            assert_eq!(singleton.id(), obj.class());
         }
         singleton
     }
@@ -317,7 +316,7 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        let singleton = self.get_metaclass(class_id).class_id();
+        let singleton = self.get_metaclass(class_id).id();
         self.class[singleton].methods.insert(
             name,
             MethodTableEntry {
@@ -464,10 +463,11 @@ impl Globals {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    fn search_method(&mut self, mut class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
+    fn search_method(&mut self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let mut visi = None;
+        let mut module = class_id.get_obj(self);
         loop {
-            if let Some(entry) = self.get_method(class_id, name) {
+            if let Some(entry) = self.get_method(module.id(), name) {
                 if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
                         visi
@@ -482,7 +482,7 @@ impl Globals {
                     visi = Some(entry.visibility);
                 }
             }
-            class_id = class_id.get_obj(self).superclass_id()?;
+            module = module.superclass()?;
         }
     }
 

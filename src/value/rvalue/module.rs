@@ -56,7 +56,7 @@ impl Module {
     }
 
     pub fn make_iclass(&self, superclass: Option<Module>) -> Module {
-        Value::new_iclass(self.class_id(), superclass).as_class()
+        Value::new_iclass(self.id(), superclass).as_class()
     }
 }
 
@@ -69,7 +69,7 @@ pub enum ModuleType {
 
 #[derive(Debug, Clone)]
 pub struct ModuleInner {
-    class: ClassId,
+    class_id: ClassId,
     /// super class object.
     superclass: Option<Module>,
     /// is singleton class?
@@ -77,16 +77,16 @@ pub struct ModuleInner {
 }
 
 impl ModuleInner {
-    pub fn new(class: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
+    pub fn new(class_id: ClassId, superclass: Option<Module>, class_type: ModuleType) -> Self {
         Self {
-            class,
+            class_id,
             superclass,
             class_type,
         }
     }
 
-    pub fn class_id(&self) -> ClassId {
-        self.class
+    pub fn id(&self) -> ClassId {
+        self.class_id
     }
 
     pub fn superclass(&self) -> Option<Module> {
@@ -98,7 +98,7 @@ impl ModuleInner {
     }
 
     pub fn superclass_id(&self) -> Option<ClassId> {
-        self.superclass.map(|m| m.class_id())
+        self.superclass.map(|m| m.id())
     }
 
     pub fn change_superclass(&mut self, superclass: Module) {

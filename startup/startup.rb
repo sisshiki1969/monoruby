@@ -49,4 +49,11 @@ end
 class Object
   def raise
   end
+  def freeze
+  end
+end
+
+class Module
+  def private_constant(*x)
+  end
 end

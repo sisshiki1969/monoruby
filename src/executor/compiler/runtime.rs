@@ -535,7 +535,7 @@ pub(super) extern "C" fn define_singleton_class(
     base: Value,
 ) -> Option<Value> {
     let self_val = globals.get_singleton(base);
-    vm.push_class_context(self_val.class_id());
+    vm.push_class_context(self_val.id());
     Some(self_val.as_val())
 }
 
@@ -574,7 +574,7 @@ pub(super) extern "C" fn singleton_define_method(
     let current_func = vm.method_func_id();
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
-    let class_id = globals.get_singleton(obj).class_id();
+    let class_id = globals.get_singleton(obj).id();
     globals.add_method(class_id, name, func, Visibility::Public);
     globals.class_version_inc();
 }
@@ -589,7 +589,7 @@ pub(super) extern "C" fn alias_method(
     let new = new.as_symbol();
     let old = old.as_symbol();
     match if meta.is_class_def() {
-        globals.alias_method_for_class(self_val.as_class().class_id(), new, old)
+        globals.alias_method_for_class(self_val.as_class().id(), new, old)
     } else {
         globals.alias_method(self_val, new, old)
     } {

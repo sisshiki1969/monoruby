@@ -118,6 +118,6 @@ impl Globals {
             .lexical_context
             .iter()
             .rev()
-            .find_map(|module| self.get_constant(module.class_id(), name))
+            .find_map(|module| self.get_constant(module.id(), name))
     }
 }

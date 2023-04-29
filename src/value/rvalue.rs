@@ -285,7 +285,7 @@ impl RValue {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS | ObjKind::MODULE => {
                     let class = self.as_class();
-                    ObjKind::class(class.class_id(), class.superclass(), class.class_type())
+                    ObjKind::class(class.id(), class.superclass(), class.class_type())
                 }
                 ObjKind::OBJECT => ObjKind::object(),
                 ObjKind::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
@@ -625,6 +625,10 @@ impl RValue {
 
     pub(crate) fn as_class(&self) -> &ModuleInner {
         unsafe { &self.kind.class }
+    }
+
+    pub(crate) fn as_class_id(&self) -> ClassId {
+        self.as_class().id()
     }
 
     pub(crate) fn as_class_mut(&mut self) -> &mut ModuleInner {

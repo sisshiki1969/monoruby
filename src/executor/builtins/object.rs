@@ -66,7 +66,7 @@ fn object_new(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class().class_id();
+    let class = lfp.self_val().as_class_id();
     let obj = Value::new_object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
@@ -319,8 +319,7 @@ fn instance_of(
     arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let b =
-        lfp.self_val().real_class(globals).class_id() == arg[0].expect_class_or_module(globals)?;
+    let b = lfp.self_val().real_class(globals).id() == arg[0].expect_class_or_module(globals)?;
     Ok(Value::bool(b))
 }
 

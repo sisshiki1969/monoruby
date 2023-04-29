@@ -33,7 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// TODO: Support arguments.
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    let class = lfp.self_val().as_class().class_id();
+    let class = lfp.self_val().as_class_id();
     let obj = Value::new_array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)
