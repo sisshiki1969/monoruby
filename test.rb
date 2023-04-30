@@ -1,13 +1,7 @@
-puts RubyVM::InstructionSequence.new(DATA).disassemble
-
-__END__
-
-a = 0
-while a < 20
-  begin
-    1/0
-  rescue 100+10
-    puts 100
-  end
-  a += 1
-end
+ def f
+ 	5.times do |x|
+ 		next    # ブロックを抜ける
+ 		break   # ブロックを呼んだメソッド（times）を抜ける
+ 		return  # ブロックが所属するメソッド（f）を抜ける
+ 	end
+ end
