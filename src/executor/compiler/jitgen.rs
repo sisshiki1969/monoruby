@@ -1638,7 +1638,7 @@ impl Codegen {
             );
             self.jit.select_page(1);
             monoasm!(self.jit,
-                error:
+            error:
             );
             self.gen_write_back(wb);
             monoasm!(self.jit,
