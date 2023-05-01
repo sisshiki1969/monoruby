@@ -9,7 +9,9 @@ use ruruby_parse::{
 mod binary;
 mod defined;
 mod encode;
+pub mod inst;
 mod method_call;
+pub(in crate::executor) use inst::*;
 
 ///
 /// ID of register.

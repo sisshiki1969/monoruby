@@ -156,14 +156,14 @@ pub(super) enum BcIr {
 }
 
 #[derive(Clone, PartialEq, Default)]
-pub struct FnInitInfo {
+pub(in crate::executor) struct FnInitInfo {
     pub reg_num: usize,
     pub arg_num: usize,
-    pub req_num: usize,
+    req_num: usize,
     pub reqopt_num: usize,
     pub block_pos: usize,
     /// bit 0:rest(yes=1 no =0) bit 1:block
-    pub info: usize,
+    info: usize,
     pub stack_offset: usize,
 }
 
@@ -212,142 +212,19 @@ impl FnInitInfo {
         (self.info & 0b1) != 0
     }
 
-    pub(super) fn has_block_param(&self) -> bool {
+    pub(crate) fn has_block_param(&self) -> bool {
         (self.info & 0b10) != 0
     }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
-pub struct Bc {
-    pub(crate) op1: u64,
-    pub(crate) op2: Bc2,
+pub(in crate::executor) struct Bc {
+    op1: u64,
+    op2: Bc2,
 }
 
 impl Bc {
-    pub(crate) fn from(op1: u64) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(0),
-        }
-    }
-
-    pub(crate) fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(
-                ((num3 as u64) << 48)
-                    + ((num2 as u64) << 32)
-                    + ((num1 as u64) << 16)
-                    + (num0 as u64),
-            ),
-        }
-    }
-
-    pub(crate) fn from_u32(op1: u64, op2: u32) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(op2 as u64),
-        }
-    }
-
-    pub(crate) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
-        let FnInitInfo {
-            arg_num,
-            block_pos,
-            req_num,
-            info,
-            ..
-        } = fn_info;
-        Bc::from_with_num(
-            op1,
-            *req_num as u16,
-            *block_pos as u16,
-            *info as u16,
-            *arg_num as u16,
-        )
-    }
-
-    pub(crate) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(callid.get() as u64),
-        }
-    }
-
-    pub(crate) fn from_with_value(op1: u64, val: Value) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(val.get()),
-        }
-    }
-
-    pub(crate) fn from_with_func_name_id(op1: u64, name: Option<IdentId>, func_id: FuncId) -> Self {
-        Self {
-            op1,
-            op2: Bc2::from(
-                ((func_id.get() as u64) << 32)
-                    + (if let Some(name) = name {
-                        name.get() as u64
-                    } else {
-                        0
-                    }),
-            ),
-        }
-    }
-
-    pub(crate) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
-        Self {
-            op1,
-            op2: Bc2::class_and_version(class_id, version),
-        }
-    }
-
-    pub(crate) fn from_with_class2(op1: u64) -> Self {
-        Self {
-            op1,
-            op2: Bc2::class2(ClassId::default(), ClassId::default()),
-        }
-    }
-
-    pub(crate) fn classid1(&self) -> ClassId {
-        ClassId::new(self.op2.0 as u32)
-    }
-
-    pub(crate) fn classid2(&self) -> ClassId {
-        ClassId::new((self.op2.0 >> 32) as u32)
-    }
-
-    pub(crate) fn class_version(&self) -> (ClassId, u32) {
-        let op = self.op2.0;
-        (ClassId::new(op as u32), (op >> 32) as u32)
-    }
-
-    pub(crate) fn u16(&self, id: usize) -> u16 {
-        (self.op2.0 >> (id * 16)) as u16
-    }
-
-    fn func_data(&self) -> Option<&'static FuncData> {
-        let op = self.op2.0;
-        if op == 0 {
-            None
-        } else {
-            Some(unsafe { &*(op as *const FuncData) })
-        }
-    }
-
-    pub(crate) fn value(&self) -> Option<Value> {
-        match self.op2.0 {
-            0 => None,
-            v => Some(Value::from(v)),
-        }
-    }
-
-    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
-    pub(crate) fn into_jit_addr(self) -> u64 {
-        self.op2.0
-    }
-
     pub(crate) fn is_integer1(&self) -> bool {
         self.classid1() == INTEGER_CLASS
     }
@@ -375,14 +252,136 @@ impl Bc {
             _ => false,
         }
     }
+    pub(crate) fn classid1(&self) -> ClassId {
+        ClassId::new(self.op2.0 as u32)
+    }
+
+    pub(crate) fn classid2(&self) -> ClassId {
+        ClassId::new((self.op2.0 >> 32) as u32)
+    }
+
+    pub(crate) fn class_version(&self) -> (ClassId, u32) {
+        let op = self.op2.0;
+        (ClassId::new(op as u32), (op >> 32) as u32)
+    }
+
+    pub(crate) fn value(&self) -> Option<Value> {
+        match self.op2.0 {
+            0 => None,
+            v => Some(Value::from(v)),
+        }
+    }
+
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    pub(crate) fn into_jit_addr(self) -> u64 {
+        self.op2.0
+    }
+
+    pub(super) fn from(op1: u64) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(0),
+        }
+    }
+
+    pub(super) fn from_u32(op1: u64, op2: u32) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(op2 as u64),
+        }
+    }
+
+    pub(super) fn from_fn_info(op1: u64, fn_info: &FnInitInfo) -> Self {
+        let FnInitInfo {
+            arg_num,
+            block_pos,
+            req_num,
+            info,
+            ..
+        } = fn_info;
+        Bc::from_with_num(
+            op1,
+            *req_num as u16,
+            *block_pos as u16,
+            *info as u16,
+            *arg_num as u16,
+        )
+    }
+
+    pub(super) fn from_with_callid(op1: u64, callid: CallSiteId) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(callid.get() as u64),
+        }
+    }
+
+    pub(super) fn from_with_value(op1: u64, val: Value) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(val.get()),
+        }
+    }
+
+    pub(super) fn from_with_func_name_id(op1: u64, name: Option<IdentId>, func_id: FuncId) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(
+                ((func_id.get() as u64) << 32)
+                    + (if let Some(name) = name {
+                        name.get() as u64
+                    } else {
+                        0
+                    }),
+            ),
+        }
+    }
+
+    pub(super) fn from_with_class_and_version(op1: u64, class_id: ClassId, version: u32) -> Self {
+        Self {
+            op1,
+            op2: Bc2::class_and_version(class_id, version),
+        }
+    }
+
+    pub(super) fn from_with_class2(op1: u64) -> Self {
+        Self {
+            op1,
+            op2: Bc2::class2(ClassId::default(), ClassId::default()),
+        }
+    }
+
+    fn from_with_num(op1: u64, num0: u16, num1: u16, num2: u16, num3: u16) -> Self {
+        Self {
+            op1,
+            op2: Bc2::from(
+                ((num3 as u64) << 48)
+                    + ((num2 as u64) << 32)
+                    + ((num1 as u64) << 16)
+                    + (num0 as u64),
+            ),
+        }
+    }
+
+    fn u16(&self, id: usize) -> u16 {
+        (self.op2.0 >> (id * 16)) as u16
+    }
+
+    fn func_data(&self) -> Option<&'static FuncData> {
+        let op = self.op2.0;
+        if op == 0 {
+            None
+        } else {
+            Some(unsafe { &*(op as *const FuncData) })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub(crate) struct Bc2(u64);
+struct Bc2(u64);
 
 impl Bc2 {
-    pub(crate) fn from(op: u64) -> Self {
+    fn from(op: u64) -> Self {
         Self(op)
     }
 
@@ -402,11 +401,62 @@ impl Bc2 {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::executor) struct MethodInfo {
+    pub recv: SlotId,
+    pub args: SlotId,
+    pub len: u16,
+    pub func_data: Option<&'static FuncData>,
+}
+
+impl MethodInfo {
+    fn new(recv: SlotId, args: SlotId, len: u16, func_data: Option<&'static FuncData>) -> Self {
+        MethodInfo {
+            recv,
+            args,
+            len,
+            func_data,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::executor) enum BrKind {
+    BrIf = 0,
+    BrIfNot = 1,
+}
+
+impl BrKind {
+    pub(super) fn from(i: u16) -> Self {
+        match i {
+            0 => Self::BrIf,
+            1 => Self::BrIfNot,
+            _ => unreachable!(),
+        }
+    }
+
+    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
+    pub(crate) fn to_s(self) -> &'static str {
+        match self {
+            Self::BrIf => "",
+            Self::BrIfNot => "not",
+        }
+    }
+}
+
+fn dec_wl(op: u64) -> (u16, u32) {
+    ((op >> 32) as u16, op as u32)
+}
+
+fn dec_www(op: u64) -> (u16, u16, u16) {
+    ((op >> 32) as u16, (op >> 16) as u16, op as u16)
+}
+
 ///
 /// Bytecode instructions.
 ///
 #[derive(Debug, Clone)]
-pub(super) enum TraceIr {
+pub(in crate::executor) enum TraceIr {
     /// branch(dest)
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
@@ -608,57 +658,6 @@ pub(super) enum TraceIr {
     /// loop start marker
     LoopStart(u32),
     LoopEnd,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct MethodInfo {
-    pub recv: SlotId,
-    pub args: SlotId,
-    pub len: u16,
-    pub func_data: Option<&'static FuncData>,
-}
-
-impl MethodInfo {
-    fn new(recv: SlotId, args: SlotId, len: u16, func_data: Option<&'static FuncData>) -> Self {
-        MethodInfo {
-            recv,
-            args,
-            len,
-            func_data,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum BrKind {
-    BrIf = 0,
-    BrIfNot = 1,
-}
-
-impl BrKind {
-    pub(super) fn from(i: u16) -> Self {
-        match i {
-            0 => Self::BrIf,
-            1 => Self::BrIfNot,
-            _ => unreachable!(),
-        }
-    }
-
-    #[cfg(any(feature = "emit-bc", feature = "emit-asm", feature = "log-jit"))]
-    pub(super) fn to_s(self) -> &'static str {
-        match self {
-            Self::BrIf => "",
-            Self::BrIfNot => "not",
-        }
-    }
-}
-
-fn dec_wl(op: u64) -> (u16, u32) {
-    ((op >> 32) as u16, op as u32)
-}
-
-fn dec_www(op: u64) -> (u16, u16, u16) {
-    ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
 impl TraceIr {

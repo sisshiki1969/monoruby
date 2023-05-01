@@ -6,14 +6,13 @@ mod bytecodegen;
 mod compiler;
 mod frame;
 mod globals;
-mod inst;
 mod op;
 pub use builtins::*;
+use bytecodegen::inst::Bc;
 use bytecodegen::*;
 use fancy_regex::Captures;
 pub use frame::*;
 pub use globals::*;
-use inst::*;
 use op::*;
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;

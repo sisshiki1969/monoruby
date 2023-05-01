@@ -801,7 +801,7 @@ impl ISeqInfo {
     }
 
     /// set bytecode.
-    pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
+    pub(in crate::executor) fn set_bytecode(&mut self, bc: Vec<Bc>) {
         self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
@@ -872,7 +872,7 @@ impl ISeqInfo {
     }
 
     /// get bytecode.
-    pub(crate) fn bytecode(&self) -> &[Bc] {
+    pub(in crate::executor) fn bytecode(&self) -> &[Bc] {
         self.bytecode.as_ref().unwrap()
     }
 
@@ -925,7 +925,7 @@ impl ISeqInfo {
 
     /// get bytecode address.
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn bytecode_top(&self) -> *const Bc {
+    pub(in crate::executor) fn bytecode_top(&self) -> *const Bc {
         self.bytecode().as_ptr()
     }
 
