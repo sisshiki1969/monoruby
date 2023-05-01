@@ -44,5 +44,8 @@
     "succ",
     "testq",
     "xorq"
+  ],
+  "rust-analyzer.linkedProjects": [
+    "./Cargo.toml"
   ]
 }

@@ -202,6 +202,16 @@ impl BytecodeGen {
         Ok(())
     }
 
+    pub(super) fn gen_method_assign(
+        &mut self,
+        callid: CallSiteId,
+        receiver: BcReg,
+        val: BcReg,
+        loc: Loc,
+    ) {
+        self.emit_call(receiver, callid, None, val, 1, false, false, loc);
+    }
+
     fn handle_arguments(
         &mut self,
         mut arglist: ArgList,
@@ -347,15 +357,5 @@ impl BytecodeGen {
         let dst = self.push().into();
         self.emit_literal(dst, Value::new_integer(block_handler));
         Ok(())
-    }
-
-    pub(super) fn gen_method_assign(
-        &mut self,
-        callid: CallSiteId,
-        receiver: BcReg,
-        val: BcReg,
-        loc: Loc,
-    ) {
-        self.emit_call(receiver, callid, None, val, 1, false, false, loc);
     }
 }
