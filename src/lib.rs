@@ -18,6 +18,7 @@ pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 use fxhash::FxHashSet as HashSet;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
+pub use executor::bytecodegen::BytecodeGen;
 use id_table::*;
 use value::*;
 

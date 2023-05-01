@@ -2,7 +2,7 @@ use super::*;
 use ruruby_parse::Node;
 
 mod builtins;
-mod bytecodegen;
+pub mod bytecodegen;
 mod compiler;
 mod frame;
 mod globals;

@@ -33,7 +33,7 @@ fn main() {
     let mut buf = String::new();
     let mut script_line = 0;
     let mut context = None;
-    let mut interp = Executor::init(&mut globals);
+    let mut executor = Executor::init(&mut globals);
     loop {
         let prompt = format!(
             "monoruby:{:03}{} ",
@@ -57,7 +57,11 @@ fn main() {
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;
-                        let fid = match globals.func.compile_script(res.node, res.source_info) {
+                        let fid = match BytecodeGen::compile_script(
+                            &mut globals,
+                            res.node,
+                            res.source_info,
+                        ) {
                             Ok(id) => id,
                             Err(err) => {
                                 err.show_error_message_and_all_loc();
@@ -83,7 +87,7 @@ fn main() {
 
                 rl.add_history_entry(code.as_str()).unwrap();
                 cont_mode = false;
-                match interp.eval(&mut globals, main_fid) {
+                match executor.eval(&mut globals, main_fid) {
                     Ok(val) => eprintln!("=> {}", val.inspect(&globals)),
                     Err(err) => err.show_error_message_and_all_loc(),
                 };

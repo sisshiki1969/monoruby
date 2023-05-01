@@ -1,6 +1,6 @@
 use super::*;
 
-impl IrContext {
+impl BytecodeGen {
     pub(super) fn gen_defined(&mut self, node: Node) -> Result<()> {
         let res = defined_str(&node);
         let reg = self.push().into();
@@ -30,12 +30,12 @@ impl IrContext {
                                 let recv = self.gen_temp_expr(b)?;
                                 self.apply_label(body_end);
                                 self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
-                                self.exception_table.push((
-                                    body_start..body_end,
-                                    nil_label,
-                                    None,
-                                    None,
-                                ));
+                                self.exception_table.push(ExceptionEntry {
+                                    range: body_start..body_end,
+                                    dest: nil_label,
+                                    err_reg: None,
+                                    handlers: None,
+                                });
                             } else {
                                 self.check_defined(b, nil_label, ret, false)?;
                             }
@@ -87,8 +87,12 @@ impl IrContext {
                         _ => unimplemented!(),
                     };
                     self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
-                    self.exception_table
-                        .push((body_start..body_end, nil_label, None, None));
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        dest: nil_label,
+                        err_reg: None,
+                        handlers: None,
+                    });
                 } else {
                     self.check_defined(l, nil_label, ret, false)?;
                 }
@@ -135,8 +139,12 @@ impl IrContext {
                     let recv = self.gen_temp_expr(r)?;
                     self.apply_label(body_end);
                     self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
-                    self.exception_table
-                        .push((body_start..body_end, nil_label, None, None));
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        dest: nil_label,
+                        err_reg: None,
+                        handlers: None,
+                    });
                 } else {
                     self.check_defined(r, nil_label, ret, false)?;
                 }
@@ -162,8 +170,12 @@ impl IrContext {
                         },
                         node.loc,
                     );
-                    self.exception_table
-                        .push((body_start..body_end, nil_label, None, None));
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        dest: nil_label,
+                        err_reg: None,
+                        handlers: None,
+                    });
                 } else {
                     self.check_defined(b, nil_label, ret, false)?;
                 }
@@ -241,6 +253,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Break(_)
         | NodeKind::Next(_)
         | NodeKind::Return(_)
+        | NodeKind::Redo
         | NodeKind::ClassDef { .. }
         | NodeKind::SingletonClassDef { .. }
         | NodeKind::MethodDef(..)

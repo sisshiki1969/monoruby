@@ -1,6 +1,6 @@
 use fancy_regex::Regex;
 use ruruby_parse::{
-    BlockInfo, Loc, LvarCollector, Node, ParamKind, ParseErr, ParseErrKind, Parser, SourceInfoRef,
+    BlockInfo, Loc, Node, ParamKind, ParseErr, ParseErrKind, Parser, SourceInfoRef,
 };
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
@@ -117,7 +117,10 @@ impl Globals {
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
-            lib_directories: vec![],
+            lib_directories: vec![
+                "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/gems/json-2.6.3/lib".to_string(),
+                "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/extensions/x86_64-linux/3.3.0+0-static/json-2.6.3".to_string()
+            ],
             random: Prng::new(),
             loaded_features: HashSet::default(),
             #[cfg(feature = "log-jit")]
@@ -173,7 +176,7 @@ impl Globals {
         path: impl Into<PathBuf>,
     ) -> Result<FuncId> {
         match Parser::parse_program(code, path.into()) {
-            Ok(res) => self.func.compile_script(res.node, res.source_info),
+            Ok(res) => BytecodeGen::compile_script(self, res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }

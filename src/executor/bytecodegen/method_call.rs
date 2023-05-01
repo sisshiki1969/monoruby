@@ -1,6 +1,6 @@
 use super::*;
 
-impl IrContext {
+impl BytecodeGen {
     pub(super) fn gen_method_call(
         &mut self,
         method: IdentId,
@@ -111,7 +111,7 @@ impl IrContext {
         use_mode: UseMode,
         loc: Loc,
     ) -> Result<()> {
-        assert_eq!(1, param.len());
+        //assert_eq!(1, param.len());
         // collect assignments for local variables.
         let mut optional_params = vec![];
         for (outer, name) in param {

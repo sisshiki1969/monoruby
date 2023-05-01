@@ -165,7 +165,15 @@ struct LoopInfo {
 }
 
 #[derive(Debug)]
-pub(crate) struct IrContext {
+struct ExceptionEntry {
+    range: std::ops::Range<Label>,
+    dest: Label,
+    err_reg: Option<BcReg>,
+    handlers: Option<(BcReg, usize, (Loc, SourceInfoRef))>,
+}
+
+#[derive(Debug)]
+pub struct BytecodeGen {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
@@ -193,12 +201,7 @@ pub(crate) struct IrContext {
     /// Source info.
     sourceinfo: SourceInfoRef,
     /// Exception jump table.
-    exception_table: Vec<(
-        std::ops::Range<Label>,
-        Label,
-        Option<BcReg>,
-        Option<(BcReg, usize, (Loc, SourceInfoRef))>,
-    )>,
+    exception_table: Vec<ExceptionEntry>,
     /// Call site info.
     callsites: Vec<CallSite>,
     /// Offset of call site info.
@@ -209,27 +212,49 @@ pub(crate) struct IrContext {
     functions_offset: usize,
 }
 
-impl std::ops::Index<Label> for IrContext {
+impl std::ops::Index<Label> for BytecodeGen {
     type Output = InstId;
     fn index(&self, index: Label) -> &Self::Output {
         self.labels[index.0].as_ref().unwrap()
     }
 }
 
-impl IrContext {
-    pub(crate) fn compile_func(func_id: FuncId, ctx: &mut FnStore) -> Result<()> {
+impl BytecodeGen {
+    pub fn compile_script(
+        globals: &mut Globals,
+        ast: Node,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        let store = &mut globals.func;
+        let main_fid = store.add_main(ast, sourceinfo)?;
+        let mut fid = main_fid;
+
+        while store.len() > fid.get() as usize {
+            BytecodeGen::compile_func(store, fid)?;
+            fid = FuncId::new(fid.get() + 1);
+        }
+
+        Ok(main_fid)
+    }
+
+    fn compile_func(store: &mut FnStore, func_id: FuncId) -> Result<()> {
         let CompileInfo {
             ast,
             for_param_info,
             keyword_initializers,
-            destruct_info: expand_info,
+            destruct_info,
             optional_info,
-        } = ctx.get_init();
-        let info = ctx[func_id].as_ruby_func();
+        } = store.get_init();
+        let info = store[func_id].as_ruby_func();
         let mother = info
             .mother
-            .map(|fid| (fid, ctx[fid].as_ruby_func().args.clone()));
-        let mut ir = IrContext::new(info, mother, ctx.callsite_offset(), ctx.functions_offset());
+            .map(|fid| (fid, store[fid].as_ruby_func().args.clone()));
+        let mut gen = BytecodeGen::new(
+            info,
+            mother,
+            store.callsite_offset(),
+            store.functions_offset(),
+        );
         // arguments preparation
         for ForParamInfo {
             dst_outer,
@@ -237,7 +262,7 @@ impl IrContext {
             src_reg,
         } in for_param_info
         {
-            ir.emit(
+            gen.emit(
                 BcIr::StoreDynVar {
                     dst: (dst_reg).into(),
                     outer: dst_outer,
@@ -246,38 +271,39 @@ impl IrContext {
                 Loc::default(),
             );
         }
-        for DestructureInfo { src, dst, len } in expand_info {
-            ir.gen_expand_array(src, dst, len);
+        for DestructureInfo { src, dst, len } in destruct_info {
+            gen.gen_expand_array(src, dst, len);
         }
         for OptionalInfo { local, initializer } in optional_info {
             let local = local.into();
-            let next = ir.new_label();
-            ir.emit_check_local(local, next);
-            ir.gen_store_expr(local, initializer)?;
-            ir.apply_label(next);
+            let next = gen.new_label();
+            gen.emit_check_local(local, next);
+            gen.gen_store_expr(local, initializer)?;
+            gen.apply_label(next);
         }
         let kw_reg = info.pos_num();
         // keyword args preparation
         for (id, initializer) in keyword_initializers.into_iter().enumerate() {
             let local = BcLocal((kw_reg + id) as u16).into();
-            let next = ir.new_label();
-            ir.emit_check_local(local, next);
+            let next = gen.new_label();
+            gen.emit_check_local(local, next);
             if let Some(box init) = initializer {
-                ir.gen_store_expr(local, init)?;
+                gen.gen_store_expr(local, init)?;
             } else {
-                ir.emit_nil(local);
+                gen.emit_nil(local);
             }
-            ir.apply_label(next);
+            gen.apply_label(next);
         }
-        ir.gen_expr(ast, UseMode::Ret)?;
-        ir.replace_init(info);
+        gen.gen_expr(ast, UseMode::Ret)?;
+        gen.replace_init(info);
         //assert_eq!(0, ir.temp);
-        ir.into_bytecode(ctx, func_id)?;
+        gen.into_bytecode(store, func_id)?;
+        store.set_func_data(func_id);
         Ok(())
     }
 }
 
-impl IrContext {
+impl BytecodeGen {
     fn new(
         info: &ISeqInfo,
         mother: Option<(FuncId, ParamsInfo)>,
@@ -379,7 +405,7 @@ impl IrContext {
 //
 // temporary registers handling.
 //
-impl IrContext {
+impl BytecodeGen {
     /// get a number of registers.
     fn total_reg_num(&self) -> usize {
         1 + (self.non_temp_num + self.temp_num) as usize
@@ -429,7 +455,7 @@ impl IrContext {
 //
 // local variables handling.
 //
-impl IrContext {
+impl BytecodeGen {
     fn get_locals(&self) -> Vec<(HashMap<IdentId, u16>, Option<IdentId>)> {
         let mut locals = vec![(self.locals.clone(), self.block_param.clone())];
         locals.extend_from_slice(&self.outer_locals);
@@ -501,7 +527,7 @@ impl IrContext {
 //
 // emit bytecode ir.
 //
-impl IrContext {
+impl BytecodeGen {
     /// get new destination label.
     fn new_label(&mut self) -> Label {
         let label = self.labels.len();
@@ -963,7 +989,7 @@ impl IrContext {
             | NodeKind::Array(..)
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }
-            | NodeKind::RegExp(_, true)
+            | NodeKind::RegExp(_, _, true)
             | NodeKind::UnOp(..)
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
@@ -1236,6 +1262,8 @@ impl IrContext {
                 if let Some(reg) = ret {
                     let temp = self.gen_temp_expr(val)?;
                     self.emit_mov(reg, temp)
+                } else {
+                    self.gen_expr(val, UseMode::NotUse)?;
                 }
                 self.emit(BcIr::Br(break_dest), loc);
                 return Ok(());
@@ -1245,7 +1273,6 @@ impl IrContext {
                     Some(data) => data,
                     None => {
                         if self.is_block() {
-                            assert_ne!(use_mode, UseMode::Use);
                             return self.gen_return(val);
                         } else {
                             return Err(MonorubyErr::escape_from_eval(
@@ -1258,16 +1285,16 @@ impl IrContext {
                 if let Some(reg) = ret {
                     let temp = self.gen_temp_expr(val)?;
                     self.emit_mov(reg, temp)
+                } else {
+                    self.gen_expr(val, UseMode::NotUse)?;
                 }
                 self.emit(BcIr::Br(next_dest), loc);
                 return Ok(());
             }
             NodeKind::Return(box val) => {
                 if self.is_block() {
-                    assert_ne!(use_mode, UseMode::Use);
                     return self.gen_method_return(val);
                 } else {
-                    assert_ne!(use_mode, UseMode::Use);
                     return self.gen_return(val);
                 }
             }
@@ -1337,12 +1364,12 @@ impl IrContext {
                         }
                         self.temp = old;
                     }
-                    self.exception_table.push((
-                        body_start..body_end,
-                        rescue_start,
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        dest: rescue_start,
                         err_reg,
-                        ex_reg,
-                    ));
+                        handlers: ex_reg,
+                    });
                     self.apply_label(else_label);
                 } else {
                     if let Some(else_) = else_ {
@@ -1504,8 +1531,8 @@ impl IrContext {
                 let val = Value::from_ast2(&rhs);
                 self.emit_literal(dst, val);
             }
-            NodeKind::RegExp(nodes, true) => {
-                let val = self.const_regexp(nodes, loc)?;
+            NodeKind::RegExp(nodes, op, true) => {
+                let val = self.const_regexp(nodes, op, loc)?;
                 self.emit_literal(dst, val);
             }
             NodeKind::Range {
@@ -1631,7 +1658,13 @@ impl IrContext {
                 let method = IdentId::get_id_from_string(method);
                 self.gen_method_call(method, None, arglist, ret, UseMode::Use, loc)?;
             }
-            NodeKind::Return(_) => unreachable!(),
+            NodeKind::Return(box val) => {
+                if self.is_block() {
+                    return self.gen_method_return(val);
+                } else {
+                    return self.gen_return(val);
+                }
+            }
             NodeKind::CompStmt(nodes) => {
                 self.gen_comp_stmts(nodes, Some(dst), UseMode::NotUse)?;
             }
@@ -1655,7 +1688,7 @@ impl IrContext {
         Ok(())
     }
 
-    fn const_regexp(&self, nodes: Vec<Node>, loc: Loc) -> Result<Value> {
+    fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let mut string = String::new();
         for node in nodes {
             match &node.kind {
@@ -1663,7 +1696,7 @@ impl IrContext {
                 _ => unreachable!(),
             }
         }
-        match string.pop().unwrap() {
+        /*match string.pop().unwrap() {
             'i' => string.insert_str(0, "(?mi)"),
             'm' => string.insert_str(0, "(?ms)"),
             'x' => string.insert_str(0, "(?mx)"),
@@ -1676,7 +1709,8 @@ impl IrContext {
                     self.sourceinfo.clone(),
                 ))
             }
-        };
+        };*/
+        let string = format!("(?{}){}", option, string);
         let re = match RegexpInner::new(string) {
             Ok(re) => re,
             Err(err) => return Err(MonorubyErr::syntax(err, loc, self.sourceinfo.clone())),
@@ -1819,7 +1853,7 @@ enum RecvKind {
     Temp,
 }
 
-impl IrContext {
+impl BytecodeGen {
     ///
     /// Generate multiple assignment.
     ///
@@ -1901,7 +1935,6 @@ impl IrContext {
         body: BlockInfo,
         use_value: bool,
     ) -> Result<()> {
-        assert_eq!(1, param.len());
         let loc = iter.loc;
         if let NodeKind::Range {
             box start,
@@ -1910,6 +1943,7 @@ impl IrContext {
             ..
         } = iter.kind
         {
+            assert_eq!(1, param.len());
             let name = IdentId::get_id(&param[0].1);
             let counter = self.assign_local(name);
             let break_dest = self.new_label();
@@ -2084,7 +2118,7 @@ impl IrContext {
     }
 }
 
-impl IrContext {
+impl BytecodeGen {
     fn level_down(&mut self, node: &mut Node, level: usize) {
         match &mut node.kind {
             NodeKind::LocalVar(l, _) => {
@@ -2135,7 +2169,8 @@ impl IrContext {
             | NodeKind::MethodDef(..)
             | NodeKind::SingletonMethodDef(..)
             | NodeKind::ClassDef { .. }
-            | NodeKind::SingletonClassDef { .. } => {}
+            | NodeKind::SingletonClassDef { .. }
+            | NodeKind::Redo => {}
             NodeKind::CompStmt(nodes)
             | NodeKind::InterporatedString(nodes)
             | NodeKind::Array(nodes, ..)

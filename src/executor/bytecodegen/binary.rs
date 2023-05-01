@@ -1,6 +1,6 @@
 use super::*;
 
-impl IrContext {
+impl BytecodeGen {
     /// Generate bytecode Ir for binary operations.
     pub(super) fn gen_binop(
         &mut self,
@@ -83,7 +83,7 @@ macro_rules! gen_ri_ops {
   };
 }
 
-impl IrContext {
+impl BytecodeGen {
     gen_ri_ops!(
         (add, Add),
         (sub, Sub),

@@ -1,3 +1,5 @@
+use ruruby_parse::LvarCollector;
+
 use super::*;
 use std::pin::Pin;
 
@@ -354,12 +356,24 @@ impl FnStore {
         &self.functions.info
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.functions.info.len()
     }
 
     pub(in crate::executor) fn get_init(&mut self) -> CompileInfo {
         self.functions.compile_info.remove(0)
+    }
+
+    pub(crate) fn add_main(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
+        self.functions.add_method(
+            Some(IdentId::get_id("/main")),
+            BlockInfo {
+                params: vec![],
+                body: Box::new(ast),
+                lvar: LvarCollector::new(),
+            },
+            sourceinfo,
+        )
     }
 }
 
@@ -396,26 +410,6 @@ impl FnStore {
 
     pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
         self.inline.get(&func_id)
-    }
-
-    pub fn compile_script(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
-        let main_fid = self.functions.add_method(
-            Some(IdentId::get_id("/main")),
-            BlockInfo {
-                params: vec![],
-                body: Box::new(ast),
-                lvar: LvarCollector::new(),
-            },
-            sourceinfo,
-        )?;
-        let mut fid = main_fid;
-
-        while self.len() > fid.get() as usize {
-            self.compile_func(fid)?;
-            fid = FuncId::new(fid.get() + 1);
-        }
-
-        Ok(main_fid)
     }
 
     pub(super) fn add_builtin_func(
@@ -482,18 +476,13 @@ impl FnStore {
         self.constsite_info.push(info);
         ConstSiteId(id as u32)
     }
-}
 
-impl FnStore {
-    /// Generate bytecode for a function which has *func_id*.
-    fn compile_func(&mut self, func_id: FuncId) -> Result<()> {
-        IrContext::compile_func(func_id, self)?;
+    pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
         let pc = info.get_pc(0);
         self[func_id].data.set_pc(pc);
         self[func_id].data.set_reg_num(regs as i64);
-        Ok(())
     }
 }
 
