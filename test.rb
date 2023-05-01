@@ -1,6 +1,8 @@
-for x in [10,20,30]
-	for a,b,c in [[1,2],[2,4],[3,6],[4,8],[5,10]]
-		puts "#{a} #{b}"
-	end
+begin
+	puts 100
+  1/0
+rescue Exception => e
+	puts e
+else
+  puts 200
 end
-puts "#{a} #{b} #{x}"

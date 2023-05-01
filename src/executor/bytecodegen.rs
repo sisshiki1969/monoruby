@@ -170,7 +170,6 @@ struct ExceptionEntry {
     range: std::ops::Range<Label>,
     dest: Label,
     err_reg: Option<BcReg>,
-    handlers: Option<(BcReg, usize, (Loc, SourceInfoRef))>,
 }
 
 #[derive(Debug)]

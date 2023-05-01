@@ -272,53 +272,58 @@ impl BytecodeGen {
         self.apply_label(body_start);
         self.gen_expr(body, body_use)?;
         self.apply_label(body_end);
+        let else_label = self.new_label();
         if !rescue.is_empty() {
-            let else_label = self.new_label();
             if !body_use.is_ret() {
                 self.emit_br(else_label);
             }
             let rescue_start = self.new_label();
-            let mut err_reg = None;
-            let mut ex_reg = None;
             self.apply_label(rescue_start);
             assert_eq!(1, rescue.len());
+            let err_reg = self.push().into();
+            let old = self.temp;
             for RescueEntry {
                 exception_list,
                 assign,
                 box body,
             } in rescue
             {
-                let old = self.temp;
-                if !exception_list.is_empty() {
-                    let start: BcReg = self.next_reg().into();
-                    let len = exception_list.len();
-                    let mut loc = exception_list[0].loc;
-                    for ex in exception_list {
-                        loc = loc.merge(ex.loc);
-                        self.gen_expr(ex, UseMode::Use)?;
-                    }
-                    ex_reg = Some((start, len, (loc, self.sourceinfo.clone())));
-                };
                 if let Some(box assign) = assign {
                     let lhs = self.eval_lvalue(&assign)?;
                     let loc = assign.loc;
-                    let src = self.next_reg().into();
-                    self.gen_assign(src, lhs, loc);
-                    err_reg = Some(src);
+                    self.gen_assign(err_reg, lhs, loc);
                 };
+                let cont_pos = self.new_label();
+                let next_pos = self.new_label();
+                if !exception_list.is_empty() {
+                    assert_eq!(1, exception_list.len());
+                    /*for ex in exception_list {
+                        self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
+                    }
+                    self.emit_br(next_pos);*/
+                };
+                self.apply_label(cont_pos);
                 self.gen_expr(body, rescue_use)?;
                 if !rescue_use.is_ret() {
                     self.emit_br(ensure_label);
                 }
+                self.apply_label(next_pos);
                 self.temp = old;
             }
+            // no rescue branch was matched.
+            // TODO:we must raise.
+            if rescue_use.is_ret() {
+                self.emit_nil(err_reg);
+                self.emit_ret(Some(err_reg));
+            } else {
+                self.emit_br(ensure_label);
+            }
+            self.pop();
             self.exception_table.push(ExceptionEntry {
                 range: body_start..body_end,
                 dest: rescue_start,
-                err_reg,
-                handlers: ex_reg,
+                err_reg: Some(err_reg),
             });
-            self.apply_label(else_label);
         } else {
             if let Some(else_) = else_ {
                 return Err(MonorubyErr::syntax(
@@ -328,6 +333,7 @@ impl BytecodeGen {
                 ));
             }
         }
+        self.apply_label(else_label);
         if let Some(box else_) = else_ {
             self.gen_expr(else_, rescue_use)?;
         }

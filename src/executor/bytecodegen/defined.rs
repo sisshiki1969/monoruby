@@ -34,7 +34,6 @@ impl BytecodeGen {
                                     range: body_start..body_end,
                                     dest: nil_label,
                                     err_reg: None,
-                                    handlers: None,
                                 });
                             } else {
                                 self.check_defined(b, nil_label, ret, false)?;
@@ -91,7 +90,6 @@ impl BytecodeGen {
                         range: body_start..body_end,
                         dest: nil_label,
                         err_reg: None,
-                        handlers: None,
                     });
                 } else {
                     self.check_defined(l, nil_label, ret, false)?;
@@ -143,7 +141,6 @@ impl BytecodeGen {
                         range: body_start..body_end,
                         dest: nil_label,
                         err_reg: None,
-                        handlers: None,
                     });
                 } else {
                     self.check_defined(r, nil_label, ret, false)?;
@@ -174,7 +171,6 @@ impl BytecodeGen {
                         range: body_start..body_end,
                         dest: nil_label,
                         err_reg: None,
-                        handlers: None,
                     });
                 } else {
                     self.check_defined(b, nil_label, ret, false)?;

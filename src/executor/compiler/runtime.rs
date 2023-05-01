@@ -696,19 +696,7 @@ pub(super) extern "C" fn handle_error(
         FuncKind::ISeq(info) => {
             // check exception table.
             let mut lfp = vm.cfp().lfp();
-            if let Some((dest, err_reg, _)) = info.get_exception_dest(pc) {
-                /*if let Some((ex_slot, len, loc)) = ex {
-                    let ex_slot = ex_slot.0 as usize;
-                    for slot in ex_slot..(ex_slot + len) {
-                        let v = unsafe { lfp.register(slot) };
-                        dbg!(v);
-                        /*if let Err(mut err) = v.expect_class_or_module_rescue() {
-                            err.loc.push(loc);
-                            globals.set_error(err);
-                            return None;
-                        }*/
-                    }
-                }*/
+            if let Some((dest, err_reg)) = info.get_exception_dest(pc) {
                 let err = globals.take_error().unwrap();
                 if let Some(err_reg) = err_reg {
                     let err_val = Value::new_exception(err);

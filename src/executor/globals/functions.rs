@@ -661,11 +661,11 @@ impl FuncInfo {
             "{:?}",
             info.exception_map
                 .iter()
-                .map(|(range, dest, err_reg, ex)| {
+                .map(|(range, dest, err_reg)| {
                     let start = info.get_pc_index(Some(range.start));
                     let end = info.get_pc_index(Some(range.end));
                     let dest = info.get_pc_index(Some(*dest));
-                    (start..end, dest, err_reg, ex)
+                    (start..end, dest, err_reg)
                 })
                 .collect::<Vec<_>>()
         );
@@ -696,10 +696,9 @@ pub(crate) struct ISeqInfo {
     pub sourcemap: Vec<Loc>,
     /// Exception handling map.
     exception_map: Vec<(
-        std::ops::Range<BcPc>,                         // range of capturing exception
-        BcPc,                                          // destination pc
-        Option<SlotId>,                                // a slot where an error object is assigned
-        Option<(SlotId, usize, (Loc, SourceInfoRef))>, // exception classes: (start, len, position in the code)
+        std::ops::Range<BcPc>, // range of capturing exception
+        BcPc,                  // destination pc
+        Option<SlotId>,        // a slot where an error object is assigned
     )>,
     /// the name of arguments.
     pub(in crate::executor) args: ParamsInfo,
@@ -880,16 +879,12 @@ impl ISeqInfo {
     pub(in crate::executor) fn get_exception_dest(
         &self,
         pc: BcPc,
-    ) -> Option<(
-        BcPc,
-        Option<SlotId>,
-        Option<(SlotId, usize, (Loc, SourceInfoRef))>,
-    )> {
+    ) -> Option<(BcPc, Option<SlotId>)> {
         self.exception_map
             .iter()
-            .filter_map(|(range, dest, slot, ex)| {
+            .filter_map(|(range, dest, slot)| {
                 if range.contains(&pc) {
-                    Some((*dest, *slot, ex.clone()))
+                    Some((*dest, *slot))
                 } else {
                     None
                 }
@@ -902,9 +897,8 @@ impl ISeqInfo {
         range: std::ops::Range<BcPc>,
         dest: BcPc,
         err_reg: Option<SlotId>,
-        ex_reg: Option<(SlotId, usize, (Loc, SourceInfoRef))>,
     ) {
-        self.exception_map.push((range, dest, err_reg, ex_reg));
+        self.exception_map.push((range, dest, err_reg));
     }
 
     /// get bytecode length.
