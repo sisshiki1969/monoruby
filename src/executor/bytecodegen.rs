@@ -17,7 +17,7 @@ pub(in crate::executor) use inst::*;
 /// ID of register.
 ///
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BcReg {
+enum BcReg {
     Self_,
     Local(BcLocal),
     Temp(BcTemp),
@@ -49,7 +49,7 @@ impl std::convert::From<BcTemp> for BcReg {
 /// ID of temporary register.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) struct BcTemp(pub u16);
+struct BcTemp(pub u16);
 
 impl std::fmt::Debug for BcTemp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -76,7 +76,7 @@ impl std::fmt::Debug for BcLocal {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) struct Label(usize);
+struct Label(usize);
 
 fn is_smi(node: &Node) -> Option<i16> {
     if let NodeKind::Integer(i) = &node.kind {
