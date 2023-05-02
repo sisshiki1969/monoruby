@@ -154,10 +154,10 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self) -> String {
-        format!("{} ({})", self.msg, self.get_type())
+        format!("{} ({})", self.msg, self.get_class_name())
     }
 
-    fn get_type(&self) -> &str {
+    pub fn get_class_name(&self) -> &str {
         match &self.kind {
             MonorubyErrKind::NotMethod => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",

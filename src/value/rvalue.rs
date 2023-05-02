@@ -519,9 +519,9 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_exception(err: MonorubyErr) -> Self {
+    pub(super) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(EXCEPTION_CLASS, ObjKind::EXCEPTION),
+            flags: RVFlag::new(class_id, ObjKind::EXCEPTION),
             kind: ObjKind::exception(err),
             var_table: None,
         }

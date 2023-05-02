@@ -1,7 +1,9 @@
 begin
 	puts 100
-  1/0
-rescue Exception => e
+  require "woooxxx"
+rescue ZeroDivisionError => e
+	puts e
+rescue LoadError => e
 	puts e
 else
   puts 200

@@ -279,7 +279,7 @@ impl BytecodeGen {
             }
             let rescue_start = self.new_label();
             self.apply_label(rescue_start);
-            assert_eq!(1, rescue.len());
+            //assert_eq!(1, rescue.len());
             let err_reg = self.push().into();
             let old = self.temp;
             for RescueEntry {
@@ -297,10 +297,10 @@ impl BytecodeGen {
                 let next_pos = self.new_label();
                 if !exception_list.is_empty() {
                     assert_eq!(1, exception_list.len());
-                    /*for ex in exception_list {
+                    for ex in exception_list {
                         self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
                     }
-                    self.emit_br(next_pos);*/
+                    self.emit_br(next_pos);
                 };
                 self.apply_label(cont_pos);
                 self.gen_expr(body, rescue_use)?;

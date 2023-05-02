@@ -2,6 +2,7 @@ use super::*;
 
 mod array;
 mod class;
+mod exception;
 mod file;
 mod float;
 mod hash;
@@ -119,8 +120,10 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     );
     let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
     assert_eq!(IO_CLASS, io_class.id());
+
     let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
     assert_eq!(EXCEPTION_CLASS, exception_class.id());
+
     let math_class = globals.define_module("Math").id();
     let process_class = globals.define_module("Process").id();
     let file_class = globals
@@ -141,6 +144,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     regexp::init(globals);
     range::init(globals);
     proc::init(globals);
+    exception::init(globals);
     time::init(globals);
     io::init(globals);
     file::init(globals, file_class);

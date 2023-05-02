@@ -456,6 +456,18 @@ impl Globals {
         )
     }
 
+    fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
+        let name = err.get_class_name();
+        self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
+            .unwrap()
+            .as_class_id()
+    }
+
+    pub fn exception_to_val(&self, err: MonorubyErr) -> Value {
+        let class_id = self.get_error_class(&err);
+        Value::new_exception_with_class(err, class_id)
+    }
+
     /*pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
         let arity = self[func_id].arity();
         if arity != -1 {

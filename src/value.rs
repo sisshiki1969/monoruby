@@ -344,8 +344,8 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
-    pub(crate) fn new_exception(err: MonorubyErr) -> Self {
-        RValue::new_exception(err).pack()
+    pub(crate) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue::new_exception_with_class(err, class_id).pack()
     }
 
     pub(crate) fn new_time(time: TimeInner) -> Self {

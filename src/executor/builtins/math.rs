@@ -7,6 +7,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
+    globals.set_constant_by_str(class_id, "PI", Value::new_float(3.141592653589793));
     globals.define_builtin_module_func_inlinable(class_id, "sqrt", sqrt, 1, InlineMethod::MathSqrt);
     globals.define_builtin_module_func_inlinable(class_id, "cos", cos, 1, InlineMethod::MathCos);
     globals.define_builtin_module_func_inlinable(class_id, "sin", sin, 1, InlineMethod::MathSin);

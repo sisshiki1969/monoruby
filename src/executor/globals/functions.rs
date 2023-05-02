@@ -788,32 +788,37 @@ impl ISeqInfo {
         self.id.unwrap()
     }
 
-    /// set bytecode.
+    ///
+    /// Set bytecode to the *ISeqInfo*.
+    ///
     pub(in crate::executor) fn set_bytecode(&mut self, bc: Vec<Bc>) {
         self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
-    /// get bytecode address.
-    /*pub(in crate::executor) fn get_bytecode_address(&self, index: usize) -> BcPc {
-        BcPcBase::new(self) + index
-    }*/
-
-    /// get a number of registers.
+    ///
+    /// Get a number of registers.
+    ///
     pub(crate) fn total_reg_num(&self) -> usize {
         1 + (self.non_temp_num + self.temp_num) as usize
     }
 
-    /// get a number of non-temp registers.
+    ///
+    /// Get a number of non-temp registers.
+    ///
     pub(crate) fn local_num(&self) -> usize {
         self.non_temp_num as usize
     }
 
-    /// get a number of keyword arguments.
+    ///
+    /// Get a number of keyword arguments.
+    ///
     pub(crate) fn key_num(&self) -> usize {
         self.args.keyword_names.len()
     }
 
-    /// get a position of keyword arguments.
+    ///
+    /// Get a position of keyword arguments.
+    ///
     pub(crate) fn block_pos(&self) -> usize {
         if self.args.block_param.is_some() {
             self.args.pos_num + self.key_num() + 1
@@ -822,21 +827,30 @@ impl ISeqInfo {
         }
     }
 
-    /// get a number of required arguments.
+    ///
+    /// Get a number of required arguments.
+    ///
     pub(crate) fn req_num(&self) -> usize {
         self.args.required_num
     }
 
+    ///
     /// get a number of required + optional arguments.
+    ///
     pub(crate) fn reqopt_num(&self) -> usize {
         self.args.reqopt_num
     }
 
-    /// get a number of required + optional + rest arguments.
+    ///
+    /// Get a number of required + optional + rest arguments.
+    ///
     pub(crate) fn pos_num(&self) -> usize {
         self.args.pos_num
     }
 
+    ///
+    /// Get a parameter info.
+    ///
     /// bit 0:rest(yes=1 no =0) bit 1:block
     pub(crate) fn info(&self) -> usize {
         (if self.args.block_param.is_some() {
@@ -846,12 +860,16 @@ impl ISeqInfo {
         }) + (self.args.pos_num - self.args.reqopt_num)
     }
 
-    /// get a block argument name.
+    ///
+    /// Get a block argument name.
+    ///
     pub(crate) fn block_param_name(&self) -> Option<IdentId> {
         self.args.block_param
     }
 
-    /// get name.
+    ///
+    /// Get the name of iseq.
+    ///
     pub(crate) fn name(&self) -> String {
         match &self.name {
             Some(name) => name.to_string(),
@@ -859,15 +877,23 @@ impl ISeqInfo {
         }
     }
 
-    /// get bytecode.
+    ///
+    /// Get a reference of bytecode.
+    ///
     pub(in crate::executor) fn bytecode(&self) -> &[Bc] {
         self.bytecode.as_ref().unwrap()
     }
 
+    ///
+    /// Get pc(*BcPc*) for instruction index(*idx*).
+    ///
     pub(in crate::executor) fn get_pc(&self, idx: usize) -> BcPc {
         BcPc::from(&self.bytecode()[idx])
     }
 
+    ///
+    /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
+    ///
     pub(in crate::executor) fn get_pc_index(&self, pc: Option<BcPc>) -> usize {
         if let Some(pos) = pc {
             pos - self.get_pc(0)
@@ -876,6 +902,9 @@ impl ISeqInfo {
         }
     }
 
+    ///
+    /// Explore exception table for pc(*BcPc*) and return error handler's pc(*BcPc*) and the slot where an error object is to be stored.
+    ///
     pub(in crate::executor) fn get_exception_dest(
         &self,
         pc: BcPc,
@@ -901,12 +930,16 @@ impl ISeqInfo {
         self.exception_map.push((range, dest, err_reg));
     }
 
-    /// get bytecode length.
+    ///
+    /// Get bytecode length.
+    ///
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode().len()
     }
 
-    /// get bytecode address.
+    ///
+    /// Get bytecode address.
+    ///
     #[cfg(feature = "emit-bc")]
     pub(in crate::executor) fn bytecode_top(&self) -> *const Bc {
         self.bytecode().as_ptr()

@@ -1,7 +1,3 @@
-class Math
-  PI = 3.141592653589793
-end
-
 class RbConfig
   def self.ruby
     @ruby ||= `ruby -e 'print RbConfig.ruby'`
@@ -56,13 +52,4 @@ end
 class Module
   def private_constant(*x)
   end
-end
-
-class ScriptError < Exception
-end
-
-class LoadError < ScriptError
-end
-
-class StandardError < Exception
 end
