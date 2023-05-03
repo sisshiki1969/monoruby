@@ -168,7 +168,8 @@ struct LoopInfo {
 #[derive(Debug)]
 struct ExceptionEntry {
     range: std::ops::Range<Label>,
-    rescue: Label,
+    rescue: Option<Label>,
+    ensure: Option<Label>,
     err_reg: Option<BcReg>,
 }
 

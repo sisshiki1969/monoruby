@@ -193,6 +193,18 @@ impl Codegen {
         };
         self.epilogue();
 
+        //BcOp::EnsureEnd
+        let ensure_end = self.jit.get_current_address();
+        let raise = self.entry_raise;
+        monoasm! { self.jit,
+            movq rdi, r12;
+            movq rax, (runtime::check_err);
+            call rax;
+            testq rax, rax;
+            jne  raise;
+        };
+        self.fetch_and_dispatch();
+
         //BcOp::Mov
         let mov = self.jit.get_current_address();
         self.vm_get_addr_r15();
@@ -260,6 +272,7 @@ impl Codegen {
         self.dispatch[80] = ret;
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
+        self.dispatch[85] = ensure_end;
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();

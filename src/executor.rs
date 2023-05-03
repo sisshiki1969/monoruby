@@ -164,6 +164,10 @@ impl Executor {
             err.show_error_message_and_all_loc();
             panic!("error occurred in startup.");
         };
+        #[cfg(feature = "emit-bc")]
+        {
+            globals.startup_flag = true;
+        }
         executor
     }
 
@@ -890,6 +894,7 @@ impl BcPc {
             TraceIr::Ret(reg) => format!("ret {:?}", reg),
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
             TraceIr::Break(reg) => format!("break {:?}", reg),
+            TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
                 ret,

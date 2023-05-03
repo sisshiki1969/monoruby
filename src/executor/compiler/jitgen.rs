@@ -1533,6 +1533,17 @@ impl Codegen {
                     self.epilogue();
                     return false;
                 }
+                TraceIr::EnsureEnd => {
+                    self.gen_write_back_locals(&mut ctx);
+                    let raise = self.entry_raise;
+                    monoasm! { self.jit,
+                        movq rdi, r12;
+                        movq rax, (runtime::check_err);
+                        call rax;
+                        testq rax, rax;
+                        jne  raise;
+                    };
+                }
                 TraceIr::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;
                     let dest_idx = (next_idx as i64 + disp as i64) as usize;

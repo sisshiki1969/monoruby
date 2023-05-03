@@ -66,18 +66,27 @@ impl BytecodeGen {
         for ExceptionEntry {
             range,
             rescue,
+            ensure,
             err_reg,
         } in std::mem::take(&mut self.exception_table)
         {
-            let start = info.get_pc(self[range.start].to_usize());
-            let end = info.get_pc(self[range.end].to_usize());
-            let rescue = info.get_pc(self[rescue].to_usize());
+            if rescue.is_none() && ensure.is_none() {
+                continue;
+            }
+            let start = self.get_pc(info, range.start);
+            let end = self.get_pc(info, range.end);
+            let rescue = rescue.map(|l| self.get_pc(info, l));
+            let ensure = ensure.map(|l| self.get_pc(info, l));
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
-            info.exception_push(start..end, rescue, err_reg);
+            info.exception_push(start..end, rescue, ensure, err_reg);
         }
 
         info.sourcemap = locs;
         Ok(())
+    }
+
+    fn get_pc(&self, info: &ISeqInfo, label: Label) -> BcPc {
+        info.get_pc(self[label].to_usize())
     }
 
     fn inst_to_bc(&self, store: &mut FnStore, inst: &BcIr, idx: usize) -> Bc {
@@ -233,6 +242,7 @@ impl BytecodeGen {
                 let op1 = self.get_index(reg);
                 Bc::from(enc_w(82, op1.0))
             }
+            BcIr::EnsureEnd => Bc::from(enc_w(85, 0)),
             BcIr::Array(ret, src, len) => {
                 let op1 = self.get_index(ret);
                 let op2 = self.get_index(src);

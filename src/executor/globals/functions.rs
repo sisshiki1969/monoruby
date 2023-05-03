@@ -661,11 +661,12 @@ impl FuncInfo {
             "{:?}",
             info.exception_map
                 .iter()
-                .map(|(range, rescue, err_reg)| {
+                .map(|(range, rescue, ensure, err_reg)| {
                     let start = info.get_pc_index(Some(range.start));
                     let end = info.get_pc_index(Some(range.end));
-                    let dest = info.get_pc_index(Some(*rescue));
-                    (start..end, dest, err_reg)
+                    let rescue = rescue.map(|pc| info.get_pc_index(Some(pc)));
+                    let ensure = ensure.map(|pc| info.get_pc_index(Some(pc)));
+                    (start..end, rescue, ensure, err_reg)
                 })
                 .collect::<Vec<_>>()
         );
@@ -697,7 +698,8 @@ pub(crate) struct ISeqInfo {
     /// Exception handling map.
     exception_map: Vec<(
         std::ops::Range<BcPc>, // range of capturing exception
-        BcPc,                  // rescue destination pc
+        Option<BcPc>,          // rescue destination pc
+        Option<BcPc>,          // ensure destination pc
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
     /// the name of arguments.
@@ -908,12 +910,12 @@ impl ISeqInfo {
     pub(in crate::executor) fn get_exception_dest(
         &self,
         pc: BcPc,
-    ) -> Option<(BcPc, Option<SlotId>)> {
+    ) -> Option<(Option<BcPc>, Option<BcPc>, Option<SlotId>)> {
         self.exception_map
             .iter()
-            .filter_map(|(range, rescue, slot)| {
+            .filter_map(|(range, rescue, ensure, slot)| {
                 if range.contains(&pc) {
-                    Some((*rescue, *slot))
+                    Some((*rescue, *ensure, *slot))
                 } else {
                     None
                 }
@@ -924,10 +926,11 @@ impl ISeqInfo {
     pub(in crate::executor) fn exception_push(
         &mut self,
         range: std::ops::Range<BcPc>,
-        rescue: BcPc,
+        rescue: Option<BcPc>,
+        ensure: Option<BcPc>,
         err_reg: Option<SlotId>,
     ) {
-        self.exception_map.push((range, rescue, err_reg));
+        self.exception_map.push((range, rescue, ensure, err_reg));
     }
 
     ///

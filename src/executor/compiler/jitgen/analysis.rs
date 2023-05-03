@@ -140,6 +140,9 @@ impl LoopAnalysis {
                 TraceIr::AliasMethod { .. } => {}
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
+                TraceIr::EnsureEnd => {
+                    reg_info.unlink_locals(func);
+                }
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
                 }
@@ -335,10 +338,7 @@ impl LoopAnalysis {
                     for i in 0..len {
                         reg_info.use_non_float(args + i);
                     }
-                    // unlink all local variables.
-                    for i in 1..1 + func.local_num() as u16 {
-                        reg_info.unlink(SlotId(i));
-                    }
+                    reg_info.unlink_locals(func);
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::MethodCallBlock { ret, info, .. } => {
@@ -349,10 +349,7 @@ impl LoopAnalysis {
                     for i in 0..len + 1 {
                         reg_info.use_non_float(args + i);
                     }
-                    // unlink all local variables.
-                    for i in 1..1 + func.local_num() as u16 {
-                        reg_info.unlink(SlotId(i));
-                    }
+                    reg_info.unlink_locals(func);
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::Super { ret, info, .. } => {
@@ -360,10 +357,7 @@ impl LoopAnalysis {
                     for i in 0..len {
                         reg_info.use_non_float(args + i);
                     }
-                    // unlink all local variables.
-                    for i in 1..1 + func.local_num() as u16 {
-                        reg_info.unlink(SlotId(i));
-                    }
+                    reg_info.unlink_locals(func);
                     reg_info.def_as(ret, false);
                 }
                 TraceIr::MethodArgs(..) => {}
@@ -523,6 +517,12 @@ impl RegInfo {
 
     fn unlink(&mut self, slot: SlotId) {
         self[slot].xmm_link = XmmLink::None;
+    }
+
+    fn unlink_locals(&mut self, func: &ISeqInfo) {
+        for i in 1..1 + func.local_num() as u16 {
+            self.unlink(SlotId(i));
+        }
     }
 
     fn def_as(&mut self, slot: SlotId, is_float: bool) {

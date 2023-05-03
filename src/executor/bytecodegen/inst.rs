@@ -86,6 +86,7 @@ pub(super) enum BcIr {
     Ret(BcReg),
     MethodRet(BcReg),
     Break(BcReg),
+    EnsureEnd,
     MethodCall(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     MethodCallBlock(Option<BcReg>, CallSiteId, bool), // (ret, id, has_splat)
     Super(Option<BcReg>, CallSiteId),
@@ -549,6 +550,8 @@ pub(in crate::executor) enum TraceIr {
     MethodRet(SlotId),
     /// method_return(%ret)
     Break(SlotId),
+    /// ensure_end
+    EnsureEnd,
     /// move(%dst, %src)
     Mov(SlotId, SlotId),
     /// initialize_method
@@ -828,6 +831,7 @@ impl TraceIr {
                 80 => Self::Ret(SlotId::new(op1)),
                 81 => Self::MethodRet(SlotId::new(op1)),
                 82 => Self::Break(SlotId::new(op1)),
+                85 => Self::EnsureEnd,
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),

@@ -694,6 +694,10 @@ pub(super) extern "C" fn err_method_return(vm: &Executor, globals: &mut Globals,
     });
 }
 
+pub(super) extern "C" fn check_err(globals: &Globals) -> usize {
+    globals.error().is_some().into()
+}
+
 #[repr(C)]
 pub(super) struct ErrorReturn {
     dest: Option<BcPc>,
@@ -736,16 +740,18 @@ pub(super) extern "C" fn handle_error(
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
             if let MonorubyErrKind::MethodReturn(val, target_lfp) = globals.error().unwrap().kind {
-                if lfp == target_lfp {
-                    eprintln!("[METHOD RETURN: CATCHED]");
-                    globals.take_error().unwrap();
-                    return ErrorReturn::return_normal(val);
+                if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    return ErrorReturn::goto(ensure);
                 } else {
-                    eprintln!("[METHOD RETURN: THROUGH]");
-                    return ErrorReturn::return_err();
+                    if lfp == target_lfp {
+                        globals.take_error().unwrap();
+                        return ErrorReturn::return_normal(val);
+                    } else {
+                        return ErrorReturn::return_err();
+                    }
                 }
             }
-            if let Some((rescue, err_reg)) = info.get_exception_dest(pc) {
+            if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err = globals.take_error().unwrap();
                 if let Some(err_reg) = err_reg {
                     let err_val = globals.exception_to_val(err);

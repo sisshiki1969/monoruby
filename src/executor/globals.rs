@@ -79,6 +79,8 @@ pub struct Globals {
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
     pub(crate) dumped_bc: usize,
+    #[cfg(feature = "emit-bc")]
+    pub(crate) startup_flag: bool,
 }
 
 impl std::ops::Index<FuncId> for Globals {
@@ -129,6 +131,8 @@ impl Globals {
             method_cache_stats: HashMap::default(),
             #[cfg(feature = "emit-bc")]
             dumped_bc: 1,
+            #[cfg(feature = "emit-bc")]
+            startup_flag: false,
         };
         globals.random.init_with_seed(None);
         builtins::init_builtins(&mut globals);
@@ -482,14 +486,16 @@ impl Globals {
     #[cfg(feature = "emit-bc")]
     pub(crate) fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
-        self.func
-            .functions()
-            .iter()
-            .skip(dumped_bc)
-            .for_each(|info| match &info.kind {
-                FuncKind::ISeq(_) => info.dump_bc(self),
-                _ => {}
-            });
+        if self.startup_flag {
+            self.func
+                .functions()
+                .iter()
+                .skip(dumped_bc)
+                .for_each(|info| match &info.kind {
+                    FuncKind::ISeq(_) => info.dump_bc(self),
+                    _ => {}
+                });
+        }
         self.dumped_bc = self.func.functions().len();
     }
 

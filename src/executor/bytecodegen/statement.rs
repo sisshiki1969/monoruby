@@ -277,8 +277,8 @@ impl BytecodeGen {
             if !body_use.is_ret() {
                 self.emit_br(else_label);
             }
-            let rescue_start = self.new_label();
-            self.apply_label(rescue_start);
+            let rescue_pos = self.new_label();
+            self.apply_label(rescue_pos);
             //assert_eq!(1, rescue.len());
             let err_reg = self.push().into();
             let old = self.temp;
@@ -321,7 +321,12 @@ impl BytecodeGen {
             self.pop();
             self.exception_table.push(ExceptionEntry {
                 range: body_start..body_end,
-                rescue: rescue_start,
+                rescue: Some(rescue_pos),
+                ensure: if ensure.is_some() {
+                    Some(ensure_label)
+                } else {
+                    None
+                },
                 err_reg: Some(err_reg),
             });
         } else {
@@ -332,6 +337,16 @@ impl BytecodeGen {
                     self.sourceinfo.clone(),
                 ));
             }
+            self.exception_table.push(ExceptionEntry {
+                range: body_start..body_end,
+                rescue: None,
+                ensure: if ensure.is_some() {
+                    Some(ensure_label)
+                } else {
+                    None
+                },
+                err_reg: None,
+            });
         }
         self.apply_label(else_label);
         if let Some(box else_) = else_ {
@@ -340,6 +355,7 @@ impl BytecodeGen {
         self.apply_label(ensure_label);
         if let Some(box ensure) = ensure {
             self.gen_expr(ensure, UseMode::NotUse)?;
+            self.emit(BcIr::EnsureEnd, Loc::default());
             if use_mode.is_ret() {
                 self.emit_ret(None);
             }
