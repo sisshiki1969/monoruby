@@ -168,7 +168,7 @@ struct LoopInfo {
 #[derive(Debug)]
 struct ExceptionEntry {
     range: std::ops::Range<Label>,
-    dest: Label,
+    rescue: Label,
     err_reg: Option<BcReg>,
 }
 
@@ -903,15 +903,7 @@ impl BytecodeGen {
         match ret {
             Some(ret) => {
                 self.gen_store_expr(ret, last)?;
-                match use_mode {
-                    UseMode::Ret => {
-                        self.emit_ret(ret.into());
-                    }
-                    UseMode::Use => {
-                        self.emit_temp_mov(ret);
-                    }
-                    UseMode::NotUse => {}
-                }
+                self.handle_mode(use_mode, ret);
             }
             None => {
                 self.gen_expr(last, use_mode)?;
@@ -1120,21 +1112,19 @@ impl BytecodeGen {
             } => {
                 let else_pos = self.new_label();
                 self.gen_opt_condbr(false, cond, else_pos)?;
+                let old = self.temp;
                 self.gen_expr(then_, use_mode)?;
                 if else_.is_empty() && use_mode == UseMode::NotUse {
                     self.apply_label(else_pos);
                 } else {
                     let succ_pos = self.new_label();
                     match use_mode {
+                        UseMode::NotUse | UseMode::Use => {
+                            self.emit_br(succ_pos);
+                        }
                         UseMode::Ret => {}
-                        UseMode::NotUse => {
-                            self.emit_br(succ_pos);
-                        }
-                        UseMode::Use => {
-                            self.emit_br(succ_pos);
-                            self.pop();
-                        }
                     }
+                    self.temp = old;
                     self.apply_label(else_pos);
                     self.gen_expr(else_, use_mode)?;
                     self.apply_label(succ_pos);

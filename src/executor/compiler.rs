@@ -101,7 +101,9 @@ pub struct Codegen {
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
     pub(super) entry_point: EntryPoint,
-    vm_raise: DestLabel,
+    /// Raise error.
+    /// r13: PC
+    entry_raise: DestLabel,
     f64_to_val: DestLabel,
     heap_to_f64: DestLabel,
     div_by_zero: DestLabel,
@@ -238,7 +240,7 @@ impl Codegen {
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
-            vm_raise: entry_panic,
+            entry_raise: entry_panic,
             f64_to_val: entry_panic,
             heap_to_f64,
             div_by_zero: entry_panic,
@@ -545,30 +547,19 @@ impl Codegen {
     ///
     /// Gen code for return in block.
     ///
-    /// rbp <- bp for a method which the block belongs to.
+    /// #### in
+    /// - rax: return value
+    /// - r13: pc
     ///
     fn method_return(&mut self) {
-        let cont1 = self.jit.label();
-        let cont2 = self.jit.label();
-        let loop1 = self.jit.label();
-        let loop2 = self.jit.label();
+        let raise = self.entry_raise;
         monoasm! { self.jit,
-            subq r14, (LBP_OUTER);  // r14 <- dfp
-        loop1:
-            cmpq [r14], 0;
-            je   cont1;
-            movq r14, [r14];
-            jmp   loop1;
-        cont1:
-            addq r14, (LBP_OUTER);  // r14 <- outermost lfp
-            movq rdi, [rbx];        // rdi <- cfp
-        loop2:
-            cmpq [rdi - ((BP_LFP - BP_PREV_CFP) as i32)], r14;
-            je   cont2;
-            movq rdi, [rdi];
-            jmp   loop2;
-        cont2:
-            lea  rbp, [rdi + (BP_PREV_CFP)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rax;
+            movq rax, (runtime::err_method_return);
+            call rax;
+            jmp  raise;
         };
     }
 

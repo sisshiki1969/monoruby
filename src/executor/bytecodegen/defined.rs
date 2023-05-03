@@ -32,7 +32,7 @@ impl BytecodeGen {
                                 self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
                                 self.exception_table.push(ExceptionEntry {
                                     range: body_start..body_end,
-                                    dest: nil_label,
+                                    rescue: nil_label,
                                     err_reg: None,
                                 });
                             } else {
@@ -88,7 +88,7 @@ impl BytecodeGen {
                     self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
                     self.exception_table.push(ExceptionEntry {
                         range: body_start..body_end,
-                        dest: nil_label,
+                        rescue: nil_label,
                         err_reg: None,
                     });
                 } else {
@@ -139,7 +139,7 @@ impl BytecodeGen {
                     self.emit(BcIr::DefinedMethod { ret, recv, name }, node.loc);
                     self.exception_table.push(ExceptionEntry {
                         range: body_start..body_end,
-                        dest: nil_label,
+                        rescue: nil_label,
                         err_reg: None,
                     });
                 } else {
@@ -169,7 +169,7 @@ impl BytecodeGen {
                     );
                     self.exception_table.push(ExceptionEntry {
                         range: body_start..body_end,
-                        dest: nil_label,
+                        rescue: nil_label,
                         err_reg: None,
                     });
                 } else {

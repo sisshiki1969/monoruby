@@ -67,6 +67,10 @@ impl Globals {
         self.set_error(MonorubyErr::cant_modify_frozen(self, val));
     }
 
+    pub(crate) fn error(&self) -> Option<&MonorubyErr> {
+        self.error.as_ref()
+    }
+
     pub(crate) fn take_error(&mut self) -> Option<MonorubyErr> {
         std::mem::take(&mut self.error)
     }
@@ -90,6 +94,7 @@ pub struct MonorubyErr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
+    MethodReturn(Value, LFP),
     NotMethod,
     Arguments,
     Syntax,
@@ -174,6 +179,7 @@ impl MonorubyErr {
             MonorubyErrKind::Internal => "InternalError",
             MonorubyErrKind::Regex => "RegexError",
             MonorubyErrKind::Runtime => "RuntimeError",
+            MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
     }
 }

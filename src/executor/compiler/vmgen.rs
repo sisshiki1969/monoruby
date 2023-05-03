@@ -130,6 +130,7 @@ impl Codegen {
 
         let vm_raise = self.jit.label();
         let leave = self.jit.label();
+        let goto = self.jit.label();
         monoasm! { self.jit,
         vm_raise:
             movq rdi, rbx;
@@ -140,7 +141,12 @@ impl Codegen {
             movq rax, (runtime::handle_error);
             call rax;
             testq rax, rax;
-            je  leave;
+            jne  goto;
+            testq rdx, rdx;
+            jz   leave;
+            movq rax, rdx;
+            jmp  leave;
+        goto:
             movq r13, rax;
         }
         self.fetch_and_dispatch();
@@ -149,7 +155,7 @@ impl Codegen {
             leave;
             ret;
         }
-        self.vm_raise = vm_raise;
+        self.entry_raise = vm_raise;
 
         let div_by_zero = self.jit.label();
         monoasm!(self.jit,
@@ -172,11 +178,11 @@ impl Codegen {
         //BcOp::MethodRet
         let method_ret = self.jit.get_current_address();
         self.vm_get_r15();
-        self.method_return();
         monoasm! { self.jit,
             movq rax, r15;
         };
-        self.epilogue();
+        self.method_return();
+        //self.epilogue();
 
         //BcOp::Break
         let block_break = self.jit.get_current_address();
@@ -722,7 +728,7 @@ impl Codegen {
     }
 
     fn vm_handle_error(&mut self) {
-        let raise = self.vm_raise;
+        let raise = self.entry_raise;
         monoasm! { self.jit,
             testq rax, rax;
             jeq  raise;

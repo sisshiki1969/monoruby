@@ -316,7 +316,7 @@ impl Codegen {
             movl [r13 - 8], r15;
             jmp method_resolved;
         );
-        let raise = self.vm_raise;
+        let raise = self.entry_raise;
         // raise error.
         monoasm!(self.jit,
         raise:

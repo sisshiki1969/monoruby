@@ -661,10 +661,10 @@ impl FuncInfo {
             "{:?}",
             info.exception_map
                 .iter()
-                .map(|(range, dest, err_reg)| {
+                .map(|(range, rescue, err_reg)| {
                     let start = info.get_pc_index(Some(range.start));
                     let end = info.get_pc_index(Some(range.end));
-                    let dest = info.get_pc_index(Some(*dest));
+                    let dest = info.get_pc_index(Some(*rescue));
                     (start..end, dest, err_reg)
                 })
                 .collect::<Vec<_>>()
@@ -697,7 +697,7 @@ pub(crate) struct ISeqInfo {
     /// Exception handling map.
     exception_map: Vec<(
         std::ops::Range<BcPc>, // range of capturing exception
-        BcPc,                  // destination pc
+        BcPc,                  // rescue destination pc
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
     /// the name of arguments.
@@ -911,9 +911,9 @@ impl ISeqInfo {
     ) -> Option<(BcPc, Option<SlotId>)> {
         self.exception_map
             .iter()
-            .filter_map(|(range, dest, slot)| {
+            .filter_map(|(range, rescue, slot)| {
                 if range.contains(&pc) {
-                    Some((*dest, *slot))
+                    Some((*rescue, *slot))
                 } else {
                     None
                 }
@@ -924,10 +924,10 @@ impl ISeqInfo {
     pub(in crate::executor) fn exception_push(
         &mut self,
         range: std::ops::Range<BcPc>,
-        dest: BcPc,
+        rescue: BcPc,
         err_reg: Option<SlotId>,
     ) {
-        self.exception_map.push((range, dest, err_reg));
+        self.exception_map.push((range, rescue, err_reg));
     }
 
     ///

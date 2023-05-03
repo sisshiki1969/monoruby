@@ -22,9 +22,9 @@ dependencies = [
 
 [[package]]
 name = "anstream"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6342bd4f5a1205d7f41e94a41a901f5647c938cdfa96036338e8533c9d6c2450"
+checksum = "0ca84f3628370c59db74ee214b3263d58f9aadd9b4fe7e711fd87dc452b7f163"
 dependencies = [
  "anstyle",
  "anstyle-parse",
@@ -177,9 +177,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.2.5"
+version = "4.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a1f23fa97e1d1641371b51f35535cb26959b8e27ab50d167a8b996b5bada819"
+checksum = "34d21f9bf1b425d2968943631ec91202fe5e837264063503708b83013f8fc938"
 dependencies = [
  "clap_builder",
  "clap_derive 4.2.0",
@@ -188,9 +188,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.2.5"
+version = "4.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fdc5d93c358224b4d6867ef1356d740de2303e9892edc06c5340daeccd96bab"
+checksum = "914c8c79fb560f238ef6429439a30023c862f7a28e688c58f7203f12b29970bd"
 dependencies = [
  "anstream",
  "anstyle",
@@ -917,7 +917,7 @@ name = "monoruby"
 version = "0.2.0"
 dependencies = [
  "chrono",
- "clap 4.2.5",
+ "clap 4.2.7",
  "dirs",
  "dtoa",
  "escape_string",
@@ -1337,7 +1337,7 @@ dependencies = [
 [[package]]
 name = "ruruby-parse"
 version = "0.0.1"
-source = "git+https://github.com/sisshiki1969/ruruby-parse.git#062eb5eac42d0e8acd154028da3874f321951ffd"
+source = "git+https://github.com/sisshiki1969/ruruby-parse.git#7868adfd9d466addadf3fa7a4faa267d5de6a01b"
 dependencies = [
  "clap 3.2.25",
  "console",

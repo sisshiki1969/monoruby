@@ -685,35 +685,84 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     Some(Value::nil())
 }
 
+pub(super) extern "C" fn err_method_return(vm: &Executor, globals: &mut Globals, val: Value) {
+    let target_lfp = vm.cfp().outermost_lfp();
+    globals.set_error(MonorubyErr {
+        kind: MonorubyErrKind::MethodReturn(val, target_lfp),
+        msg: String::new(),
+        loc: vec![],
+    });
+}
+
+#[repr(C)]
+pub(super) struct ErrorReturn {
+    dest: Option<BcPc>,
+    value: Option<Value>,
+}
+
+impl ErrorReturn {
+    fn return_err() -> Self {
+        Self {
+            dest: None,
+            value: None,
+        }
+    }
+
+    fn return_normal(val: Value) -> Self {
+        Self {
+            dest: None,
+            value: Some(val),
+        }
+    }
+
+    fn goto(dest: BcPc) -> Self {
+        Self {
+            dest: Some(dest),
+            value: None,
+        }
+    }
+}
+
 pub(super) extern "C" fn handle_error(
     vm: &mut Executor,
     globals: &mut Globals,
     meta: Meta,
     pc: BcPc,
-) -> Option<BcPc> {
+) -> ErrorReturn {
     let func_info = &globals[meta.func_id()];
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             // check exception table.
             let mut lfp = vm.cfp().lfp();
-            if let Some((dest, err_reg)) = info.get_exception_dest(pc) {
+            // First, we check method_return.
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = globals.error().unwrap().kind {
+                if lfp == target_lfp {
+                    eprintln!("[METHOD RETURN: CATCHED]");
+                    globals.take_error().unwrap();
+                    return ErrorReturn::return_normal(val);
+                } else {
+                    eprintln!("[METHOD RETURN: THROUGH]");
+                    return ErrorReturn::return_err();
+                }
+            }
+            if let Some((rescue, err_reg)) = info.get_exception_dest(pc) {
                 let err = globals.take_error().unwrap();
                 if let Some(err_reg) = err_reg {
                     let err_val = globals.exception_to_val(err);
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
                 }
-                return Some(dest);
-            };
-            let bc_base = func_info.data.pc();
-            let sourceinfo = info.sourceinfo.clone();
-            let loc = info.sourcemap[pc - bc_base];
-            globals.push_error_location(loc, sourceinfo);
+                return ErrorReturn::goto(rescue);
+            } else {
+                let bc_base = func_info.data.pc();
+                let sourceinfo = info.sourceinfo.clone();
+                let loc = info.sourcemap[pc - bc_base];
+                globals.push_error_location(loc, sourceinfo);
+            }
         }
         FuncKind::Builtin { .. } => {}
-        FuncKind::AttrReader { .. } => {}
-        FuncKind::AttrWriter { .. } => {}
+        _ => unreachable!(),
     }
-    None
+    ErrorReturn::return_err()
 }
 
 pub extern "C" fn _dump_reg(reg: u64) {

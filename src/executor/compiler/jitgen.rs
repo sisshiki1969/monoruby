@@ -1519,8 +1519,10 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, lhs);
                     self.gen_write_back_locals(&mut ctx);
                     self.load_rax(lhs);
+                    monoasm! { self.jit,
+                        movq r13, ((pc + 1).get_u64());
+                    };
                     self.method_return();
-                    self.epilogue();
                     return false;
                 }
                 TraceIr::Break(lhs) => {
@@ -1628,7 +1630,7 @@ impl Codegen {
 
 impl Codegen {
     fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
-        let raise = self.vm_raise;
+        let raise = self.entry_raise;
         let wb = ctx.get_write_back();
         if self.jit.get_page() == 0 {
             let error = self.jit.label();

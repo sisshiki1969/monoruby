@@ -321,7 +321,7 @@ impl BytecodeGen {
             self.pop();
             self.exception_table.push(ExceptionEntry {
                 range: body_start..body_end,
-                dest: rescue_start,
+                rescue: rescue_start,
                 err_reg: Some(err_reg),
             });
         } else {

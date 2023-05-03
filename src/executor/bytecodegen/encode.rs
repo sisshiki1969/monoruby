@@ -65,15 +65,15 @@ impl BytecodeGen {
         info.set_bytecode(ops);
         for ExceptionEntry {
             range,
-            dest,
+            rescue,
             err_reg,
         } in std::mem::take(&mut self.exception_table)
         {
             let start = info.get_pc(self[range.start].to_usize());
             let end = info.get_pc(self[range.end].to_usize());
-            let dest = info.get_pc(self[dest].to_usize());
+            let rescue = info.get_pc(self[rescue].to_usize());
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
-            info.exception_push(start..end, dest, err_reg);
+            info.exception_push(start..end, rescue, err_reg);
         }
 
         info.sourcemap = locs;
