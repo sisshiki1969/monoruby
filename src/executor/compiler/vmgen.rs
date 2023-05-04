@@ -807,15 +807,16 @@ impl Codegen {
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         monoasm! { self.jit,
-            movl rdx, rdi;
-            negq rdx;
-            movq rdx, [r14 + rdx * 8 - (LBP_SELF)];
-            movl rcx, rsi;
+            movl rcx, rdi;  // new
             negq rcx;
             movq rcx, [r14 + rcx * 8 - (LBP_SELF)];
-            movq rdi, r12;
-            movq rsi, [r14 - (LBP_SELF)];
-            movq r8, [r14 - (LBP_META)];
+            movl r8, rsi;  // old
+            negq r8;
+            movq r8, [r14 + r8 * 8 - (LBP_SELF)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (LBP_SELF)];
+            movq r9, [r14 - (LBP_META)];
             movq rax, (runtime::alias_method);
             call rax;
         };

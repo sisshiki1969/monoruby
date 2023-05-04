@@ -1308,11 +1308,12 @@ impl Codegen {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
-                        movq rdx, [r14 - (conv(new))];
-                        movq rcx, [r14 - (conv(old))];
-                        movq rdi, r12;
-                        movq rsi, [r14 - (LBP_SELF)];
-                        movq r8, [r14 - (LBP_META)];
+                        movq rdi, rbx;
+                        movq rsi, r12;
+                        movq rdx, [r14 - (LBP_SELF)];
+                        movq rcx, [r14 - (conv(new))];
+                        movq r8, [r14 - (conv(old))];
+                        movq r9, [r14 - (LBP_META)];
                         movq rax, (runtime::alias_method);
                         call rax;
                     );

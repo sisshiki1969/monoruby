@@ -159,7 +159,7 @@ pub(super) struct HandleArguments {
 }
 
 pub(super) extern "C" fn vm_handle_arguments(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     ha: &HandleArguments,
@@ -170,7 +170,7 @@ pub(super) extern "C" fn vm_handle_arguments(
         FuncKind::ISeq(info) => {
             // required + optional + rest
             if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, ha.callee_reg) {
-                globals.err_wrong_number_of_arg_range(arg_num, range);
+                vm.err_wrong_number_of_arg_range(arg_num, range);
                 return None;
             };
             // keyword
@@ -609,6 +609,7 @@ pub(super) extern "C" fn singleton_define_method(
 }
 
 pub(super) extern "C" fn alias_method(
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     new: Value,
@@ -781,7 +782,7 @@ pub(super) extern "C" fn handle_error(
                 }
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
-                let err_val = vm.take_error_obj();
+                let err_val = vm.take_error_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };

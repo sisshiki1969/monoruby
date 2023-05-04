@@ -77,9 +77,9 @@ impl Executor {
         std::mem::take(&mut self.error)
     }
 
-    pub(crate) fn take_error_obj(&mut self) -> Value {
+    pub(crate) fn take_error_obj(&mut self, globals: &Globals) -> Value {
         let err = self.take_error().unwrap();
-        self.exception_to_val(err)
+        self.exception_to_val(globals, err)
     }
 
     pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
@@ -91,15 +91,8 @@ impl Executor {
         };
     }
 
-    fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
-        let name = err.get_class_name();
-        self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .expect(&format!("{name}"))
-            .as_class_id()
-    }
-
-    pub fn exception_to_val(&self, err: MonorubyErr) -> Value {
-        let class_id = self.get_error_class(&err);
+    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
+        let class_id = globals.get_error_class(&err);
         Value::new_exception_with_class(err, class_id)
     }
 }
