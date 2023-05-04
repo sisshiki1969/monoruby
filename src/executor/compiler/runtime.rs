@@ -43,7 +43,7 @@ pub(super) extern "C" fn get_classdef_data<'a>(
 }
 
 pub(super) extern "C" fn get_super_data(
-    vm: &Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
 ) -> Option<FuncDataPtr> {
@@ -421,7 +421,7 @@ pub(super) extern "C" fn set_array_integer_index(
     mut base: Value,
     index: i64,
     vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
     match base.as_array_mut().set_index(index, src) {
@@ -715,7 +715,7 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     Some(Value::nil())
 }
 
-pub(super) extern "C" fn err_method_return(vm: &Executor, globals: &mut Globals, val: Value) {
+pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
     vm.set_error(MonorubyErr {
         kind: MonorubyErrKind::MethodReturn(val, target_lfp),

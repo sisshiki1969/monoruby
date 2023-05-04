@@ -102,6 +102,7 @@ pub(crate) struct InstanceVarCache {
 }
 
 pub(crate) extern "C" fn set_instance_var_with_cache(
+    vm: &mut Executor,
     globals: &mut Globals,
     mut base: Value,
     name: IdentId,
@@ -112,7 +113,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => {
-            vm.err_cant_modify_frozen(base);
+            vm.err_cant_modify_frozen(globals, base);
             return None;
         }
     };

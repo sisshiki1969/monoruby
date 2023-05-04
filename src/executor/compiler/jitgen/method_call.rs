@@ -432,11 +432,12 @@ impl Codegen {
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
-            movq rsi, rdi;  // recv: Value
-            movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [r14 - (conv(args))];  //val: Value
-            movq rdi, r12; //&mut Globals
-            lea  r8, [rip + cache];
+            movq rdx, rdi;  // recv: Value
+            movq rcx, (ivar_name.get()); // name: IdentId
+            movq r8, [r14 - (conv(args))];  //val: Value
+            movq rdi, rbx; //&mut Executor
+            movq rsi, r12; //&mut Globals
+            lea  r9, [rip + cache];
             movq rax, (set_instance_var_with_cache);
             call rax;
         );
