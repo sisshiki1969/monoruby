@@ -151,10 +151,12 @@ impl Codegen {
             ..
         } = method_info;
         let deopt = self.gen_side_deopt(pc - 1, ctx);
-        self.load_rdi(recv);
+        let mut self_in_rdi_flag = false;
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         if !recv.is_zero() {
+            self.load_rdi(recv);
+            self_in_rdi_flag = true;
             self.guard_class(cached.class_id, deopt);
         }
         self.guard_version(cached.version, deopt);
@@ -172,6 +174,9 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 } else {
+                    if !self_in_rdi_flag {
+                        self.load_rdi(recv);
+                    }
                     self.attr_reader(ctx, ivar_name, ret);
                 }
             }
@@ -179,9 +184,15 @@ impl Codegen {
                 assert_eq!(1, len);
                 assert!(block.is_none());
                 assert!(fnstore[callid].kw_args.is_empty());
+                if !self_in_rdi_flag {
+                    self.load_rdi(recv);
+                }
                 self.attr_writer(ctx, ivar_name, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
+                if !self_in_rdi_flag {
+                    self.load_rdi(recv);
+                }
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
@@ -270,7 +281,7 @@ impl Codegen {
 
         monoasm! {self.jit,
             movq rcx, r15;
-            movl rsi, (callid.get()); // CallSiteId
+            movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
         monoasm!(self.jit,
@@ -576,7 +587,7 @@ impl Codegen {
                 } else {
                     monoasm! {self.jit,
                         movq rcx, (func_data as *const _ as u64);
-                        movl rsi, (callid.get());
+                        movl rdx, (callid.get());
                     }
                     self.handle_arguments();
                     self.jit_handle_error(ctx, pc);
@@ -642,8 +653,8 @@ impl Codegen {
         self.block_arg_expand();
 
         monoasm! { self.jit,
-            movl rsi, (callid.get()); // CallSiteId
             movq rcx, r13;
+            movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
         self.jit_handle_error(ctx, pc);
