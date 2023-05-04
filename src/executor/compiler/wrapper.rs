@@ -213,7 +213,7 @@ pub extern "C" fn wrapper(
     match f(vm, globals, lfp, arg, len) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }

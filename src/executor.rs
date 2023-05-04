@@ -4,6 +4,7 @@ use ruruby_parse::Node;
 mod builtins;
 pub mod bytecodegen;
 mod compiler;
+mod error;
 mod frame;
 mod globals;
 mod op;
@@ -132,6 +133,8 @@ pub struct Executor {
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
+    /// error information.
+    error: Option<MonorubyErr>,
 }
 
 impl alloc::GC<RValue> for Executor {
@@ -254,7 +257,7 @@ impl Executor {
             }
         }
 
-        res.ok_or_else(|| globals.take_error().unwrap())
+        res.ok_or_else(|| self.take_error().unwrap())
     }
 
     pub(super) fn get_block_data(
@@ -356,7 +359,7 @@ impl Executor {
         let func_id = match globals.find_method(receiver, method, false) {
             Ok(id) => id,
             Err(err) => {
-                globals.set_error(err);
+                self.set_error(err);
                 return None;
             }
         };
@@ -386,7 +389,7 @@ impl Executor {
             args.len(),
         ) {
             Some(val) => Ok(val),
-            None => Err(globals.take_error().unwrap()),
+            None => Err(self.take_error().unwrap()),
         }
     }
 
@@ -420,7 +423,7 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
-        .ok_or_else(|| globals.take_error().unwrap())
+        .ok_or_else(|| self.take_error().unwrap())
     }
 
     fn invoke_method2_if_exists(
@@ -451,7 +454,7 @@ impl Executor {
     ) -> Result<Value> {
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
-            .ok_or_else(|| globals.take_error().unwrap())
+            .ok_or_else(|| self.take_error().unwrap())
     }
 
     fn define_class(

@@ -991,8 +991,9 @@ impl Codegen {
                     self.load_rdi(start);
                     self.load_rsi(end);
                     monoasm! { self.jit,
-                        movq rdx, r12; // &mut Globals
-                        movl rcx, (if exclude_end {1} else {0});
+                        movq rdx, rbx; // &mut Executor
+                        movq rcx, r12; // &mut Globals
+                        movl r8, (if exclude_end {1} else {0});
                         movq rax, (runtime::gen_range);
                         call rax;
                     };
@@ -1538,7 +1539,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     let raise = self.entry_raise;
                     monoasm! { self.jit,
-                        movq rdi, r12;
+                        movq rdi, rbx;
                         movq rax, (runtime::check_err);
                         call rax;
                         testq rax, rax;

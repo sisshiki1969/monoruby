@@ -156,7 +156,7 @@ impl Codegen {
             leave;
             ret;
         no_block:
-            movq rdi, r12;
+            movq rdi, rbx;
             movq rax, (runtime::err_no_block_given);
             call rax;
             xorq rax, rax;

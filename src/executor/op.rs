@@ -34,7 +34,7 @@ macro_rules! binop_values {
                     (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
                     (RV::Integer(_), _) | (RV::BigInt(_), _) | (RV::Float(_), _) => {
                         let err = MonorubyErr::no_implicit_conversion(&globals, rhs, INTEGER_CLASS);
-                        globals.set_error(err);
+                        vm.set_error(err);
                         return None;
                     }
                     _ => {
@@ -139,14 +139,14 @@ pub(super) extern "C" fn div_values(
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Integer(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.err_divide_by_zero();
+                vm.err_divide_by_zero();
                 return None;
             }
             Value::new_integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.err_divide_by_zero();
+                vm.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
@@ -154,14 +154,14 @@ pub(super) extern "C" fn div_values(
         (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).div(&rhs)),
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
-                globals.err_divide_by_zero();
+                vm.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
-                globals.err_divide_by_zero();
+                vm.err_divide_by_zero();
                 return None;
             }
             Value::new_bigint(lhs.div_floor(rhs))
@@ -491,7 +491,7 @@ pub extern "C" fn vm_get_constant(
             Some(val)
         }
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }

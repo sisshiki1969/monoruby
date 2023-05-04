@@ -337,7 +337,7 @@ fn rand(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let i = match len {
         0 => 0i64,
         1 => arg[0].coerce_to_fixnum(globals)?,
@@ -617,7 +617,7 @@ fn abort(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     if len == 1 {
         match arg[0].is_string() {
             Some(s) => eprintln!("{}", s),

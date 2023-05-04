@@ -1,15 +1,17 @@
+use ruruby_parse::{Loc, ParamKind, ParseErr, ParseErrKind, SourceInfoRef};
+
 use super::*;
 
 //
 // error handlers
 //
-impl Globals {
+impl Executor {
     pub fn set_error(&mut self, err: MonorubyErr) {
         self.error = Some(err);
     }
 
-    pub(crate) fn err_method_not_found(&mut self, name: IdentId, obj: Value) {
-        self.set_error(MonorubyErr::method_not_found(self, name, obj))
+    pub(crate) fn err_method_not_found(&mut self, globals: &Globals, name: IdentId, obj: Value) {
+        self.set_error(MonorubyErr::method_not_found(globals, name, obj))
     }
 
     /*pub(crate) fn err_protected_method_called(&mut self, name: IdentId, obj: Value) {
@@ -63,8 +65,8 @@ impl Globals {
     ///
     /// Set FrozenError with message "can't modify frozen Integer: 5".
     ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(self, val));
+    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
     }
 
     pub(crate) fn error(&self) -> Option<&MonorubyErr> {
@@ -87,6 +89,18 @@ impl Globals {
             }
             None => unreachable!(),
         };
+    }
+
+    fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
+        let name = err.get_class_name();
+        self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
+            .expect(&format!("{name}"))
+            .as_class_id()
+    }
+
+    pub fn exception_to_val(&self, err: MonorubyErr) -> Value {
+        let class_id = self.get_error_class(&err);
+        Value::new_exception_with_class(err, class_id)
     }
 }
 

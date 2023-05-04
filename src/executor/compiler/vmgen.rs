@@ -119,7 +119,7 @@ impl Codegen {
         let wrong_argument = self.jit.label();
         monoasm! {self.jit,
         wrong_argument:
-            movq rdi, r12;
+            movq rdi, rbx;
             movl rsi, rdx;  // given
             movzxw rdx, [r13 - 8];  // min
             movzxw rcx, [r13 - 14];  // max
@@ -160,7 +160,7 @@ impl Codegen {
         let div_by_zero = self.jit.label();
         monoasm!(self.jit,
         div_by_zero:
-            movq rdi, r12;
+            movq rdi, rbx;
             movq rax, (runtime::err_divide_by_zero);
             call rax;
             jmp vm_raise;
@@ -197,7 +197,7 @@ impl Codegen {
         let ensure_end = self.jit.get_current_address();
         let raise = self.entry_raise;
         monoasm! { self.jit,
-            movq rdi, r12;
+            movq rdi, rbx;
             movq rax, (runtime::check_err);
             call rax;
             testq rax, rax;
@@ -972,8 +972,9 @@ impl Codegen {
         self.vm_get_rdi();
         self.vm_get_rsi();
         monoasm! { self.jit,
-            movq rdx, r12;
-            movl rcx, (if exclude_end {1} else {0});
+            movq rdx, rbx;
+            movq rcx, r12;
+            movl r8, (if exclude_end {1} else {0});
             movq rax, (runtime::gen_range);
             call rax;
         };

@@ -107,7 +107,7 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => {
-            globals.err_cant_modify_frozen(base);
+            vm.err_cant_modify_frozen(base);
             return None;
         }
     };

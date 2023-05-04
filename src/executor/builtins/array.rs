@@ -118,7 +118,7 @@ fn index(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     if len == 1 {
         let idx = arg[0];
         lfp.self_val().as_array().get_elem1(globals, idx)
@@ -169,7 +169,7 @@ fn inject(
             return Err(MonorubyErr::no_block_given());
         }
     };
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let self_ = lfp.self_val();
     let mut iter = self_.as_array().iter();
     let mut res = if len == 0 {
@@ -192,7 +192,7 @@ fn inject(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let sep = if len == 0 {
         "".to_string()
     } else {
@@ -224,23 +224,21 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
 fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
     let self_ = lfp.self_val();
     let aref = self_.as_array();
     match lfp.block() {
         None => {
             for v in &**aref {
-                sum = add_values(vm, globals, sum, *v)
-                    .ok_or_else(|| globals.take_error().unwrap())?;
+                sum = add_values(vm, globals, sum, *v).ok_or_else(|| vm.take_error().unwrap())?;
             }
         }
         Some(b) => {
             let data = vm.get_block_data(globals, b);
             for v in &**aref {
                 let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
-                sum = add_values(vm, globals, sum, rhs)
-                    .ok_or_else(|| globals.take_error().unwrap())?;
+                sum = add_values(vm, globals, sum, rhs).ok_or_else(|| vm.take_error().unwrap())?;
             }
         }
     }

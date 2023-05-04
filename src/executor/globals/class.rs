@@ -396,7 +396,7 @@ impl Globals {
         }
     }
 
-    pub fn find_super(&mut self, self_val: Value, func_name: IdentId) -> Option<MethodTableEntry> {
+    /*pub fn find_super(&mut self, self_val: Value, func_name: IdentId) -> Option<MethodTableEntry> {
         match self.check_super(self_val, func_name) {
             Some(entry) => Some(entry),
             None => {
@@ -404,7 +404,7 @@ impl Globals {
                 None
             }
         }
-    }
+    }*/
 
     ///
     /// Check whether a method *name* for object *obj* exists.
@@ -422,7 +422,11 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    fn check_super(&mut self, self_val: Value, name: IdentId) -> Option<MethodTableEntry> {
+    pub(crate) fn check_super(
+        &mut self,
+        self_val: Value,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
         let class_id = self_val.class();
         let MethodTableEntry { owner, .. } = self.check_method_for_class(class_id, name)?;
         let superclass = owner.get_obj(self).superclass_id()?;

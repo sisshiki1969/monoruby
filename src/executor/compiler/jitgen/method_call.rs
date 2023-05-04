@@ -300,10 +300,11 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm!(self.jit,
         slow_path:
-            movq rdi, r12;
-            movq rsi, (callid.get()); // CallSiteId
-            movq rdx, [r14 - (conv(recv))]; // receiver: Value
-            movw rcx, (recv.0);
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, (callid.get()); // CallSiteId
+            movq rcx, [r14 - (conv(recv))]; // receiver: Value
+            movw r8, (recv.0);
             movq rax, (runtime::find_method);
             call rax;
             // absolute address was returned to rax.

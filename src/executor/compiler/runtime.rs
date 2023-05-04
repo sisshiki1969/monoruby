@@ -10,6 +10,7 @@ use super::*;
 /// If no method was found or the number of arguments was invalid, return None (==0u64).
 ///
 pub(super) extern "C" fn find_method(
+    vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
     receiver: Value,
@@ -20,7 +21,7 @@ pub(super) extern "C" fn find_method(
     let func_id = match globals.find_method(receiver, func_name, recv_reg == 0) {
         Ok(id) => id,
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             return None;
         }
     };
@@ -48,7 +49,15 @@ pub(super) extern "C" fn get_super_data(
 ) -> Option<FuncDataPtr> {
     let func_id = vm.method_func_id();
     let func_name = globals.func[func_id].name().unwrap();
-    let super_id = globals.find_super(self_val, func_name)?.func_id();
+    let super_id = match globals.check_super(self_val, func_name) {
+        Some(entry) => Some(entry),
+        None => {
+            vm.err_method_not_found(globals, func_name, self_val);
+            None
+        }
+    }?
+    .func_id();
+
     let func_data = globals.compile_on_demand(super_id);
     Some(func_data.as_ptr())
 }
@@ -91,13 +100,14 @@ pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
 pub(super) extern "C" fn gen_range(
     start: Value,
     end: Value,
+    vm: &mut Executor,
     globals: &mut Globals,
     exclude_end: bool,
 ) -> Option<Value> {
     match globals.generate_range(start, end, exclude_end) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }
@@ -357,7 +367,7 @@ pub(super) extern "C" fn get_index(
             return match base.as_array().get_elem1(globals, index) {
                 Ok(val) => Some(val),
                 Err(err) => {
-                    globals.set_error(err);
+                    vm.set_error(err);
                     None
                 }
             }
@@ -389,7 +399,7 @@ pub(super) extern "C" fn set_index(
                 return match base.as_array_mut().set_index(idx, src) {
                     Ok(val) => Some(val),
                     Err(err) => {
-                        globals.set_error(err);
+                        vm.set_error(err);
                         None
                     }
                 };
@@ -404,13 +414,14 @@ pub(super) extern "C" fn set_index(
 pub(super) extern "C" fn set_array_integer_index(
     mut base: Value,
     index: i64,
+    vm: &mut Executor,
     globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
     match base.as_array_mut().set_index(index, src) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }
@@ -429,7 +440,7 @@ pub(super) extern "C" fn get_constant(
     match vm.find_constant(globals, site_id) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }
@@ -466,13 +477,14 @@ pub(super) extern "C" fn get_instance_var(
 /// rax <= Some(*val*). If error("can't modify frozen object") occured, returns None.
 ///
 pub(super) extern "C" fn set_instance_var(
+    vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
     name: IdentId,
     val: Value,
 ) -> Option<Value> {
     if let Err(err) = globals.set_ivar(base, name, val) {
-        globals.set_error(err);
+        vm.set_error(err);
         return None;
     };
     Some(val)
@@ -534,7 +546,7 @@ pub(super) extern "C" fn define_class(
     match vm.define_class(globals, name, superclass, is_module) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }
@@ -606,7 +618,7 @@ pub(super) extern "C" fn alias_method(
     } {
         Ok(_) => {}
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             return None;
         }
     }
@@ -675,22 +687,22 @@ pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
-pub(super) extern "C" fn err_divide_by_zero(globals: &mut Globals) {
-    globals.err_divide_by_zero();
+pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
+    vm.err_divide_by_zero();
 }
 
-pub(super) extern "C" fn err_no_block_given(globals: &mut Globals) {
-    globals.err_no_block_given();
+pub(super) extern "C" fn err_no_block_given(vm: &mut Executor) {
+    vm.err_no_block_given();
 }
 
 pub(super) extern "C" fn err_wrong_number_of_arguments_range(
-    globals: &mut Globals,
+    vm: &mut Executor,
     given: usize,
     min: usize,
     max: usize,
 ) -> Option<Value> {
-    if let Err(err) = Globals::check_number_of_arguments(given, min..=max) {
-        globals.set_error(err);
+    if let Err(err) = Executor::check_number_of_arguments(given, min..=max) {
+        vm.set_error(err);
         return None;
     };
     Some(Value::nil())
@@ -698,15 +710,15 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
 
 pub(super) extern "C" fn err_method_return(vm: &Executor, globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
-    globals.set_error(MonorubyErr {
+    vm.set_error(MonorubyErr {
         kind: MonorubyErrKind::MethodReturn(val, target_lfp),
         msg: String::new(),
         loc: vec![],
     });
 }
 
-pub(super) extern "C" fn check_err(globals: &Globals) -> usize {
-    globals.error().is_some().into()
+pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
+    vm.error().is_some().into()
 }
 
 #[repr(C)]
@@ -750,12 +762,12 @@ pub(super) extern "C" fn handle_error(
             // check exception table.
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
-            if let MonorubyErrKind::MethodReturn(val, target_lfp) = globals.error().unwrap().kind {
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.error().unwrap().kind {
                 if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     return ErrorReturn::goto(ensure);
                 } else {
                     if lfp == target_lfp {
-                        globals.take_error().unwrap();
+                        vm.take_error().unwrap();
                         return ErrorReturn::return_normal(val);
                     } else {
                         return ErrorReturn::return_err();
@@ -763,7 +775,7 @@ pub(super) extern "C" fn handle_error(
                 }
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
-                let err_val = globals.take_error_obj();
+                let err_val = vm.take_error_obj();
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
@@ -773,7 +785,7 @@ pub(super) extern "C" fn handle_error(
                 let bc_base = func_info.data.pc();
                 let sourceinfo = info.sourceinfo.clone();
                 let loc = info.sourcemap[pc - bc_base];
-                globals.push_error_location(loc, sourceinfo);
+                vm.push_error_location(loc, sourceinfo);
             }
         }
         FuncKind::Builtin { .. } => {}

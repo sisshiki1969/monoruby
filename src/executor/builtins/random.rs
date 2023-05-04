@@ -22,7 +22,7 @@ fn srand(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random.seed);
     let new_seed = if len == 0 {
         None
