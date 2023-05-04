@@ -147,8 +147,9 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
-            movl rsi, rdi;  // id
+            movl rdx, rdi;  // id
             movq rdi, rbx;  // &Executor
+            movq rsi, r12;  // &Globals
             movq rax, (runtime::get_special_var);
             call rax;
         };

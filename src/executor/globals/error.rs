@@ -259,7 +259,7 @@ impl MonorubyErr {
         MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, loc, sourceinfo)
     }
 
-    pub(crate) fn cant_set_variable(id: usize, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
+    pub(crate) fn cant_set_variable(id: u32, loc: Loc, sourceinfo: SourceInfoRef) -> MonorubyErr {
         // 0 => $&
         // 1 => $'
         // 100 + n => $n
@@ -267,8 +267,10 @@ impl MonorubyErr {
             format!(
                 "can't set variable ${}.",
                 match id {
-                    0 => "&".to_string(),
-                    1 => "'".to_string(),
+                    ruruby_parse::SPECIAL_LASTMATCH => "&".to_string(),
+                    ruruby_parse::SPECIAL_POSTMATCH => "'".to_string(),
+                    ruruby_parse::SPECIAL_LOADPATH => "LOAD_PATH".to_string(),
+                    ruruby_parse::SPECIAL_LOADEDFEATURES => "LOADED_FEATURES".to_string(),
                     n => (n - 100).to_string(),
                 }
             ),

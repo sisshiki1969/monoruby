@@ -58,7 +58,7 @@ impl BytecodeGen {
                 }
             }
         }
-        let mut info = store[func_id].as_ruby_func_mut();
+        let info = store[func_id].as_ruby_func_mut();
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);

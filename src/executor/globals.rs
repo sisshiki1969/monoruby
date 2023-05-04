@@ -201,6 +201,23 @@ impl Globals {
     pub(crate) fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
         self.global_vars.get(&name).cloned()
     }
+
+    pub(crate) fn get_load_path(&self) -> Value {
+        let iter = self
+            .lib_directories
+            .iter()
+            .map(|s| Value::new_string_from_str(s));
+        Value::new_array_from_iter(iter)
+    }
+
+    pub(crate) fn get_loaded_features(&self) -> Value {
+        let iter = self
+            .loaded_canonicalized_files
+            .iter()
+            .map(|s| Value::new_string_from_str(s.to_string_lossy().as_ref()));
+        Value::new_array_from_iter(iter)
+    }
+
     pub(crate) fn current_source_path(&self, executor: &Executor) -> PathBuf {
         let source_func_id = executor.cfp().get_source_pos();
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()

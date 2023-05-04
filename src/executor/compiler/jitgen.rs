@@ -1094,7 +1094,8 @@ impl Codegen {
                     self.xmm_save(&xmm_using);
                     monoasm! { self.jit,
                         movq rdi, rbx;
-                        movl rsi, (id);
+                        movl rsi, r12;
+                        movl rdx, (id);
                         movq rax, (runtime::get_special_var);
                         call rax;
                     };
