@@ -141,24 +141,30 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     }
 }
 
+#[repr(C)]
+pub(super) struct HandleArguments {
+    caller_reg: *const Value,
+    callee: *const FuncData,
+    callee_reg: *mut Option<Value>,
+}
+
 pub(super) extern "C" fn vm_handle_arguments(
+    _vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
-    caller_reg: *const Value,
-    callee: &FuncData,
-    callee_reg: *mut Option<Value>,
+    ha: &HandleArguments,
     arg_num: usize,
 ) -> Option<Value> {
-    let callee_func_id = callee.meta.func_id();
+    let callee_func_id = unsafe { (*ha.callee).meta.func_id() };
     match &globals[callee_func_id].kind {
         FuncKind::ISeq(info) => {
             // required + optional + rest
-            if let Some((arg_num, range)) = handle_req_opt_rest(info, arg_num, callee_reg) {
+            if let Some((arg_num, range)) = handle_req_opt_rest(&info, arg_num, ha.callee_reg) {
                 globals.err_wrong_number_of_arg_range(arg_num, range);
                 return None;
             };
             // keyword
-            handle_keyword(info, &globals.func[callid], caller_reg, callee_reg);
+            handle_keyword(&info, &globals.func[callid], ha.caller_reg, ha.callee_reg);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }

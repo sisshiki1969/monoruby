@@ -585,23 +585,30 @@ impl Codegen {
     /// #### in
     /// - rdi: arg len
     /// - rcx: &FuncData
-    /// - rsi: CallSiteId
+    /// - rdx: CallSiteId
     ///
     /// #### out
     /// - rax: Option<Value>
     ///  
     fn handle_arguments(&mut self) {
         monoasm! {self.jit,
-            lea  r8, [rsp - (16 + LBP_SELF)];
-            movq r9, rdi;
-            subq rsp, 4088;
+            lea  r9, [rsp - (16 + LBP_SELF)];   // callee_reg
+            movq r8, rdi;
+            subq rsp, 4096;
             pushq rdi;
-            movq rdi, r12; // &mut Globals
-            lea  rdx, [r14 - (LBP_SELF)];
+            subq rsp, 24;
+            movq rdi, rbx; // &mut Executor
+            movq rsi, r12; // &mut Globals
+            movq [rsp + 16], r9;    // callee_reg
+            movq [rsp + 8], rcx;    // callee: &FuncData
+            lea  rax, [r14 - (LBP_SELF)];
+            movq [rsp], rax;        // caller_reg
+            movq rcx, rsp;
             movq rax, (runtime::vm_handle_arguments);
             call rax;
+            addq rsp, 24;
             popq rdi;
-            addq rsp, 4088;
+            addq rsp, 4096;
         }
     }
 
