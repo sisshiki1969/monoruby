@@ -1,17 +1,13 @@
-# foo.rb
-def foo
-  2.times do |i|
-    2.times  do |j|
-      puts "i=#{i} j=#{j}"
-      return 3 if i == 1 && j == 0
-    ensure
-      puts "ensure in j loop, j=#{j}"
-    end
-  ensure
-    puts "ensure in i loop, i=#{i}"
-  end
+begin
+  100
+rescue StandardError
+  puts "rescue"
+  100
+else
+  puts "else"
+  200
 ensure
-  puts "ensure in foo"
+  puts "ensure"
+  300
 end
-
-puts "foo=#{foo}"
+500

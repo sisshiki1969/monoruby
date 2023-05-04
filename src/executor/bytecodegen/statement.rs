@@ -253,9 +253,11 @@ impl BytecodeGen {
         ensure: Option<Box<Node>>,
         use_mode: UseMode,
     ) -> Result<()> {
+        let base = self.temp;
+        let ret_reg = self.next_reg().into();
         let ensure_label = self.new_label();
-
         let body_use = if else_.is_some() {
+            // if else_ exists, rescue must also exists.
             UseMode::NotUse
         } else if ensure.is_some() && use_mode.is_ret() {
             UseMode::Use
@@ -269,6 +271,7 @@ impl BytecodeGen {
         };
         let body_start = self.new_label();
         let body_end = self.new_label();
+        let range = body_start..body_end;
         self.apply_label(body_start);
         self.gen_expr(body, body_use)?;
         self.apply_label(body_end);
@@ -277,10 +280,10 @@ impl BytecodeGen {
             if !body_use.is_ret() {
                 self.emit_br(else_label);
             }
+            let err_reg = self.push().into();
             let rescue_pos = self.new_label();
             self.apply_label(rescue_pos);
             //assert_eq!(1, rescue.len());
-            let err_reg = self.push().into();
             let old = self.temp;
             for RescueEntry {
                 exception_list,
@@ -303,7 +306,10 @@ impl BytecodeGen {
                     self.emit_br(next_pos);
                 };
                 self.apply_label(cont_pos);
-                self.gen_expr(body, rescue_use)?;
+                match rescue_use {
+                    UseMode::Use => self.gen_store_expr(ret_reg, body)?,
+                    _ => self.gen_expr(body, rescue_use)?,
+                }
                 if !rescue_use.is_ret() {
                     self.emit_br(ensure_label);
                 }
@@ -320,7 +326,7 @@ impl BytecodeGen {
             }
             self.pop();
             self.exception_table.push(ExceptionEntry {
-                range: body_start..body_end,
+                range,
                 rescue: Some(rescue_pos),
                 ensure: if ensure.is_some() {
                     Some(ensure_label)
@@ -338,7 +344,7 @@ impl BytecodeGen {
                 ));
             }
             self.exception_table.push(ExceptionEntry {
-                range: body_start..body_end,
+                range,
                 rescue: None,
                 ensure: if ensure.is_some() {
                     Some(ensure_label)
@@ -359,6 +365,10 @@ impl BytecodeGen {
             if use_mode.is_ret() {
                 self.emit_ret(None);
             }
+        }
+        match use_mode {
+            UseMode::Use => assert_eq!(self.temp, base + 1),
+            _ => assert_eq!(self.temp, base),
         }
         Ok(())
     }
