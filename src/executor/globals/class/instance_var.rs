@@ -95,13 +95,18 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     rval.get_var(ivar_id).unwrap_or_default()
 }
 
+#[repr(C)]
+pub(crate) struct InstanceVarCache {
+    class_id: ClassId,
+    ivar_id: IvarId,
+}
+
 pub(crate) extern "C" fn set_instance_var_with_cache(
     globals: &mut Globals,
     mut base: Value,
     name: IdentId,
     val: Value,
-    cache_class: &mut ClassId,
-    cache_ivarid: &mut IvarId,
+    cache: &mut InstanceVarCache,
 ) -> Option<Value> {
     let class_id = base.class();
     let rval = match base.try_rvalue_mut() {
@@ -111,13 +116,13 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
             return None;
         }
     };
-    if class_id == *cache_class {
-        rval.set_var(*cache_ivarid, val);
+    if class_id == cache.class_id {
+        rval.set_var(cache.ivar_id, val);
         return Some(Value::nil());
     }
     let ivar_id = globals.get_ivar_id(class_id, name);
-    *cache_class = class_id;
-    *cache_ivarid = ivar_id;
+    cache.class_id = class_id;
+    cache.ivar_id = ivar_id;
     rval.set_var(ivar_id, val);
     Some(Value::nil())
 }
