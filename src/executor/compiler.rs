@@ -513,7 +513,7 @@ impl Codegen {
         );
     }
 
-    fn call_binop(&mut self, func: usize) {
+    fn call_binop(&mut self, func: BinaryOpFn) {
         monoasm!(self.jit,
             movq rdx, rdi;
             movq rcx, rsi;

@@ -75,6 +75,11 @@ impl Globals {
         std::mem::take(&mut self.error)
     }
 
+    pub(crate) fn take_error_obj(&mut self) -> Value {
+        let err = self.take_error().unwrap();
+        self.exception_to_val(err)
+    }
+
     pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
         match &mut self.error {
             Some(err) => {

@@ -17,6 +17,7 @@ use op::*;
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
 pub type BuiltinFn = fn(&mut Executor, &mut Globals, LFP, Arg, usize) -> Result<Value>;
+pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 
 const BP_PREV_CFP: i64 = 8;
 const BP_LFP: i64 = 16;
@@ -1177,9 +1178,7 @@ impl BinOpK {
         }
     }
 
-    fn generic_func(
-        &self,
-    ) -> extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value> {
+    fn generic_func(&self) -> BinaryOpFn {
         match self {
             BinOpK::Add => add_values,
             BinOpK::Sub => sub_values,

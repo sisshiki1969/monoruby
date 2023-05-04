@@ -463,7 +463,7 @@ impl Globals {
     fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
         let name = err.get_class_name();
         self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .unwrap()
+            .expect(&format!("{name}"))
             .as_class_id()
     }
 

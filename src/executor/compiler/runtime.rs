@@ -752,9 +752,9 @@ pub(super) extern "C" fn handle_error(
                 }
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
-                let err = globals.take_error().unwrap();
+                let err_val = globals.take_error_obj();
+                globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
-                    let err_val = globals.exception_to_val(err);
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
                 }
                 return ErrorReturn::goto(rescue);

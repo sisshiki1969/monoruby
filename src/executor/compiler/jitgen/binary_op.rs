@@ -93,7 +93,7 @@ impl Codegen {
             }
             BinOpK::Mul | BinOpK::Div | BinOpK::Rem => {
                 self.load_binary_args_with_mode(&mode);
-                self.generic_binop(ctx, ret, kind.generic_func() as _, pc);
+                self.generic_binop(ctx, ret, kind, pc);
             }
             _ => {
                 self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
@@ -348,7 +348,7 @@ impl Codegen {
         kind: BinOpK,
         ret: SlotId,
     ) {
-        self.generic_binop(ctx, ret, kind.generic_func() as _, pc);
+        self.generic_binop(ctx, ret, kind, pc);
     }
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
@@ -444,13 +444,13 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         match kind {
-            CmpKind::Eq => self.call_binop(cmp_eq_values as _),
-            CmpKind::Ne => self.call_binop(cmp_ne_values as _),
-            CmpKind::Ge => self.call_binop(cmp_ge_values as _),
-            CmpKind::Gt => self.call_binop(cmp_gt_values as _),
-            CmpKind::Le => self.call_binop(cmp_le_values as _),
-            CmpKind::Lt => self.call_binop(cmp_lt_values as _),
-            CmpKind::TEq => self.call_binop(cmp_teq_values as _),
+            CmpKind::Eq => self.call_binop(cmp_eq_values),
+            CmpKind::Ne => self.call_binop(cmp_ne_values),
+            CmpKind::Ge => self.call_binop(cmp_ge_values),
+            CmpKind::Gt => self.call_binop(cmp_gt_values),
+            CmpKind::Le => self.call_binop(cmp_le_values),
+            CmpKind::Lt => self.call_binop(cmp_lt_values),
+            CmpKind::TEq => self.call_binop(cmp_teq_values),
             _ => unimplemented!(),
         }
         self.xmm_restore(&xmm_using);
@@ -670,7 +670,8 @@ impl Codegen {
         self.shift_under(under, after);
     }
 
-    fn generic_binop(&mut self, ctx: &BBContext, ret: SlotId, func: usize, pc: BcPc) {
+    fn generic_binop(&mut self, ctx: &BBContext, ret: SlotId, kind: BinOpK, pc: BcPc) {
+        let func = kind.generic_func();
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         self.call_binop(func);

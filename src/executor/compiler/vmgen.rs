@@ -223,16 +223,16 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
-        let (add_rr, add_ri, add_ir) = self.vm_binops_opt(Self::int_add, add_values as _);
-        let (sub_rr, sub_ri, sub_ir) = self.vm_binops_opt(Self::int_sub, sub_values as _);
-        let (or_rr, or_ri, or_ir) = self.vm_binops_opt(Self::int_or, bitor_values as _);
-        let (and_rr, and_ri, and_ir) = self.vm_binops_opt(Self::int_and, bitand_values as _);
-        let (xor_rr, xor_ri, xor_ir) = self.vm_binops_opt(Self::int_xor, bitxor_values as _);
-        let (div_rr, div_ri, div_ir) = self.vm_binops(div_values as _);
-        let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values as _);
-        let (shl_rr, shl_ri, shl_ir) = self.vm_binops(shl_values as _);
-        let (shr_rr, shr_ri, shr_ir) = self.vm_binops(shr_values as _);
-        let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values as _);
+        let (add_rr, add_ri, add_ir) = self.vm_binops_opt(Self::int_add, add_values);
+        let (sub_rr, sub_ri, sub_ir) = self.vm_binops_opt(Self::int_sub, sub_values);
+        let (or_rr, or_ri, or_ir) = self.vm_binops_opt(Self::int_or, bitor_values);
+        let (and_rr, and_ri, and_ir) = self.vm_binops_opt(Self::int_and, bitand_values);
+        let (xor_rr, xor_ri, xor_ir) = self.vm_binops_opt(Self::int_xor, bitxor_values);
+        let (div_rr, div_ri, div_ir) = self.vm_binops(div_values);
+        let (mul_rr, mul_ri, mul_ir) = self.vm_binops(mul_values);
+        let (shl_rr, shl_ri, shl_ir) = self.vm_binops(shl_values);
+        let (shr_rr, shr_ri, shr_ir) = self.vm_binops(shr_values);
+        let (pow_rr, pow_ri, pow_ir) = self.vm_binops(pow_values);
 
         self.dispatch[1] = self.vm_singleton_method_def();
         self.dispatch[2] = self.vm_method_def();
@@ -757,7 +757,7 @@ impl Codegen {
         self.fetch_and_dispatch();
     }
 
-    fn vm_generic_binop(&mut self, generic: DestLabel, func: usize) {
+    fn vm_generic_binop(&mut self, generic: DestLabel, func: BinaryOpFn) {
         self.jit.bind_label(generic);
         self.vm_save_binary_class();
         self.call_binop(func);
@@ -1207,7 +1207,7 @@ impl Codegen {
     fn vm_binops_opt(
         &mut self,
         opt_func: fn(&mut Codegen, DestLabel),
-        generic_func: usize,
+        generic_func: BinaryOpFn,
     ) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
@@ -1242,7 +1242,7 @@ impl Codegen {
         (ptr_rr, ptr_ri, ptr_ir)
     }
 
-    fn vm_binops(&mut self, func: usize) -> (CodePtr, CodePtr, CodePtr) {
+    fn vm_binops(&mut self, func: BinaryOpFn) -> (CodePtr, CodePtr, CodePtr) {
         let common = self.jit.label();
         let ptr_rr = self.jit.get_current_address();
         self.vm_get_rr_r15(); // rdi <- lhs, rsi <- rhs, r15 <- ret addr
