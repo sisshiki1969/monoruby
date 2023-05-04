@@ -107,7 +107,7 @@ impl RegexpInner {
                 Ok(None) => return Ok((given.to_string(), false)),
                 Ok(Some(captures)) => {
                     let m = captures.get(0).unwrap();
-                    vm.get_captures(&captures, given);
+                    vm.save_captures(&captures, given);
                     (m.start(), m.end(), m.as_str())
                 }
                 Err(err) => {
@@ -183,7 +183,7 @@ impl RegexpInner {
                     Ok(Some(captures)) => {
                         let m = captures.get(0).unwrap();
                         i = m.end() + usize::from(m.start() == m.end());
-                        vm.get_captures(&captures, given);
+                        vm.save_captures(&captures, given);
                         (m.start(), m.end(), m.as_str())
                     }
                     Err(err) => {
@@ -224,16 +224,16 @@ impl RegexpInner {
         re: &Regex,
         given: &str,
         block: Option<BlockHandler>,
-        pos: usize,
+        char_pos: usize,
     ) -> Result<Value> {
-        let pos = match given.char_indices().nth(pos) {
+        let byte_pos = match given.char_indices().nth(char_pos) {
             Some((pos, _)) => pos,
             None => return Ok(Value::nil()),
         };
-        match re.captures_from_pos(given, pos) {
+        match re.captures_from_pos(given, byte_pos) {
             Ok(None) => Ok(Value::nil()),
             Ok(Some(captures)) => {
-                vm.get_captures(&captures, given);
+                vm.save_captures(&captures, given);
                 if let Some(block_handler) = block {
                     let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
                     let data = vm.get_block_data(globals, block_handler);
@@ -265,7 +265,7 @@ impl RegexpInner {
         match re.captures(given) {
             Ok(None) => Ok(None),
             Ok(Some(captures)) => {
-                vm.get_captures(&captures, given);
+                vm.save_captures(&captures, given);
                 Ok(captures.get(0))
             }
             Err(err) => Err(MonorubyErr::internalerr(format!(
@@ -373,7 +373,7 @@ impl RegexpInner {
         }
 
         if let Some(c) = last_captures {
-            vm.get_captures(&c, given)
+            vm.save_captures(&c, given)
         }
 
         Ok((res, !range.is_empty()))
@@ -394,7 +394,7 @@ impl RegexpInner {
             Ok(Some(captures)) => {
                 let mut res = given.to_string();
                 let m = captures.get(0).unwrap();
-                vm.get_captures(&captures, given);
+                vm.save_captures(&captures, given);
                 let mut rep = "".to_string();
                 let mut escape = false;
                 for ch in replace.chars() {

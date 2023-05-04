@@ -481,7 +481,7 @@ fn index(
         match info.captures(&lhs) {
             Ok(None) => return Ok(Value::nil()),
             Ok(Some(captures)) => {
-                vm.get_captures(&captures, &lhs);
+                vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 if nth == 0 {
                     Ok(Value::new_string_from_str(
@@ -1196,6 +1196,8 @@ mod test {
         );
         run_test(r##"'hoge hige hege bar'.match('h.ge', 0)[0]"##);
         run_test(r##"'hoge hige hege bar'.match('h.ge', 1)[0]"##);
+        run_test(r##"'hoge 髭男 hege bar'.match('髭.', 5)[0]"##);
+        run_test(r##"'髭女 髭男 髭面 髭剃'.match('髭.', 5)[0]"##);
     }
 
     #[test]

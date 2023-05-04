@@ -494,11 +494,16 @@ impl Executor {
 // Handling special variables.
 
 impl Executor {
+    ///
     /// Save captured strings to special variables.
-    /// $n (n:0,1,2,3...) <- The string which matched with nth parenthesis in the last successful match.
-    /// $& <- The string which matched successfully at last.
-    /// $' <- The string after $&.
-    pub(crate) fn get_captures(&mut self, captures: &Captures, given: &str) {
+    ///
+    /// - $n (n:0,1,2,3...) <- The string which matched with nth parenthesis in the last successful match.
+    ///
+    /// - $& <- The string which matched successfully at last.
+    ///
+    /// - $' <- The string after $&.
+    ///
+    pub(crate) fn save_captures(&mut self, captures: &Captures, given: &str) {
         //let id1 = IdentId::get_id("$&");
         //let id2 = IdentId::get_id("$'");
         match captures.get(0) {
