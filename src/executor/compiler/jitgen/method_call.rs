@@ -397,12 +397,12 @@ impl Codegen {
         let exit = self.jit.label();
         let slow_path = self.jit.label();
         let no_inline = self.jit.label();
-        let cached_class = self.jit.const_i32(0);
-        let cached_ivarid = self.jit.const_i32(-1);
+        let cache = self.jit.const_i64(-1);
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         monoasm!(self.jit,
-            movl rsi, [rip + cached_ivarid];
+            lea  rax, [rip + cache];
+            movl rsi, [rax + 4];
             cmpl rsi, (-1);
             jeq  slow_path;
             cmpw [rdi + 2], (ObjKind::OBJECT);
@@ -435,8 +435,7 @@ impl Codegen {
             movq rdx, (ivar_name.get()); // name: IdentId
             movq rcx, [r14 - (conv(args))];  //val: Value
             movq rdi, r12; //&mut Globals
-            lea  r8, [rip + cached_class];
-            lea  r9, [rip + cached_ivarid];
+            lea  r8, [rip + cache];
             movq rax, (set_instance_var_with_cache);
             call rax;
         );

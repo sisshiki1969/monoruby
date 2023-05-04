@@ -85,7 +85,6 @@ impl Codegen {
             movq rsi, [r14 - (LBP_SELF)];  // base: Value
             movq rcx, r15;     // val: Value
             lea r8, [r13 - 8]; // &mut ClassId
-            lea r9, [r13 - 4]; // &mut IvarId
             movq rax, (set_instance_var_with_cache);
             call rax;
         };
