@@ -681,8 +681,8 @@ fn split(
                 Ok(lfp.self_val())
             }
             None => {
-                let v = iter.collect();
-                Ok(Value::new_array_from_vec(v))
+                //let v = iter.collect();
+                Ok(Value::new_array_from_iter(iter))
             }
         }
     } else {
@@ -957,9 +957,8 @@ fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) 
     let string = receiver.expect_string(globals)?;
     let ary = string
         .split_inclusive('\n')
-        .map(|line| Value::new_string_from_str(line))
-        .collect();
-    Ok(Value::new_array_from_vec(ary))
+        .map(|line| Value::new_string_from_str(line));
+    Ok(Value::new_array_from_iter(ary))
 }
 
 ///
