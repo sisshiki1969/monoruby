@@ -468,8 +468,13 @@ fn kernel_integer(
     ))
 }
 
-fn load(vm: &mut Executor, globals: &mut Globals, file_name: std::path::PathBuf) -> Result<Value> {
-    if let Some((file_body, path)) = globals.load_lib(&file_name)? {
+fn load(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    file_name: std::path::PathBuf,
+    is_relative: bool,
+) -> Result<Value> {
+    if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
         vm.eval_script(globals, file_body, &path)?;
         Ok(Value::bool(true))
     } else {
@@ -492,7 +497,7 @@ fn require(
 ) -> Result<Value> {
     let feature = arg[0].expect_string(globals)?;
     let file_name = std::path::PathBuf::from(feature);
-    load(vm, globals, file_name)
+    load(vm, globals, file_name, false)
 }
 
 ///
@@ -513,7 +518,7 @@ fn require_relative(
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
     file_name.extend(&feature);
     file_name.set_extension("rb");
-    load(vm, globals, file_name)
+    load(vm, globals, file_name, true)
 }
 
 fn prepare_command_arg(input: String) -> (String, Vec<String>) {

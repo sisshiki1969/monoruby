@@ -70,7 +70,8 @@ pub struct Globals {
     pub lib_directories: Vec<String>,
     /// standard PRNG
     pub random: Prng,
-    loaded_features: HashSet<PathBuf>,
+    /// loaded libraries (canonical path).
+    loaded_canonicalized_files: IndexSet<PathBuf>,
     #[cfg(feature = "log-jit")]
     /// stats for deoptimization
     pub(crate) deopt_stats: HashMap<(FuncId, usize), usize>,
@@ -124,7 +125,7 @@ impl Globals {
                 "/home/monochrome/.rbenv/versions/3.3.0-dev/lib/ruby/gems/3.3.0+0/extensions/x86_64-linux/3.3.0+0-static/json-2.6.3".to_string()
             ],
             random: Prng::new(),
-            loaded_features: HashSet::default(),
+            loaded_canonicalized_files: IndexSet::default(),
             #[cfg(feature = "log-jit")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "log-jit")]
@@ -205,26 +206,34 @@ impl Globals {
         self[source_func_id].as_ruby_func().sourceinfo.path.clone()
     }
 
+    ///
+    /// Load external library.
+    ///
     pub(crate) fn load_lib(
         &mut self,
         file_name: &std::path::Path,
+        is_relative: bool,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
-        for lib in self.lib_directories.clone() {
-            let mut lib = std::path::PathBuf::from(lib);
-            lib.push(file_name);
-            lib.set_extension("rb");
-            if lib.exists() {
-                if !self.loaded_features.insert(lib.clone()) {
-                    return Ok(None);
+        if !is_relative {
+            for lib in self.lib_directories.clone() {
+                let mut lib = std::path::PathBuf::from(lib);
+                lib.push(file_name);
+                lib.set_extension("rb");
+                if lib.exists() {
+                    return self.load_file(lib);
                 }
-                return self.load_file(lib);
+                lib.set_extension("so");
+                if lib.exists() {
+                    eprintln!("Warning: currently, can not require .so file. {:?}", lib);
+                }
             }
-            lib.set_extension("so");
-            if lib.exists() {
-                eprintln!("Warning: currently, can not require .so file. {:?}", lib);
+            Err(MonorubyErr::cant_load(None, file_name))
+        } else {
+            if file_name.exists() {
+                return self.load_file(file_name.into());
             }
+            Err(MonorubyErr::cant_load(None, file_name))
         }
-        Err(MonorubyErr::cant_load(None, file_name))
     }
 
     /// ## ABI of JIT-compiled code.
@@ -278,6 +287,10 @@ impl Globals {
         &mut self,
         path: std::path::PathBuf,
     ) -> Result<Option<(String, std::path::PathBuf)>> {
+        let path = path.canonicalize().unwrap();
+        if !self.loaded_canonicalized_files.insert(path.clone()) {
+            return Ok(None);
+        }
         let mut file_body = String::new();
         let err = match std::fs::OpenOptions::new().read(true).open(&path) {
             Ok(mut file) => match file.read_to_string(&mut file_body) {
