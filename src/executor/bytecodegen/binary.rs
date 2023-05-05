@@ -28,6 +28,54 @@ impl BytecodeGen {
             BinOp::Cmp(kind) => self.gen_cmp(dst, kind, lhs, rhs, false, loc),
         }
     }
+
+    pub(super) fn gen_teq_condbr(
+        &mut self,
+        lhs: Node,
+        rhs: BcReg,
+        cont_pos: Label,
+        jmp_if_true: bool,
+    ) -> Result<()> {
+        let loc = lhs.loc;
+        let lhs = self.gen_temp_expr(lhs)?;
+        self.emit(
+            BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
+            loc,
+        );
+        self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
+        Ok(())
+    }
+
+    pub(super) fn gen_opt_condbr(
+        &mut self,
+        jmp_if_true: bool,
+        cond: Node,
+        else_pos: Label,
+    ) -> Result<()> {
+        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+            let loc = cond.loc;
+            let cond = self.next_reg().into();
+            self.gen_cmp(None, kind, lhs, rhs, true, loc)?;
+            self.pop();
+            self.emit_condbr(cond, else_pos, jmp_if_true, true);
+        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
+            if jmp_if_true {
+                self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
+            } else {
+                self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
+            }
+        } else if let NodeKind::BinOp(BinOp::LOr, box lhs, box rhs) = cond.kind {
+            if jmp_if_true {
+                self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
+            } else {
+                self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
+            }
+        } else {
+            let cond = self.gen_temp_expr(cond)?;
+            self.emit_condbr(cond, else_pos, jmp_if_true, false);
+        }
+        Ok(())
+    }
 }
 
 macro_rules! gen_ops {
@@ -184,54 +232,6 @@ impl BytecodeGen {
             loc,
         )?;
         Ok(ret)
-    }
-
-    pub(super) fn gen_teq_condbr(
-        &mut self,
-        lhs: Node,
-        rhs: BcReg,
-        cont_pos: Label,
-        jmp_if_true: bool,
-    ) -> Result<()> {
-        let loc = lhs.loc;
-        let lhs = self.gen_temp_expr(lhs)?;
-        self.emit(
-            BcIr::Cmp(CmpKind::TEq, lhs, BinopMode::RR(lhs, rhs), true),
-            loc,
-        );
-        self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
-        Ok(())
-    }
-
-    pub(super) fn gen_opt_condbr(
-        &mut self,
-        jmp_if_true: bool,
-        cond: Node,
-        else_pos: Label,
-    ) -> Result<()> {
-        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
-            let loc = cond.loc;
-            let cond = self.next_reg().into();
-            self.gen_cmp(None, kind, lhs, rhs, true, loc)?;
-            self.pop();
-            self.emit_condbr(cond, else_pos, jmp_if_true, true);
-        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
-            if jmp_if_true {
-                self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
-            } else {
-                self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
-            }
-        } else if let NodeKind::BinOp(BinOp::LOr, box lhs, box rhs) = cond.kind {
-            if jmp_if_true {
-                self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
-            } else {
-                self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
-            }
-        } else {
-            let cond = self.gen_temp_expr(cond)?;
-            self.emit_condbr(cond, else_pos, jmp_if_true, false);
-        }
-        Ok(())
     }
 
     fn gen_opt_land_condbr(
