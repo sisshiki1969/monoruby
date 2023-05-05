@@ -69,7 +69,7 @@ impl Codegen {
         } else {
             self.xmm_save(&xmm_using);
             monoasm!(self.jit,
-                movq rdi, rdi;  // base: Value
+                movq rdx, rdi;  // base: Value
                 movq rcx, (id.get());  // id: IdentId
                 movq r8, [r14 - (conv(src))];   // val: Value
                 movq rdi, rbx; //&mut Executor
