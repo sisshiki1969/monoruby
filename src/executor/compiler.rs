@@ -105,7 +105,6 @@ pub struct Codegen {
     /// r13: PC
     entry_raise: DestLabel,
     f64_to_val: DestLabel,
-    heap_to_f64: DestLabel,
     div_by_zero: DestLabel,
     no_block: DestLabel,
     ///
@@ -141,7 +140,6 @@ impl Codegen {
         let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let entry_panic = jit.label();
         let no_block = jit.label();
-        let heap_to_f64 = jit.label();
         let splat = jit.label();
         monoasm!(&mut jit,
         entry_panic:
@@ -161,43 +159,6 @@ impl Codegen {
             call rax;
             xorq rax, rax;
             leave;
-            ret;
-        heap_to_f64:
-            // we must save rdi for log_optimize.
-            subq rsp, 128;
-            movq [rsp + 112], rdi;
-            movq [rsp + 104], xmm15;
-            movq [rsp + 96], xmm14;
-            movq [rsp + 88], xmm13;
-            movq [rsp + 80], xmm12;
-            movq [rsp + 72], xmm11;
-            movq [rsp + 64], xmm10;
-            movq [rsp + 56], xmm9;
-            movq [rsp + 48], xmm8;
-            movq [rsp + 40], xmm7;
-            movq [rsp + 32], xmm6;
-            movq [rsp + 24], xmm5;
-            movq [rsp + 16], xmm4;
-            movq [rsp + 8], xmm3;
-            movq [rsp + 0], xmm2;
-            movq rax, (Value::val_tof);
-            call rax;
-            movq xmm2, [rsp + 0];
-            movq xmm3, [rsp + 8];
-            movq xmm4, [rsp + 16];
-            movq xmm5, [rsp + 24];
-            movq xmm6, [rsp + 32];
-            movq xmm7, [rsp + 40];
-            movq xmm8, [rsp + 48];
-            movq xmm9, [rsp + 56];
-            movq xmm10, [rsp + 64];
-            movq xmm11, [rsp + 72];
-            movq xmm12, [rsp + 80];
-            movq xmm13, [rsp + 88];
-            movq xmm14, [rsp + 96];
-            movq xmm15, [rsp + 104];
-            movq rdi, [rsp + 112];
-            addq rsp, 128;
             ret;
         splat:
             subq rsp, 1024;
@@ -242,7 +203,6 @@ impl Codegen {
             entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_raise: entry_panic,
             f64_to_val: entry_panic,
-            heap_to_f64,
             div_by_zero: entry_panic,
             no_block,
             wrong_argument: entry_panic,

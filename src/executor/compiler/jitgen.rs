@@ -709,133 +709,17 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value is Float, and convert to f64.
-    ///
-    /// side-exit if not Float.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm(*xmm*): f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax, rdi
-    ///
-    fn gen_val_to_f64_assume_float(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
-        let heap_to_f64 = self.heap_to_f64;
-        let entry = self.jit.label();
-        let heap = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(&mut self.jit,
-        entry:
-            testq rdi, 0b01;
-            jnz side_exit;
-            testq rdi, 0b10;
-            jz heap;
-            xorps xmm(xmm), xmm(xmm);
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            je exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm(xmm), rdi;
-            jmp exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-            movq xmm(xmm), xmm0;
-        exit:
-        );
-
-        entry
-    }
-
-    ///
     /// Confirm the Value is Float.
     ///
     /// side-exit if not Float.
     ///
     /// ### registers destroyed
     ///
-    /// - rax, rdi
+    /// - rdi
     ///
     fn gen_assume_float(&mut self, reg: SlotId, side_exit: DestLabel) {
-        let heap_to_f64 = self.heap_to_f64;
-        let heap = self.jit.label();
-        let exit = self.jit.label();
         self.load_rdi(reg);
-        monoasm!(&mut self.jit,
-            testq rdi, 0b01;
-            jnz side_exit;
-            testq rdi, 0b10;
-            jnz exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-        exit:
-        );
-    }
-
-    ///
-    /// Convert the Value to f64.
-    ///
-    /// side-exit if neither Float nor Integer.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm(*xmm*): f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - caller save registers except xmm registers(xmm2-xmm15).
-    ///
-    fn gen_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
-        let heap_to_f64 = self.heap_to_f64;
-        let integer = self.jit.label();
-        let heap = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(&mut self.jit,
-            testq rdi, 0b01;
-            jnz integer;
-            testq rdi, 0b10;
-            jz  heap;
-            xorps xmm(xmm), xmm(xmm);
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            je  exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm(xmm), rdi;
-            jmp exit;
-        integer:
-            sarq rdi, 1;
-            cvtsi2sdq xmm(xmm), rdi;
-            jmp exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-            movq xmm(xmm), xmm0;
-        exit:
-        );
+        self.assume_float(side_exit);
     }
 
     ///

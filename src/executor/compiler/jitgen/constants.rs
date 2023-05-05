@@ -75,7 +75,7 @@ impl Codegen {
             movq [rip + cached_value], rax;
             movq rdi, rax;
         );
-        self.gen_val_to_f64_assume_float(0, side_exit);
+        self.unbox_float(0, side_exit);
         monoasm!(self.jit,
             movq [rip + cached_float], xmm0;
             movq rax, [rip + global_const_version];
