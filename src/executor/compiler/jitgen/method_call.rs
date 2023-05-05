@@ -9,6 +9,124 @@ impl Codegen {
         f.sin()
     }
 
+    fn integer_tof(
+        gen: &mut Codegen,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        ret: SlotId,
+        pc: BcPc,
+        deopt: DestLabel,
+    ) {
+        let MethodInfo { recv, .. } = method_info;
+        gen.load_rdi(*recv);
+        if !recv.is_zero() {
+            gen.guard_class(pc.class_version().0, deopt);
+        }
+        let fret = ctx.xmm_write(ret);
+        monoasm!(gen.jit,
+            sarq  rdi, 1;
+            cvtsi2sdq xmm(fret.enc()), rdi;
+        );
+    }
+
+    fn math_sqrt(
+        gen: &mut Codegen,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        ret: SlotId,
+        pc: BcPc,
+        deopt: DestLabel,
+    ) {
+        let MethodInfo { recv, args, .. } = method_info;
+        gen.load_rdi(*recv);
+        if !recv.is_zero() {
+            gen.guard_class(pc.class_version().0, deopt);
+        }
+        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fret = ctx.xmm_write(ret);
+        monoasm!(gen.jit,
+            sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
+        );
+    }
+
+    fn math_cos(
+        gen: &mut Codegen,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        ret: SlotId,
+        pc: BcPc,
+        deopt: DestLabel,
+    ) {
+        let MethodInfo { recv, args, .. } = method_info;
+        gen.load_rdi(*recv);
+        if !recv.is_zero() {
+            gen.guard_class(pc.class_version().0, deopt);
+        }
+        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fret = ctx.xmm_write(ret);
+        let xmm_using = ctx.get_xmm_using();
+        gen.xmm_save(&xmm_using);
+        monoasm!(gen.jit,
+            movq xmm0, xmm(fsrc.enc());
+            movq rax, (Self::cos);
+            call rax;
+        );
+        gen.xmm_restore(&xmm_using);
+        monoasm!(gen.jit,
+            movq xmm(fret.enc()), xmm0;
+        );
+    }
+
+    fn math_sin(
+        gen: &mut Codegen,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        ret: SlotId,
+        pc: BcPc,
+        deopt: DestLabel,
+    ) {
+        let MethodInfo { recv, args, .. } = method_info;
+        gen.load_rdi(*recv);
+        if !recv.is_zero() {
+            gen.guard_class(pc.class_version().0, deopt);
+        }
+        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fret = ctx.xmm_write(ret);
+        let xmm_using = ctx.get_xmm_using();
+        gen.xmm_save(&xmm_using);
+        monoasm!(gen.jit,
+            movq xmm0, xmm(fsrc.enc());
+            movq rax, (Self::sin);
+            call rax;
+        );
+        gen.xmm_restore(&xmm_using);
+        monoasm!(gen.jit,
+            movq xmm(fret.enc()), xmm0;
+        );
+    }
+
+    fn object_nil(
+        gen: &mut Codegen,
+        ctx: &mut BBContext,
+        method_info: &MethodInfo,
+        ret: SlotId,
+        _pc: BcPc,
+        _deopt: DestLabel,
+    ) {
+        let MethodInfo { recv, .. } = method_info;
+        gen.load_rdi(*recv);
+        ctx.dealloc_xmm(ret);
+        let l1 = gen.jit.label();
+        monoasm!(gen.jit,
+            movq rax, (FALSE_VALUE);
+            cmpq rdi, (NIL_VALUE);
+            jne  l1;
+            movq rax, (TRUE_VALUE);
+        l1:
+        );
+        gen.store_rax(ret);
+    }
+
     pub(super) fn gen_inlinable(
         &mut self,
         ctx: &mut BBContext,
@@ -17,85 +135,26 @@ impl Codegen {
         ret: SlotId,
         pc: BcPc,
     ) {
-        let MethodInfo { recv, args, .. } = method_info;
-        let (class, version) = pc.class_version();
+        let (_, version) = pc.class_version();
         let deopt = self.gen_side_deopt(pc, ctx);
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         self.guard_version(version, deopt);
         match inline_id {
             InlineMethod::IntegerTof => {
-                self.load_rdi(*recv);
-                if !recv.is_zero() {
-                    self.guard_class(class, deopt);
-                }
-                let fret = ctx.xmm_write(ret);
-                monoasm!(self.jit,
-                    sarq  rdi, 1;
-                    cvtsi2sdq xmm(fret.enc()), rdi;
-                );
+                Self::integer_tof(self, ctx, method_info, ret, pc, deopt);
             }
             InlineMethod::MathSqrt => {
-                self.load_rdi(*recv);
-                if !recv.is_zero() {
-                    self.guard_class(class, deopt);
-                }
-                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
-                let fret = ctx.xmm_write(ret);
-                monoasm!(self.jit,
-                    sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
-                );
+                Self::math_sqrt(self, ctx, method_info, ret, pc, deopt);
             }
             InlineMethod::MathCos => {
-                self.load_rdi(*recv);
-                if !recv.is_zero() {
-                    self.guard_class(class, deopt);
-                }
-                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
-                let fret = ctx.xmm_write(ret);
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
-                    movq xmm0, xmm(fsrc.enc());
-                    movq rax, (Self::cos as u64);
-                    call rax;
-                );
-                self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
-                    movq xmm(fret.enc()), xmm0;
-                );
+                Self::math_cos(self, ctx, method_info, ret, pc, deopt);
             }
             InlineMethod::MathSin => {
-                self.load_rdi(*recv);
-                if !recv.is_zero() {
-                    self.guard_class(class, deopt);
-                }
-                let fsrc = self.xmm_read_assume_float(ctx, *args, pc);
-                let fret = ctx.xmm_write(ret);
-                let xmm_using = ctx.get_xmm_using();
-                self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
-                    movq xmm0, xmm(fsrc.enc());
-                    movq rax, (Self::sin as u64);
-                    call rax;
-                );
-                self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
-                    movq xmm(fret.enc()), xmm0;
-                );
+                Self::math_sin(self, ctx, method_info, ret, pc, deopt);
             }
             InlineMethod::ObjectNil => {
-                self.load_rdi(*recv);
-                ctx.dealloc_xmm(ret);
-                let l1 = self.jit.label();
-                monoasm!(self.jit,
-                    movq rax, (FALSE_VALUE);
-                    cmpq rdi, (NIL_VALUE);
-                    jne  l1;
-                    movq rax, (TRUE_VALUE);
-                l1:
-                );
-                self.store_rax(ret);
+                Self::object_nil(self, ctx, method_info, ret, pc, deopt);
             }
         }
     }
