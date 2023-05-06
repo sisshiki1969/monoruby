@@ -413,36 +413,38 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
-            monoasm!(self.jit,
-                movl rsi, (ivar_id.get());
-                cmpw [rdi + 2], (ObjKind::OBJECT);
-                jne  no_inline;
-                cmpl rsi, (OBJECT_INLINE_IVAR);
-                jge  no_inline;
-                movq rax, [rdi + rsi * 8 + 16];
-            exit:
-            );
-            if !ret.is_zero() {
-                self.store_rax(ret);
+            if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
+                monoasm!(self.jit,
+                    movl rsi, (ivar_id.get());
+                    cmpw [rdi + 2], (ObjKind::OBJECT);
+                    jne  no_inline;
+                    movq rax, [rdi + rsi * 8 + 16];
+                exit:
+                );
+                self.jit.select_page(1);
+                self.jit.bind_label(no_inline);
+                self.get_ivar(&xmm_using);
+                monoasm!(self.jit,
+                    jmp  exit;
+                );
+                self.jit.select_page(0);
+            } else {
+                monoasm!(self.jit,
+                    movl rsi, (ivar_id.get());
+                );
+                self.get_ivar(&xmm_using);
             }
         } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
             monoasm!(self.jit,
-                lea  rax, [rip + cache];    // cache.ivarid
+                lea  rax, [rip + cache];
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
                 jeq  slow_path;
-                cmpw [rdi + 2], (ObjKind::OBJECT);
-                jne  no_inline;
-                cmpl rsi, (OBJECT_INLINE_IVAR);
-                jge no_inline;
-                movq rax, [rdi + rsi * 8 + 16];
-            exit:
             );
-            if !ret.is_zero() {
-                self.store_rax(ret);
-            }
+            self.get_ivar(&xmm_using);
+            self.jit.bind_label(exit);
 
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
@@ -460,19 +462,9 @@ impl Codegen {
             );
             self.jit.select_page(0);
         }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(no_inline);
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rax, (RValue::get_ivar);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
-            jmp  exit;
-        );
-        self.jit.select_page(0);
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
     }
 
     fn attr_writer(
@@ -489,16 +481,30 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
-            monoasm!(self.jit,
-                movl rsi, (ivar_id.get());
-                cmpw [rdi + 2], (ObjKind::OBJECT);
-                jne  no_inline;
-                cmpl rsi, (OBJECT_INLINE_IVAR);
-                jge no_inline;
-                movq rax, [r14 - (conv(args))];  //val: Value
-                movq [rdi + rsi * 8 + 16], rax;
+            if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
+                monoasm!(self.jit,
+                    movl rsi, (ivar_id.get());
+                    cmpw [rdi + 2], (ObjKind::OBJECT);
+                    jne  no_inline;
+                    movq rax, [r14 - (conv(args))];  //val: Value
+                    movq [rdi + rsi * 8 + 16], rax;
                 exit:
-            );
+                );
+                self.jit.select_page(1);
+                self.jit.bind_label(no_inline);
+                self.set_ivar(args, &xmm_using);
+                self.jit_handle_error(ctx, pc);
+                monoasm!(self.jit,
+                    jmp exit;
+                );
+                self.jit.select_page(0);
+            } else {
+                monoasm!(self.jit,
+                    movl rsi, (ivar_id.get());
+                );
+                self.set_ivar(args, &xmm_using);
+                self.jit_handle_error(ctx, pc);
+            }
             if !ret.is_zero() {
                 self.store_rax(ret);
             }
@@ -539,23 +545,15 @@ impl Codegen {
             monoasm!(self.jit,
                 jmp exit;
             );
+
+            self.jit.bind_label(no_inline);
+            self.set_ivar(args, &xmm_using);
+            self.jit_handle_error(ctx, pc);
+            monoasm!(self.jit,
+                jmp exit;
+            );
             self.jit.select_page(0);
         }
-
-        self.jit.select_page(1);
-        self.jit.bind_label(no_inline);
-        self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
-            movq rdx, [r14 - (conv(args))];  //val: Value
-            movq rax, (RValue::set_ivar);
-            call rax;
-        );
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-        monoasm!(self.jit,
-            jmp exit;
-        );
-        self.jit.select_page(0);
     }
 
     fn native_call(
@@ -981,6 +979,51 @@ mod test {
           a << x*2
         end
         a
+        "##,
+        );
+    }
+
+    #[test]
+    fn attr_accessor() {
+        tests::run_test_with_prelude(
+            r##"
+            x = [C.new, B.new, A.new]
+            res = []
+            for e in x
+                e.a += 1000.0
+                e.b += 1000.0
+                e.c += 1000.0
+                res << e.a
+                res << e.b
+                res << e.c
+            end
+            res
+            "##,
+            r##"
+            class C
+              def initialize
+                @a = 1
+                @b = 2
+                @c = 3
+              end
+              attr_accessor :a, :b, :c
+            end
+            class B < C
+              def initialize
+                @b = 10
+                @c = 20
+                @a = 30
+              end
+              attr_accessor :a, :b, :c
+            end
+            class A < B
+              def initialize
+                @c = 100
+                @a = 200
+                @b = 300
+              end
+              attr_accessor :a, :b, :c
+            end
         "##,
         );
     }

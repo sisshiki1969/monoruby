@@ -23,7 +23,10 @@ impl Codegen {
                     movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
                 );
             } else {
-                self.get_ivar(cached_ivarid, &xmm_using);
+                monoasm!(self.jit,
+                    movl rsi, (cached_ivarid.get());
+                );
+                self.get_ivar(&xmm_using);
             }
         } else {
             // ctx.self_class != cached_class merely happens, but possible.
@@ -64,7 +67,10 @@ impl Codegen {
                     movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
             } else {
-                self.set_ivar(src, cached_ivarid, &xmm_using);
+                monoasm!(self.jit,
+                    movl rsi, (cached_ivarid.get());
+                );
+                self.set_ivar(src, &xmm_using);
             }
         } else {
             self.xmm_save(&xmm_using);
@@ -278,20 +284,44 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn get_ivar(&mut self, cached_ivarid: IvarId, xmm_using: &[Xmm]) {
+    ///
+    /// Get an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    ///
+    /// - rsi: IvarId
+    ///
+    /// #### out
+    ///
+    /// - rax: Value
+    ///
+    pub(super) fn get_ivar(&mut self, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
         monoasm!(self.jit,
-            movl rsi, (cached_ivarid.get());
             movq rax, (RValue::get_ivar);
             call rax;
         );
         self.xmm_restore(xmm_using);
     }
 
-    fn set_ivar(&mut self, src: SlotId, cached_ivarid: IvarId, xmm_using: &[Xmm]) {
+    ///
+    /// Set an instance variable.
+    ///
+    /// #### in
+    ///
+    /// - rdi: &RValue
+    ///
+    /// - rsi: IvarId
+    ///
+    /// #### destroy
+    ///
+    /// - caller-save registers
+    ///
+    pub(super) fn set_ivar(&mut self, src: SlotId, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
         monoasm!(self.jit,
-            movl rsi, (cached_ivarid.get());
             movq rdx, [r14 - (conv(src))];   // val: Value
             movq rax, (RValue::set_ivar);
             call rax;
