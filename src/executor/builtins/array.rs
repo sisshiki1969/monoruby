@@ -231,14 +231,14 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     match lfp.block() {
         None => {
             for v in &**aref {
-                sum = add_values(vm, globals, sum, *v).ok_or_else(|| vm.take_error().unwrap())?;
+                sum = add_values(vm, globals, sum, *v).ok_or_else(|| vm.take_exception())?;
             }
         }
         Some(b) => {
             let data = vm.get_block_data(globals, b);
             for v in &**aref {
                 let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
-                sum = add_values(vm, globals, sum, rhs).ok_or_else(|| vm.take_error().unwrap())?;
+                sum = add_values(vm, globals, sum, rhs).ok_or_else(|| vm.take_exception())?;
             }
         }
     }

@@ -2,106 +2,14 @@ use ruruby_parse::{Loc, ParamKind, ParseErr, ParseErrKind, SourceInfoRef};
 
 use super::*;
 
-//
-// error handlers
-//
-impl Executor {
-    pub fn set_error(&mut self, err: MonorubyErr) {
-        self.error = Some(err);
-    }
-
-    pub(crate) fn err_method_not_found(&mut self, globals: &Globals, name: IdentId, obj: Value) {
-        self.set_error(MonorubyErr::method_not_found(globals, name, obj))
-    }
-
-    /*pub(crate) fn err_protected_method_called(&mut self, name: IdentId, obj: Value) {
-        self.set_error(MonorubyErr::method_not_found(format!(
-            "protected method `{}' called for {}:{}",
-            IdentId::get_name(name),
-            obj.to_s(self),
-            obj.get_real_class_name(self)
-        )))
-    }*/
-
-    pub(crate) fn err_divide_by_zero(&mut self) {
-        self.set_error(MonorubyErr::divide_by_zero());
-    }
-
-    pub(crate) fn err_no_block_given(&mut self) {
-        self.set_error(MonorubyErr::no_block_given());
-    }
-
-    pub(crate) fn check_number_of_arguments(
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_arguments(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
-        }
-    }
-
-    pub(crate) fn err_wrong_number_of_arg_range(
-        &mut self,
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) {
-        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
-    }
-
-    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
-    }
-
-    ///
-    /// Set FrozenError with message "can't modify frozen Integer: 5".
-    ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
-    }
-
-    pub(crate) fn error(&self) -> Option<&MonorubyErr> {
-        self.error.as_ref()
-    }
-
-    pub(crate) fn take_error(&mut self) -> Option<MonorubyErr> {
-        std::mem::take(&mut self.error)
-    }
-
-    pub(crate) fn take_error_obj(&mut self, globals: &Globals) -> Value {
-        let err = self.take_error().unwrap();
-        self.exception_to_val(globals, err)
-    }
-
-    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
-        match &mut self.error {
-            Some(err) => {
-                err.loc.push((loc, sourceinfo));
-            }
-            None => unreachable!(),
-        };
-    }
-
-    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
-        let class_id = globals.get_error_class(&err);
-        Value::new_exception_with_class(err, class_id)
-    }
-}
-
+///
+/// Exception information which is stored in *Executor*.
+///
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonorubyErr {
-    pub kind: MonorubyErrKind,
-    pub msg: String,
-    pub loc: Vec<(Loc, SourceInfoRef)>,
+    kind: MonorubyErrKind,
+    msg: String,
+    trace: Vec<(Loc, SourceInfoRef)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,7 +37,7 @@ impl MonorubyErr {
         MonorubyErr {
             kind,
             msg,
-            loc: vec![],
+            trace: vec![],
         }
     }
 
@@ -142,18 +50,26 @@ impl MonorubyErr {
         MonorubyErr {
             kind,
             msg,
-            loc: vec![(loc, sourceinfo)],
+            trace: vec![(loc, sourceinfo)],
         }
     }
 
+    pub fn kind(&self) -> &MonorubyErrKind {
+        &self.kind
+    }
+
+    pub fn msg(&self) -> &str {
+        &self.msg
+    }
+
     pub fn show_all_loc(&self) {
-        for (loc, sourceinfo) in &self.loc {
+        for (loc, sourceinfo) in &self.trace {
             sourceinfo.show_loc(loc);
         }
     }
 
     fn show_loc(&self) {
-        if let Some((loc, sourceinfo)) = self.loc.first() {
+        if let Some((loc, sourceinfo)) = self.trace.first() {
             sourceinfo.show_loc(loc);
         } else {
             eprintln!("location not defined.");
@@ -207,7 +123,7 @@ impl MonorubyErr {
     }
 }
 
-// Bytecode compiler level errors.
+// Bytecodegen level errors.
 impl MonorubyErr {
     pub(crate) fn unsupported_parameter_kind(
         param: ParamKind,
@@ -298,6 +214,13 @@ impl MonorubyErr {
 
 // Executor level errors.
 impl MonorubyErr {
+    pub(crate) fn method_return(val: Value, target_lfp: LFP) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::MethodReturn(val, target_lfp),
+            String::new(),
+        )
+    }
+
     pub(crate) fn method_not_found(globals: &Globals, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod,
@@ -515,6 +438,88 @@ impl MonorubyErr {
 
     pub(crate) fn runtimeerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
+    }
+}
+
+//
+// error handlers
+//
+impl Executor {
+    pub fn set_error(&mut self, err: MonorubyErr) {
+        self.exception = Some(err);
+    }
+
+    pub(crate) fn exception(&self) -> Option<&MonorubyErr> {
+        self.exception.as_ref()
+    }
+
+    pub(crate) fn take_exception(&mut self) -> MonorubyErr {
+        std::mem::take(&mut self.exception).unwrap()
+    }
+
+    pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
+        let err = self.take_exception();
+        self.exception_to_val(globals, err)
+    }
+
+    pub(crate) fn err_divide_by_zero(&mut self) {
+        self.set_error(MonorubyErr::divide_by_zero());
+    }
+
+    pub(crate) fn err_no_block_given(&mut self) {
+        self.set_error(MonorubyErr::no_block_given());
+    }
+
+    pub(crate) fn check_number_of_arguments(
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) -> Result<()> {
+        if range.contains(&given) {
+            Ok(())
+        } else {
+            let err = if range.start() == range.end() {
+                MonorubyErr::wrong_arguments(*range.start(), given)
+            } else {
+                MonorubyErr::wrong_number_of_arg_range(given, range)
+            };
+            Err(err)
+        }
+    }
+
+    pub(crate) fn err_wrong_number_of_arg_range(
+        &mut self,
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) {
+        self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
+    }
+
+    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
+        if given >= min {
+            return Ok(());
+        }
+        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
+    }
+
+    ///
+    /// Set FrozenError with message "can't modify frozen Integer: 5".
+    ///
+    pub(crate) fn err_cant_modify_frozen(&mut self, globals: &Globals, val: Value) {
+        self.set_error(MonorubyErr::cant_modify_frozen(globals, val));
+    }
+
+    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef) {
+        match &mut self.exception {
+            Some(err) => {
+                err.trace.push((loc, sourceinfo));
+            }
+            None => unreachable!(),
+        };
+    }
+
+    pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
+        let class_id = globals.get_error_class(&err);
+        Value::new_exception_with_class(err, class_id)
     }
 }
 

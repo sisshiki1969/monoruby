@@ -338,7 +338,7 @@ impl Globals {
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => self.regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().err.msg.clone(),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.msg().to_string(),
                 _ => format!("{:016x}", val.get()),
             },
         }

@@ -182,7 +182,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
         Some(val) => Ok(val),
         None => {
-            let err = vm.take_error().unwrap();
+            let err = vm.take_exception();
             Err(err)
         }
     }

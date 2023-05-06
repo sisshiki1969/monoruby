@@ -52,7 +52,7 @@ pub(super) extern "C" fn get_super_data(
     let super_id = match globals.check_super(self_val, func_name) {
         Some(entry) => entry.func_id(),
         None => {
-            vm.err_method_not_found(globals, func_name, self_val);
+            vm.set_error(MonorubyErr::method_not_found(globals, func_name, self_val));
             return None;
         }
     };
@@ -716,15 +716,11 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
 
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, _globals: &mut Globals, val: Value) {
     let target_lfp = vm.cfp().outermost_lfp();
-    vm.set_error(MonorubyErr {
-        kind: MonorubyErrKind::MethodReturn(val, target_lfp),
-        msg: String::new(),
-        loc: vec![],
-    });
+    vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
 pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
-    vm.error().is_some().into()
+    vm.exception().is_some().into()
 }
 
 #[repr(C)]
@@ -768,12 +764,14 @@ pub(super) extern "C" fn handle_error(
             // check exception table.
             let mut lfp = vm.cfp().lfp();
             // First, we check method_return.
-            if let MonorubyErrKind::MethodReturn(val, target_lfp) = vm.error().unwrap().kind {
+            if let MonorubyErrKind::MethodReturn(val, target_lfp) =
+                vm.exception().unwrap().kind().clone()
+            {
                 if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     return ErrorReturn::goto(ensure);
                 } else {
                     if lfp == target_lfp {
-                        vm.take_error().unwrap();
+                        vm.take_exception();
                         return ErrorReturn::return_normal(val);
                     } else {
                         return ErrorReturn::return_err();
@@ -781,7 +779,7 @@ pub(super) extern "C" fn handle_error(
                 }
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
-                let err_val = vm.take_error_obj(globals);
+                let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
                 if let Some(err_reg) = err_reg {
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
