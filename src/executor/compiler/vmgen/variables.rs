@@ -62,7 +62,6 @@ impl Codegen {
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
             movq rdx, r12; // &mut Globals
             lea rcx, [r13 - 8]; // &mut ClassId
-            lea r8, [r13 - 4]; // &mut IvarId
             movq rax, (get_instance_var_with_cache);
             call rax;
         };

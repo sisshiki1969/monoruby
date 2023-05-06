@@ -2,14 +2,16 @@
 
 cargo build --release --features emit-asm
 target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.disas
+ruby benchmark/app_fib.rb
 target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.disas
+ruby benchmark/tarai.rb
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.disas > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.disas > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
 
 cargo build --release --features emit-bc
-target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.bytecode
-target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.bytecode
+target/release/monoruby benchmark/app_fib.rb 2> benchmark/fib.bytecode > /dev/null
+target/release/monoruby benchmark/tarai.rb 2> benchmark/tarai.bytecode > /dev/null
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.bytecode > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.bytecode > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.bytecode

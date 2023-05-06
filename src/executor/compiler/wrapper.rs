@@ -146,14 +146,12 @@ impl Codegen {
     /// ~~~
     fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
-        let cached_class = self.jit.const_i32(0);
-        let cached_ivarid = self.jit.const_i32(0);
+        let cache = self.jit.const_i64(-1);
         monoasm!(self.jit,
             movq rdi, [rsp - (8 + LBP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
-            lea  rcx, [rip + cached_class];
-            lea  r8, [rip + cached_ivarid];
+            lea  rcx, [rip + cache];
             movq rax, (get_instance_var_with_cache);
             subq rsp, 8;
             call rax;

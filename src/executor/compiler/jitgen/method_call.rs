@@ -401,12 +401,12 @@ impl Codegen {
         let exit = self.jit.label();
         let slow_path = self.jit.label();
         let no_inline = self.jit.label();
-        let cached_class = self.jit.const_i32(0);
-        let cached_ivarid = self.jit.const_i32(-1);
+        let cache = self.jit.const_i64(-1);
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         monoasm!(self.jit,
-            movl rsi, [rip + cached_ivarid];
+            lea  rax, [rip + cache];    // cache.ivarid
+            movl rsi, [rax + 4];
             cmpl rsi, (-1);
             jeq  slow_path;
             cmpw [rdi + 2], (ObjKind::OBJECT);
@@ -414,28 +414,30 @@ impl Codegen {
             cmpl rsi, (OBJECT_INLINE_IVAR);
             jge no_inline;
             movq rax, [rdi + rsi * 8 + 16];
-            jmp exit;
-        no_inline:
+        exit:
         );
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+
+        self.jit.select_page(1);
+        self.jit.bind_label(no_inline);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rax, (RValue::get_ivar);
             call rax;
         );
         self.xmm_restore(&xmm_using);
-        self.jit.bind_label(exit);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
+        monoasm!(self.jit,
+            jmp  exit;
+        );
 
-        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rsi, (ivar_name.get()); // IvarId
             movq rdx, r12; // &mut Globals
-            lea  rcx, [rip + cached_class];
-            lea  r8, [rip + cached_ivarid];
+            lea  rcx, [rip + cache];
             movq rax, (get_instance_var_with_cache);
             call rax;
         );
@@ -461,7 +463,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         // rdi: base: Value
         monoasm!(self.jit,
-            lea  rax, [rip + cache];
+            lea  rax, [rip + cache];    // cache.ivarid
             movl rsi, [rax + 4];
             cmpl rsi, (-1);
             jeq  slow_path;
@@ -471,9 +473,14 @@ impl Codegen {
             jge no_inline;
             movq rax, [r14 - (conv(args))];  //val: Value
             movq [rdi + rsi * 8 + 16], rax;
-            jmp exit;
-        no_inline:
+        exit:
         );
+        if !ret.is_zero() {
+            self.store_rax(ret);
+        }
+
+        self.jit.select_page(1);
+        self.jit.bind_label(no_inline);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,
             movq rdx, [r14 - (conv(args))];  //val: Value
@@ -482,12 +489,10 @@ impl Codegen {
         );
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-        self.jit.bind_label(exit);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
+        monoasm!(self.jit,
+            jmp exit;
+        );
 
-        self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.xmm_save(&xmm_using);
         monoasm!(self.jit,

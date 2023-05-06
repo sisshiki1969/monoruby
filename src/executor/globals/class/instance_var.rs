@@ -71,34 +71,33 @@ impl Globals {
     }
 }
 
+#[repr(C)]
+pub(crate) struct InstanceVarCache {
+    class_id: ClassId,
+    ivar_id: IvarId,
+}
+
 pub(crate) extern "C" fn get_instance_var_with_cache(
     mut base: Value,
     name: IdentId,
     globals: &mut Globals,
-    cache_class: &mut ClassId,
-    cache_ivarid: &mut IvarId,
+    cache: &mut InstanceVarCache,
 ) -> Value {
     let class_id = base.class();
     let rval = match base.try_rvalue_mut() {
         Some(rval) => rval,
         None => return Value::nil(),
     };
-    if class_id == *cache_class {
-        return rval.get_var(*cache_ivarid).unwrap_or_default();
+    if class_id == cache.class_id {
+        return rval.get_var(cache.ivar_id).unwrap_or_default();
     }
     let ivar_id = match globals.class[class_id].ivar_names.get(&name) {
         Some(id) => *id,
         None => return Value::nil(),
     };
-    *cache_class = class_id;
-    *cache_ivarid = ivar_id;
+    let new_cache = InstanceVarCache { class_id, ivar_id };
+    *cache = new_cache;
     rval.get_var(ivar_id).unwrap_or_default()
-}
-
-#[repr(C)]
-pub(crate) struct InstanceVarCache {
-    class_id: ClassId,
-    ivar_id: IvarId,
 }
 
 pub(crate) extern "C" fn set_instance_var_with_cache(
@@ -122,8 +121,8 @@ pub(crate) extern "C" fn set_instance_var_with_cache(
         return Some(Value::nil());
     }
     let ivar_id = globals.get_ivar_id(class_id, name);
-    cache.class_id = class_id;
-    cache.ivar_id = ivar_id;
+    let new_cache = InstanceVarCache { class_id, ivar_id };
+    *cache = new_cache;
     rval.set_var(ivar_id, val);
     Some(Value::nil())
 }
