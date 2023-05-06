@@ -12,7 +12,7 @@ pub fn run_test(code: &str) {
           res2 = ({0})
           __assert(res, res2)
       end
-      res
+      ({0})
   "##,
         code
     );
@@ -46,7 +46,7 @@ pub fn run_tests(code: &[String]) {
           res2 = ({0})
           __assert(res, res2)
       end
-      res
+      ({0})
   "##,
         code
     );
@@ -83,7 +83,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
           res2 = ({code})
           __assert(res, res2)
       end
-      res
+      ({code})
   "##
     );
     eprintln!("{}", wrapped);
