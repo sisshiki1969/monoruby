@@ -549,6 +549,27 @@ mod test {
         );
         run_test_error(
             r##"
+        class S; end
+        class C < S
+            def f
+                super
+            end
+        end
+        C.new.f
+        "##,
+        );
+        run_test_error(
+            r##"
+        class C
+            def f
+                yield
+            end
+        end
+        C.new.f
+        "##,
+        );
+        run_test_error(
+            r##"
         attr_accessor 2
         "##,
         );

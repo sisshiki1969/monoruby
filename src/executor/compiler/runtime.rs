@@ -50,13 +50,12 @@ pub(super) extern "C" fn get_super_data(
     let func_id = vm.method_func_id();
     let func_name = globals.func[func_id].name().unwrap();
     let super_id = match globals.check_super(self_val, func_name) {
-        Some(entry) => Some(entry),
+        Some(entry) => entry.func_id(),
         None => {
             vm.err_method_not_found(globals, func_name, self_val);
-            None
+            return None;
         }
-    }?
-    .func_id();
+    };
 
     let func_data = globals.compile_on_demand(super_id);
     Some(func_data.as_ptr())
