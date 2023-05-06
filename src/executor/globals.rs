@@ -48,7 +48,7 @@ pub struct Globals {
     /// function info.
     pub func: FnStore,
     /// class table.
-    class: ClassStore,
+    pub(super) class: ClassStore,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.

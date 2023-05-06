@@ -534,7 +534,7 @@ impl Globals {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct ClassInfo {
+pub(in crate::executor) struct ClassInfo {
     /// the constant name which this class object is bound.
     name: Option<IdentId>,
     /// corresponding class object.
@@ -576,10 +576,14 @@ impl ClassInfo {
             ivar_names: self.ivar_names.clone(),
         }
     }
+
+    pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
+        self.ivar_names.get(&name).cloned()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct ClassStore {
+pub(in crate::executor) struct ClassStore {
     /// class table.
     classes: Vec<ClassInfo>,
 }

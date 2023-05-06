@@ -664,9 +664,9 @@ impl Globals {
                 func.bytecode().as_ptr(),
             );
         }
-        let (label, _sourcemap) = self
-            .codegen
-            .compile(&self.func, func_id, self_value, position);
+        let (label, _sourcemap) =
+            self.codegen
+                .compile(&self.func, &self.class, func_id, self_value, position);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);

@@ -486,6 +486,7 @@ impl Codegen {
     pub(super) fn compile(
         &mut self,
         fnstore: &FnStore,
+        classstore: &ClassStore,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
@@ -540,7 +541,7 @@ impl Codegen {
         );
         for i in bb_start_pos {
             cc.bb_pos = i;
-            if self.compile_bb(fnstore, func, &mut cc, position) {
+            if self.compile_bb(fnstore, classstore, func, &mut cc, position) {
                 break;
             };
         }
@@ -764,6 +765,7 @@ impl Codegen {
     fn compile_bb(
         &mut self,
         fnstore: &FnStore,
+        classstore: &ClassStore,
         func: &ISeqInfo,
         cc: &mut JitContext,
         position: Option<BcPc>,
@@ -1224,6 +1226,7 @@ impl Codegen {
                     } else {
                         self.gen_call(
                             fnstore,
+                            classstore,
                             &mut ctx,
                             info,
                             callid,
@@ -1255,6 +1258,7 @@ impl Codegen {
                         info.args = args + 1;
                         self.gen_call(
                             fnstore,
+                            classstore,
                             &mut ctx,
                             info,
                             callid,
@@ -1279,7 +1283,17 @@ impl Codegen {
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                     } else {
-                        self.gen_call(fnstore, &mut ctx, info, callid, None, ret, pc + 1, false);
+                        self.gen_call(
+                            fnstore,
+                            classstore,
+                            &mut ctx,
+                            info,
+                            callid,
+                            None,
+                            ret,
+                            pc + 1,
+                            false,
+                        );
                     }
                 }
                 TraceIr::InlineCall {
