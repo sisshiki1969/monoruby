@@ -256,7 +256,7 @@ impl Codegen {
         let side_exit = self.jit.label();
         for (reg, freg) in conv_list {
             self.load_rdi(reg);
-            self.gen_val_to_f64(freg.enc(), side_exit);
+            self.unbox_integer_float_to_f64(freg.enc(), side_exit);
             #[cfg(feature = "emit-tir")]
             eprintln!("      conv: {:?}->{:?}", reg, freg);
         }

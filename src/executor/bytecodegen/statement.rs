@@ -370,6 +370,7 @@ impl BytecodeGen {
             UseMode::Use => assert_eq!(self.temp, base + 1),
             _ => assert_eq!(self.temp, base),
         }
+
         Ok(())
     }
 }

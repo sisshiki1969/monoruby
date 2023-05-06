@@ -119,7 +119,7 @@ impl Codegen {
         let wrong_argument = self.jit.label();
         monoasm! {self.jit,
         wrong_argument:
-            movq rdi, r12;
+            movq rdi, rbx;
             movl rsi, rdx;  // given
             movzxw rdx, [r13 - 8];  // min
             movzxw rcx, [r13 - 14];  // max
@@ -160,7 +160,7 @@ impl Codegen {
         let div_by_zero = self.jit.label();
         monoasm!(self.jit,
         div_by_zero:
-            movq rdi, r12;
+            movq rdi, rbx;
             movq rax, (runtime::err_divide_by_zero);
             call rax;
             jmp vm_raise;
@@ -197,7 +197,7 @@ impl Codegen {
         let ensure_end = self.jit.get_current_address();
         let raise = self.entry_raise;
         monoasm! { self.jit,
-            movq rdi, r12;
+            movq rdi, rbx;
             movq rax, (runtime::check_err);
             call rax;
             testq rax, rax;
@@ -807,15 +807,16 @@ impl Codegen {
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         monoasm! { self.jit,
-            movl rdx, rdi;
-            negq rdx;
-            movq rdx, [r14 + rdx * 8 - (LBP_SELF)];
-            movl rcx, rsi;
+            movl rcx, rdi;  // new
             negq rcx;
             movq rcx, [r14 + rcx * 8 - (LBP_SELF)];
-            movq rdi, r12;
-            movq rsi, [r14 - (LBP_SELF)];
-            movq r8, [r14 - (LBP_META)];
+            movl r8, rsi;  // old
+            negq r8;
+            movq r8, [r14 + r8 * 8 - (LBP_SELF)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (LBP_SELF)];
+            movq r9, [r14 - (LBP_META)];
             movq rax, (runtime::alias_method);
             call rax;
         };
@@ -972,8 +973,9 @@ impl Codegen {
         self.vm_get_rdi();
         self.vm_get_rsi();
         monoasm! { self.jit,
-            movq rdx, r12;
-            movl rcx, (if exclude_end {1} else {0});
+            movq rdx, rbx;
+            movq rcx, r12;
+            movl r8, (if exclude_end {1} else {0});
             movq rax, (runtime::gen_range);
             call rax;
         };

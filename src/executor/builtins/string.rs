@@ -428,7 +428,7 @@ fn index(
             }
         }
     }
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let self_ = lfp.self_val();
     let lhs = self_.expect_string(globals)?;
     if let Some(i) = arg[0].try_fixnum() {
@@ -564,7 +564,7 @@ fn split(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let self_ = lfp.self_val();
     let string = self_.expect_string(globals)?;
     let arg0 = arg[0];
@@ -727,13 +727,13 @@ fn sub_main(
 ) -> Result<(String, bool)> {
     match block {
         None => {
-            Globals::check_number_of_arguments(len, 2..=2)?;
+            Executor::check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = arg[1].expect_string(globals)?;
             RegexpInner::replace_one(vm, globals, arg[0], &given, &replace)
         }
         Some(block) => {
-            Globals::check_number_of_arguments(len, 1..=1)?;
+            Executor::check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInner::replace_one_block(vm, globals, arg[0], &given, block)
         }
@@ -785,13 +785,13 @@ fn gsub_main(
 ) -> Result<(String, bool)> {
     match block {
         None => {
-            Globals::check_number_of_arguments(len, 2..=2)?;
+            Executor::check_number_of_arguments(len, 2..=2)?;
             let given = self_val.expect_string(globals)?;
             let replace = args[1].expect_string(globals)?;
             RegexpInner::replace_all(vm, globals, args[0], &given, &replace)
         }
         Some(block) => {
-            Globals::check_number_of_arguments(len, 1..=1)?;
+            Executor::check_number_of_arguments(len, 1..=1)?;
             let given = self_val.expect_string(globals)?;
             RegexpInner::replace_all_block(vm, globals, args[0], &given, block)
         }
@@ -812,7 +812,7 @@ fn string_match(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let pos = match len {
         1 => 0usize,
         2 => match arg[1].coerce_to_fixnum(globals)? {
@@ -836,7 +836,7 @@ fn tos(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=0)?;
+    Executor::check_number_of_arguments(len, 0..=0)?;
     Ok(lfp.self_val())
 }
 
@@ -878,7 +878,7 @@ fn ljust(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
         arg.expect_string(globals)?
@@ -916,7 +916,7 @@ fn rjust(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let padding = if len == 2 {
         let arg = arg[1];
         arg.expect_string(globals)?
@@ -984,7 +984,7 @@ fn to_i(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let self_ = lfp.self_val();
     let s = self_.as_str();
     let radix = if len == 0 {

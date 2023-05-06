@@ -184,11 +184,12 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
         monoasm!(self.jit,
-            movq rdi, r12; //&mut Globals
-            movq rsi, [rsp - (8 + LBP_SELF)];  // self: Value
-            movq rdx, (ivar_name.get()); // name: IdentId
-            movq rcx, [rsp - (8 + LBP_ARG0)];  //val: Value
-            lea  r8, [rip + cache];
+            movq rdi, rbx; //&mut Executor
+            movq rsi, r12; //&mut Globals
+            movq rdx, [rsp - (8 + LBP_SELF)];  // self: Value
+            movq rcx, (ivar_name.get()); // name: IdentId
+            movq r8, [rsp - (8 + LBP_ARG0)];  //val: Value
+            lea  r9, [rip + cache];
             movq rax, (set_instance_var_with_cache);
             subq rsp, 8;
             call rax;
@@ -211,7 +212,7 @@ pub extern "C" fn wrapper(
     match f(vm, globals, lfp, arg, len) {
         Ok(val) => Some(val),
         Err(err) => {
-            globals.set_error(err);
+            vm.set_error(err);
             None
         }
     }

@@ -709,133 +709,17 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value is Float, and convert to f64.
-    ///
-    /// side-exit if not Float.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm(*xmm*): f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax, rdi
-    ///
-    fn gen_val_to_f64_assume_float(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
-        let heap_to_f64 = self.heap_to_f64;
-        let entry = self.jit.label();
-        let heap = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(&mut self.jit,
-        entry:
-            testq rdi, 0b01;
-            jnz side_exit;
-            testq rdi, 0b10;
-            jz heap;
-            xorps xmm(xmm), xmm(xmm);
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            je exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm(xmm), rdi;
-            jmp exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-            movq xmm(xmm), xmm0;
-        exit:
-        );
-
-        entry
-    }
-
-    ///
     /// Confirm the Value is Float.
     ///
     /// side-exit if not Float.
     ///
     /// ### registers destroyed
     ///
-    /// - rax, rdi
+    /// - rdi
     ///
     fn gen_assume_float(&mut self, reg: SlotId, side_exit: DestLabel) {
-        let heap_to_f64 = self.heap_to_f64;
-        let heap = self.jit.label();
-        let exit = self.jit.label();
         self.load_rdi(reg);
-        monoasm!(&mut self.jit,
-            testq rdi, 0b01;
-            jnz side_exit;
-            testq rdi, 0b10;
-            jnz exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-        exit:
-        );
-    }
-
-    ///
-    /// Convert the Value to f64.
-    ///
-    /// side-exit if neither Float nor Integer.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm(*xmm*): f64
-    ///
-    /// ### registers destroyed
-    ///
-    /// - caller save registers except xmm registers(xmm2-xmm15).
-    ///
-    fn gen_val_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
-        let heap_to_f64 = self.heap_to_f64;
-        let integer = self.jit.label();
-        let heap = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(&mut self.jit,
-            testq rdi, 0b01;
-            jnz integer;
-            testq rdi, 0b10;
-            jz  heap;
-            xorps xmm(xmm), xmm(xmm);
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            je  exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm(xmm), rdi;
-            jmp exit;
-        integer:
-            sarq rdi, 1;
-            cvtsi2sdq xmm(xmm), rdi;
-            jmp exit;
-        heap:
-            call heap_to_f64;
-            testq rax, rax;
-            jz   side_exit;
-            movq xmm(xmm), xmm0;
-        exit:
-        );
+        self.assume_float(side_exit);
     }
 
     ///
@@ -991,8 +875,9 @@ impl Codegen {
                     self.load_rdi(start);
                     self.load_rsi(end);
                     monoasm! { self.jit,
-                        movq rdx, r12; // &mut Globals
-                        movl rcx, (if exclude_end {1} else {0});
+                        movq rdx, rbx; // &mut Executor
+                        movq rcx, r12; // &mut Globals
+                        movl r8, (if exclude_end {1} else {0});
                         movq rax, (runtime::gen_range);
                         call rax;
                     };
@@ -1307,11 +1192,12 @@ impl Codegen {
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!(self.jit,
-                        movq rdx, [r14 - (conv(new))];
-                        movq rcx, [r14 - (conv(old))];
-                        movq rdi, r12;
-                        movq rsi, [r14 - (LBP_SELF)];
-                        movq r8, [r14 - (LBP_META)];
+                        movq rdi, rbx;
+                        movq rsi, r12;
+                        movq rdx, [r14 - (LBP_SELF)];
+                        movq rcx, [r14 - (conv(new))];
+                        movq r8, [r14 - (conv(old))];
+                        movq r9, [r14 - (LBP_META)];
                         movq rax, (runtime::alias_method);
                         call rax;
                     );
@@ -1538,7 +1424,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     let raise = self.entry_raise;
                     monoasm! { self.jit,
-                        movq rdi, r12;
+                        movq rdi, rbx;
                         movq rax, (runtime::check_err);
                         call rax;
                         testq rax, rax;

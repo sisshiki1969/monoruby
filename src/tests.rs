@@ -2055,6 +2055,31 @@ mod test {
     fn rescue() {
         run_test(
             r#"
+            # Use
+            begin
+              100
+            end
+        "#,
+        );
+        run_test(
+            r#"
+            # NoUse
+            begin
+              100
+            end
+            nil
+        "#,
+        );
+        run_test_once(
+            r#"
+            # Ret
+            begin
+              100
+            end
+        "#,
+        );
+        run_test(
+            r#"
             begin
               100
             end
@@ -2065,6 +2090,7 @@ mod test {
             begin
               100
             rescue
+              200
             end
         "#,
         );
@@ -2109,7 +2135,7 @@ mod test {
                 end
             rescue => d
                 $x << d.to_s
-            end        
+            end
             $x
         "#,
         );

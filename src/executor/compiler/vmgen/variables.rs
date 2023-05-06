@@ -80,11 +80,12 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_get_r15();
         monoasm! { self.jit,
-            movq rdx, rdi;  // name: IdentId
-            movq rdi, r12; //&mut Globals
-            movq rsi, [r14 - (LBP_SELF)];  // base: Value
-            movq rcx, r15;     // val: Value
-            lea r8, [r13 - 8]; // &mut ClassId
+            movq rcx, rdi;  // name: IdentId
+            movq rdi, rbx; //&mut Executor
+            movq rsi, r12; //&mut Globals
+            movq rdx, [r14 - (LBP_SELF)];  // base: Value
+            movq r8, r15;     // val: Value
+            lea r9, [r13 - 8]; // &mut ClassId
             movq rax, (set_instance_var_with_cache);
             call rax;
         };

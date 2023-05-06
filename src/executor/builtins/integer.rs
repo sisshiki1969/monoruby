@@ -87,7 +87,7 @@ fn step(
     args: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let block = match lfp.block() {
         None => {
             /*let id = IdentId::get_ident_id("step");
@@ -178,11 +178,11 @@ fn to_i(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=1)?;
+    Executor::check_number_of_arguments(len, 1..=1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
         Some(val) => Ok(val),
         None => {
-            let err = globals.take_error().unwrap();
+            let err = vm.take_error().unwrap();
             Err(err)
         }
     }

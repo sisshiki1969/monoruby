@@ -268,7 +268,7 @@ fn env_fetch(
     let self_ = lfp.self_val();
     let env_map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
-        Globals::check_number_of_arguments(len, 1..=1)?;
+        Executor::check_number_of_arguments(len, 1..=1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => {
@@ -279,7 +279,7 @@ fn env_fetch(
     } else if len == 1 {
         env_map.get(arg[0]).unwrap()
     } else {
-        Globals::check_number_of_arguments(len, 1..=2)?;
+        Executor::check_number_of_arguments(len, 1..=2)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => arg[1],

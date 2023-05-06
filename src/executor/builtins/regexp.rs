@@ -64,7 +64,7 @@ fn regexp_last_match(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     if len == 0 {
         Ok(vm.get_last_matchdata())
     } else {

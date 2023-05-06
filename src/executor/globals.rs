@@ -1,7 +1,5 @@
 use fancy_regex::Regex;
-use ruruby_parse::{
-    BlockInfo, Loc, Node, ParamKind, ParseErr, ParseErrKind, Parser, SourceInfoRef,
-};
+use ruruby_parse::{BlockInfo, Loc, Node, ParamKind, Parser, SourceInfoRef};
 use std::io::{stdout, BufWriter, Stdout};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -10,7 +8,6 @@ use std::rc::Rc;
 use super::*;
 
 mod class;
-mod error;
 mod functions;
 mod method;
 mod prng;
@@ -54,8 +51,6 @@ pub struct Globals {
     class: ClassStore,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
-    /// error information.
-    error: Option<MonorubyErr>,
     /// global method cache.
     global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
     /// regex cache.
@@ -116,7 +111,6 @@ impl Globals {
             global_vars: HashMap::default(),
             global_method_cache: HashMap::default(),
             regexp_cache: HashMap::default(),
-            error: None,
             warning,
             no_jit,
             stdout: BufWriter::new(stdout()),
@@ -488,18 +482,6 @@ impl Globals {
             if range.exclude_end() { "..." } else { ".." },
             self.val_inspect(range.end),
         )
-    }
-
-    fn get_error_class(&self, err: &MonorubyErr) -> ClassId {
-        let name = err.get_class_name();
-        self.get_constant(OBJECT_CLASS, IdentId::get_id(name))
-            .expect(&format!("{name}"))
-            .as_class_id()
-    }
-
-    pub fn exception_to_val(&self, err: MonorubyErr) -> Value {
-        let class_id = self.get_error_class(&err);
-        Value::new_exception_with_class(err, class_id)
     }
 
     /*pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {

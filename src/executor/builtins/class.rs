@@ -23,7 +23,7 @@ fn class_new(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 0..=1)?;
+    Executor::check_number_of_arguments(len, 0..=1)?;
     let superclass = if len == 0 {
         None
     } else {

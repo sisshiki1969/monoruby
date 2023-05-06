@@ -95,7 +95,7 @@ fn expand_path(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Globals::check_number_of_arguments(len, 1..=2)?;
+    Executor::check_number_of_arguments(len, 1..=2)?;
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {

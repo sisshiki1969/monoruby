@@ -50,11 +50,12 @@ impl Codegen {
 
         self.jit.select_page(1);
         monoasm!(self.jit,
-            slow_path:
-            movq rdi, r12;
-            movq rsi, [rsp + 8];  // rsi: CallSiteId
-            movq rdx, [rsp]; // rcx: receiver:Value
-            movzxw rcx, [r13 +  4];
+        slow_path:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [rsp + 8];  // rsi: CallSiteId
+            movq rcx, [rsp]; // rcx: receiver:Value
+            movzxw r8, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
         );

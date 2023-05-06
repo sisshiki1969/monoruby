@@ -69,10 +69,11 @@ impl Codegen {
         } else {
             self.xmm_save(&xmm_using);
             monoasm!(self.jit,
-                movq rsi, rdi;  // base: Value
-                movq rdx, (id.get());  // id: IdentId
-                movq rcx, [r14 - (conv(src))];   // val: Value
-                movq rdi, r12; //&mut Globals
+                movq rdx, rdi;  // base: Value
+                movq rcx, (id.get());  // id: IdentId
+                movq r8, [r14 - (conv(src))];   // val: Value
+                movq rdi, rbx; //&mut Executor
+                movq rsi, r12; //&mut Globals
                 movq rax, (runtime::set_instance_var);
                 call rax;
             );
@@ -149,8 +150,9 @@ impl Codegen {
             };
             self.xmm_save(&xmm_using);
             monoasm! { self.jit,
-                movq rdx, r12;
-                movq rcx, [r14 - (conv(src))];
+                movq rdx, rbx;
+                movq rcx, r12;
+                movq r8, [r14 - (conv(src))];
                 movq rax, (runtime::set_array_integer_index);
                 call rax;
             };
