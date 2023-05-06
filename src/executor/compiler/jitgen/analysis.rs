@@ -17,7 +17,7 @@ impl LoopAnalysis {
     ///
     pub(super) fn analyse(
         func: &ISeqInfo,
-        fnstore: &FnStore,
+        fnstore: &Store,
         bb_pos: usize,
     ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
@@ -128,7 +128,7 @@ impl LoopAnalysis {
     fn scan_bb(
         &mut self,
         func: &ISeqInfo,
-        fnstore: &FnStore,
+        fnstore: &Store,
         mut reg_info: RegInfo,
         bb_pos: usize,
     ) -> Option<RegInfo> {

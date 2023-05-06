@@ -3,6 +3,242 @@ use ruruby_parse::LvarCollector;
 use super::*;
 use std::pin::Pin;
 
+#[derive(Default)]
+pub(crate) struct Store {
+    /// function info.
+    functions: Funcs,
+    /// inline function info.
+    inline: HashMap<FuncId, InlineMethod>,
+    /// call site info.
+    callsite_info: Vec<CallSiteInfo>,
+    /// const access site info.
+    constsite_info: Vec<ConstSiteInfo>,
+    /// class table.
+    classes: Vec<ClassInfo>,
+}
+
+impl std::ops::Index<FuncId> for Store {
+    type Output = FuncInfo;
+    fn index(&self, index: FuncId) -> &FuncInfo {
+        &self.functions[index]
+    }
+}
+
+impl std::ops::IndexMut<FuncId> for Store {
+    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
+        &mut self.functions[index]
+    }
+}
+
+impl std::ops::Index<ConstSiteId> for Store {
+    type Output = ConstSiteInfo;
+    fn index(&self, index: ConstSiteId) -> &ConstSiteInfo {
+        &self.constsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ConstSiteId> for Store {
+    fn index_mut(&mut self, index: ConstSiteId) -> &mut ConstSiteInfo {
+        &mut self.constsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::Index<CallSiteId> for Store {
+    type Output = CallSiteInfo;
+    fn index(&self, index: CallSiteId) -> &CallSiteInfo {
+        &self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<CallSiteId> for Store {
+    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
+        &mut self.callsite_info[index.0 as usize]
+    }
+}
+
+impl std::ops::Index<ClassId> for Store {
+    type Output = ClassInfo;
+    fn index(&self, index: ClassId) -> &Self::Output {
+        &self.classes[index.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ClassId> for Store {
+    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
+        &mut self.classes[index.0 as usize]
+    }
+}
+
+impl alloc::GC<RValue> for Store {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.functions.mark(alloc);
+        self.classes.iter().for_each(|info| info.mark(alloc));
+    }
+}
+
+impl Store {
+    pub(super) fn new() -> Self {
+        Self {
+            functions: Funcs::default(),
+            inline: HashMap::default(),
+            constsite_info: vec![],
+            callsite_info: vec![],
+            classes: vec![ClassInfo::new(); 20],
+        }
+    }
+
+    #[cfg(feature = "emit-bc")]
+    pub(super) fn functions(&self) -> &Vec<FuncInfo> {
+        &self.functions.info
+    }
+
+    pub(crate) fn func_len(&self) -> usize {
+        self.functions.info.len()
+    }
+
+    pub(in crate::executor) fn get_init(&mut self) -> CompileInfo {
+        self.functions.compile_info.remove(0)
+    }
+
+    pub(crate) fn add_main(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
+        self.functions.add_method(
+            Some(IdentId::get_id("/main")),
+            BlockInfo {
+                params: vec![],
+                body: Box::new(ast),
+                lvar: LvarCollector::new(),
+            },
+            sourceinfo,
+        )
+    }
+
+    pub(super) fn add_class(&mut self) -> ClassId {
+        let id = self.classes.len();
+        self.classes.push(ClassInfo::new());
+        ClassId(id as u32)
+    }
+
+    pub(super) fn copy_class(&mut self, original_class: ClassId) -> ClassId {
+        let id = self.classes.len();
+        let info = self[original_class].copy();
+        self.classes.push(info);
+        ClassId(id as u32)
+    }
+
+    pub(super) fn def_builtin_class(&mut self, class: ClassId) {
+        self[class] = ClassInfo::new();
+    }
+}
+
+impl Store {
+    pub(crate) fn add_method(
+        &mut self,
+        name: Option<IdentId>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        self.functions.add_method(name, info, sourceinfo)
+    }
+
+    pub(crate) fn add_classdef(
+        &mut self,
+        name: Option<IdentId>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        self.functions.add_classdef(name, info, sourceinfo)
+    }
+
+    pub(crate) fn add_block(
+        &mut self,
+        mother: FuncId,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        optional_params: Vec<(usize, BcLocal, IdentId)>,
+        info: BlockInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Result<FuncId> {
+        self.functions
+            .add_block(mother, outer, optional_params, info, sourceinfo)
+    }
+
+    pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
+        self.inline.get(&func_id)
+    }
+
+    pub(super) fn add_builtin_func(
+        &mut self,
+        name: String,
+        address: BuiltinFn,
+        arity: i32,
+    ) -> FuncId {
+        self.functions.add_native_func(name, address, arity)
+    }
+
+    pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+        self.functions.add_attr_reader(name, ivar_name)
+    }
+
+    pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
+        self.functions.add_attr_writer(name, ivar_name)
+    }
+
+    pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
+        self.inline.insert(func_id, inline_id);
+    }
+
+    pub(crate) fn callsite_offset(&self) -> usize {
+        self.callsite_info.len()
+    }
+
+    pub(crate) fn functions_offset(&self) -> usize {
+        self.functions.info.len()
+    }
+
+    pub(crate) fn add_callsite(
+        &mut self,
+        name: Option<IdentId>,
+        arg_num: usize,
+        kw_pos: SlotId,
+        kw_args: HashMap<IdentId, usize>,
+        splat_pos: Vec<usize>,
+        hash_splat_pos: Vec<SlotId>,
+    ) {
+        self.callsite_info.push(CallSiteInfo {
+            name,
+            arg_num,
+            kw_pos,
+            kw_args,
+            splat_pos,
+            hash_splat_pos,
+        })
+    }
+
+    pub(crate) fn add_constsite(
+        &mut self,
+        name: IdentId,
+        prefix: Vec<IdentId>,
+        toplevel: bool,
+    ) -> ConstSiteId {
+        let info = ConstSiteInfo {
+            name,
+            prefix,
+            toplevel,
+            cache: (usize::MAX, None),
+        };
+        let id = self.constsite_info.len();
+        self.constsite_info.push(info);
+        ConstSiteId(id as u32)
+    }
+
+    pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
+        let info = self[func_id].as_ruby_func();
+        let regs = info.total_reg_num();
+        let pc = info.get_pc(0);
+        self[func_id].data.set_pc(pc);
+        self[func_id].data.set_reg_num(regs as i64);
+    }
+}
+
 ///
 /// ID of function.
 ///
@@ -26,7 +262,7 @@ impl FuncId {
     }
 }
 
-pub(super) struct Funcs {
+struct Funcs {
     info: Vec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }
@@ -64,7 +300,7 @@ impl Funcs {
         FuncId::new(self.info.len() as u32)
     }
 
-    pub(crate) fn add_method(
+    fn add_method(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -283,206 +519,6 @@ impl std::convert::From<u32> for CallSiteId {
 impl CallSiteId {
     pub fn get(&self) -> u32 {
         self.0
-    }
-}
-
-#[derive(Default)]
-pub struct FnStore {
-    functions: Funcs,
-    inline: HashMap<FuncId, InlineMethod>,
-    /// call site info.
-    callsite_info: Vec<CallSiteInfo>,
-    /// const access site info.
-    constsite_info: Vec<ConstSiteInfo>,
-}
-
-impl std::ops::Index<FuncId> for FnStore {
-    type Output = FuncInfo;
-    fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.functions[index]
-    }
-}
-
-impl std::ops::IndexMut<FuncId> for FnStore {
-    fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.functions[index]
-    }
-}
-
-impl std::ops::Index<ConstSiteId> for FnStore {
-    type Output = ConstSiteInfo;
-    fn index(&self, index: ConstSiteId) -> &ConstSiteInfo {
-        &self.constsite_info[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<ConstSiteId> for FnStore {
-    fn index_mut(&mut self, index: ConstSiteId) -> &mut ConstSiteInfo {
-        &mut self.constsite_info[index.0 as usize]
-    }
-}
-
-impl std::ops::Index<CallSiteId> for FnStore {
-    type Output = CallSiteInfo;
-    fn index(&self, index: CallSiteId) -> &CallSiteInfo {
-        &self.callsite_info[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<CallSiteId> for FnStore {
-    fn index_mut(&mut self, index: CallSiteId) -> &mut CallSiteInfo {
-        &mut self.callsite_info[index.0 as usize]
-    }
-}
-
-impl alloc::GC<RValue> for FnStore {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.functions.mark(alloc);
-    }
-}
-
-impl FnStore {
-    pub(super) fn new() -> Self {
-        Self {
-            functions: Funcs::default(),
-            inline: HashMap::default(),
-            constsite_info: vec![],
-            callsite_info: vec![],
-        }
-    }
-
-    #[cfg(feature = "emit-bc")]
-    pub(super) fn functions(&self) -> &Vec<FuncInfo> {
-        &self.functions.info
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.functions.info.len()
-    }
-
-    pub(in crate::executor) fn get_init(&mut self) -> CompileInfo {
-        self.functions.compile_info.remove(0)
-    }
-
-    pub(crate) fn add_main(&mut self, ast: Node, sourceinfo: SourceInfoRef) -> Result<FuncId> {
-        self.functions.add_method(
-            Some(IdentId::get_id("/main")),
-            BlockInfo {
-                params: vec![],
-                body: Box::new(ast),
-                lvar: LvarCollector::new(),
-            },
-            sourceinfo,
-        )
-    }
-}
-
-impl FnStore {
-    pub(crate) fn add_method(
-        &mut self,
-        name: Option<IdentId>,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        self.functions.add_method(name, info, sourceinfo)
-    }
-
-    pub(crate) fn add_classdef(
-        &mut self,
-        name: Option<IdentId>,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        self.functions.add_classdef(name, info, sourceinfo)
-    }
-
-    pub(crate) fn add_block(
-        &mut self,
-        mother: FuncId,
-        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
-        optional_params: Vec<(usize, BcLocal, IdentId)>,
-        info: BlockInfo,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        self.functions
-            .add_block(mother, outer, optional_params, info, sourceinfo)
-    }
-
-    pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
-        self.inline.get(&func_id)
-    }
-
-    pub(super) fn add_builtin_func(
-        &mut self,
-        name: String,
-        address: BuiltinFn,
-        arity: i32,
-    ) -> FuncId {
-        self.functions.add_native_func(name, address, arity)
-    }
-
-    pub(super) fn add_attr_reader(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
-        self.functions.add_attr_reader(name, ivar_name)
-    }
-
-    pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
-        self.functions.add_attr_writer(name, ivar_name)
-    }
-
-    pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
-        self.inline.insert(func_id, inline_id);
-    }
-
-    pub fn callsite_offset(&self) -> usize {
-        self.callsite_info.len()
-    }
-
-    pub fn functions_offset(&self) -> usize {
-        self.functions.info.len()
-    }
-
-    pub(crate) fn add_callsite(
-        &mut self,
-        name: Option<IdentId>,
-        arg_num: usize,
-        kw_pos: SlotId,
-        kw_args: HashMap<IdentId, usize>,
-        splat_pos: Vec<usize>,
-        hash_splat_pos: Vec<SlotId>,
-    ) {
-        self.callsite_info.push(CallSiteInfo {
-            name,
-            arg_num,
-            kw_pos,
-            kw_args,
-            splat_pos,
-            hash_splat_pos,
-        })
-    }
-
-    pub(crate) fn add_constsite(
-        &mut self,
-        name: IdentId,
-        prefix: Vec<IdentId>,
-        toplevel: bool,
-    ) -> ConstSiteId {
-        let info = ConstSiteInfo {
-            name,
-            prefix,
-            toplevel,
-            cache: (usize::MAX, None),
-        };
-        let id = self.constsite_info.len();
-        self.constsite_info.push(info);
-        ConstSiteId(id as u32)
-    }
-
-    pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
-        let info = self[func_id].as_ruby_func();
-        let regs = info.total_reg_num();
-        let pc = info.get_pc(0);
-        self[func_id].data.set_pc(pc);
-        self[func_id].data.set_reg_num(regs as i64);
     }
 }
 

@@ -664,7 +664,7 @@ pub(in crate::executor) enum TraceIr {
 }
 
 impl TraceIr {
-    pub(crate) fn from_bc(pc: BcPc, fnstore: &FnStore) -> Self {
+    pub(crate) fn from_bc(pc: BcPc, fnstore: &Store) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0xffc0 == 0 {

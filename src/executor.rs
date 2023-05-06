@@ -659,7 +659,7 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    fn get_ir(&self, fnstore: &FnStore) -> TraceIr {
+    fn get_ir(&self, fnstore: &Store) -> TraceIr {
         TraceIr::from_bc(*self, fnstore)
     }
 }
@@ -674,7 +674,7 @@ impl BcPc {
                 ""
             }
         }
-        let s = match self.get_ir(&globals.func) {
+        let s = match self.get_ir(&globals.store) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }
@@ -734,7 +734,7 @@ impl BcPc {
                     prefix,
                     toplevel,
                     ..
-                } = &globals.func[id];
+                } = &globals.store[id];
                 let mut const_name = if *toplevel { "::" } else { "" }.to_string();
                 for c in prefix {
                     c.append_to(&mut const_name);
@@ -913,7 +913,7 @@ impl BcPc {
                 info,
                 ..
             } => {
-                let name = globals.func[callid].name.unwrap();
+                let name = globals.store[callid].name.unwrap();
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
@@ -974,7 +974,7 @@ impl BcPc {
                 info,
                 ..
             } => {
-                let name = globals.func[callid].name.unwrap();
+                let name = globals.store[callid].name.unwrap();
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
@@ -1063,7 +1063,7 @@ impl BcPc {
                     prefix,
                     toplevel,
                     ..
-                } = &globals.func[siteid];
+                } = &globals.store[siteid];
                 let mut const_name = if *toplevel { "::" } else { "" }.to_string();
                 for c in prefix {
                     c.append_to(&mut const_name);

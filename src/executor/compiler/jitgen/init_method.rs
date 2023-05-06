@@ -1,7 +1,7 @@
 use super::*;
 
 impl Codegen {
-    pub(super) fn prologue(&mut self, pc: BcPc, fnstore: &FnStore) {
+    pub(super) fn prologue(&mut self, pc: BcPc, fnstore: &Store) {
         monoasm!(self.jit,
             pushq rbp;
             movq rbp, rsp;

@@ -7,7 +7,7 @@ impl Globals {
     }
 
     pub(crate) fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
-        if self.class[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
+        if self.store[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
             eprintln!("warning: already initialized constant {name}")
         }
     }
@@ -18,7 +18,7 @@ impl Globals {
     /// If not found, simply return None with no error.
     ///
     pub(crate) fn get_constant(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
-        self.class[class_id].constants.get(&name).cloned()
+        self.store[class_id].constants.get(&name).cloned()
     }
 
     pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Result<Value> {
@@ -38,7 +38,7 @@ impl Globals {
     /// Get constant names in the class of *class_id*.
     ///
     pub(crate) fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.class[class_id].constants.keys().cloned().collect()
+        self.store[class_id].constants.keys().cloned().collect()
     }
 
     ///
@@ -52,7 +52,7 @@ impl Globals {
             mut prefix,
             name,
             ..
-        } = self.func[id].clone();
+        } = self.store[id].clone();
         let mut parent = if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -113,7 +113,7 @@ impl Globals {
     }
 
     fn search_lexical_stack(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
-        self.func[current_func]
+        self.store[current_func]
             .as_ruby_func()
             .lexical_context
             .iter()

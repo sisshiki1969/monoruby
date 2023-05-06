@@ -1,7 +1,7 @@
 use super::*;
 
 impl BytecodeGen {
-    pub(super) fn into_bytecode(mut self, store: &mut FnStore, func_id: FuncId) -> Result<()> {
+    pub(super) fn into_bytecode(mut self, store: &mut Store, func_id: FuncId) -> Result<()> {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
@@ -89,7 +89,7 @@ impl BytecodeGen {
         info.get_pc(self[label].to_usize())
     }
 
-    fn inst_to_bc(&self, store: &mut FnStore, inst: &BcIr, idx: usize) -> Bc {
+    fn inst_to_bc(&self, store: &mut Store, inst: &BcIr, idx: usize) -> Bc {
         match inst {
             BcIr::Br(dst) => {
                 let dst = self[*dst].to_usize();

@@ -161,8 +161,7 @@ impl Codegen {
 
     pub(super) fn gen_call(
         &mut self,
-        fnstore: &FnStore,
-        classstore: &ClassStore,
+        store: &Store,
         ctx: &BBContext,
         info: MethodInfo,
         callid: CallSiteId,
@@ -177,11 +176,9 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(fnstore, ctx, info, callid, block, ret, pc, has_splat);
+                self.gen_call_not_cached(store, ctx, info, callid, block, ret, pc, has_splat);
             } else {
-                self.gen_call_cached(
-                    fnstore, classstore, ctx, callid, info, block, ret, cached, pc, has_splat,
-                );
+                self.gen_call_cached(store, ctx, callid, info, block, ret, cached, pc, has_splat);
             }
         } else {
             unreachable!();
@@ -194,8 +191,7 @@ impl Codegen {
     ///
     fn gen_call_cached(
         &mut self,
-        fnstore: &FnStore,
-        classstore: &ClassStore,
+        store: &Store,
         ctx: &BBContext,
         callid: CallSiteId,
         method_info: MethodInfo,
@@ -222,11 +218,11 @@ impl Codegen {
         }
         self.guard_version(cached.version, deopt);
         let func_id = func_data.unwrap().meta.func_id();
-        match fnstore[func_id].kind {
+        match store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
                 assert_eq!(0, len);
                 assert!(block.is_none());
-                assert!(fnstore[callid].kw_args.is_empty());
+                assert!(store[callid].kw_args.is_empty());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!(self.jit,
@@ -238,18 +234,18 @@ impl Codegen {
                     if !self_in_rdi_flag {
                         self.load_rdi(recv);
                     }
-                    let ivar_id = classstore[cached.class_id].get_ivarid(ivar_name);
+                    let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
                     self.attr_reader(ctx, ivar_name, ivar_id, ret);
                 }
             }
             FuncKind::AttrWriter { ivar_name } => {
                 assert_eq!(1, len);
                 assert!(block.is_none());
-                assert!(fnstore[callid].kw_args.is_empty());
+                assert!(store[callid].kw_args.is_empty());
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
-                let ivar_id = classstore[cached.class_id].get_ivarid(ivar_name);
+                let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
                 self.attr_writer(ctx, ivar_name, ivar_id, ret, method_info.args, pc);
             }
             FuncKind::Builtin { abs_address } => {
@@ -259,16 +255,7 @@ impl Codegen {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(
-                    ctx,
-                    fnstore,
-                    callid,
-                    method_info,
-                    ret,
-                    block,
-                    pc,
-                    has_splat,
-                );
+                self.method_call_cached(ctx, store, callid, method_info, ret, block, pc, has_splat);
             }
         };
     }
@@ -278,7 +265,7 @@ impl Codegen {
     ///
     fn gen_call_not_cached(
         &mut self,
-        fnstore: &FnStore,
+        store: &Store,
         ctx: &BBContext,
         method_info: MethodInfo,
         callid: CallSiteId,
@@ -328,7 +315,7 @@ impl Codegen {
         }
 
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid]);
+        self.set_self_and_args(method_info, block, has_splat, &store[callid]);
 
         monoasm! {self.jit,
             // set meta.
@@ -628,7 +615,7 @@ impl Codegen {
     fn method_call_cached(
         &mut self,
         ctx: &BBContext,
-        fnstore: &FnStore,
+        store: &Store,
         callid: CallSiteId,
         method_info: MethodInfo,
         ret: SlotId,
@@ -641,13 +628,13 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
-        self.set_self_and_args(method_info, block, has_splat, &fnstore[callid]);
+        self.set_self_and_args(method_info, block, has_splat, &store[callid]);
         // argument registers:
         //   rdi: args len
         let callee_func_id = func_data.meta.func_id();
-        match &fnstore[callee_func_id].kind {
+        match &store[callee_func_id].kind {
             FuncKind::ISeq(info) => {
-                let callsite = &fnstore[callid];
+                let callsite = &store[callid];
                 if info.is_block_style && info.reqopt_num() > 1 && callsite.arg_num == 1 {
                     self.single_arg_expand();
                 }
@@ -722,7 +709,7 @@ impl Codegen {
     pub(super) fn gen_yield(
         &mut self,
         ctx: &BBContext,
-        fnstore: &FnStore,
+        store: &Store,
         args: SlotId,
         len: u16,
         ret: SlotId,
@@ -753,7 +740,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_BLOCK)], 0;
         };
         // set arguments
-        self.jit_set_arguments(args, len, true, &fnstore[callid]);
+        self.jit_set_arguments(args, len, true, &store[callid]);
 
         monoasm! { self.jit,
             movq rsi, [r13 + (FUNCDATA_OFFSET_PC)];

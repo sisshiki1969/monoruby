@@ -371,7 +371,7 @@ impl Codegen {
         &mut self,
         ctx: &mut BBContext,
         cc: &mut JitContext,
-        fnstore: &FnStore,
+        fnstore: &Store,
         mode: OpMode,
         kind: CmpKind,
         ret: SlotId,

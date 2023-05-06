@@ -227,11 +227,11 @@ impl BytecodeGen {
         ast: Node,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let store = &mut globals.func;
+        let store = &mut globals.store;
         let main_fid = store.add_main(ast, sourceinfo)?;
         let mut fid = main_fid;
 
-        while store.len() > fid.get() as usize {
+        while store.func_len() > fid.get() as usize {
             BytecodeGen::compile_func(store, fid)?;
             fid = FuncId::new(fid.get() + 1);
         }
@@ -239,7 +239,7 @@ impl BytecodeGen {
         Ok(main_fid)
     }
 
-    fn compile_func(store: &mut FnStore, func_id: FuncId) -> Result<()> {
+    fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
         let CompileInfo {
             ast,
             for_param_info,

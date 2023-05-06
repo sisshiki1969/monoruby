@@ -20,7 +20,7 @@ impl IvarId {
 
 impl Globals {
     fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
-        let table = &mut self.class[class_id].ivar_names;
+        let table = &mut self.store[class_id].ivar_names;
         match table.get(&ivar_name) {
             Some(id) => *id,
             None => {
@@ -37,7 +37,7 @@ impl Globals {
     pub(crate) fn get_ivar(&self, mut val: Value, name: IdentId) -> Option<Value> {
         let class_id = val.class();
         let rval = val.try_rvalue_mut()?;
-        let id = self.class[class_id].ivar_names.get(&name)?;
+        let id = self.store[class_id].ivar_names.get(&name)?;
         rval.get_var(*id)
     }
 
@@ -47,7 +47,7 @@ impl Globals {
             Some(rval) => rval,
             None => return vec![],
         };
-        self.class[class_id]
+        self.store[class_id]
             .ivar_names
             .iter()
             .filter_map(|(name, id)| rval.get_var(*id).map(|v| (*name, v)))
@@ -91,7 +91,7 @@ pub(crate) extern "C" fn get_instance_var_with_cache(
     if class_id == cache.class_id {
         return rval.get_var(cache.ivar_id).unwrap_or_default();
     }
-    let ivar_id = match globals.class[class_id].ivar_names.get(&name) {
+    let ivar_id = match globals.store[class_id].ivar_names.get(&name) {
         Some(id) => *id,
         None => return Value::nil(),
     };

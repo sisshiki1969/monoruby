@@ -459,10 +459,10 @@ extern "C" fn log_deoptimize(
     let bc_begin = globals[func_id].as_ruby_func().get_pc(0);
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
-    if let TraceIr::LoopEnd = pc.get_ir(&globals.func) {
+    if let TraceIr::LoopEnd = pc.get_ir(&globals.store) {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
-    } else if let TraceIr::ClassDef { .. } = pc.get_ir(&globals.func) {
+    } else if let TraceIr::ClassDef { .. } = pc.get_ir(&globals.store) {
         eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
@@ -485,8 +485,7 @@ extern "C" fn log_deoptimize(
 impl Codegen {
     pub(super) fn compile(
         &mut self,
-        fnstore: &FnStore,
-        classstore: &ClassStore,
+        fnstore: &Store,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
@@ -541,7 +540,7 @@ impl Codegen {
         );
         for i in bb_start_pos {
             cc.bb_pos = i;
-            if self.compile_bb(fnstore, classstore, func, &mut cc, position) {
+            if self.compile_bb(fnstore, func, &mut cc, position) {
                 break;
             };
         }
@@ -764,8 +763,7 @@ impl Codegen {
 
     fn compile_bb(
         &mut self,
-        fnstore: &FnStore,
-        classstore: &ClassStore,
+        fnstore: &Store,
         func: &ISeqInfo,
         cc: &mut JitContext,
         position: Option<BcPc>,
@@ -1226,7 +1224,6 @@ impl Codegen {
                     } else {
                         self.gen_call(
                             fnstore,
-                            classstore,
                             &mut ctx,
                             info,
                             callid,
@@ -1258,7 +1255,6 @@ impl Codegen {
                         info.args = args + 1;
                         self.gen_call(
                             fnstore,
-                            classstore,
                             &mut ctx,
                             info,
                             callid,
@@ -1283,17 +1279,7 @@ impl Codegen {
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                     } else {
-                        self.gen_call(
-                            fnstore,
-                            classstore,
-                            &mut ctx,
-                            info,
-                            callid,
-                            None,
-                            ret,
-                            pc + 1,
-                            false,
-                        );
+                        self.gen_call(fnstore, &mut ctx, info, callid, None, ret, pc + 1, false);
                     }
                 }
                 TraceIr::InlineCall {

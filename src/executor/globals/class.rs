@@ -90,7 +90,7 @@ impl ClassId {
             return "<INVALID>".to_string();
         }
         let class = self.get_obj(globals);
-        match globals.class[self].name {
+        match globals.store[self].name {
             Some(id) => id.to_string(),
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().get()),
@@ -102,7 +102,7 @@ impl ClassId {
 
 impl Globals {
     fn get_class_obj(&self, class_id: ClassId) -> Module {
-        self.class[class_id].object.unwrap()
+        self.store[class_id].object.unwrap()
     }
 
     pub(crate) fn define_module(&mut self, name: &str) -> Module {
@@ -148,7 +148,7 @@ impl Globals {
         parent: ClassId,
         is_module: bool,
     ) -> Module {
-        let class_id = self.class.add_class();
+        let class_id = self.store.add_class();
         let obj = self.generate_class_obj(name_id, class_id, superclass.into(), parent, is_module);
         self.get_metaclass(class_id);
         obj
@@ -156,13 +156,13 @@ impl Globals {
 
     // TODO: we must name the unnamed class when the class object is assigned to constant later.
     pub(crate) fn new_unnamed_class(&mut self, superclass: Option<Module>) -> Value {
-        let class_id = self.class.add_class();
+        let class_id = self.store.add_class();
         let superclass = match superclass {
             Some(class) => class,
             None => OBJECT_CLASS.get_obj(self),
         };
         let class_obj = Value::new_empty_class(class_id, Some(superclass));
-        self.class[class_id].object = Some(class_obj.as_class());
+        self.store[class_id].object = Some(class_obj.as_class());
         class_obj
     }
 
@@ -173,7 +173,7 @@ impl Globals {
         superclass: impl Into<Option<Module>>,
         parent: ClassId,
     ) -> Module {
-        self.class.def_builtin_class(class_id);
+        self.store.def_builtin_class(class_id);
         self.generate_class_obj(name_id, class_id, superclass.into(), parent, false)
     }
 
@@ -190,8 +190,8 @@ impl Globals {
         } else {
             Value::new_empty_class(class_id, superclass)
         };
-        self.class[class_id].object = Some(class_obj.as_class());
-        self.class[class_id].name = Some(name_id);
+        self.store[class_id].object = Some(class_obj.as_class());
+        self.store[class_id].name = Some(name_id);
         self.set_constant(parent, name_id, class_obj);
         class_obj.as_class()
     }
@@ -202,9 +202,9 @@ impl Globals {
         base: Value,
         original_class: ClassId,
     ) -> Module {
-        let id = self.class.copy_class(original_class);
+        let id = self.store.copy_class(original_class);
         let class_obj = Value::new_empty_singleton_class(id, super_class.into(), base).as_class();
-        self.class[id].object = Some(class_obj);
+        self.store[id].object = Some(class_obj);
         class_obj
     }
 
@@ -287,7 +287,7 @@ impl Globals {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.class[class_id].methods.insert(
+        self.store[class_id].methods.insert(
             name,
             MethodTableEntry {
                 owner: class_id,
@@ -303,7 +303,7 @@ impl Globals {
         name: IdentId,
         visibility: Visibility,
     ) {
-        self.class[class_id].methods.insert(
+        self.store[class_id].methods.insert(
             name,
             MethodTableEntry {
                 owner: class_id,
@@ -324,7 +324,7 @@ impl Globals {
         visibility: Visibility,
     ) {
         let singleton = self.get_metaclass(class_id).id();
-        self.class[singleton].methods.insert(
+        self.store[singleton].methods.insert(
             name,
             MethodTableEntry {
                 owner: singleton,
@@ -504,7 +504,7 @@ impl Globals {
         visi: Visibility,
     ) {
         for name in names {
-            match self.class[class_id].methods.get_mut(name) {
+            match self.store[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visi;
                 }
@@ -522,19 +522,19 @@ impl Globals {
     /// If not found, simply return None with no error.
     ///
     fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
-        self.class[class_id].methods.get(&name)
+        self.store[class_id].methods.get(&name)
     }
 
     ///
     /// Get method names in the class of *class_id*.
     ///  
     pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.class[class_id].methods.keys().cloned().collect()
+        self.store[class_id].methods.keys().cloned().collect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(in crate::executor) struct ClassInfo {
+pub(crate) struct ClassInfo {
     /// the constant name which this class object is bound.
     name: Option<IdentId>,
     /// corresponding class object.
@@ -557,7 +557,7 @@ impl alloc::GC<RValue> for ClassInfo {
 }
 
 impl ClassInfo {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             name: None,
             object: None,
@@ -567,7 +567,7 @@ impl ClassInfo {
         }
     }
 
-    fn copy(&self) -> Self {
+    pub(crate) fn copy(&self) -> Self {
         Self {
             name: None,
             object: None,
@@ -579,55 +579,5 @@ impl ClassInfo {
 
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
         self.ivar_names.get(&name).cloned()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(in crate::executor) struct ClassStore {
-    /// class table.
-    classes: Vec<ClassInfo>,
-}
-
-impl std::ops::Index<ClassId> for ClassStore {
-    type Output = ClassInfo;
-    fn index(&self, index: ClassId) -> &Self::Output {
-        &self.classes[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<ClassId> for ClassStore {
-    fn index_mut(&mut self, index: ClassId) -> &mut Self::Output {
-        &mut self.classes[index.0 as usize]
-    }
-}
-
-impl alloc::GC<RValue> for ClassStore {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.classes.iter().for_each(|info| info.mark(alloc));
-    }
-}
-
-impl ClassStore {
-    pub(crate) fn new() -> Self {
-        Self {
-            classes: vec![ClassInfo::new(); 20],
-        }
-    }
-
-    fn add_class(&mut self) -> ClassId {
-        let id = self.classes.len();
-        self.classes.push(ClassInfo::new());
-        ClassId(id as u32)
-    }
-
-    fn copy_class(&mut self, original_class: ClassId) -> ClassId {
-        let id = self.classes.len();
-        let info = self[original_class].copy();
-        self.classes.push(info);
-        ClassId(id as u32)
-    }
-
-    fn def_builtin_class(&mut self, class: ClassId) {
-        self[class] = ClassInfo::new();
     }
 }

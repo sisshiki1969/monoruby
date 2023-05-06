@@ -24,7 +24,7 @@ impl Codegen {
     pub(super) fn gen_merging_branches_loop(
         &mut self,
         func: &ISeqInfo,
-        fnstore: &FnStore,
+        fnstore: &Store,
         cc: &mut JitContext,
         bb_pos: usize,
     ) -> BBContext {

@@ -17,7 +17,7 @@ pub(super) extern "C" fn find_method(
     // register id of *self*
     recv_reg: u16,
 ) -> Option<FuncDataPtr> {
-    let func_name = globals.func[callid].name.unwrap();
+    let func_name = globals.store[callid].name.unwrap();
     let func_id = match globals.find_method(receiver, func_name, recv_reg == 0) {
         Ok(id) => id,
         Err(err) => {
@@ -48,7 +48,7 @@ pub(super) extern "C" fn get_super_data(
     self_val: Value,
 ) -> Option<FuncDataPtr> {
     let func_id = vm.method_func_id();
-    let func_name = globals.func[func_id].name().unwrap();
+    let func_name = globals.store[func_id].name().unwrap();
     let super_id = match globals.check_super(self_val, func_name) {
         Some(entry) => entry.func_id(),
         None => {
@@ -173,7 +173,7 @@ pub(super) extern "C" fn vm_handle_arguments(
                 return None;
             };
             // keyword
-            handle_keyword(&info, &globals.func[callid], ha.caller_reg, ha.callee_reg);
+            handle_keyword(&info, &globals.store[callid], ha.caller_reg, ha.callee_reg);
         }
         _ => {} // no keyword param and rest param for native func, attr_accessor, etc.
     }
@@ -329,9 +329,9 @@ pub(super) extern "C" fn jit_handle_hash_splat(
     callee_func_id: FuncId,
 ) {
     let lfp = vm.cfp().lfp();
-    let callsite = &globals.func[callid];
+    let callsite = &globals.store[callid];
     let CallSiteInfo { hash_splat_pos, .. } = callsite;
-    let info = globals.func[callee_func_id].as_ruby_func();
+    let info = globals.store[callee_func_id].as_ruby_func();
     let callee_kw_pos = info.args.pos_num + 1;
     for (id, param_name) in info.args.keyword_names.iter().enumerate() {
         for hash in hash_splat_pos {

@@ -8,14 +8,14 @@ use std::rc::Rc;
 use super::*;
 
 mod class;
-mod functions;
 mod method;
 mod prng;
+mod store;
 pub use class::*;
 pub use compiler::*;
 pub use error::*;
-pub use functions::*;
 use prng::*;
+pub use store::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InlineMethod {
@@ -45,10 +45,8 @@ impl MethodTableEntry {
 pub struct Globals {
     /// code generator.
     pub codegen: Codegen,
-    /// function info.
-    pub func: FnStore,
-    /// class table.
-    pub(super) class: ClassStore,
+    /// function and class info.
+    pub(crate) store: Store,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
@@ -82,20 +80,19 @@ pub struct Globals {
 impl std::ops::Index<FuncId> for Globals {
     type Output = FuncInfo;
     fn index(&self, index: FuncId) -> &FuncInfo {
-        &self.func[index]
+        &self.store[index]
     }
 }
 
 impl std::ops::IndexMut<FuncId> for Globals {
     fn index_mut(&mut self, index: FuncId) -> &mut FuncInfo {
-        &mut self.func[index]
+        &mut self.store[index]
     }
 }
 
 impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.class.mark(alloc);
-        self.func.mark(alloc);
+        self.store.mark(alloc);
         self.global_vars.values().for_each(|v| v.mark(alloc));
     }
 }
@@ -106,8 +103,7 @@ impl Globals {
 
         let mut globals = Self {
             codegen: Codegen::new(no_jit, main_object),
-            func: FnStore::new(),
-            class: ClassStore::new(),
+            store: Store::new(),
             global_vars: HashMap::default(),
             global_method_cache: HashMap::default(),
             regexp_cache: HashMap::default(),
@@ -499,7 +495,7 @@ impl Globals {
     pub(crate) fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
         if self.startup_flag {
-            self.func
+            self.store
                 .functions()
                 .iter()
                 .skip(dumped_bc)
@@ -508,7 +504,7 @@ impl Globals {
                     _ => {}
                 });
         }
-        self.dumped_bc = self.func.functions().len();
+        self.dumped_bc = self.store.func_len();
     }
 
     #[cfg(any(feature = "emit-asm"))]

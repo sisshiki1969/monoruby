@@ -421,7 +421,7 @@ pub extern "C" fn vm_expand_splat(
 ) -> usize {
     let mut dst_len = 0;
     unsafe {
-        let splat_pos = &globals.func[callid].splat_pos;
+        let splat_pos = &globals.store[callid].splat_pos;
         for i in 0..len {
             let v = *src.sub(i);
             if splat_pos.contains(&i) {
@@ -481,13 +481,13 @@ pub extern "C" fn vm_get_constant(
     const_version: usize,
     _: Option<Value>,
 ) -> Option<Value> {
-    let (cached_version, val) = &globals.func[site_id].cache;
+    let (cached_version, val) = &globals.store[site_id].cache;
     if *cached_version == const_version {
         return *val;
     };
     match vm.find_constant(globals, site_id) {
         Ok(val) => {
-            globals.func[site_id].cache = (const_version, Some(val));
+            globals.store[site_id].cache = (const_version, Some(val));
             Some(val)
         }
         Err(err) => {
