@@ -1404,6 +1404,15 @@ impl Codegen {
             xorq rdx, rdx;
         };
         self.call_rax();
+        // pop class context.
+        monoasm!(self.jit,
+            movq r15, rax;
+            movq rdi, rbx; // &mut Interp
+            movq rsi, r12; // &mut Globals
+            movq rax, (runtime::pop_class_context);
+            call rax;
+            movq rax, r15;
+        );
         monoasm! { self.jit,
             popq r15;
             popq r13;
@@ -1411,13 +1420,6 @@ impl Codegen {
         self.vm_handle_error();
         let exit = self.jit.label();
         self.vm_store_r15_if_nonzero(exit);
-        // pop class context.
-        monoasm!(self.jit,
-            movq rdi, rbx; // &mut Interp
-            movq rsi, r12; // &mut Globals
-            movq rax, (runtime::pop_class_context);
-            call rax;
-        );
         self.fetch_and_dispatch();
     }
 

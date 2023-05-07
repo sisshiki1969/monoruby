@@ -8,13 +8,19 @@ static ID: LazyLock<RwLock<IdentifierTable>> =
 ///
 /// Wrapper of ID for strings.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct IdentId(NonZeroU32);
 
 impl std::default::Default for IdentId {
     fn default() -> Self {
         Self(NonZeroU32::new(1u32).unwrap())
+    }
+}
+
+impl std::fmt::Debug for IdentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get_name())
     }
 }
 
