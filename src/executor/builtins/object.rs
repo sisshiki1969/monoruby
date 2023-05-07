@@ -194,7 +194,7 @@ fn block_given(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
-    let s = lfp.self_val().to_s(globals);
+    let s = globals.tos(lfp.self_val());
     Ok(Value::new_string(s))
 }
 
@@ -207,7 +207,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
 fn p(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let mut buf = String::new();
     for v in arg.iter(len) {
-        buf += &v.inspect(globals);
+        buf += &globals.inspect(v);
         buf += "\n";
     }
     globals.write_stdout(buf.as_bytes());
@@ -232,8 +232,8 @@ fn assert(
     let actual = arg[1];
     eprintln!(
         "expected:{} actual:{}",
-        expected.inspect(globals),
-        actual.inspect(globals)
+        globals.inspect(expected),
+        globals.inspect(actual)
     );
     assert!(Value::eq(expected, actual));
     Ok(Value::nil())
@@ -286,7 +286,7 @@ fn inspect(
     _: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let s = lfp.self_val().inspect(globals);
+    let s = globals.inspect(lfp.self_val());
     Ok(Value::new_string(s))
 }
 
@@ -450,7 +450,7 @@ fn kernel_integer(
                 match s.parse::<i64>() {
                     Ok(num) => return Ok(Value::new_integer(num)),
                     Err(_) => {
-                        let s = arg0.to_s(globals);
+                        let s = globals.tos(arg0);
                         return Err(MonorubyErr::argumenterr(format!(
                             "invalid value for Integer(): {}",
                             s

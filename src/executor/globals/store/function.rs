@@ -1,5 +1,28 @@
 use super::*;
 
+///
+/// ID of function.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct FuncId(std::num::NonZeroU32);
+
+impl From<FuncId> for u32 {
+    fn from(id: FuncId) -> u32 {
+        id.0.get()
+    }
+}
+
+impl FuncId {
+    pub fn new(id: u32) -> Self {
+        Self(std::num::NonZeroU32::new(id).unwrap())
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0.get()
+    }
+}
+
 pub(crate) struct Funcs {
     info: Vec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
@@ -34,6 +57,7 @@ impl alloc::GC<RValue> for Funcs {
 }
 
 impl Funcs {
+    #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         &self.info
     }
@@ -226,5 +250,189 @@ impl Funcs {
             required_num,
             block_param,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum FuncKind {
+    ISeq(ISeqInfo),
+    Builtin { abs_address: u64 },
+    AttrReader { ivar_name: IdentId },
+    AttrWriter { ivar_name: IdentId },
+}
+
+impl alloc::GC<RValue> for FuncKind {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let FuncKind::ISeq(info) = self {
+            info.mark(alloc)
+        }
+    }
+}
+
+impl std::default::Default for FuncKind {
+    fn default() -> Self {
+        Self::Builtin { abs_address: 0 }
+    }
+}
+
+pub const FUNCDATA_OFFSET_CODEPTR: u64 = 0;
+pub const FUNCDATA_OFFSET_META: u64 = 8;
+pub const FUNCDATA_OFFSET_REGNUM: u64 = 12;
+pub const FUNCDATA_OFFSET_PC: u64 = 16;
+
+#[derive(Debug, Clone, Default)]
+pub struct FuncInfo {
+    /// name of this function.
+    name: Option<IdentId>,
+    pub(in crate::executor) data: FuncData,
+    pub(in crate::executor) kind: FuncKind,
+}
+
+impl alloc::GC<RValue> for FuncInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.kind.mark(alloc);
+    }
+}
+
+impl FuncInfo {
+    fn new_method_iseq(
+        name: impl Into<Option<IdentId>>,
+        func_id: Option<FuncId>,
+        args: ParamsInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        let name = name.into();
+        let info = ISeqInfo::new_method(func_id, name, args, sourceinfo);
+        Self {
+            name,
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::vm_method(func_id, 0),
+            },
+            kind: FuncKind::ISeq(info),
+        }
+    }
+
+    fn new_block_iseq(
+        func_id: Option<FuncId>,
+        mother: FuncId,
+        outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
+        args: ParamsInfo,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        let info = ISeqInfo::new_block(func_id, mother, outer, args, sourceinfo);
+        Self {
+            name: None,
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::vm_method(func_id, 0),
+            },
+            kind: FuncKind::ISeq(info),
+        }
+    }
+
+    fn new_classdef_iseq(
+        name: Option<IdentId>,
+        func_id: Option<FuncId>,
+        sourceinfo: SourceInfoRef,
+    ) -> Self {
+        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), sourceinfo);
+        Self {
+            name,
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::vm_classdef(func_id, 0),
+            },
+            kind: FuncKind::ISeq(info),
+        }
+    }
+
+    fn new_native(func_id: FuncId, name: String, address: BuiltinFn, arity: i32) -> Self {
+        let reg_num = if arity == -1 { -1 } else { arity as i64 };
+        Self {
+            name: Some(IdentId::get_id_from_string(name)),
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::native(func_id, reg_num),
+            },
+            kind: FuncKind::Builtin {
+                abs_address: address as *const u8 as u64,
+            },
+        }
+    }
+
+    fn new_attr_reader(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        Self {
+            name: Some(name),
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::native(func_id, 0),
+            },
+            kind: FuncKind::AttrReader { ivar_name },
+        }
+    }
+
+    fn new_attr_writer(func_id: FuncId, name: IdentId, ivar_name: IdentId) -> Self {
+        Self {
+            name: Some(name),
+            data: FuncData {
+                codeptr: None,
+                pc: None,
+                meta: Meta::native(func_id, 1),
+            },
+            kind: FuncKind::AttrWriter { ivar_name },
+        }
+    }
+
+    pub(crate) fn name(&self) -> Option<IdentId> {
+        self.name
+    }
+
+    pub(crate) fn as_ruby_func(&self) -> &ISeqInfo {
+        match &self.kind {
+            FuncKind::ISeq(info) => info,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn as_ruby_func_mut(&mut self) -> &mut ISeqInfo {
+        match &mut self.kind {
+            FuncKind::ISeq(info) => info,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl FuncInfo {
+    #[cfg(feature = "emit-bc")]
+    pub(crate) fn dump_bc(&self, globals: &Globals) {
+        let info = self.as_ruby_func();
+        eprintln!("------------------------------------");
+        eprintln!(
+            "{:?} name:{} bc:{:?} meta:{:?} {:?}",
+            info.id(),
+            match self.name {
+                Some(name) => name.to_string(),
+                None => "<ANONYMOUS>".to_string(),
+            },
+            BcPcBase::new(info),
+            self.data.meta,
+            self.kind
+        );
+        eprintln!("{:?}", info.get_exception_map());
+        let bb_info = info.get_bb_info();
+        for (i, pc) in info.bytecode().iter().enumerate() {
+            let pc = BcPc::from(pc);
+            if let Some(fmt) = pc.format(globals, i) {
+                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i);
+                eprintln!("{}", fmt);
+            };
+        }
+        eprintln!("------------------------------------");
     }
 }

@@ -136,16 +136,8 @@ impl Value {
         self.get() == NIL_VALUE
     }
 
-    pub fn to_s(self, globals: &Globals) -> String {
-        globals.val_tos(self)
-    }
-
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
         globals.val_to_bytes(self)
-    }
-
-    pub fn inspect(self, globals: &Globals) -> String {
-        globals.val_inspect(self)
     }
 
     pub(crate) extern "C" fn get_class(val: Value) -> ClassId {
@@ -606,7 +598,7 @@ impl Value {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.val_tos(*self);
+                let name = globals.tos(*self);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
@@ -623,7 +615,7 @@ impl Value {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.val_tos(*self);
+                let name = globals.tos(*self);
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -633,7 +625,7 @@ impl Value {
         match self.is_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.val_tos(*self);
+                let name = globals.tos(*self);
                 Err(MonorubyErr::is_not_class(name))
             }
         }

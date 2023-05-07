@@ -474,7 +474,7 @@ extern "C" fn log_deoptimize(
         };
         if let Some(v) = v {
             eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
-            eprintln!("    [{:05}] {fmt} caused by {}", index, v.to_s(globals));
+            eprintln!("    [{:05}] {fmt} caused by {}", index, globals.tos(v));
         } else {
             eprint!("<-- non-optimized branch in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);

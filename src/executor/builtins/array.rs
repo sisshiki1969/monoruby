@@ -206,7 +206,7 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 
 fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str) {
     for elem in &**aref {
-        let s = elem.to_s(globals);
+        let s = globals.tos(*elem);
         if res.is_empty() {
             *res = s;
         } else {

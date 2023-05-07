@@ -19,18 +19,6 @@ impl IvarId {
 }
 
 impl Globals {
-    fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
-        let table = &mut self.store[class_id].ivar_names;
-        match table.get(&ivar_name) {
-            Some(id) => *id,
-            None => {
-                let id = IvarId(table.len() as u32);
-                table.insert(ivar_name, id);
-                id
-            }
-        }
-    }
-
     ///
     /// Get the value of a instance variable with *name* which belongs to *val*.
     ///
@@ -68,6 +56,18 @@ impl Globals {
         let id = self.get_ivar_id(class_id, name);
         rval.set_var(id, val);
         Ok(())
+    }
+
+    fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
+        let table = &mut self.store[class_id].ivar_names;
+        match table.get(&ivar_name) {
+            Some(id) => *id,
+            None => {
+                let id = IvarId(table.len() as u32);
+                table.insert(ivar_name, id);
+                id
+            }
+        }
     }
 }
 

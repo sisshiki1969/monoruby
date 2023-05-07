@@ -120,7 +120,7 @@ pub(super) extern "C" fn concatenate_string(
     let mut res = String::new();
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        res += &v.to_s(globals);
+        res += &globals.tos(v);
     }
     Value::new_string(res)
 }

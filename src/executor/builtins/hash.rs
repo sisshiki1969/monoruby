@@ -223,7 +223,7 @@ fn inspect(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let s = globals.val_inspect(lfp.self_val());
+    let s = globals.inspect(lfp.self_val());
     Ok(Value::new_string(s))
 }
 

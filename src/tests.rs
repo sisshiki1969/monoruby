@@ -137,7 +137,7 @@ fn run_test_main(code: &str) -> (Value, Globals) {
     let res = globals
         .compile_and_run(code, std::path::Path::new(""))
         .unwrap();
-    let jit_str = res.inspect(&globals);
+    let jit_str = globals.inspect(res);
     #[cfg(not(debug_assertions))]
     eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());
     #[cfg(debug_assertions)]
@@ -190,7 +190,7 @@ fn run_ruby(code: &str, globals: &mut Globals) -> Value {
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("ruby: {}", res.inspect(&globals));
+    eprintln!("ruby: {}", globals.inspect(res));
     res
 }
 

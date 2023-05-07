@@ -94,9 +94,58 @@ impl ClassId {
             Some(id) => id.to_string(),
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().get()),
-                Some(base) => format!("#<Class:{}>", globals.val_tos(base)),
+                Some(base) => format!("#<Class:{}>", globals.tos(base)),
             },
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClassInfo {
+    /// the constant name which this class object is bound.
+    name: Option<IdentId>,
+    /// corresponding class object.
+    object: Option<Module>,
+    /// method table.
+    methods: HashMap<IdentId, MethodTableEntry>,
+    /// constants table.
+    constants: HashMap<IdentId, Value>,
+    /// instance variable table.
+    ivar_names: HashMap<IdentId, IvarId>,
+}
+
+impl alloc::GC<RValue> for ClassInfo {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(v) = self.object {
+            v.as_val().mark(alloc);
+        }
+        self.constants.values().for_each(|v| v.mark(alloc));
+    }
+}
+
+impl ClassInfo {
+    pub(super) fn new() -> Self {
+        Self {
+            name: None,
+            object: None,
+            methods: HashMap::default(),
+            constants: HashMap::default(),
+            ivar_names: HashMap::default(),
+        }
+    }
+
+    pub(super) fn copy(&self) -> Self {
+        Self {
+            name: None,
+            object: None,
+            methods: HashMap::default(),
+            constants: HashMap::default(),
+            ivar_names: self.ivar_names.clone(),
+        }
+    }
+
+    pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
+        self.ivar_names.get(&name).cloned()
     }
 }
 
@@ -443,7 +492,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(super) fn check_method_for_class(
+    pub(crate) fn check_method_for_class(
         &mut self,
         class_id: ClassId,
         name: IdentId,
@@ -517,67 +566,18 @@ impl Globals {
     }
 
     ///
+    /// Get method names in the class of *class_id*.
+    ///  
+    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
+        self.store[class_id].methods.keys().cloned().collect()
+    }
+
+    ///
     /// Get a method with *name* in the class of *class_id*.
     ///   
     /// If not found, simply return None with no error.
     ///
     fn get_method(&self, class_id: ClassId, name: IdentId) -> Option<&MethodTableEntry> {
         self.store[class_id].methods.get(&name)
-    }
-
-    ///
-    /// Get method names in the class of *class_id*.
-    ///  
-    pub(crate) fn get_method_names(&self, class_id: ClassId) -> Vec<IdentId> {
-        self.store[class_id].methods.keys().cloned().collect()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ClassInfo {
-    /// the constant name which this class object is bound.
-    name: Option<IdentId>,
-    /// corresponding class object.
-    object: Option<Module>,
-    /// method table.
-    methods: HashMap<IdentId, MethodTableEntry>,
-    /// constants table.
-    constants: HashMap<IdentId, Value>,
-    /// instance variable table.
-    ivar_names: HashMap<IdentId, IvarId>,
-}
-
-impl alloc::GC<RValue> for ClassInfo {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(v) = self.object {
-            v.as_val().mark(alloc);
-        }
-        self.constants.values().for_each(|v| v.mark(alloc));
-    }
-}
-
-impl ClassInfo {
-    pub(crate) fn new() -> Self {
-        Self {
-            name: None,
-            object: None,
-            methods: HashMap::default(),
-            constants: HashMap::default(),
-            ivar_names: HashMap::default(),
-        }
-    }
-
-    pub(crate) fn copy(&self) -> Self {
-        Self {
-            name: None,
-            object: None,
-            methods: HashMap::default(),
-            constants: HashMap::default(),
-            ivar_names: self.ivar_names.clone(),
-        }
-    }
-
-    pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
-        self.ivar_names.get(&name).cloned()
     }
 }

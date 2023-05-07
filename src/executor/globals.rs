@@ -7,11 +7,9 @@ use std::rc::Rc;
 
 use super::*;
 
-mod class;
 mod method;
 mod prng;
 mod store;
-pub use class::*;
 pub use compiler::*;
 pub use error::*;
 use prng::*;
@@ -311,7 +309,7 @@ impl Globals {
 }
 
 impl Globals {
-    pub(crate) fn val_tos(&self, val: Value) -> String {
+    pub(crate) fn tos(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
             RV::Nil => "".to_string(),
@@ -330,9 +328,9 @@ impl Globals {
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_tos(val),
                 ObjKind::RANGE => self.range_tos(val),
-                ObjKind::PROC => self.proc_tos(val),
+                ObjKind::PROC => Self::proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
-                ObjKind::REGEXP => self.regexp_tos(val),
+                ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
                 ObjKind::EXCEPTION => rvalue.as_exception().err.msg().to_string(),
                 _ => format!("{:016x}", val.get()),
@@ -344,10 +342,10 @@ impl Globals {
         if let RV::String(s) = val.unpack() {
             return s.to_vec();
         }
-        self.val_tos(val).into_bytes()
+        self.tos(val).into_bytes()
     }
 
-    pub(crate) fn val_inspect(&self, val: Value) -> String {
+    pub fn inspect(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
             RV::Nil => "nil".to_string(),
@@ -366,9 +364,9 @@ impl Globals {
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
                 ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_tos(val),
-                ObjKind::PROC => self.proc_tos(val),
+                ObjKind::PROC => Self::proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
-                ObjKind::REGEXP => self.regexp_tos(val),
+                ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
                 ObjKind::EXCEPTION => rvalue.as_exception().err.get_error_message(),
                 kind => unreachable!("{:016x} {kind}", val.get()),
@@ -391,11 +389,11 @@ impl Globals {
     fn array_tos(&self, v: &ArrayInner) -> String {
         match v.len() {
             0 => "[]".to_string(),
-            1 => format!("[{}]", self.val_inspect(v[0])),
+            1 => format!("[{}]", self.inspect(v[0])),
             _ => {
-                let mut s = format!("[{}", self.val_inspect(v[0]));
+                let mut s = format!("[{}", self.inspect(v[0]));
                 for val in v[1..].iter() {
-                    s += &format!(", {}", self.val_inspect(*val));
+                    s += &format!(", {}", self.inspect(*val));
                 }
                 s += "]";
                 s
@@ -405,7 +403,7 @@ impl Globals {
 
     fn object_tos(&self, val: Value) -> String {
         if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.val_tos(name)
+            self.tos(name)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
@@ -415,17 +413,17 @@ impl Globals {
         }
     }
 
-    fn proc_tos(&self, val: Value) -> String {
+    fn proc_tos(val: Value) -> String {
         format!("#<Proc:0x{:016x}>", val.rvalue().id())
     }
 
     fn object_inspect(&self, val: Value) -> String {
         if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.val_tos(name)
+            self.tos(name)
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(val).into_iter() {
-                s += &format!(" {id}={}", self.val_inspect(v));
+                s += &format!(" {id}={}", self.inspect(v));
             }
             format!(
                 "#<{}:0x{:016x}{s}>",
@@ -446,12 +444,12 @@ impl Globals {
                     let k_inspect = if k == val {
                         "{...}".to_string()
                     } else {
-                        k.inspect(self)
+                        self.inspect(k)
                     };
                     let v_inspect = if v == val {
                         "{...}".to_string()
                     } else {
-                        v.inspect(self)
+                        self.inspect(v)
                     };
                     result = if first {
                         format!("{k_inspect}=>{v_inspect}")
@@ -465,7 +463,7 @@ impl Globals {
         }
     }
 
-    fn regexp_tos(&self, val: Value) -> String {
+    fn regexp_tos(val: Value) -> String {
         let regexp = val.is_regex().unwrap();
         format!("/{}/", regexp.as_str())
     }
@@ -474,9 +472,9 @@ impl Globals {
         let range = val.as_range();
         format!(
             "{}{}{}",
-            self.val_inspect(range.start),
+            self.inspect(range.start),
             if range.exclude_end() { "..." } else { ".." },
-            self.val_inspect(range.end),
+            self.inspect(range.end),
         )
     }
 }
@@ -486,10 +484,8 @@ impl Globals {
     pub(crate) fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
         if self.startup_flag {
-            self.store
-                .functions()
+            self.store.functions()[dumped_bc..]
                 .iter()
-                .skip(dumped_bc)
                 .for_each(|info| match &info.kind {
                     FuncKind::ISeq(_) => info.dump_bc(self),
                     _ => {}
@@ -589,7 +585,7 @@ impl Globals {
                 "%{}{}:[{}] ",
                 r,
                 if r == 0 { "(self)" } else { "" },
-                self.val_inspect(v)
+                self.inspect(v)
             );
         }
         eprintln!();

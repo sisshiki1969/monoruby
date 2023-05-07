@@ -708,7 +708,7 @@ impl BcPc {
                 end
             ),
             TraceIr::Literal(reg, val) => {
-                format!("{:?} = literal[{}]", reg, globals.val_inspect(val))
+                format!("{:?} = literal[{}]", reg, globals.inspect(val))
             }
             TraceIr::Array { ret, args, len } => {
                 format!("{:?} = array[{:?}; {}]", ret, args, len)
@@ -747,7 +747,7 @@ impl BcPc {
                     op1,
                     match self.value() {
                         None => "<INVALID>".to_string(),
-                        Some(val) => val.inspect(globals),
+                        Some(val) => globals.inspect(val),
                     }
                 )
             }
