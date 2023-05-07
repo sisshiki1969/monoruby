@@ -79,16 +79,10 @@ impl BytecodeGen {
                     match rhs.kind {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
-                        _ => {
-                            self.gen_store_expr(dst, rhs)?;
-                            self.emit_neg(Some(dst), loc);
-                        }
+                        _ => self.emit_neg(dst, rhs, loc)?,
                     };
                 }
-                UnOp::Not => {
-                    self.gen_store_expr(dst, rhs)?;
-                    self.emit_not(dst, dst, loc);
-                }
+                UnOp::Not => self.emit_not(dst, rhs, loc)?,
                 _ => {
                     return Err(MonorubyErr::unsupported_feature(
                         &format!("unsupported unop. {:?}", op),

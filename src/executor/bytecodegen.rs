@@ -700,27 +700,26 @@ impl BytecodeGen {
         self.emit(BcIr::LoadSvar { ret, id }, loc);
     }
 
-    fn emit_neg(&mut self, local: Option<BcReg>, loc: Loc) {
-        match local {
-            Some(local) => {
-                self.emit(
-                    BcIr::Neg {
-                        ret: local,
-                        src: local,
-                    },
-                    loc,
-                );
-            }
-            None => {
-                let src = self.pop().into();
-                let ret = self.push().into();
-                self.emit(BcIr::Neg { ret, src }, loc);
-            }
-        };
+    fn emit_neg(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
+        if let Some(rhs) = self.is_refer_local(&rhs) {
+            let rhs = rhs.into();
+            self.emit(BcIr::Neg { ret, src: rhs }, loc);
+        } else {
+            self.gen_store_expr(ret, rhs)?;
+            self.emit(BcIr::Neg { ret, src: ret }, loc);
+        }
+        Ok(())
     }
 
-    fn emit_not(&mut self, ret: BcReg, src: BcReg, loc: Loc) {
-        self.emit(BcIr::Not { ret, src }, loc);
+    fn emit_not(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
+        if let Some(rhs) = self.is_refer_local(&rhs) {
+            let rhs = rhs.into();
+            self.emit(BcIr::Not { ret, src: rhs }, loc);
+        } else {
+            self.gen_store_expr(ret, rhs)?;
+            self.emit(BcIr::Not { ret, src: ret }, loc);
+        }
+        Ok(())
     }
 
     fn push_nil(&mut self) {
