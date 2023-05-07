@@ -246,17 +246,12 @@ impl BytecodeGen {
             keyword_initializers,
             destruct_info,
             optional_info,
-        } = store.get_init();
+        } = store.get_compile_info();
         let info = store[func_id].as_ruby_func();
         let mother = info
             .mother
             .map(|fid| (fid, store[fid].as_ruby_func().args.clone()));
-        let mut gen = BytecodeGen::new(
-            info,
-            mother,
-            store.callsite_offset(),
-            store.functions_offset(),
-        );
+        let mut gen = BytecodeGen::new(info, mother, store.callsite_offset(), store.func_len());
         // arguments preparation
         for ForParamInfo {
             dst_outer,

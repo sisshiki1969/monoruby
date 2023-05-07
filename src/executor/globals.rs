@@ -72,7 +72,7 @@ pub struct Globals {
     /// stats for method cache miss
     pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
-    pub(crate) dumped_bc: usize,
+    dumped_bc: usize,
     #[cfg(feature = "emit-bc")]
     pub(crate) startup_flag: bool,
 }
@@ -479,15 +479,6 @@ impl Globals {
             self.val_inspect(range.end),
         )
     }
-
-    /*pub(crate) fn check_arg(&mut self, func_id: FuncId, args_len: usize) -> Option<()> {
-        let arity = self[func_id].arity();
-        if arity != -1 {
-            let arity = arity as usize;
-            self.check_number_of_arguments(args_len, arity..=arity)?;
-        }
-        Some(())
-    }*/
 }
 
 impl Globals {
@@ -506,7 +497,6 @@ impl Globals {
         }
         self.dumped_bc = self.store.func_len();
     }
-
     #[cfg(any(feature = "emit-asm"))]
     pub(crate) fn dump_disas(&mut self, sourcemap: Vec<(usize, usize)>, func_id: FuncId) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
