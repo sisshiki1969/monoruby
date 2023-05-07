@@ -273,6 +273,8 @@ impl Codegen {
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
         self.dispatch[85] = ensure_end;
+        self.dispatch[126] = self.vm_pos();
+        self.dispatch[127] = self.vm_bitnot();
         self.dispatch[128] = self.vm_not();
         self.dispatch[129] = self.vm_neg();
         self.dispatch[131] = self.vm_array();
@@ -1149,6 +1151,15 @@ impl Codegen {
         label
     }
 
+    fn vm_bitnot(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        self.vm_generic_unop(generic, bitnot_value as _);
+        label
+    }
+
     fn vm_neg(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
@@ -1163,6 +1174,21 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
         self.vm_generic_unop(generic, neg_value as _);
+        label
+    }
+
+    fn vm_pos(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.vm_get_rdi(); // rdi <- lhs
+        self.vm_get_addr_r15(); // r15 <- ret addr
+        monoasm! {self.jit,
+            testq rdi, 0x1;
+            jz generic;
+            movq [r15], rdi;
+        }
+        self.fetch_and_dispatch();
+        self.vm_generic_unop(generic, pos_value as _);
         label
     }
 

@@ -74,6 +74,16 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
     run_tests(&test);
 }
 
+pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
+    let mut test = vec![];
+    for rhs in rhs {
+        for op in op {
+            test.extend_from_slice(&[format!("{op} {rhs}"), format!("{op} (-{rhs})")]);
+        }
+    }
+    run_tests(&test);
+}
+
 pub fn run_test_with_prelude(code: &str, prelude: &str) {
     let wrapped = format!(
         r##"
@@ -406,6 +416,23 @@ mod test {
             "690426.0",
         ];
         run_binop_tests(&lhs, &["==", "!=", "<", "<=", ">", ">=", "==="], &rhs);
+    }
+
+    #[test]
+    fn test_numbers_unop() {
+        let rhs = [
+            "0",
+            "5375",
+            "690426",
+            "24829482958347598570210950349530597028472983429873",
+        ];
+        run_unop_tests(&["-", "~", "+", "!"], &rhs);
+        let rhs = [
+            "0.0",
+            "53.75",
+            "248.29482958347598570210950349530597028472983429873",
+        ];
+        run_unop_tests(&["-", "+"], &rhs);
     }
 
     #[test]

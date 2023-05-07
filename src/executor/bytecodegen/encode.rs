@@ -281,6 +281,20 @@ impl BytecodeGen {
                 Bc::from(enc_w(82, op1.0))
             }
             BcIr::EnsureEnd => Bc::from(enc_w(85, 0)),
+            BcIr::Pos { ret, src } => {
+                let op1 = self.get_index(ret);
+                let op2 = self.get_index(src);
+                Bc::from_with_class_and_version(
+                    enc_ww(126, op1.0, op2.0),
+                    ClassId::default(),
+                    -1i32 as u32,
+                )
+            }
+            BcIr::BitNot { ret, src } => {
+                let op1 = self.get_index(ret);
+                let op2 = self.get_index(src);
+                Bc::from(enc_ww(127, op1.0, op2.0))
+            }
             BcIr::Not { ret, src } => {
                 let op1 = self.get_index(ret);
                 let op2 = self.get_index(src);

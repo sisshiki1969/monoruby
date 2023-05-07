@@ -123,18 +123,32 @@ impl Cref {
 ///
 /// Bytecode interpreter.
 ///
-#[derive(Default)]
 #[repr(C)]
 pub struct Executor {
     cfp: Option<CFP>, // [rbx]
     lfp_top: LFP,     // [rbx + 8]
-    lexical_class: Vec<Cref>,
+    lexical_class: Vec<Vec<Cref>>,
     sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
     sp_matches: Vec<Option<Value>>, // $1 ... $n : Regexp.last_match(n)
     temp_stack: Vec<Value>,
     /// error information.
     exception: Option<MonorubyErr>,
+}
+
+impl std::default::Default for Executor {
+    fn default() -> Self {
+        Self {
+            cfp: None,
+            lfp_top: LFP::default(),
+            lexical_class: vec![vec![]],
+            sp_last_match: None,
+            sp_post_match: None,
+            sp_matches: vec![],
+            temp_stack: vec![],
+            exception: None,
+        }
+    }
 }
 
 impl alloc::GC<RValue> for Executor {
@@ -291,21 +305,42 @@ impl Executor {
             .and_then(|fid| self.eval(globals, fid))
     }
 
+    fn enter_class_context(&mut self) {
+        self.lexical_class.push(vec![]);
+    }
+
+    fn exit_class_context(&mut self) {
+        self.lexical_class.pop();
+    }
+
     fn push_class_context(&mut self, class_id: ClassId) {
         self.lexical_class
+            .last_mut()
+            .unwrap()
             .push(Cref::new(class_id, false, Visibility::Public));
     }
 
     fn pop_class_context(&mut self) -> Option<ClassId> {
-        self.lexical_class.pop().map(|x| x.class_id)
+        self.lexical_class
+            .last_mut()
+            .unwrap()
+            .pop()
+            .map(|x| x.class_id)
     }
 
     fn set_module_function(&mut self) {
-        self.lexical_class.last_mut().unwrap().module_function = true;
+        self.lexical_class
+            .last_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .module_function = true;
     }
 
     fn get_class_context(&self) -> Cref {
         self.lexical_class
+            .last()
+            .unwrap()
             .last()
             .cloned()
             .unwrap_or_else(|| Cref::new(OBJECT_CLASS, false, Visibility::Private))
@@ -314,6 +349,8 @@ impl Executor {
     fn context_class_id(&self) -> ClassId {
         self.lexical_class
             .last()
+            .unwrap()
+            .last()
             .map(|cref| cref.class_id)
             .unwrap_or(OBJECT_CLASS)
     }
@@ -321,12 +358,19 @@ impl Executor {
     fn context_visibility(&self) -> Visibility {
         self.lexical_class
             .last()
+            .unwrap()
+            .last()
             .map(|cref| cref.visibility)
             .unwrap_or(Visibility::Private)
     }
 
     fn set_context_visibility(&mut self, visi: Visibility) {
-        self.lexical_class.last_mut().unwrap().visibility = visi;
+        self.lexical_class
+            .last_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()
+            .visibility = visi;
     }
 }
 
@@ -800,6 +844,14 @@ impl BcPc {
                 )
             }
             TraceIr::Nil(reg) => format!("{:?} = nil", reg),
+            TraceIr::BitNot { ret, src } => {
+                let op1 = format!("{:?} = ~{:?}", ret, src);
+                format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
+            }
+            TraceIr::Pos { ret, src } => {
+                let op1 = format!("{:?} = +{:?}", ret, src);
+                format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
+            }
             TraceIr::Neg { ret, src } => {
                 let op1 = format!("{:?} = -{:?}", ret, src);
                 format!("{:36} [{}]", op1, self.classid1().get_name(globals),)
@@ -813,12 +865,12 @@ impl BcPc {
                 ret,
                 mode: OpMode::RR(lhs, rhs),
             }
-            | TraceIr::IntegerBinOp {
+            | TraceIr::IBinOp {
                 kind,
                 ret,
                 mode: OpMode::RR(lhs, rhs),
             }
-            | TraceIr::FloatBinOp {
+            | TraceIr::FBinOp {
                 kind,
                 ret,
                 mode: OpMode::RR(lhs, rhs),
@@ -836,12 +888,12 @@ impl BcPc {
                 ret,
                 mode: OpMode::RI(lhs, rhs),
             }
-            | TraceIr::IntegerBinOp {
+            | TraceIr::IBinOp {
                 kind,
                 ret,
                 mode: OpMode::RI(lhs, rhs),
             }
-            | TraceIr::FloatBinOp {
+            | TraceIr::FBinOp {
                 kind,
                 ret,
                 mode: OpMode::RI(lhs, rhs),
@@ -859,12 +911,12 @@ impl BcPc {
                 ret,
                 mode: OpMode::IR(lhs, rhs),
             }
-            | TraceIr::IntegerBinOp {
+            | TraceIr::IBinOp {
                 kind,
                 ret,
                 mode: OpMode::IR(lhs, rhs),
             }
-            | TraceIr::FloatBinOp {
+            | TraceIr::FBinOp {
                 kind,
                 ret,
                 mode: OpMode::IR(lhs, rhs),

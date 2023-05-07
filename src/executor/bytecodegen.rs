@@ -700,6 +700,17 @@ impl BytecodeGen {
         self.emit(BcIr::LoadSvar { ret, id }, loc);
     }
 
+    fn emit_pos(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
+        if let Some(rhs) = self.is_refer_local(&rhs) {
+            let rhs = rhs.into();
+            self.emit(BcIr::Pos { ret, src: rhs }, loc);
+        } else {
+            self.gen_store_expr(ret, rhs)?;
+            self.emit(BcIr::Pos { ret, src: ret }, loc);
+        }
+        Ok(())
+    }
+
     fn emit_neg(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
         if let Some(rhs) = self.is_refer_local(&rhs) {
             let rhs = rhs.into();
@@ -718,6 +729,17 @@ impl BytecodeGen {
         } else {
             self.gen_store_expr(ret, rhs)?;
             self.emit(BcIr::Not { ret, src: ret }, loc);
+        }
+        Ok(())
+    }
+
+    fn emit_bitnot(&mut self, ret: BcReg, rhs: Node, loc: Loc) -> Result<()> {
+        if let Some(rhs) = self.is_refer_local(&rhs) {
+            let rhs = rhs.into();
+            self.emit(BcIr::BitNot { ret, src: rhs }, loc);
+        } else {
+            self.gen_store_expr(ret, rhs)?;
+            self.emit(BcIr::BitNot { ret, src: ret }, loc);
         }
         Ok(())
     }

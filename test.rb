@@ -1,13 +1,10 @@
-begin
-  100
-rescue StandardError
-  puts "rescue"
-  100
-else
-  puts "else"
-  200
-ensure
-  puts "ensure"
-  300
+class M
+  class M
+    class D < C
+    end
+  end
+  class C
+  end
 end
-500
+
+

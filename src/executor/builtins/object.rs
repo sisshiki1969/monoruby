@@ -475,7 +475,10 @@ fn load(
     is_relative: bool,
 ) -> Result<Value> {
     if let Some((file_body, path)) = globals.load_lib(&file_name, is_relative)? {
-        vm.eval_script(globals, file_body, &path)?;
+        vm.enter_class_context();
+        let res = vm.eval_script(globals, file_body, &path);
+        vm.exit_class_context();
+        res?;
         Ok(Value::bool(true))
     } else {
         Ok(Value::bool(false))

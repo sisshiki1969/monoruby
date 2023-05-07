@@ -69,6 +69,14 @@ pub(super) enum BcIr {
     },
     LoadIvar(BcReg, IdentId),  // ret, id  - %ret = @id
     StoreIvar(BcReg, IdentId), // src, id  - @id = %src
+    BitNot {
+        ret: BcReg,
+        src: BcReg,
+    },
+    Pos {
+        ret: BcReg,
+        src: BcReg,
+    },
     Neg {
         ret: BcReg,
         src: BcReg,
@@ -517,8 +525,16 @@ pub(in crate::executor) enum TraceIr {
     },
     /// nil(%reg)
     Nil(SlotId),
+    BitNot {
+        ret: SlotId,
+        src: SlotId,
+    },
     /// negate(%ret, %src)
     Neg {
+        ret: SlotId,
+        src: SlotId,
+    },
+    Pos {
         ret: SlotId,
         src: SlotId,
     },
@@ -532,12 +548,12 @@ pub(in crate::executor) enum TraceIr {
         ret: SlotId,
         mode: OpMode,
     },
-    IntegerBinOp {
+    IBinOp {
         kind: BinOpK,
         ret: SlotId,
         mode: OpMode,
     },
-    FloatBinOp {
+    FBinOp {
         kind: BinOpK,
         ret: SlotId,
         mode: OpMode,
@@ -832,6 +848,14 @@ impl TraceIr {
                 81 => Self::MethodRet(SlotId::new(op1)),
                 82 => Self::Break(SlotId::new(op1)),
                 85 => Self::EnsureEnd,
+                126 => Self::Pos {
+                    ret: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
+                127 => Self::BitNot {
+                    ret: SlotId::new(op1),
+                    src: SlotId::new(op2),
+                },
                 128 => Self::Not {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),
@@ -950,9 +974,9 @@ impl TraceIr {
                     let ret = SlotId::new(op1);
                     let mode = OpMode::IR(op2 as i16, SlotId::new(op3));
                     if pc.is_integer2() {
-                        Self::IntegerBinOp { kind, ret, mode }
+                        Self::IBinOp { kind, ret, mode }
                     } else if pc.is_float2() {
-                        Self::FloatBinOp { kind, ret, mode }
+                        Self::FBinOp { kind, ret, mode }
                     } else {
                         Self::BinOp { kind, ret, mode }
                     }
@@ -962,9 +986,9 @@ impl TraceIr {
                     let ret = SlotId::new(op1);
                     let mode = OpMode::RR(SlotId::new(op2), SlotId::new(op3));
                     if pc.is_integer_binop() {
-                        Self::IntegerBinOp { kind, ret, mode }
+                        Self::IBinOp { kind, ret, mode }
                     } else if pc.is_float_binop() {
-                        Self::FloatBinOp { kind, ret, mode }
+                        Self::FBinOp { kind, ret, mode }
                     } else {
                         Self::BinOp { kind, ret, mode }
                     }
@@ -974,9 +998,9 @@ impl TraceIr {
                     let ret = SlotId::new(op1);
                     let mode = OpMode::RI(SlotId::new(op2), op3 as i16);
                     if pc.is_integer1() {
-                        Self::IntegerBinOp { kind, ret, mode }
+                        Self::IBinOp { kind, ret, mode }
                     } else if pc.is_float1() {
-                        Self::FloatBinOp { kind, ret, mode }
+                        Self::FBinOp { kind, ret, mode }
                     } else {
                         Self::BinOp { kind, ret, mode }
                     }

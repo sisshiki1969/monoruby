@@ -82,14 +82,15 @@ impl BytecodeGen {
                         _ => self.emit_neg(dst, rhs, loc)?,
                     };
                 }
-                UnOp::Not => self.emit_not(dst, rhs, loc)?,
-                _ => {
-                    return Err(MonorubyErr::unsupported_feature(
-                        &format!("unsupported unop. {:?}", op),
-                        loc,
-                        self.sourceinfo.clone(),
-                    ))
+                UnOp::Pos => {
+                    match rhs.kind {
+                        NodeKind::Integer(i) => self.emit_integer(dst, i),
+                        NodeKind::Float(f) => self.emit_float(dst, f),
+                        _ => self.emit_pos(dst, rhs, loc)?,
+                    };
                 }
+                UnOp::Not => self.emit_not(dst, rhs, loc)?,
+                UnOp::BitNot => self.emit_bitnot(dst, rhs, loc)?,
             },
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(op, lhs, rhs, Some(dst), loc)?;

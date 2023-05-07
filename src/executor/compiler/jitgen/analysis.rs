@@ -231,7 +231,16 @@ impl LoopAnalysis {
                 | TraceIr::StoreGvar { src, .. } => {
                     reg_info.use_non_float(src);
                 }
+                TraceIr::BitNot { ret, src } => {
+                    reg_info.use_non_float(src);
+                    reg_info.def_as(ret, false);
+                }
                 TraceIr::Neg { ret, src } => {
+                    let is_float = pc.is_float1();
+                    reg_info.use_as(src, is_float, pc.classid1());
+                    reg_info.def_as(ret, is_float);
+                }
+                TraceIr::Pos { ret, src } => {
                     let is_float = pc.is_float1();
                     reg_info.use_as(src, is_float, pc.classid1());
                     reg_info.def_as(ret, is_float);
@@ -240,7 +249,7 @@ impl LoopAnalysis {
                     reg_info.use_non_float(src);
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::FloatBinOp { ret, mode, .. } => {
+                TraceIr::FBinOp { ret, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
                             reg_info.use_as(lhs, true, pc.classid1());
@@ -255,7 +264,7 @@ impl LoopAnalysis {
                     }
                     reg_info.def_as(ret, true);
                 }
-                TraceIr::IntegerBinOp {
+                TraceIr::IBinOp {
                     ret,
                     mode: OpMode::RR(lhs, rhs),
                     ..
@@ -269,7 +278,7 @@ impl LoopAnalysis {
                     reg_info.use_as(rhs, false, pc.classid2());
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::IntegerBinOp {
+                TraceIr::IBinOp {
                     ret,
                     mode: OpMode::RI(lhs, _),
                     ..
@@ -282,7 +291,7 @@ impl LoopAnalysis {
                     reg_info.use_as(lhs, false, pc.classid1());
                     reg_info.def_as(ret, false);
                 }
-                TraceIr::IntegerBinOp {
+                TraceIr::IBinOp {
                     ret,
                     mode: OpMode::IR(_, rhs),
                     ..

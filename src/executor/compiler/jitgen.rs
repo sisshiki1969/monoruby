@@ -169,7 +169,7 @@ impl BBContext {
                 return Xmm(flhs as u16);
             }
         }
-        unreachable!()
+        unreachable!("no xmm reg is vacant.")
     }
 
     fn link_rw_xmm(&mut self, reg: SlotId, freg: Xmm) {
@@ -1027,6 +1027,21 @@ impl Codegen {
                         movq [r14 - (conv(ret))], (NIL_VALUE);
                     );
                 }
+                TraceIr::BitNot { ret, src } => {
+                    self.write_back_slot(&mut ctx, src);
+                    ctx.dealloc_xmm(ret);
+                    if pc.classid1().0 == 0 {
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                    } else {
+                        let xmm_using = ctx.get_xmm_using();
+                        self.xmm_save(&xmm_using);
+                        self.load_rdi(src);
+                        self.call_unop(bitnot_value as _);
+                        self.xmm_restore(&xmm_using);
+                        self.jit_handle_error(&ctx, pc);
+                        self.store_rax(ret);
+                    }
+                }
                 TraceIr::Not { ret, src } => {
                     ctx.dealloc_xmm(ret);
                     monoasm!(self.jit,
@@ -1062,14 +1077,35 @@ impl Codegen {
                         }
                     }
                 }
-                TraceIr::IntegerBinOp {
+                TraceIr::Pos { ret, src } => {
+                    if pc.is_float1() {
+                        let fsrc = self.xmm_read_assume_float(&mut ctx, src, pc);
+                        let fdst = ctx.xmm_write(ret);
+                        self.xmm_mov(fsrc, fdst);
+                    } else {
+                        self.write_back_slot(&mut ctx, src);
+                        ctx.dealloc_xmm(ret);
+                        if pc.classid1().0 == 0 {
+                            self.recompile_and_deopt(&mut ctx, position, pc);
+                        } else {
+                            let xmm_using = ctx.get_xmm_using();
+                            self.xmm_save(&xmm_using);
+                            self.load_rdi(src);
+                            self.call_unop(pos_value as _);
+                            self.xmm_restore(&xmm_using);
+                            self.jit_handle_error(&ctx, pc);
+                            self.store_rax(ret);
+                        }
+                    }
+                }
+                TraceIr::IBinOp {
                     kind, ret, mode, ..
                 } => {
                     self.writeback_binary(&mut ctx, &mode);
                     ctx.dealloc_xmm(ret);
                     self.gen_binop_integer(pc, kind, ret, mode, &ctx);
                 }
-                TraceIr::FloatBinOp {
+                TraceIr::FBinOp {
                     kind, ret, mode, ..
                 } => {
                     match mode {

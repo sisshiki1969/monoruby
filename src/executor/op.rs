@@ -408,6 +408,37 @@ pub(super) extern "C" fn neg_value(
     Some(v)
 }
 
+pub(super) extern "C" fn pos_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+) -> Option<Value> {
+    let v = match lhs.unpack() {
+        RV::Integer(lhs) => Value::new_integer(lhs),
+        RV::Float(lhs) => Value::new_float(lhs),
+        RV::BigInt(lhs) => Value::new_bigint(lhs.clone()),
+        _ => {
+            return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[]);
+        }
+    };
+    Some(v)
+}
+
+pub(super) extern "C" fn bitnot_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+) -> Option<Value> {
+    let v = match lhs.unpack() {
+        RV::Integer(lhs) => Value::new_integer(!lhs),
+        RV::BigInt(lhs) => Value::new_bigint(!lhs),
+        _ => {
+            return vm.invoke_method(globals, IdentId::get_id("~"), lhs, &[]);
+        }
+    };
+    Some(v)
+}
+
 pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {
     expand_splat_inner(src, dst)
 }
