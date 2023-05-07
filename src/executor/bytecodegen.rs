@@ -65,6 +65,13 @@ impl std::ops::AddAssign<usize> for BcTemp {
     }
 }
 
+impl std::ops::Add<usize> for BcTemp {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs as u16)
+    }
+}
+
 ///
 /// ID of local variable.
 ///
@@ -96,6 +103,7 @@ enum LvalueKind {
     GlobalVar(IdentId),
     DynamicVar { outer: usize, dst: BcReg },
     Index { base: BcReg, index: BcReg },
+    Index2 { base: BcReg, index1: BcTemp },
     Send { recv: BcReg, method: IdentId },
     LocalVar { dst: BcReg },
 }
@@ -754,11 +762,23 @@ impl BytecodeGen {
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {
-                assert_eq!(1, index.len());
-                let index = index[0].clone();
-                let base = self.gen_expr_reg(base.clone())?;
-                let index = self.gen_expr_reg(index)?;
-                LvalueKind::Index { base, index }
+                if index.len() == 1 {
+                    let base = self.gen_expr_reg(base.clone())?;
+                    let index = self.gen_expr_reg(index[0].clone())?;
+                    LvalueKind::Index { base, index }
+                } else if index.len() == 2 {
+                    let base = self.gen_expr_reg(base.clone())?;
+                    let index1 = self.push_expr(index[0].clone())?;
+                    self.push_expr(index[1].clone())?;
+                    self.push(); // register for src.
+                    LvalueKind::Index2 { base, index1 }
+                } else {
+                    return Err(MonorubyErr::unsupported_feature(
+                        &format!("unsupported index. {}", index.len()),
+                        lhs.loc,
+                        self.sourceinfo.clone(),
+                    ));
+                }
             }
             NodeKind::MethodCall {
                 box receiver,
@@ -806,6 +826,12 @@ impl BytecodeGen {
             LvalueKind::Index { base, index } => {
                 self.emit(BcIr::StoreIndex(src, base, index), loc);
             }
+            LvalueKind::Index2 { base, index1 } => {
+                let callid = self.add_callsite(IdentId::_INDEX_ASSIGN, 3, None, vec![]);
+                self.emit_mov((index1 + 2).into(), src);
+                self.emit(BcIr::MethodCall(None, callid, false), loc);
+                self.emit(BcIr::MethodArgs(base, index1.into(), 3), loc);
+            }
             LvalueKind::Send { recv, method } => {
                 let callid = self.add_callsite(method, 1, None, vec![]);
                 self.gen_method_assign(callid, recv, src, loc);
@@ -820,7 +846,7 @@ impl BytecodeGen {
     fn gen_expr_reg(&mut self, expr: Node) -> Result<BcReg> {
         Ok(match self.is_refer_local(&expr) {
             Some(lhs) => lhs.into(),
-            None => self.push_expr(expr)?,
+            None => self.push_expr(expr)?.into(),
         })
     }
 
@@ -838,8 +864,8 @@ impl BytecodeGen {
     fn gen_binary_temp_expr(&mut self, lhs: Node, rhs: Node) -> Result<(BcReg, BcReg)> {
         match (self.is_refer_local(&lhs), self.is_refer_local(&rhs)) {
             (None, None) => {
-                let lhs = self.push_expr(lhs)?;
-                let rhs = self.push_expr(rhs)?;
+                let lhs = self.push_expr(lhs)?.into();
+                let rhs = self.push_expr(rhs)?.into();
                 self.temp -= 2;
                 Ok((lhs, rhs))
             }

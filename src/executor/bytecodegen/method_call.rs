@@ -233,7 +233,7 @@ impl BytecodeGen {
                 kw_args.insert(IdentId::get_id_from_string(name), id);
             }
             for node in hash_splat {
-                hash_splat_pos.push(self.push_expr(node)?);
+                hash_splat_pos.push(self.push_expr(node)?.into());
             }
             Some(KeywordArgs {
                 kw_pos,

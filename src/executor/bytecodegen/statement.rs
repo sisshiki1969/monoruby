@@ -38,7 +38,7 @@ impl BytecodeGen {
             self.gen_store_expr(counter.into(), start)?;
             let end = if use_value {
                 let iter = self.push();
-                let end = self.push_expr(end)?;
+                let end = self.push_expr(end)?.into();
                 self.emit(
                     BcIr::Range {
                         ret: iter.into(),
@@ -50,7 +50,7 @@ impl BytecodeGen {
                 );
                 end
             } else {
-                self.push_expr(end)?
+                self.push_expr(end)?.into()
             };
             self.apply_label(loop_entry);
             self.emit(BcIr::LoopStart, loc);

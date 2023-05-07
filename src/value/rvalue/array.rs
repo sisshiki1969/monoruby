@@ -41,7 +41,7 @@ impl ArrayInner {
 
     /*pub fn pop(&mut self) -> Option<Value> {
         self.0.pop()
-    }
+    }*/
 
     pub fn truncate(&mut self, new_len: usize) {
         self.0.truncate(new_len);
@@ -49,11 +49,11 @@ impl ArrayInner {
 
     pub fn resize(&mut self, new_len: usize, value: Value) {
         self.0.resize(new_len, value)
-    }*/
-
-    pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
-        self.0.extend(iter);
     }
+
+    /*pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
+        self.0.extend(iter);
+    }*/
 
     pub fn extend_from_slice(&mut self, slice: &[Value]) {
         self.0.extend_from_slice(slice);
@@ -65,26 +65,63 @@ impl ArrayInner {
 }
 
 impl ArrayInner {
-    pub fn set_index(&mut self, idx: i64, src: Value) -> Result<Value> {
+    pub(crate) fn set_index(&mut self, idx: i64, src: Value) -> Result<Value> {
         if idx >= 0 {
             match self.get_mut(idx as usize) {
                 Some(v) => *v = src,
                 None => {
                     let idx = idx as usize;
-                    self.extend((self.len()..idx).map(|_| Value::nil()));
+                    self.resize(idx, Value::nil());
                     self.push(src);
                 }
             }
         } else {
-            let len = self.len();
-            let idx_positive = len as i64 + idx;
-            if idx_positive < 0 {
-                return Err(MonorubyErr::index_too_small(idx, -(len as i64)));
-            } else {
-                self[idx_positive as usize] = src;
+            match self.get_array_index(idx) {
+                Some(i) => self[i] = src,
+                None => return Err(MonorubyErr::index_too_small(idx, -(self.len() as i64))),
+            };
+        }
+        Ok(src)
+    }
+
+    pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
+        let len = self.len();
+        match val.is_array() {
+            Some(ary) => {
+                // if self = ary, something wrong happens..
+                let ary_len = ary.len();
+                if index >= len || index + length > len {
+                    self.resize(index + ary_len, Value::nil());
+                } else if ary_len > length {
+                    // possibly self == ary
+                    self.resize(len + ary_len - length, Value::nil());
+                    self.copy_within(index + length..len, index + ary_len);
+                } else {
+                    // self != ary
+                    self.copy_within(index + length..len, index + ary_len);
+                    self.resize(len + ary_len - length, Value::nil());
+                }
+                self[index..index + ary_len].copy_from_slice(&ary[0..ary_len]);
+            }
+            None => {
+                if index >= len {
+                    self.resize(index + 1, Value::nil());
+                } else if length == 0 {
+                    self.push(Value::nil());
+                    self.copy_within(index..len, index + 1);
+                } else {
+                    let end = index + length;
+                    if end < len {
+                        self.copy_within(end..len, index + 1);
+                        self.truncate(len + 1 - length);
+                    } else {
+                        self.truncate(index + 1);
+                    }
+                }
+                self[index] = val;
             }
         };
-        Ok(src)
+        Ok(val)
     }
 
     pub(crate) fn get_index(&self, idx: i64) -> Option<Value> {
@@ -222,55 +259,6 @@ impl ArrayInner {
             }
         } else {
             Err(VMError::no_implicit_conv(idx, "Integer or Range"))
-        }
-    }
-
-    pub(crate) fn set_elem2(&mut self, index: usize, length: usize, val: Value) -> VMResult {
-        let len = self.len();
-        match val.as_array() {
-            Some(ary) => {
-                // if self = ary, something wrong happens..
-                let ary_len = ary.len();
-                if index >= len || index + length > len {
-                    self.resize(index + ary_len, Value::nil());
-                } else if ary_len > length {
-                    // possibly self == ary
-                    self.resize(len + ary_len - length, Value::nil());
-                    self.copy_within(index + length..len, index + ary_len);
-                } else {
-                    // self != ary
-                    self.copy_within(index + length..len, index + ary_len);
-                    self.resize(len + ary_len - length, Value::nil());
-                }
-                self[index..index + ary_len].copy_from_slice(&ary[0..ary_len]);
-            }
-            None => {
-                if index >= len {
-                    self.resize(index + 1, Value::nil());
-                } else if length == 0 {
-                    self.push(Value::nil());
-                    self.copy_within(index..len, index + 1);
-                } else {
-                    let end = index + length;
-                    if end < len {
-                        self.copy_within(end..len, index + 1);
-                        self.truncate(len + 1 - length);
-                    } else {
-                        self.truncate(index + 1);
-                    }
-                }
-                self[index] = val;
-            }
-        };
-        Ok(val)
-    }
-
-    pub(crate) fn set_elem_imm(&mut self, index: usize, val: Value) {
-        if index >= self.len() {
-            self.resize(index as usize, Value::nil());
-            self.push(val);
-        } else {
-            self[index] = val;
         }
     }*/
 }

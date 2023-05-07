@@ -1,8 +1,8 @@
 use super::*;
 
 impl BytecodeGen {
-    pub(super) fn push_expr(&mut self, expr: Node) -> Result<BcReg> {
-        let ret = self.next_reg().into();
+    pub(super) fn push_expr(&mut self, expr: Node) -> Result<BcTemp> {
+        let ret = self.next_reg();
         self.gen_expr(expr, UseMode::Use)?;
         Ok(ret)
     }
@@ -189,7 +189,7 @@ impl BytecodeGen {
                 self.gen_class_def(name, base, superclass, info, dst, is_module, loc)?;
             }
             _ => {
-                let ret = self.push_expr(rhs)?;
+                let ret = self.push_expr(rhs)?.into();
                 self.emit_mov(dst, ret);
                 self.pop();
             }
@@ -677,7 +677,7 @@ impl BytecodeGen {
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
         let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
-            let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?;
+            let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?.into();
             mrhs_len = mlhs_len;
             let rhs_reg = self.next_reg();
             self.emit(

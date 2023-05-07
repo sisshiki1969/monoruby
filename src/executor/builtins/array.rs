@@ -11,7 +11,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
-    globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, 2);
+    globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
@@ -135,17 +135,35 @@ fn index(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
 fn index_assign(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
-    let i = arg[0];
-    let val = arg[1];
-    if let Some(idx) = i.try_fixnum() {
-        return lfp.self_val().as_array_mut().set_index(idx, val);
+    if len == 2 {
+        let i = arg[0];
+        let val = arg[1];
+        if let Some(idx) = i.try_fixnum() {
+            return lfp.self_val().as_array_mut().set_index(idx, val);
+        } else {
+            unimplemented!()
+        }
+    } else if len == 3 {
+        let i = arg[0].coerce_to_fixnum(globals)?;
+        let l = arg[1].coerce_to_fixnum(globals)?;
+        if l < 0 {
+            return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
+        }
+        if i < 0 {
+            return Err(MonorubyErr::index_too_small(i, 0));
+        }
+        let val = arg[2];
+        return lfp
+            .self_val()
+            .as_array_mut()
+            .set_index2(i as usize, l as usize, val);
     } else {
-        unimplemented!()
+        Err(MonorubyErr::wrong_number_of_arg_range(len, 2..=3))
     }
 }
 
@@ -399,6 +417,41 @@ mod test {
         );
         run_test(
             r##"
+        ary = [0, 1, 2, 3]
+        ary[1, 2] = ["a", "b", "c", "d"]
+        ary
+        "##,
+        );
+        run_test(
+            r##"
+        ary = [0, 1, 2]
+        ary[5, 1] = "Z"
+        ary
+        "##,
+        );
+        run_test(
+            r##"
+        ary = [0, 1, 2, 3]
+        ary[0, 10] = ["a"]
+        ary
+        "##,
+        );
+        run_test_error(
+            r##"
+        ary = [0, 1, 2, 3]
+        ary[-1, 10] = ["a"]
+        ary
+        "##,
+        );
+        run_test_error(
+            r##"
+        ary = [0, 1, 2, 3]
+        ary[0, -1] = ["a"]
+        ary
+        "##,
+        );
+        run_test(
+            r##"
         a = [1,2,3];
         a.[]=(2, 42);
         a.[]=(4,99);
@@ -408,7 +461,7 @@ mod test {
         );
         run_test(
             r##"
-        a = [ "a", "b", "c", "d", "e" ];
+        a = ["a","b","c","d","e"];
         [a[0..1], a[0...1], a[0..-1], a[-2..-1], a[-2..4], a[0..10], a[10..11], a[2..1], a[-1..-2], a[5..10]]
         "##,
         );
