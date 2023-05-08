@@ -637,6 +637,75 @@ impl Codegen {
         l1:
         };
     }
+
+    /// #### in
+    ///
+    /// - rdi: Value
+    ///
+    /// #### out
+    ///
+    /// - rax: ClassId
+    ///
+    pub(super) fn get_class(&mut self) {
+        let l1 = self.jit.label();
+        let exit = self.jit.label();
+        monoasm!(self.jit,
+                movl  rax, (INTEGER_CLASS.0);
+                testq rdi, 0b001;
+                jnz   exit;
+                movl  rax, (FLOAT_CLASS.0);
+                testq rdi, 0b010;
+                jnz   exit;
+                testq rdi, 0b111;
+                jnz   l1;
+                movl  rax, [rdi + 4];
+                jmp   exit;
+            l1:
+                movl  rax, (SYMBOL_CLASS.0);
+                cmpb  rdi, (TAG_SYMBOL);
+                je    exit;
+                movl  rax, (NIL_CLASS.0);
+                cmpq  rdi, (NIL_VALUE);
+                je    exit;
+                movl  rax, (TRUE_CLASS.0);
+                cmpq  rdi, (TRUE_VALUE);
+                je    exit;
+                movl  rax, (FALSE_CLASS.0);
+                cmpq  rdi, (FALSE_VALUE);
+                je    exit;
+            exit:
+                ret;
+        );
+    }
+}
+
+#[test]
+fn guard_class() {
+    let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+
+    for (class, value) in [
+        (INTEGER_CLASS, Value::new_integer(-2558)),
+        (INTEGER_CLASS, Value::new_integer(i32::MAX as i64)),
+        (INTEGER_CLASS, Value::new_integer(i32::MIN as i64)),
+        (FLOAT_CLASS, Value::new_float(1.44e-17)),
+        (FLOAT_CLASS, Value::new_float(0.0)),
+        (FLOAT_CLASS, Value::new_float(f64::MAX)),
+        (FLOAT_CLASS, Value::new_float(f64::MIN)),
+        (NIL_CLASS, Value::nil()),
+        (SYMBOL_CLASS, Value::new_symbol(IdentId::get_id("Ruby"))),
+        (TRUE_CLASS, Value::bool(true)),
+        (FALSE_CLASS, Value::bool(false)),
+        (ARRAY_CLASS, Value::new_array_from_vec(vec![])),
+        (HASH_CLASS, Value::new_hash(IndexMap::default())),
+        (STRING_CLASS, Value::new_string_from_str("Ruby")),
+    ] {
+        let entry_point = gen.jit.get_current_address();
+        gen.get_class();
+        gen.jit.finalize();
+
+        let func: fn(Value) -> ClassId = unsafe { std::mem::transmute(entry_point.as_ptr()) };
+        assert_eq!(class, func(value))
+    }
 }
 
 impl Globals {

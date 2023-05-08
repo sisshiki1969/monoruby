@@ -54,8 +54,8 @@ impl Codegen {
         slow_path:
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rsp + 8];  // rsi: CallSiteId
-            movq rcx, [rsp]; // rcx: receiver:Value
+            movq rdx, [r13 - 16];  // CallSiteId
+            movq rcx, [rsp]; // receiver:Value
             movzxw r8, [r13 +  4];
             movq rax, (runtime::find_method);
             call rax;   // rax <- Option<&FuncData>
@@ -105,10 +105,10 @@ impl Codegen {
 
         self.jit.select_page(1);
         monoasm!(self.jit,
-            slow_path:
+        slow_path:
             movq rdi, rbx;
-            movq rsi, r12;  // rsi: CallSiteId
-            movq rdx, [rsp]; // rcx: receiver:Value
+            movq rsi, r12;
+            movq rdx, [rsp];
             movq rax, (runtime::get_super_data);
             call rax;   // rax <- Option<&FuncData>
         );
@@ -151,26 +151,19 @@ impl Codegen {
         // [r13 +  2]; %args
         // [r13 +  4]: %recv
         // [r13 +  8]: FuncData
-        self.fetch2();
+        self.execute_gc();
         monoasm! { self.jit,
-            pushq r15;
             pushq r13;
-            pushq rdi;
             movzxw rdi, [r13 + 4];
         };
         self.vm_get_rdi();
         monoasm! { self.jit,
             pushq rdi;
         }
-        // rsp + 24:[%ret]
-        // rsp + 16:[pc]
-        // rsp + 08:[callid:CallSiteId]
+        // rsp + 08:[pc]
         // rsp + 00:[recv:Value]
-
-        self.execute_gc();
         // rdi: receiver: Value
         monoasm! { self.jit,
-            movq rdi, [rsp];
             movq rax, (Value::get_class);
             call rax;
             movl r15, rax;
@@ -222,9 +215,9 @@ impl Codegen {
         };
         self.call_rax();
         monoasm! { self.jit,
-            addq rsp, 16;
+            addq rsp, 8;
             popq r13;   // pop pc
-            popq r15;   // pop %ret
+            movzxw r15, [r13 - 12];  // r15 <- :1
             addq r13, 16;
         };
         self.vm_handle_error();
