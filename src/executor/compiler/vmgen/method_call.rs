@@ -29,6 +29,7 @@ impl Codegen {
         let slow_path = self.jit.label();
         let exec = self.jit.label();
         let class_version = self.class_version;
+
         //      -16    -12    -8     -4
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
@@ -150,7 +151,7 @@ impl Codegen {
         // [r13 +  2]; %args
         // [r13 +  4]: %recv
         // [r13 +  8]: FuncData
-
+        self.fetch2();
         monoasm! { self.jit,
             pushq r15;
             pushq r13;
@@ -251,7 +252,7 @@ impl Codegen {
         // r15: %ret
         // rdi: %args
         // rsi: len
-
+        self.fetch3();
         monoasm! { self.jit,
             // rsp + 08:[%ret]
             // rsp + 00:[pc]

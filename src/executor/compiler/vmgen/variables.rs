@@ -9,6 +9,7 @@ impl Codegen {
     pub(super) fn vm_load_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;
+        self.fetch2();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rdx, rdi;  // name: ConstSiteId
@@ -35,6 +36,7 @@ impl Codegen {
     pub(super) fn vm_store_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let const_version = self.const_version;
+        self.fetch2();
         self.vm_get_r15();
         monoasm! { self.jit,
             movq rdx, rdi;  // name: IdentId
@@ -56,6 +58,7 @@ impl Codegen {
     //
     pub(super) fn vm_load_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch2();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movq rsi, rdi; // name: IdentId
@@ -77,6 +80,7 @@ impl Codegen {
     //
     pub(super) fn vm_store_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch2();
         self.vm_get_r15();
         monoasm! { self.jit,
             movq rcx, rdi;  // name: IdentId
@@ -102,6 +106,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_load_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch2();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movl rsi, rdi; // name: IdentId
@@ -123,6 +128,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_store_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch2();
         self.vm_get_r15();
         monoasm! { self.jit,
             movl rsi, rdi;  // name: IdentId
@@ -144,6 +150,7 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_load_svar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch2();
         self.vm_get_addr_r15();
         monoasm! { self.jit,
             movl rdx, rdi;  // id
@@ -176,6 +183,7 @@ impl Codegen {
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         let exit = self.jit.label();
+        self.fetch3();
         monoasm! { self.jit,
             movq rax, [r14 - (LBP_OUTER)];
         loop_:
@@ -211,6 +219,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        self.fetch3();
         monoasm! { self.jit,
             movq rax, [r14 - (LBP_OUTER)];
         loop_:

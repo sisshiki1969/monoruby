@@ -28,6 +28,7 @@ impl Codegen {
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        self.fetch3();
         self.stack_setup();
         self.vm_init_func();
         self.fetch_and_dispatch();
