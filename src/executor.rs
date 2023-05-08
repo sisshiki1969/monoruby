@@ -236,41 +236,6 @@ impl Executor {
         globals.dump_bc();
 
         let res = (globals.codegen.entry_point)(self, globals, main_data);
-        globals.flush_stdout();
-        #[cfg(feature = "log-jit")]
-        {
-            eprintln!();
-            eprintln!("deoptimization stats");
-            eprintln!("{:20} FuncId [{:05}]  {:10}", "func name", "index", "count");
-            eprintln!("-----------------------------------------------");
-            let mut v: Vec<_> = globals.deopt_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((func_id, index), count) in v {
-                let name = globals[*func_id].as_ruby_func().name();
-                eprintln!(
-                    "{:20}  {:5} [{:05}]  {:10}",
-                    name,
-                    func_id.get(),
-                    index,
-                    count
-                );
-            }
-            eprintln!();
-            eprintln!("method cache stats");
-            eprintln!("{:20} {:15} {:10}", "func name", "class", "count");
-            eprintln!("-----------------------------------------------");
-            let mut v: Vec<_> = globals.method_cache_stats.iter().collect();
-            v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
-            for ((class_id, name), count) in v {
-                eprintln!(
-                    "{:20} {:15} {:10}",
-                    name.to_string(),
-                    class_id.get_name(globals),
-                    count
-                );
-            }
-        }
-
         res.ok_or_else(|| self.take_exception())
     }
 

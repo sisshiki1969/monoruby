@@ -160,7 +160,11 @@ impl Globals {
 
     pub fn compile_and_run(&mut self, code: &str, path: &std::path::Path) -> Result<Value> {
         let mut executor = Executor::init(self);
-        executor.eval_script(self, code.to_string(), path)
+        let res = executor.eval_script(self, code.to_string(), path);
+        self.flush_stdout();
+        #[cfg(feature = "log-jit")]
+        self.show_stats();
+        res
     }
 
     pub(super) fn compile_script(
@@ -172,6 +176,10 @@ impl Globals {
             Ok(res) => BytecodeGen::compile_script(self, res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
+    }
+
+    pub fn gc_enable(flag: bool) {
+        alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = flag);
     }
 
     pub(crate) fn flush_stdout(&mut self) {
@@ -589,5 +597,39 @@ impl Globals {
             );
         }
         eprintln!();
+    }
+
+    #[cfg(feature = "log-jit")]
+    pub(crate) fn show_stats(&self) {
+        eprintln!();
+        eprintln!("deoptimization stats");
+        eprintln!("{:20} FuncId [{:05}]  {:10}", "func name", "index", "count");
+        eprintln!("-----------------------------------------------");
+        let mut v: Vec<_> = self.deopt_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((func_id, index), count) in v {
+            let name = self[*func_id].as_ruby_func().name();
+            eprintln!(
+                "{:20}  {:5} [{:05}]  {:10}",
+                name,
+                func_id.get(),
+                index,
+                count
+            );
+        }
+        eprintln!();
+        eprintln!("method cache stats");
+        eprintln!("{:20} {:15} {:10}", "func name", "class", "count");
+        eprintln!("-----------------------------------------------");
+        let mut v: Vec<_> = self.method_cache_stats.iter().collect();
+        v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        for ((class_id, name), count) in v {
+            eprintln!(
+                "{:20} {:15} {:10}",
+                name.to_string(),
+                class_id.get_name(self),
+                count
+            );
+        }
     }
 }

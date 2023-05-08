@@ -576,13 +576,23 @@ pub(super) extern "C" fn define_method(
     globals: &mut Globals,
     name: IdentId,
     func: FuncId,
-) {
+) -> Option<Value> {
     let Cref {
         class_id,
         module_function,
         visibility,
     } = vm.get_class_context();
     let current_func = vm.method_func_id();
+    if !globals[func].is_ruby_func() {
+        let err = MonorubyErr::internalerr(format!(
+            "define func: {:?} {:016x}",
+            name,
+            (func.get() as u64) + (name.get() as u64) << 32
+        ));
+        _dump_stacktrace(vm, globals);
+        vm.set_error(err);
+        return None;
+    }
     globals[func].as_ruby_func_mut().lexical_context =
         globals[current_func].as_ruby_func().lexical_context.clone();
     globals.add_method(class_id, name, func, visibility);
@@ -590,6 +600,7 @@ pub(super) extern "C" fn define_method(
         globals.add_singleton_method(class_id, name, func, visibility);
     }
     globals.class_version_inc();
+    Some(Value::nil())
 }
 
 pub(super) extern "C" fn singleton_define_method(

@@ -406,6 +406,13 @@ impl FuncInfo {
             _ => unreachable!(),
         }
     }
+
+    pub(crate) fn is_ruby_func(&mut self) -> bool {
+        match &mut self.kind {
+            FuncKind::ISeq(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl FuncInfo {

@@ -1302,6 +1302,7 @@ impl Codegen {
 
     fn vm_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let raise = self.entry_raise;
         monoasm! { self.jit,
             movl rdx, [r13 - 8];  // name
             movl rcx, [r13 - 4];  // func_id
@@ -1309,6 +1310,8 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_method);
             call rax;
+            testq rax, rax;
+            jz   raise;
         };
         self.fetch_and_dispatch();
         label

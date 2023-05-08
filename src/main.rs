@@ -14,9 +14,12 @@ struct CommandLineArgs {
     /// print the version number, then exit
     #[arg(short, long)]
     version: bool,
-    /// switch just-in-time compilation.
+    /// switch for just-in-time compilation.
     #[arg(long)]
     no_jit: bool,
+    /// switch for garbage collection.
+    #[arg(long)]
+    no_gc: bool,
     /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
     directory: Vec<String>,
@@ -33,6 +36,7 @@ fn main() {
     let mut finish_flag = false;
     let args = CommandLineArgs::parse();
     let mut globals = Globals::new(args.warning, args.no_jit);
+    Globals::gc_enable(!args.no_gc);
     let mut lib = args
         .directory
         .iter()
