@@ -116,18 +116,6 @@ impl Codegen {
 
         self.vm_entry = entry;
 
-        let wrong_argument = self.jit.label();
-        monoasm! {self.jit,
-        wrong_argument:
-            movq rdi, rbx;
-            movl rsi, rdx;  // given
-            movzxw rdx, [r13 - 8];  // min
-            movzxw rcx, [r13 - 14];  // max
-            movq rax, (runtime::err_wrong_number_of_arguments_range);
-            call rax;
-        }
-        self.wrong_argument = wrong_argument;
-
         let vm_raise = self.jit.label();
         let leave = self.jit.label();
         let goto = self.jit.label();
@@ -704,14 +692,10 @@ impl Codegen {
     }
 
     fn vm_save_lhs_class(&mut self) {
+        let get_class = self.get_class;
         monoasm! { self.jit,
-            pushq rdi;
-            pushq rsi;
-            movq  rax, (Value::get_class);
-            call rax;
+            call  get_class;
             movl  [r13 - 8], rax;
-            popq  rsi;
-            popq  rdi;
         };
     }
 
@@ -729,17 +713,14 @@ impl Codegen {
     }*/
 
     fn vm_save_binary_class(&mut self) {
+        let get_class = self.get_class;
         monoasm! { self.jit,
-            pushq rdi;
-            pushq rsi;
-            movq  rax, (Value::get_class);
-            call rax;
+            call  get_class;
             movl  [r13 - 8], rax;
-            movq  rdi, [rsp];
-            movq  rax, (Value::get_class);
-            call rax;
+            pushq rdi;
+            movq  rdi, rsi;
+            call  get_class;
             movl  [r13 - 4], rax;
-            popq  rsi;
             popq  rdi;
         };
     }

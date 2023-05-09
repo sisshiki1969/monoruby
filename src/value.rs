@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::alloc::{Allocator, GC};
 use crate::*;
-use num::{BigInt, ToPrimitive};
+use num::BigInt;
 use ruruby_parse::{Node, NodeKind};
 
 pub mod rvalue;
@@ -138,10 +138,6 @@ impl Value {
 
     pub(crate) fn to_bytes(self, globals: &Globals) -> Vec<u8> {
         globals.val_to_bytes(self)
-    }
-
-    pub(crate) extern "C" fn get_class(val: Value) -> ClassId {
-        val.class()
     }
 
     pub(crate) fn deep_copy(&self) -> Self {
@@ -377,14 +373,14 @@ pub struct F2 {
     f2: f64,
 }
 
-#[repr(C)]
+/*#[repr(C)]
 pub struct ValTofResult {
     result: f64,
     code: u64,
-}
+}*/
 
 impl Value {
-    pub extern "C" fn val_tof(v: Value) -> ValTofResult {
+    /*pub extern "C" fn val_tof(v: Value) -> ValTofResult {
         ValTofResult {
             result: match v.unpack() {
                 RV::Integer(n) => n.to_f64().unwrap(),
@@ -399,7 +395,7 @@ impl Value {
             },
             code: 1,
         }
-    }
+    }*/
 
     pub(crate) fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
@@ -445,6 +441,14 @@ impl Value {
         let bit = 0b10 - ((u >> 63) & 0b1);
         let num = ((u & !3) | bit).rotate_right(3);
         f64::from_bits(num)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn try_float(&self) -> Option<f64> {
+        match self.unpack() {
+            RV::Float(f) => Some(f),
+            _ => None,
+        }
     }
 
     pub(crate) fn try_flonum(&self) -> Option<f64> {

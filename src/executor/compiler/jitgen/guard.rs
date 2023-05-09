@@ -280,6 +280,8 @@ mod test {
             f64::MAX,
             f64::MIN,
             f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
             1.0 / 0.0,
             -1.0 / 0.0,
         ] {

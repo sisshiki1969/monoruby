@@ -100,7 +100,6 @@ pub struct Codegen {
     entry_panic: DestLabel,
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
-    pub(super) entry_point: EntryPoint,
     /// Raise error.
     /// r13: PC
     entry_raise: DestLabel,
@@ -116,7 +115,18 @@ pub struct Codegen {
     ///
     #[allow(dead_code)]
     wrong_argument: DestLabel,
+    ///
+    /// Get class id.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - rax: ClassId
+    ///
+    get_class: DestLabel,
     dispatch: Vec<CodePtr>,
+    pub(super) entry_point: EntryPoint,
     pub(super) method_invoker: MethodInvoker,
     pub(super) method_invoker2: MethodInvoker2,
     pub(super) block_invoker: BlockInvoker,
@@ -139,43 +149,20 @@ impl Codegen {
         let const_version = jit.const_i64(1);
         let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let entry_panic = jit.label();
+        jit.bind_label(entry_panic);
+        let mut jit = Self::entry_panic(jit);
+        let get_class = jit.label();
+        jit.bind_label(get_class);
+        let mut jit = Self::get_class(jit);
+        let wrong_argument = jit.label();
+        jit.bind_label(wrong_argument);
+        let mut jit = Self::wrong_arguments(jit);
         let no_block = jit.label();
-        let splat = jit.label();
-        monoasm!(&mut jit,
-        entry_panic:
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::_dump_stacktrace);
-            call rax;
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (runtime::panic);
-            jmp rax;
-            leave;
-            ret;
-        no_block:
-            movq rdi, rbx;
-            movq rax, (runtime::err_no_block_given);
-            call rax;
-            xorq rax, rax;
-            leave;
-            ret;
-        splat:
-            subq rsp, 1024;
-            pushq rdi;
-            pushq rsi;
-            movq rdi, rax;
-            movq rsi, r8;
-            movq rax, (expand_splat);
-            call rax;
-            popq rsi;
-            popq rdi;
-            addq rsp, 1024;
-            lea  rdi, [rdi + rax * 1 - 1];
-            shlq rax, 3;
-            subq r8, rax;
-            ret;
-        );
+        jit.bind_label(no_block);
+        let mut jit = Self::no_block(jit);
+        let f64_to_val = jit.label();
+        jit.bind_label(f64_to_val);
+        let mut jit = Self::f64_to_val(jit);
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
@@ -200,18 +187,18 @@ impl Codegen {
             entry_panic,
             vm_entry: entry_panic,
             vm_fetch: entry_panic,
-            entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             entry_raise: entry_panic,
-            f64_to_val: entry_panic,
+            f64_to_val,
             div_by_zero: entry_panic,
             no_block,
-            wrong_argument: entry_panic,
+            wrong_argument,
+            get_class,
             dispatch,
+            entry_point: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
-        codegen.f64_to_val = codegen.generate_f64_to_val();
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
         codegen.jit.finalize();
@@ -638,18 +625,19 @@ impl Codegen {
         };
     }
 
-    /// #### in
     ///
+    /// Get *ClassId* of the *Value*.
+    ///
+    /// #### in
     /// - rdi: Value
     ///
     /// #### out
-    ///
     /// - rax: ClassId
     ///
-    pub(super) fn get_class(&mut self) {
-        let l1 = self.jit.label();
-        let exit = self.jit.label();
-        monoasm!(self.jit,
+    fn get_class(mut jit: JitMemory) -> JitMemory {
+        let l1 = jit.label();
+        let exit = jit.label();
+        monoasm!(&mut jit,
                 movl  rax, (INTEGER_CLASS.0);
                 testq rdi, 0b001;
                 jnz   exit;
@@ -673,9 +661,128 @@ impl Codegen {
                 movl  rax, (FALSE_CLASS.0);
                 cmpq  rdi, (FALSE_VALUE);
                 je    exit;
+                movq  rax, (runtime::illegal_classid);  // rdi: Value
+                call  rax;
+                // no return
             exit:
                 ret;
         );
+        jit
+    }
+
+    fn wrong_arguments(mut jit: JitMemory) -> JitMemory {
+        monoasm! {&mut jit,
+            movq rdi, rbx;
+            movl rsi, rdx;  // given
+            movzxw rdx, [r13 - 8];  // min
+            movzxw rcx, [r13 - 14];  // max
+            movq rax, (runtime::err_wrong_number_of_arguments_range);
+            call rax;
+        }
+        jit
+    }
+
+    fn entry_panic(mut jit: JitMemory) -> JitMemory {
+        monoasm! {&mut jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::_dump_stacktrace);
+            call rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::panic);
+            jmp rax;
+            leave;
+            ret;
+        }
+        jit
+    }
+
+    fn no_block(mut jit: JitMemory) -> JitMemory {
+        monoasm! {&mut jit,
+            movq rdi, rbx;
+            movq rax, (runtime::err_no_block_given);
+            call rax;
+            xorq rax, rax;
+            leave;
+            ret;
+        }
+        jit
+    }
+
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    /// - xmm0: f64
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - caller saved registers except rdi
+    ///
+    pub(super) fn f64_to_val(mut jit: JitMemory) -> JitMemory {
+        let normal = jit.label();
+        let heap_alloc = jit.label();
+        monoasm!(&mut jit,
+            xorps xmm1, xmm1;
+            ucomisd xmm0, xmm1;
+            jne normal;
+            jp normal;
+            movq rax, (Value::new_float(0.0).get());
+            ret;
+        normal:
+            movq rax, xmm0;
+            movq rcx, rax;
+            shrq rcx, 60;
+            addl rcx, 1;
+            andl rcx, 6;
+            cmpl rcx, 4;
+            jne heap_alloc;
+            rolq rax, 3;
+            andq rax, (-4);
+            orq rax, 2;
+            ret;
+        heap_alloc:
+        // we must save rdi for log_optimize.
+            subq rsp, 120;
+            movq [rsp + 112], rdi;
+            movq [rsp + 104], xmm15;
+            movq [rsp + 96], xmm14;
+            movq [rsp + 88], xmm13;
+            movq [rsp + 80], xmm12;
+            movq [rsp + 72], xmm11;
+            movq [rsp + 64], xmm10;
+            movq [rsp + 56], xmm9;
+            movq [rsp + 48], xmm8;
+            movq [rsp + 40], xmm7;
+            movq [rsp + 32], xmm6;
+            movq [rsp + 24], xmm5;
+            movq [rsp + 16], xmm4;
+            movq [rsp + 8], xmm3;
+            movq [rsp + 0], xmm2;
+            movq rax, (Value::new_float);
+            call rax;
+            movq xmm2, [rsp + 0];
+            movq xmm3, [rsp + 8];
+            movq xmm4, [rsp + 16];
+            movq xmm5, [rsp + 24];
+            movq xmm6, [rsp + 32];
+            movq xmm7, [rsp + 40];
+            movq xmm8, [rsp + 48];
+            movq xmm9, [rsp + 56];
+            movq xmm10, [rsp + 64];
+            movq xmm11, [rsp + 72];
+            movq xmm12, [rsp + 80];
+            movq xmm13, [rsp + 88];
+            movq xmm14, [rsp + 96];
+            movq xmm15, [rsp + 104];
+            movq rdi, [rsp + 112];
+            addq rsp, 120;
+            ret;
+        );
+        jit
     }
 }
 
@@ -689,6 +796,9 @@ fn guard_class() {
         (INTEGER_CLASS, Value::new_integer(i32::MIN as i64)),
         (FLOAT_CLASS, Value::new_float(1.44e-17)),
         (FLOAT_CLASS, Value::new_float(0.0)),
+        (FLOAT_CLASS, Value::new_float(f64::NAN)),
+        (FLOAT_CLASS, Value::new_float(f64::INFINITY)),
+        (FLOAT_CLASS, Value::new_float(f64::NEG_INFINITY)),
         (FLOAT_CLASS, Value::new_float(f64::MAX)),
         (FLOAT_CLASS, Value::new_float(f64::MIN)),
         (NIL_CLASS, Value::nil()),
@@ -699,12 +809,33 @@ fn guard_class() {
         (HASH_CLASS, Value::new_hash(IndexMap::default())),
         (STRING_CLASS, Value::new_string_from_str("Ruby")),
     ] {
-        let entry_point = gen.jit.get_current_address();
-        gen.get_class();
-        gen.jit.finalize();
+        let func = gen.jit.get_label_addr(gen.get_class);
 
-        let func: fn(Value) -> ClassId = unsafe { std::mem::transmute(entry_point.as_ptr()) };
         assert_eq!(class, func(value))
+    }
+}
+
+#[test]
+fn test_f64_to_val() {
+    let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+
+    for f in [
+        1.44e-17,
+        0.0,
+        1285.333,
+        -7512.0255,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::MAX,
+        f64::MIN,
+    ] {
+        let func: extern "C" fn(f64) -> Value = gen.jit.get_label_addr(gen.f64_to_val);
+        if f.is_nan() {
+            assert!(func(f).try_float().unwrap().is_nan())
+        } else {
+            assert_eq!(Value::new_float(f).try_float(), func(f).try_float());
+        }
     }
 }
 

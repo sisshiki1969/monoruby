@@ -135,6 +135,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
         let class_version = self.class_version;
+        let get_class = self.get_class;
         //      -16    -12    -8     -4
         //      +------+------+------+------+
         //      | MethodCall  |class | ver  |
@@ -164,8 +165,7 @@ impl Codegen {
         // rsp + 00:[recv:Value]
         // rdi: receiver: Value
         monoasm! { self.jit,
-            movq rax, (Value::get_class);
-            call rax;
+            call get_class;
             movl r15, rax;
             cmpl r15, [r13 - 8];
             jne  slow_path;

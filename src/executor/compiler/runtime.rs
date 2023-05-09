@@ -704,6 +704,10 @@ pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
     panic!("panic in jit code.");
 }
 
+pub(super) extern "C" fn illegal_classid(v: Value) {
+    panic!("illegal Value for ge_class(): {:016x}", v.get());
+}
+
 pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
 }

@@ -293,9 +293,9 @@ impl Codegen {
             );
         } else {
             self.load_rdi(recv);
+            let get_class = self.get_class;
             monoasm!(self.jit,
-                movq rax, (Value::get_class);
-                call rax;
+                call get_class;
                 movl r15, rax;  // r15: receiver class_id
             );
         }
