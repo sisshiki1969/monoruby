@@ -103,7 +103,7 @@ impl Codegen {
         //   r12: &mut Globals
         //   r13: pc
         //
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         entry:
             pushq rbp;
             movq rbp, rsp;
@@ -119,7 +119,7 @@ impl Codegen {
         let vm_raise = self.jit.label();
         let leave = self.jit.label();
         let goto = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         vm_raise:
             movq rdi, rbx;
             movq rsi, r12;
@@ -138,7 +138,7 @@ impl Codegen {
             movq r13, rax;
         }
         self.fetch_and_dispatch();
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
         leave:
             leave;
             ret;
@@ -146,7 +146,7 @@ impl Codegen {
         self.entry_raise = vm_raise;
 
         let div_by_zero = self.jit.label();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         div_by_zero:
             movq rdi, rbx;
             movq rax, (runtime::err_divide_by_zero);
@@ -159,7 +159,7 @@ impl Codegen {
         let ret = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, [r15];
         };
         self.epilogue();
@@ -168,7 +168,7 @@ impl Codegen {
         let method_ret = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, r15;
         };
         self.method_return();
@@ -178,7 +178,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_r15();
         self.block_break();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, r15;
         };
         self.epilogue();
@@ -186,7 +186,7 @@ impl Codegen {
         //BcOp::EnsureEnd
         let ensure_end = self.jit.get_current_address();
         let raise = self.entry_raise;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rax, (runtime::check_err);
             call rax;
@@ -200,14 +200,14 @@ impl Codegen {
         self.fetch3();
         self.vm_get_addr_r15();
         self.vm_get_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [r15], rdi;
         };
         self.fetch_and_dispatch();
 
         let br_inst = self.jit.get_current_address();
         let branch = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movsxl rdi, [r13 - 16];  // rdi <- :2:3
         branch:
             shlq rdi, 4;
@@ -401,12 +401,12 @@ impl Codegen {
         // rdx: (method)*const FuncData
         // rdx: (block) *const BlockData
         if invoke_block {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rax, [rdx];        // rax <- outer_lfp
                 movq rdx, [rdx + 8];    // rdx <- &FuncData
             };
         }
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             pushq rbx;
             pushq r12;
             pushq r13;
@@ -424,7 +424,7 @@ impl Codegen {
         if invoke_block {
             self.set_block_self_outer()
         } else {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq [rsp - (16 + LBP_SELF)], rcx;
             }
             self.set_method_outer()
@@ -432,7 +432,7 @@ impl Codegen {
     }
 
     fn gen_invoker_epilogue(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
 
             movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
@@ -447,7 +447,7 @@ impl Codegen {
         }
         self.push_frame();
         self.set_lfp();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // set codeptr
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
@@ -467,7 +467,7 @@ impl Codegen {
     fn gen_invoker_prep(&mut self) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;
@@ -488,7 +488,7 @@ impl Codegen {
     fn gen_invoker_prep2(&mut self) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;
@@ -519,7 +519,7 @@ impl Codegen {
     /// - rax
     ///
     fn fetch_and_dispatch(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq r15, (self.dispatch.as_ptr());
             addq r13, 16;
             movzxw rax, [r13 - 10]; // rax <- :0
@@ -529,14 +529,14 @@ impl Codegen {
     }
 
     fn fetch2(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movsxl rdi, [r13 - 16];  // rdi <- :2:3
             movzxw r15, [r13 - 12];  // r15 <- :1
         };
     }
 
     fn fetch3(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movsxw rsi, [r13 - 16];    // rsi <- :3
             movzxw rdi, [r13 - 14];    // rdi <- :2
             movzxw r15, [r13 - 12];  // r15 <- :1
@@ -551,7 +551,7 @@ impl Codegen {
     /// - *rdi*: absolute address of the register
     ///
     fn vm_get_addr_rdi(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq rdi;
             lea rdi, [r14 + rdi * 8 - (LBP_SELF)];
         };
@@ -565,7 +565,7 @@ impl Codegen {
     /// - *rcx*: absolute address of the register
     ///
     fn vm_get_addr_rcx(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq rcx;
             lea rcx, [r14 + rcx * 8 - (LBP_SELF)];
         };
@@ -579,7 +579,7 @@ impl Codegen {
     /// - *rdi*: value of the register
     ///
     fn vm_get_rdi(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq rdi;
             movq rdi, [r14 + rdi * 8 - (LBP_SELF)];
         };
@@ -593,7 +593,7 @@ impl Codegen {
     /// - *rsi*: value of the register
     ///
     fn vm_get_rsi(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq rsi;
             movq rsi, [r14 + rsi * 8 - (LBP_SELF)];
         };
@@ -607,14 +607,14 @@ impl Codegen {
     /// - *r15*: value of the register
     ///
     fn vm_get_r15(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq r15;
             movq r15, [r14 + r15 * 8 - (LBP_SELF)];
         };
     }
 
     fn vm_get_smi_rdi(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movsxw rdi, rdi;
             shlq rdi, 1;
             orq  rdi, 1;
@@ -622,7 +622,7 @@ impl Codegen {
     }
 
     fn vm_get_smi_rsi(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movsxw rsi, rsi;
             shlq rsi, 1;
             orq  rsi, 1;
@@ -637,7 +637,7 @@ impl Codegen {
     /// - *r15*: address of the register
     ///
     fn vm_get_addr_r15(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             negq r15;
             lea r15, [r14 + r15 * 8 - (LBP_SELF)];
         };
@@ -676,13 +676,13 @@ impl Codegen {
     }
 
     fn vm_store_r15(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [r15], rax;
         };
     }
 
     fn vm_store_r15_if_nonzero(&mut self, exit: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             testq r15, r15;
             jeq exit;
         };
@@ -693,14 +693,14 @@ impl Codegen {
 
     fn vm_save_lhs_class(&mut self) {
         let get_class = self.get_class;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             call  get_class;
             movl  [r13 - 8], rax;
         };
     }
 
     /*fn vm_save_rhs_class(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             pushq rdi;
             pushq rsi;
             movq  rdi, rsi;
@@ -714,7 +714,7 @@ impl Codegen {
 
     fn vm_save_binary_class(&mut self) {
         let get_class = self.get_class;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             call  get_class;
             movl  [r13 - 8], rax;
             pushq rdi;
@@ -727,7 +727,7 @@ impl Codegen {
 
     fn vm_save_binary_integer(&mut self) {
         let int_class: u32 = INTEGER_CLASS.into();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl  [r13 - 8], (int_class);
             movl  [r13 - 4], (int_class);
         };
@@ -735,7 +735,7 @@ impl Codegen {
 
     fn vm_handle_error(&mut self) {
         let raise = self.entry_raise;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             testq rax, rax;
             jeq  raise;
         };
@@ -772,7 +772,7 @@ impl Codegen {
     fn vm_expand_array(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // rdx <- len
             movq rdx, rsi;
             // rsi <- dst
@@ -801,7 +801,7 @@ impl Codegen {
     fn vm_alias_method(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rcx, rdi;  // new
             negq rcx;
             movq rcx, [r14 + rcx * 8 - (LBP_SELF)];
@@ -836,7 +836,7 @@ impl Codegen {
         let exit = self.jit.label();
         self.fetch3();
         self.vm_get_addr_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rsi;
             movq rsi, rdi;
             movq rdi, r12;
@@ -853,7 +853,7 @@ impl Codegen {
         let count = self.jit.label();
         let compile = self.jit.label();
         if !no_jit {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
                 testq rax, rax;
                 jeq count;
@@ -866,7 +866,7 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
         if !no_jit {
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
             compile:
                 movq rdi, r12;
                 movl rsi, [r14 - (LBP_META_FUNCID)];
@@ -890,7 +890,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [r15], (NIL_VALUE);
         };
         self.fetch_and_dispatch();
@@ -901,7 +901,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             shlq rdi, 1;
             addq rdi, 1;
             movq [r15], rdi;
@@ -914,7 +914,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             shlq rdi, 32;
             orq rdi, (TAG_SYMBOL);
             movq [r15], rdi;
@@ -927,7 +927,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdi, [r13 - 8];
             movq rax, (Value::value_deep_copy);
             call rax;
@@ -942,7 +942,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_addr_r15();
         self.vm_get_addr_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // src: *const Value
             movzxw rsi, rsi;  // len: usize
             movq rax, (runtime::gen_array);
@@ -958,7 +958,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_addr_r15();
         self.vm_get_addr_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // src: *const Value
             movzxw rsi, rsi;  // len: usize
             movq rax, (runtime::gen_hash);
@@ -975,7 +975,7 @@ impl Codegen {
         self.vm_get_addr_r15();
         self.vm_get_rdi();
         self.vm_get_rsi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rbx;
             movq rcx, r12;
             movl r8, (if exclude_end {1} else {0});
@@ -999,7 +999,7 @@ impl Codegen {
         self.vm_get_addr_r15();
         self.vm_get_rdi();
         self.vm_get_rsi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
             movq rdi, rbx; // &mut Interp
@@ -1020,7 +1020,7 @@ impl Codegen {
         self.vm_get_r15();
         self.vm_get_rdi();
         self.vm_get_rsi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
             movq r8, r15;  // src: Value
@@ -1047,7 +1047,7 @@ impl Codegen {
         let loop_exit = self.jit.label();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             lea  rax, [r14 - (LBP_OUTER)];
             testq rdi, rdi;
             jz   loop_exit;
@@ -1071,7 +1071,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, r15;
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
@@ -1086,7 +1086,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
             movq rdi, rbx;  // &mut Interp
@@ -1102,7 +1102,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
             movq rdi, rbx;  // &mut Interp
@@ -1118,7 +1118,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
             movq rdi, rbx;  // &mut Interp
@@ -1135,7 +1135,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_addr_r15();
         self.vm_get_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, r15;
             movq rcx, rdi;
             movl r8, [r13 - 8];
@@ -1154,7 +1154,7 @@ impl Codegen {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
         self.not_rdi_to_rax();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
@@ -1178,7 +1178,7 @@ impl Codegen {
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
         self.guard_rdi_fixnum(generic);
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             sarq rdi, 1;
             negq rdi;
             lea rdi, [rdi + rdi + 1];
@@ -1195,7 +1195,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_rdi(); // rdi <- lhs
         self.vm_get_addr_r15(); // r15 <- ret addr
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             testq rdi, 0x1;
             jz generic;
             movq [r15], rdi;
@@ -1206,7 +1206,7 @@ impl Codegen {
     }
 
     fn int_add(&mut self, generic: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, rdi;
             subb rax, 1;
             addq rax, rsi;
@@ -1215,7 +1215,7 @@ impl Codegen {
     }
 
     fn int_sub(&mut self, generic: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, rdi;
             subq rax, rsi;
             jo generic;
@@ -1224,21 +1224,21 @@ impl Codegen {
     }
 
     fn int_or(&mut self, _generic: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, rdi;
             orq rax, rsi;
         };
     }
 
     fn int_and(&mut self, _generic: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, rdi;
             andq rax, rsi;
         };
     }
 
     fn int_xor(&mut self, _generic: DestLabel) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, rdi;
             xorq rax, rsi;
             orb rax, 1;
@@ -1264,19 +1264,19 @@ impl Codegen {
         self.fetch_and_dispatch();
 
         self.vm_generic_binop(generic, generic_func);
-        monoasm! { self.jit, jmp exit; };
+        monoasm! { &mut self.jit, jmp exit; };
 
         let ptr_ri = self.jit.get_current_address();
         self.vm_get_ri_r15();
         self.guard_rdi_fixnum(generic);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             jmp common;
         );
 
         let ptr_ir = self.jit.get_current_address();
         self.vm_get_ir_r15();
         self.guard_rsi_fixnum(generic);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             jmp common;
         );
 
@@ -1292,11 +1292,11 @@ impl Codegen {
 
         let ptr_ri = self.jit.get_current_address();
         self.vm_get_ri_r15();
-        monoasm!(self.jit, jmp common; );
+        monoasm!( &mut self.jit, jmp common; );
 
         let ptr_ir = self.jit.get_current_address();
         self.vm_get_ir_r15();
-        monoasm!(self.jit, jmp common; );
+        monoasm!( &mut self.jit, jmp common; );
 
         (ptr_rr, ptr_ri, ptr_ir)
     }
@@ -1317,7 +1317,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let raise = self.entry_raise;
         self.fetch2();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rdx, [r13 - 8];  // name
             movl rcx, [r13 - 4];  // func_id
             movq rdi, rbx;  // &mut Interp
@@ -1335,7 +1335,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq r8, r15;
             movl rdx, [r13 - 8];  // name
             movl rcx, [r13 - 4];  // func_id
@@ -1353,20 +1353,20 @@ impl Codegen {
         let super_ = self.jit.label();
         self.fetch2();
         if is_module {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movl r8, 1;
             }
         } else {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 xorq r8, r8;
             }
         }
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             cmpl rdi, 0;
             jeq super_;
         }
         self.vm_get_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         super_:
             movq rcx, rdi; // rcx <- superclass: Option<Value>
             movl rdx, [r13 - 8];  // rdx <- name
@@ -1385,7 +1385,7 @@ impl Codegen {
         let super_ = self.jit.label();
         self.fetch2();
         self.vm_get_rdi();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         super_:
             movq rdx, rdi; // rdx <- base: Value
             movq rdi, rbx;  // &mut Interp
@@ -1399,7 +1399,7 @@ impl Codegen {
 
     fn class_def_sub(&mut self) {
         self.vm_handle_error();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             pushq r13;
             pushq r15;
 
@@ -1418,14 +1418,14 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], r15;
         };
         self.set_method_outer();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdx, rdx;
         };
         self.call_rax();
         // pop class context.
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq r15, rax;
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
@@ -1433,7 +1433,7 @@ impl Codegen {
             call rax;
             movq rax, r15;
         );
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             popq r15;
             popq r13;
         };
@@ -1447,7 +1447,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             testq r15, r15;
             jne  branch;
         };
@@ -1459,7 +1459,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             orq r15, 0x10;
             cmpq r15, (FALSE_VALUE);
             jne branch;
@@ -1472,7 +1472,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             orq r15, 0x10;
             cmpq r15, (FALSE_VALUE);
             jeq branch;

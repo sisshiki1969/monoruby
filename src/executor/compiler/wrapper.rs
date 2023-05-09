@@ -27,7 +27,7 @@ impl Codegen {
         let counter = self.jit.const_i32(5);
         let entry = self.jit.label();
         let next = self.jit.label();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         entry:
             jmp  next;
         next:
@@ -57,7 +57,7 @@ impl Codegen {
     fn gen_vm_stub(&mut self) -> CodePtr {
         let vm_entry = self.vm_entry;
         let codeptr = self.jit.get_current_address();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             jmp vm_entry;
         );
         codeptr
@@ -103,14 +103,14 @@ impl Codegen {
     fn wrap_native_func(&mut self, abs_address: u64) -> CodePtr {
         let label = self.jit.get_current_address();
         // calculate stack offset
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
             movq r8, rdx;
             movq rax, rdx;
         );
         self.calc_offset();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             subq rsp, rax;
             lea  rcx, [r14 - (LBP_ARG0)];     // rcx <- *const arg[0]
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
@@ -147,7 +147,7 @@ impl Codegen {
     fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdi, [rsp - (8 + LBP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
@@ -181,7 +181,7 @@ impl Codegen {
     fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
             movq rdx, [rsp - (8 + LBP_SELF)];  // self: Value

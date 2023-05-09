@@ -40,7 +40,7 @@ impl Codegen {
     /// in
     /// rsi: stack_offset
     fn stack_setup(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // setup stack pointer
             shlq rsi, 4;
             subq rsp, rsi;
@@ -50,7 +50,7 @@ impl Codegen {
     fn vm_init_func(&mut self) {
         let set_block = self.jit.label();
         let exit = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         // set block parameter
             movzxw rax, [r13 - 6];
             testq rax, rax;
@@ -74,7 +74,7 @@ impl Codegen {
     fn fill(&mut self, val: u64) {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             testq rax, rax;
             jz   l1;
             negq rdi;
@@ -99,7 +99,7 @@ impl Codegen {
     /// rax
     fn expand_arg0(&mut self) {
         let l1 = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // if passed_arg == 1 && arg0 isArray && pos_num >= 2 then expand arg0.
             cmpl rdx, 1;
             jne  l1;

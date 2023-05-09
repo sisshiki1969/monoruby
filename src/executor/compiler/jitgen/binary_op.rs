@@ -16,7 +16,7 @@ impl Codegen {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
                         self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, 1;
                             addq rdi, rsi;
@@ -26,7 +26,7 @@ impl Codegen {
                     }
                     OpMode::RI(lhs, rhs) => {
                         self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             addq rdi, (Value::int32(rhs as i32).get() - 1);
                             jo deopt;
@@ -35,7 +35,7 @@ impl Codegen {
                     }
                     OpMode::IR(lhs, rhs) => {
                         self.load_guard_rsi_fixnum(rhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             addq rsi, (Value::int32(lhs as i32).get() - 1);
                             jo deopt;
@@ -48,7 +48,7 @@ impl Codegen {
                 match mode {
                     OpMode::RR(lhs, rhs) => {
                         self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, rsi;
                             jo deopt;
@@ -58,7 +58,7 @@ impl Codegen {
                     }
                     OpMode::RI(lhs, rhs) => {
                         self.load_guard_rdi_fixnum(lhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             subq rdi, (Value::int32(rhs as i32).get() - 1);
                             jo deopt;
@@ -67,7 +67,7 @@ impl Codegen {
                     }
                     OpMode::IR(lhs, rhs) => {
                         self.load_guard_rsi_fixnum(rhs, deopt);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             // fastpath
                             movq rdi, (Value::int32(lhs as i32).get());
                             subq rdi, rsi;
@@ -82,7 +82,7 @@ impl Codegen {
                 let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
                 self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     sarq rdi, 1;
                     sarq rsi, 1;
                     movq rax, (pow_ii as u64);
@@ -99,17 +99,17 @@ impl Codegen {
                 self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                 match kind {
                     BinOpK::BitOr => {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             orq rdi, rsi;
                         );
                     }
                     BinOpK::BitAnd => {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             andq rdi, rsi;
                         );
                     }
                     BinOpK::BitXor => {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             xorq rdi, rsi;
                             addq rdi, 1;
                         );
@@ -137,52 +137,52 @@ impl Codegen {
         match kind {
             BinOpK::Add => {
                 if ret == rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         addsd xmm(ret), xmm(lhs);
                     );
                 } else {
                     self.xmm_mov(flhs, fret);
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         addsd xmm(ret), xmm(rhs);
                     );
                 }
             }
             BinOpK::Sub => {
                 if ret == rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm0, xmm(lhs);
                         subsd xmm0, xmm(ret);
                         movq  xmm(ret), xmm0;
                     );
                 } else {
                     self.xmm_mov(flhs, fret);
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         subsd xmm(ret), xmm(rhs);
                     );
                 }
             }
             BinOpK::Mul => {
                 if ret == rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         mulsd xmm(ret), xmm(lhs);
                     );
                 } else {
                     self.xmm_mov(flhs, fret);
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         mulsd xmm(ret), xmm(rhs);
                     );
                 }
             }
             BinOpK::Div => {
                 if ret == rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm0, xmm(lhs);
                         divsd xmm0, xmm(ret);
                         movq  xmm(ret), xmm0;
                     );
                 } else {
                     self.xmm_mov(flhs, fret);
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         divsd xmm(ret), xmm(rhs);
                     );
                 }
@@ -190,14 +190,14 @@ impl Codegen {
             BinOpK::Exp => {
                 let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
             }
@@ -218,25 +218,25 @@ impl Codegen {
         match kind {
             BinOpK::Add => {
                 self.xmm_mov(flhs, fret);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     addsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Sub => {
                 self.xmm_mov(flhs, fret);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     subsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Mul => {
                 self.xmm_mov(flhs, fret);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     mulsd xmm(ret), [rip + rhs_label];
                 );
             }
             BinOpK::Div => {
                 self.xmm_mov(flhs, fret);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     divsd xmm(ret), [rip + rhs_label];
                 )
             }
@@ -244,14 +244,14 @@ impl Codegen {
                 let lhs = flhs.enc();
                 let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm0, xmm(lhs);
                     movq xmm1, [rip + rhs_label];
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
             }
@@ -273,24 +273,24 @@ impl Codegen {
         match kind {
             BinOpK::Add => {
                 if ret != rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm(ret), [rip + lhs];
                         addsd xmm(ret), xmm(rhs);
                     );
                 } else {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         addsd xmm(ret), [rip + lhs];
                     );
                 }
             }
             BinOpK::Sub => {
                 if ret != rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm(ret), [rip + lhs];
                         subsd xmm(ret), xmm(rhs);
                     );
                 } else {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm0, xmm(rhs);
                         movq  xmm(ret), [rip + lhs];
                         subsd xmm(ret), xmm0;
@@ -299,24 +299,24 @@ impl Codegen {
             }
             BinOpK::Mul => {
                 if ret != rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm(ret), [rip + lhs];
                         mulsd xmm(ret), xmm(rhs);
                     );
                 } else {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         mulsd xmm(ret), [rip + lhs];
                     );
                 }
             }
             BinOpK::Div => {
                 if ret != rhs {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm(ret), [rip + lhs];
                         divsd xmm(ret), xmm(rhs);
                     );
                 } else {
-                    monoasm!(self.jit,
+                    monoasm!( &mut self.jit,
                         movq  xmm0, xmm(ret);
                         movq  xmm(ret), [rip + lhs];
                         divsd xmm(ret), xmm0;
@@ -326,14 +326,14 @@ impl Codegen {
             BinOpK::Exp => {
                 let xmm_using = ctx.get_xmm_using();
                 self.xmm_save(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm0, [rip + lhs];
                     movq xmm1, xmm(rhs);
                     movq rax, (pow_ff_f as u64);
                     call rax;
                 );
                 self.xmm_restore(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq xmm(ret), xmm0;
                 );
             }
@@ -353,15 +353,15 @@ impl Codegen {
 
     pub(super) fn setflag_float(&mut self, kind: CmpKind) {
         match kind {
-            CmpKind::Eq | CmpKind::TEq => monoasm! { self.jit, seteq rax; },
-            CmpKind::Ne => monoasm! { self.jit, setne rax; },
-            CmpKind::Ge => monoasm! { self.jit, setae rax; },
-            CmpKind::Gt => monoasm! { self.jit, seta rax; },
-            CmpKind::Le => monoasm! { self.jit, setbe rax; },
-            CmpKind::Lt => monoasm! { self.jit, setb rax; },
+            CmpKind::Eq | CmpKind::TEq => monoasm! { &mut self.jit, seteq rax; },
+            CmpKind::Ne => monoasm! { &mut self.jit, setne rax; },
+            CmpKind::Ge => monoasm! { &mut self.jit, setae rax; },
+            CmpKind::Gt => monoasm! { &mut self.jit, seta rax; },
+            CmpKind::Le => monoasm! { &mut self.jit, setbe rax; },
+            CmpKind::Lt => monoasm! { &mut self.jit, setb rax; },
             _ => unimplemented!(),
         }
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             shlq rax, 3;
             orq rax, (FALSE_VALUE);
         };
@@ -387,7 +387,7 @@ impl Codegen {
                         OpMode::RR(lhs, rhs) => {
                             let (flhs, frhs) = self.xmm_read_binary(ctx, lhs, rhs, pc);
                             ctx.dealloc_xmm(ret);
-                            monoasm! { self.jit,
+                            monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), xmm(frhs.enc());
                             };
                         }
@@ -395,7 +395,7 @@ impl Codegen {
                             let rhs_label = self.jit.const_f64(rhs as f64);
                             let flhs = self.xmm_read_assume_float(ctx, lhs, pc);
                             ctx.dealloc_xmm(ret);
-                            monoasm! { self.jit,
+                            monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), [rip + rhs_label];
                             };
                         }
@@ -410,19 +410,19 @@ impl Codegen {
                         match mode {
                             OpMode::RR(lhs, rhs) => {
                                 self.load_guard_binary_fixnum(lhs, rhs, deopt);
-                                monoasm!(self.jit,
+                                monoasm!( &mut self.jit,
                                     cmpq rdi, rsi;
                                 );
                             }
                             OpMode::RI(lhs, rhs) => {
                                 self.load_guard_rdi_fixnum(lhs, deopt);
-                                monoasm!(self.jit,
+                                monoasm!( &mut self.jit,
                                     cmpq rdi, (Value::int32(rhs as i32).get());
                                 );
                             }
                             OpMode::IR(lhs, rhs) => {
                                 self.load_guard_rsi_fixnum(rhs, deopt);
-                                monoasm!(self.jit,
+                                monoasm!( &mut self.jit,
                                     movq rdi, (Value::int32(lhs as i32).get());
                                     cmpq rdi, rsi;
                                 );
@@ -479,16 +479,16 @@ impl Codegen {
     ) {
         self.generic_cmp(kind, ctx);
         self.jit_handle_error(ctx, pc);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             orq  rax, 0x10;
             cmpq rax, (FALSE_VALUE);
             // if true, Z=0(not set).
         );
         match brkind {
-            BrKind::BrIf => monoasm! { self.jit,
+            BrKind::BrIf => monoasm! { &mut self.jit,
                 jnz branch_dest;
             },
-            BrKind::BrIfNot => monoasm! { self.jit,
+            BrKind::BrIfNot => monoasm! { &mut self.jit,
                 jz  branch_dest;
             },
         }
@@ -558,12 +558,12 @@ impl Codegen {
             OpMode::RR(lhs, rhs) => self.load_binary_args(lhs, rhs),
             OpMode::RI(lhs, rhs) => {
                 self.load_rdi(lhs);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rsi, (Value::int32(rhs as i32).get());
                 );
             }
             OpMode::IR(lhs, rhs) => {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rdi, (Value::int32(lhs as i32).get());
                 );
                 self.load_rsi(rhs);
@@ -582,13 +582,13 @@ impl Codegen {
             }
             OpMode::RI(lhs, rhs) => {
                 self.load_guard_rdi_fixnum(lhs, deopt);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rsi, (Value::int32(rhs as i32).get());
                 );
             }
             OpMode::IR(lhs, rhs) => {
                 self.load_guard_rsi_fixnum(rhs, deopt);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rdi, (Value::int32(lhs as i32).get());
                 );
             }
@@ -598,7 +598,7 @@ impl Codegen {
     fn shift_under(&mut self, under: DestLabel, after: DestLabel) {
         self.jit.select_page(1);
         let zero = self.jit.label();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         under:
             testq rdi, rdi;
             jns zero;
@@ -616,7 +616,7 @@ impl Codegen {
         let shl = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rcx, rsi;
             sarq rcx, 1;
             js shl;
@@ -627,7 +627,7 @@ impl Codegen {
             orq rdi, 1;
         );
         self.jit.select_page(1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         shl:
             negq rcx;
             lzcntq rax, rdi;
@@ -645,7 +645,7 @@ impl Codegen {
         let shr = self.jit.label();
         let after = self.jit.label();
         let under = self.jit.label();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rcx, rsi;
             sarq rcx, 1;
             js shr;
@@ -658,7 +658,7 @@ impl Codegen {
             orq rdi, 1;
         );
         self.jit.select_page(1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         shr:
             negq rcx;
             cmpq rcx, 64;

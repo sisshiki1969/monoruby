@@ -11,7 +11,7 @@ impl Codegen {
         let const_version = self.const_version;
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rdi;  // name: ConstSiteId
             movq rcx, [rip + const_version]; // usize
             movq rdi, rbx;  // &mut Interp
@@ -20,7 +20,7 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [r13 - 8], rax;
         };
         self.vm_store_r15();
@@ -38,7 +38,7 @@ impl Codegen {
         let const_version = self.const_version;
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rdi;  // name: IdentId
             movq rcx, r15;  // val: Value
             movq rdi, rbx;  // &mut Interp
@@ -60,7 +60,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rsi, rdi; // name: IdentId
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
             movq rdx, r12; // &mut Globals
@@ -82,7 +82,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rcx, rdi;  // name: IdentId
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
@@ -108,7 +108,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rsi, rdi; // name: IdentId
             movq rdi, r12; // &mut Globals
             movq rax, (runtime::get_global_var);
@@ -130,7 +130,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rsi, rdi;  // name: IdentId
             movq rdi, r12;  // &mut Globals
             movq rdx, r15;  // base: Value
@@ -152,7 +152,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch2();
         self.vm_get_addr_r15();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rdx, rdi;  // id
             movq rdi, rbx;  // &Executor
             movq rsi, r12;  // &Globals
@@ -184,7 +184,7 @@ impl Codegen {
         let loop_exit = self.jit.label();
         let exit = self.jit.label();
         self.fetch3();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, [r14 - (LBP_OUTER)];
         loop_:
             subq rsi, 1;
@@ -220,7 +220,7 @@ impl Codegen {
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
         self.fetch3();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rax, [r14 - (LBP_OUTER)];
         loop_:
             subq rdi, 1;

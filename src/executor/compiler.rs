@@ -37,7 +37,7 @@ macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
             fn [<integer_cmp_ $op>](&mut self) {
-                monoasm! { self.jit,
+                monoasm! { &mut self.jit,
                     xorq rax, rax;
                     cmpq rdi, rsi;
                     [<set $op>] rax;
@@ -58,10 +58,10 @@ macro_rules! cmp_opt_main {
         paste! {
             fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
                 match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
+                    BrKind::BrIf => monoasm! { &mut self.jit,
                         [<j $sop>] branch_dest;
                     },
-                    BrKind::BrIfNot => monoasm! { self.jit,
+                    BrKind::BrIfNot => monoasm! { &mut self.jit,
                         [<j $rev_sop>] branch_dest;
                     },
                 }
@@ -69,10 +69,10 @@ macro_rules! cmp_opt_main {
 
             fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
                 match brkind {
-                    BrKind::BrIf => monoasm! { self.jit,
+                    BrKind::BrIf => monoasm! { &mut self.jit,
                         [<j $op>] branch_dest;
                     },
-                    BrKind::BrIfNot => monoasm! { self.jit,
+                    BrKind::BrIfNot => monoasm! { &mut self.jit,
                         [<j $rev_op>] branch_dest;
                     },
                 }
@@ -150,23 +150,23 @@ impl Codegen {
         let alloc_flag = jit.const_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
         let entry_panic = jit.label();
         jit.bind_label(entry_panic);
-        let mut jit = Self::entry_panic(jit);
+        Self::entry_panic(&mut jit);
         let get_class = jit.label();
         jit.bind_label(get_class);
-        let mut jit = Self::get_class(jit);
+        Self::get_class(&mut jit);
         let wrong_argument = jit.label();
         jit.bind_label(wrong_argument);
-        let mut jit = Self::wrong_arguments(jit);
+        Self::wrong_arguments(&mut jit);
         let no_block = jit.label();
         jit.bind_label(no_block);
-        let mut jit = Self::no_block(jit);
+        Self::no_block(&mut jit);
         let f64_to_val = jit.label();
         jit.bind_label(f64_to_val);
-        let mut jit = Self::f64_to_val(jit);
+        Self::f64_to_val(&mut jit);
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
-        monoasm! { jit,
+        monoasm! { &mut jit,
                 movq rdi, rbx;
                 movq rsi, r12;
                 movq rdx, [r13 - 16];
@@ -214,7 +214,7 @@ impl Codegen {
     fn gen_entry_point(&mut self, main_object: Value) {
         // "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>
         let entry = self.jit.get_current_address();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             pushq rbx;
             pushq r12;
             pushq r13;
@@ -238,7 +238,7 @@ impl Codegen {
         };
         let l1 = self.jit.label();
         let l2 = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             lea  rax, [rsp - (16 + LBP_ARG0)];
             movzxw rdi, [r13 + (FUNCDATA_OFFSET_REGNUM)];
         l1:
@@ -250,7 +250,7 @@ impl Codegen {
         l2:
         };
         self.set_lfp();
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq [rbx + 8], r14;
             //
             //       +-------------+
@@ -305,13 +305,13 @@ impl Codegen {
         let gc = self.jit.label();
         let exit = self.jit.label();
         assert_eq!(0, self.jit.get_page());
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             cmpl [rip + alloc_flag], 0;
             jne  gc;
         exit:
         };
         self.jit.select_page(1);
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         gc:
             movq rdi, r12;
             movq rsi, rbx;
@@ -328,7 +328,7 @@ impl Codegen {
     /// - rdi, rsi
     ///
     fn push_frame(&mut self) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             // push cfp
             movq rdi, [rbx];
             lea  rsi, [rsp - (16 + BP_PREV_CFP)];
@@ -346,7 +346,7 @@ impl Codegen {
     /// - rsi
     ///
     fn set_block_self_outer(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // set outer
             lea  rsi, [rax - (LBP_OUTER)];
             movq [rsp - (16 + LBP_OUTER)], rsi;
@@ -358,14 +358,14 @@ impl Codegen {
 
     /// Set outer.
     fn set_method_outer(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq [rsp - (16 + LBP_OUTER)], 0;
         };
     }
 
     /// Pop control frame
     fn pop_frame(&mut self) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             // pop cfp
             lea  r14, [rbp - (BP_PREV_CFP)];
             movq [rbx], r14;
@@ -376,7 +376,7 @@ impl Codegen {
 
     /// Set lfp(r14) for callee.
     fn set_lfp(&mut self) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             // set lfp
             lea  r14, [rsp - 16];
             movq [rsp - (16 + BP_LFP)], r14;
@@ -391,7 +391,7 @@ impl Codegen {
     fn call_rax(&mut self) {
         self.push_frame();
         self.set_lfp();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             call rax;
         );
         self.pop_frame();
@@ -405,7 +405,7 @@ impl Codegen {
         self.push_frame();
         self.set_lfp();
         let src_point = self.jit.get_current_address();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             call (codeptr - src_point - 5);
         );
         self.pop_frame();
@@ -415,7 +415,7 @@ impl Codegen {
     /// calculate an offset of stack pointer.
     ///
     fn calc_offset(&mut self) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             addq rax, (LBP_ARG0 / 8 + 1);
             andq rax, (-2);
             shlq rax, 3;
@@ -434,7 +434,7 @@ impl Codegen {
     /// check whether lhs is fixnum.
     ///
     fn guard_rdi_fixnum(&mut self, generic: DestLabel) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             testq rdi, 0x1;
             jz generic;
         );
@@ -444,14 +444,14 @@ impl Codegen {
     /// check whether rhs is fixnum.
     ///
     fn guard_rsi_fixnum(&mut self, generic: DestLabel) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             testq rsi, 0x1;
             jz generic;
         );
     }
 
     fn call_unop(&mut self, func: usize) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
@@ -461,7 +461,7 @@ impl Codegen {
     }
 
     fn call_binop(&mut self, func: BinaryOpFn) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdx, rdi;
             movq rcx, rsi;
             movq rdi, rbx;
@@ -472,7 +472,7 @@ impl Codegen {
     }
 
     fn epilogue(&mut self) {
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             leave;
             ret;
         );
@@ -484,7 +484,7 @@ impl Codegen {
     /// rbp <- bp for a context which called the block.
     ///
     fn block_break(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdi, [rbx];
             movq rdi, [rdi];    // rdi <- caller's cfp
             lea  rbp, [rdi + (BP_PREV_CFP)];
@@ -500,7 +500,7 @@ impl Codegen {
     ///
     fn method_return(&mut self) {
         let raise = self.entry_raise;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rax;
@@ -516,7 +516,7 @@ impl Codegen {
     /// - rdi
     ///
     fn not_rdi_to_rax(&mut self) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             orq  rdi, 0x10;
             xorq rax, rax;
             cmpq rdi, (FALSE_VALUE);
@@ -538,7 +538,7 @@ impl Codegen {
     /// - rax: Option<Value>
     ///  
     fn handle_arguments(&mut self) {
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             lea  r9, [rsp - (16 + LBP_SELF)];   // callee_reg
             movq r8, rdi;
             subq rsp, 4096;
@@ -574,7 +574,7 @@ impl Codegen {
     ///
     fn block_arg_expand(&mut self) {
         let l1 = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             testq rsi, rsi;
             je   l1;
             // rax <- op
@@ -587,7 +587,7 @@ impl Codegen {
             jle  l1;
         }
         self.single_arg_expand();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
         l1:
         };
     }
@@ -603,7 +603,7 @@ impl Codegen {
     ///
     fn single_arg_expand(&mut self) {
         let l1 = self.jit.label();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // arg_num == 1?
             cmpl rdi, 1;
             jne  l1;
@@ -634,10 +634,10 @@ impl Codegen {
     /// #### out
     /// - rax: ClassId
     ///
-    fn get_class(mut jit: JitMemory) -> JitMemory {
+    fn get_class(jit: &mut JitMemory) {
         let l1 = jit.label();
         let exit = jit.label();
-        monoasm!(&mut jit,
+        monoasm!(jit,
                 movl  rax, (INTEGER_CLASS.0);
                 testq rdi, 0b001;
                 jnz   exit;
@@ -667,11 +667,10 @@ impl Codegen {
             exit:
                 ret;
         );
-        jit
     }
 
-    fn wrong_arguments(mut jit: JitMemory) -> JitMemory {
-        monoasm! {&mut jit,
+    fn wrong_arguments(jit: &mut JitMemory) {
+        monoasm! {jit,
             movq rdi, rbx;
             movl rsi, rdx;  // given
             movzxw rdx, [r13 - 8];  // min
@@ -679,11 +678,10 @@ impl Codegen {
             movq rax, (runtime::err_wrong_number_of_arguments_range);
             call rax;
         }
-        jit
     }
 
-    fn entry_panic(mut jit: JitMemory) -> JitMemory {
-        monoasm! {&mut jit,
+    fn entry_panic(jit: &mut JitMemory) {
+        monoasm! {jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::_dump_stacktrace);
@@ -695,11 +693,10 @@ impl Codegen {
             leave;
             ret;
         }
-        jit
     }
 
-    fn no_block(mut jit: JitMemory) -> JitMemory {
-        monoasm! {&mut jit,
+    fn no_block(jit: &mut JitMemory) {
+        monoasm! {jit,
             movq rdi, rbx;
             movq rax, (runtime::err_no_block_given);
             call rax;
@@ -707,7 +704,6 @@ impl Codegen {
             leave;
             ret;
         }
-        jit
     }
 
     ///
@@ -722,10 +718,10 @@ impl Codegen {
     /// ### destroy
     /// - caller saved registers except rdi
     ///
-    pub(super) fn f64_to_val(mut jit: JitMemory) -> JitMemory {
+    pub(super) fn f64_to_val(jit: &mut JitMemory) {
         let normal = jit.label();
         let heap_alloc = jit.label();
-        monoasm!(&mut jit,
+        monoasm!(jit,
             xorps xmm1, xmm1;
             ucomisd xmm0, xmm1;
             jne normal;
@@ -782,7 +778,6 @@ impl Codegen {
             addq rsp, 120;
             ret;
         );
-        jit
     }
 }
 

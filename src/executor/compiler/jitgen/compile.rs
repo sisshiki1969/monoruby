@@ -12,18 +12,18 @@ impl Codegen {
         assert!(!cached_class.is_always_frozen());
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
         if ctx.self_value.class() == cached_class {
             if ctx.self_value.kind() == Some(ObjKind::OBJECT)
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
                 );
             } else {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (cached_ivarid.get());
                 );
                 self.get_ivar(&xmm_using);
@@ -31,7 +31,7 @@ impl Codegen {
         } else {
             // ctx.self_class != cached_class merely happens, but possible.
             self.xmm_save(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq rsi, (id.get());  // id: IdentId
                 movq rdx, r12; // &mut Globals
                 movq rax, (runtime::get_instance_var);
@@ -55,7 +55,7 @@ impl Codegen {
         assert!(!cached_class.is_always_frozen());
         let exit = self.jit.label();
         let xmm_using = ctx.get_xmm_using();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdi, [r14 - (LBP_SELF)];  // base: Value
         );
         if ctx.self_value.class() == cached_class {
@@ -63,18 +63,18 @@ impl Codegen {
                 && cached_ivarid.get() < OBJECT_INLINE_IVAR as u32
             {
                 self.load_rax(src);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq [rdi + (16 + (cached_ivarid.get() as i32) * 8)], rax;
                 );
             } else {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (cached_ivarid.get());
                 );
                 self.set_ivar(src, &xmm_using);
             }
         } else {
             self.xmm_save(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq rdx, rdi;  // base: Value
                 movq rcx, (id.get());  // id: IdentId
                 movq r8, [r14 - (conv(src))];   // val: Value
@@ -100,25 +100,25 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             let deopt = self.gen_side_deopt(pc, ctx);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
                 movq rsi, [r14 - (conv(idx))]; // idx: Value
             };
             self.guard_class(ARRAY_CLASS, deopt);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 testq rsi, 0b01;
                 jeq deopt;
                 sarq rsi, 1;
             };
             self.xmm_save(&xmm_using);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rax, (runtime::get_array_integer_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
         } else {
             self.xmm_save(&xmm_using);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rdi, rbx; // &mut Interp
                 movq rsi, r12; // &mut Globals
                 movq rdx, [r14 - (conv(base))]; // base: Value
@@ -144,18 +144,18 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             let deopt = self.gen_side_deopt(pc, ctx);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
                 movq rsi, [r14 - (conv(idx))]; // idx: Value
             };
             self.guard_class(ARRAY_CLASS, deopt);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 testq rsi, 0b01;
                 jeq deopt;
                 sarq rsi, 1;
             };
             self.xmm_save(&xmm_using);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rdx, rbx;
                 movq rcx, r12;
                 movq r8, [r14 - (conv(src))];
@@ -165,7 +165,7 @@ impl Codegen {
             self.xmm_restore(&xmm_using);
         } else {
             self.xmm_save(&xmm_using);
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rdx, [r14 - (conv(base))]; // base: Value
                 movq rcx, [r14 - (conv(idx))]; // idx: Value
                 movq r8, [r14 - (conv(src))];  // src: Value
@@ -193,24 +193,24 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         if superclass.is_zero() {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 xorq rcx, rcx;
             }
         } else {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movq rcx, [r14 - (conv(superclass))];  // rcx <- superclass: Option<Value>
             }
         }
         if is_module {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 movl r8, 1; // r8 <- is_module
             }
         } else {
-            monoasm! { self.jit,
+            monoasm! { &mut self.jit,
                 xorq r8, r8;
             }
         }
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movl rdx, (name.get());  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
@@ -232,7 +232,7 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, [r14 - (conv(base))];  // rdx <- name
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals
@@ -245,7 +245,7 @@ impl Codegen {
     }
 
     fn jit_class_def_sub(&mut self, ctx: &BBContext, func_id: FuncId, ret: SlotId, pc: BcPc) {
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
             movl rdx, (func_id.get());  // rdx <- func_id
@@ -261,7 +261,7 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], r15;
         }
         self.set_method_outer();
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq r13 , [r8 + (FUNCDATA_OFFSET_PC)];
             movq rax, [r8 + (FUNCDATA_OFFSET_CODEPTR)];
             xorq rdx, rdx;
@@ -271,7 +271,7 @@ impl Codegen {
             self.store_rax(ret);
         }
         // pop class context.
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq r13, rax;
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
@@ -299,7 +299,7 @@ impl Codegen {
     ///
     pub(super) fn get_ivar(&mut self, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rax, (RValue::get_ivar);
             call rax;
         );
@@ -321,7 +321,7 @@ impl Codegen {
     ///
     pub(super) fn set_ivar(&mut self, src: SlotId, xmm_using: &[Xmm]) {
         self.xmm_save(xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdx, [r14 - (conv(src))];   // val: Value
             movq rax, (RValue::set_ivar);
             call rax;

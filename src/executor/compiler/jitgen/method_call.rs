@@ -23,7 +23,7 @@ impl Codegen {
             gen.guard_class(pc.class_version().0, deopt);
         }
         let fret = ctx.xmm_write(ret);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             sarq  rdi, 1;
             cvtsi2sdq xmm(fret.enc()), rdi;
         );
@@ -44,7 +44,7 @@ impl Codegen {
         }
         let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
         let fret = ctx.xmm_write(ret);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
         );
     }
@@ -66,13 +66,13 @@ impl Codegen {
         let fret = ctx.xmm_write(ret);
         let xmm_using = ctx.get_xmm_using();
         gen.xmm_save(&xmm_using);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             movq xmm0, xmm(fsrc.enc());
             movq rax, (Self::cos);
             call rax;
         );
         gen.xmm_restore(&xmm_using);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             movq xmm(fret.enc()), xmm0;
         );
     }
@@ -94,13 +94,13 @@ impl Codegen {
         let fret = ctx.xmm_write(ret);
         let xmm_using = ctx.get_xmm_using();
         gen.xmm_save(&xmm_using);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             movq xmm0, xmm(fsrc.enc());
             movq rax, (Self::sin);
             call rax;
         );
         gen.xmm_restore(&xmm_using);
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             movq xmm(fret.enc()), xmm0;
         );
     }
@@ -117,7 +117,7 @@ impl Codegen {
         gen.load_rdi(*recv);
         ctx.dealloc_xmm(ret);
         let l1 = gen.jit.label();
-        monoasm!(gen.jit,
+        monoasm!( &mut gen.jit,
             movq rax, (FALSE_VALUE);
             cmpq rdi, (NIL_VALUE);
             jne  l1;
@@ -225,7 +225,7 @@ impl Codegen {
                 assert!(store[callid].kw_args.is_empty());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq rax, (NIL_VALUE);
                         );
                         self.store_rax(ret);
@@ -288,18 +288,18 @@ impl Codegen {
         // r15 <- recv's class
         if recv.is_zero() {
             // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movl r15, (ctx.self_value.class().0);
             );
         } else {
             self.load_rdi(recv);
             let get_class = self.get_class;
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 call get_class;
                 movl r15, rax;  // r15: receiver class_id
             );
         }
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq r13, (pc.get_u64());
             // check inline cache
             cmpq [r13 + 8], 0;
@@ -317,29 +317,29 @@ impl Codegen {
         self.set_method_outer();
         self.set_self_and_args(method_info, block, has_splat, &store[callid]);
 
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             // set meta.
             movq r15, [r13 + 8];    // &FuncData
             movq rax, [r15 + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rax;
         }
 
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rsi, [r15 + (FUNCDATA_OFFSET_PC)];
         }
         self.block_arg_expand();
 
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq rcx, r15;
             movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             testq rax, rax;
             jeq raise;
         );
 
-        monoasm! {self.jit,
+        monoasm! { &mut self.jit,
             movq rdx, rdi;
             // set codeptr
             movq rax, [r15 + (FUNCDATA_OFFSET_CODEPTR)];
@@ -348,7 +348,7 @@ impl Codegen {
         }
         self.call_rax();
         self.xmm_restore(&xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             testq rax, rax;
             jeq raise;
         );
@@ -359,7 +359,7 @@ impl Codegen {
         // slow path
         // r15: recv's class
         self.jit.select_page(1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         slow_path:
             movq rdi, rbx;
             movq rsi, r12;
@@ -380,7 +380,7 @@ impl Codegen {
         );
         let raise = self.entry_raise;
         // raise error.
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         raise:
             movq r13, ((pc + 2).get_u64());
             jmp raise;
@@ -401,7 +401,7 @@ impl Codegen {
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
                     cmpw [rdi + 2], (ObjKind::OBJECT);
                     jne  no_inline;
@@ -411,12 +411,12 @@ impl Codegen {
                 self.jit.select_page(1);
                 self.jit.bind_label(no_inline);
                 self.get_ivar(&xmm_using);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     jmp  exit;
                 );
                 self.jit.select_page(0);
             } else {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
                 );
                 self.get_ivar(&xmm_using);
@@ -424,7 +424,7 @@ impl Codegen {
         } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 lea  rax, [rip + cache];
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
@@ -436,7 +436,7 @@ impl Codegen {
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
             self.xmm_save(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq rsi, (ivar_name.get()); // IvarId
                 movq rdx, r12; // &mut Globals
                 lea  rcx, [rip + cache];
@@ -444,7 +444,7 @@ impl Codegen {
                 call rax;
             );
             self.xmm_restore(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 jmp exit;
             );
             self.jit.select_page(0);
@@ -469,7 +469,7 @@ impl Codegen {
         // rdi: base: Value
         if let Some(ivar_id) = ivar_id {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
                     cmpw [rdi + 2], (ObjKind::OBJECT);
                     jne  no_inline;
@@ -481,12 +481,12 @@ impl Codegen {
                 self.jit.bind_label(no_inline);
                 self.set_ivar(args, &xmm_using);
                 self.jit_handle_error(ctx, pc);
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     jmp exit;
                 );
                 self.jit.select_page(0);
             } else {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
                 );
                 self.set_ivar(args, &xmm_using);
@@ -498,7 +498,7 @@ impl Codegen {
         } else {
             let slow_path = self.jit.label();
             let cache = self.jit.const_i64(-1);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 lea  rax, [rip + cache];    // cache.ivarid
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
@@ -518,7 +518,7 @@ impl Codegen {
             self.jit.select_page(1);
             self.jit.bind_label(slow_path);
             self.xmm_save(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq rdx, rdi;  // recv: Value
                 movq rcx, (ivar_name.get()); // name: IdentId
                 movq r8, [r14 - (conv(args))];  //val: Value
@@ -529,14 +529,14 @@ impl Codegen {
                 call rax;
             );
             self.xmm_restore(&xmm_using);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 jmp exit;
             );
 
             self.jit.bind_label(no_inline);
             self.set_ivar(args, &xmm_using);
             self.jit_handle_error(ctx, pc);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 jmp exit;
             );
             self.jit.select_page(0);
@@ -557,7 +557,7 @@ impl Codegen {
         let MethodInfo { args, len, .. } = method_info;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rax, (Meta::native(func_id, 0 /* for GC */ as _).get());
             movq [rsp - (16 + LBP_META)], rax;
             movq [rsp - (16 + LBP_SELF)], rdi;  // self: Value
@@ -565,24 +565,24 @@ impl Codegen {
         );
         match block {
             Some(block) => {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq rax, [r14 - (conv(block))];
                     movq [rsp - (16 + LBP_BLOCK)], rax;
                 );
             }
             None => {
-                monoasm!(self.jit,
+                monoasm!( &mut self.jit,
                     movq [rsp - (16 + LBP_BLOCK)], 0;
                 );
             }
         }
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             lea  rcx, [r14 - (conv(args))];  // args: *const Value
         );
         let stack_offset = (LBP_SELF + 31) & !0xf;
         let entry = self.jit.label();
         self.push_frame();
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             // set lfp
             lea  rdx, [rsp - 16];
             movq [rsp - (16 + BP_LFP)], rdx;
@@ -595,7 +595,7 @@ impl Codegen {
             self.store_rax(ret);
         }
         self.jit.select_page(1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         entry:
             pushq rbp;
             subq rsp, (stack_offset);
@@ -650,13 +650,13 @@ impl Codegen {
                                 Some(caller) => {
                                     let caller_ofs =
                                         (kw_pos.0 as i64 + *caller as i64) * 8 + LBP_SELF;
-                                    monoasm! {self.jit,
+                                    monoasm! { &mut self.jit,
                                         movq  rax, [r14 - (caller_ofs)];
                                         movq  [rsp - (16 + callee_ofs)], rax;
                                     }
                                 }
                                 None => {
-                                    monoasm! {self.jit,
+                                    monoasm! { &mut self.jit,
                                         movq  [rsp - (16 + callee_ofs)], 0;
                                     }
                                 }
@@ -665,7 +665,7 @@ impl Codegen {
                         // TODO: We must care about a rest keyword paramter.
                     }
                     if !callsite.hash_splat_pos.is_empty() {
-                        monoasm! {self.jit,
+                        monoasm! { &mut self.jit,
                             lea  rcx, [rsp - (16 + LBP_SELF)];
                             subq rsp, 4088;
                             pushq rdi;
@@ -680,7 +680,7 @@ impl Codegen {
                         }
                     }
                 } else {
-                    monoasm! {self.jit,
+                    monoasm! { &mut self.jit,
                         movq rcx, (func_data as *const _ as u64);
                         movl rdx, (callid.get());
                     }
@@ -690,7 +690,7 @@ impl Codegen {
             }
             _ => {}
         }
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdx, rdi;
             // set meta.
             movq rax, (func_data.meta.get());
@@ -719,7 +719,7 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         let no_block = self.no_block;
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::get_yield_data);
@@ -730,7 +730,7 @@ impl Codegen {
         }
 
         self.set_block_self_outer();
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // r13 <- &FuncData
             movq r13, rdx;
             // set meta
@@ -742,18 +742,18 @@ impl Codegen {
         // set arguments
         self.jit_set_arguments(args, len, true, &store[callid]);
 
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rsi, [r13 + (FUNCDATA_OFFSET_PC)];
         }
         self.block_arg_expand();
 
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             movq rcx, r13;
             movl rdx, (callid.get()); // CallSiteId
         }
         self.handle_arguments();
         self.jit_handle_error(ctx, pc);
-        monoasm! { self.jit,
+        monoasm! { &mut self.jit,
             // argument registers:
             //   rdx: args len
             //
@@ -779,7 +779,7 @@ impl Codegen {
 impl Codegen {
     fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
         let global_class_version = self.class_version;
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             cmpl [rip + global_class_version], (cached_version);
             jne side_exit;
         );
@@ -804,18 +804,18 @@ impl Codegen {
         } = method_info;
         // set self, len
         self.load_rax(recv);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq [rsp - (16 + LBP_SELF)], rax;
         );
         self.jit_set_arguments(args, len, has_splat, callsite);
         // set block
         if let Some(block) = block {
             self.load_rax(block);
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], rax;
             );
         } else {
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], 0;
             );
         }
@@ -841,7 +841,7 @@ impl Codegen {
     ) {
         // set arguments
         if has_splat {
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 lea r15, [rsp - (16 + LBP_ARG0)];
                 movq r8, (len);
                 subq rsp, 1024;
@@ -850,7 +850,7 @@ impl Codegen {
                 let reg = args + i;
                 if callsite.splat_pos.contains(&(i as usize)) {
                     self.load_rdi(reg);
-                    monoasm! {self.jit,
+                    monoasm! { &mut self.jit,
                         movq rsi, r15;
                         movq rax, (expand_splat);
                         subq rsp, 8;
@@ -864,13 +864,13 @@ impl Codegen {
                     }
                 } else {
                     self.load_rax(reg);
-                    monoasm! {self.jit,
+                    monoasm! { &mut self.jit,
                         movq [r15], rax;
                         subq r15, 8;
                     }
                 }
             }
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 addq rsp, 1024;
                 movq rdi, r8;
             );
@@ -878,11 +878,11 @@ impl Codegen {
             for i in 0..len {
                 let reg = args + i;
                 self.load_rax(reg);
-                monoasm! {self.jit,
+                monoasm! { &mut self.jit,
                     movq [rsp - ((16 + LBP_ARG0 + 8 * (i as i64)) as i32)], rax;
                 }
             }
-            monoasm!(self.jit,
+            monoasm!( &mut self.jit,
                 movq rdi, (len);
             );
         }

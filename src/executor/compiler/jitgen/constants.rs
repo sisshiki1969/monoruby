@@ -5,7 +5,7 @@ impl Codegen {
         let const_version = self.const_version;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
           movq rdx, (id.get());  // name: IdentId
           movq rcx, [r14 - (conv(src))];  // val: Value
           movq rdi, rbx;  // &mut Interp
@@ -33,7 +33,7 @@ impl Codegen {
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.get_constant(ctx, id, pc);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq [rip + cached_value], rax;
             movq rdi, [rip + global_const_version];
             movq [rip + cached_const_version], rdi;
@@ -41,7 +41,7 @@ impl Codegen {
         );
         self.jit.select_page(0);
 
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
             jne  slow_path;
@@ -71,12 +71,12 @@ impl Codegen {
         self.jit.select_page(1);
         self.jit.bind_label(slow_path);
         self.get_constant(ctx, id, pc);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq [rip + cached_value], rax;
             movq rdi, rax;
         );
         self.unbox_float(0, side_exit);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq [rip + cached_float], xmm0;
             movq rax, [rip + global_const_version];
             movq [rip + cached_const_version], rax;
@@ -84,7 +84,7 @@ impl Codegen {
         );
         self.jit.select_page(0);
 
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
             jne  slow_path;
@@ -98,7 +98,7 @@ impl Codegen {
     fn get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             movq rdx, (id.0);  // name: ConstSiteId
             movq rdi, rbx;  // &mut Interp
             movq rsi, r12;  // &mut Globals

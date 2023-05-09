@@ -172,14 +172,14 @@ impl Codegen {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
                     } else if src_ctx.xmm[r].is_empty() {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_rw_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm0, xmm(l.enc());
                             movq  xmm(l.enc()), xmm(r.enc());
                             movq  xmm(r.enc()), xmm0;
@@ -190,14 +190,14 @@ impl Codegen {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
                     } else if src_ctx.xmm[r].is_empty() {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_rw_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm0, xmm(l.enc());
                             movq  xmm(l.enc()), xmm(r.enc());
                             movq  xmm(r.enc()), xmm0;
@@ -211,14 +211,14 @@ impl Codegen {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
                     } else if src_ctx.xmm[r].is_empty() {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_r_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm0, xmm(l.enc());
                             movq  xmm(l.enc()), xmm(r.enc());
                             movq  xmm(r.enc()), xmm0;
@@ -229,14 +229,14 @@ impl Codegen {
                     if l == r {
                         src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
                     } else if src_ctx.xmm[r].is_empty() {
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
                         src_ctx.link_r_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
-                        monoasm!(self.jit,
+                        monoasm!( &mut self.jit,
                             movq  xmm0, xmm(l.enc());
                             movq  xmm(l.enc()), xmm(r.enc());
                             movq  xmm(r.enc()), xmm0;
@@ -263,13 +263,13 @@ impl Codegen {
         for reg in guard_list {
             self.gen_assume_float(reg, side_exit);
         }
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
             jmp exit;
         );
         self.jit.select_page(0);
         let side_label = self.gen_side_deopt(pc + 1, &src_ctx);
         self.jit.select_page(1);
-        monoasm!(self.jit,
+        monoasm!( &mut self.jit,
         side_exit:
             jmp side_label;
         );
