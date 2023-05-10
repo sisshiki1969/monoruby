@@ -717,11 +717,11 @@ impl Codegen {
         monoasm! { &mut self.jit,
             call  get_class;
             movl  [r13 - 8], rax;
-            pushq rdi;
-            movq  rdi, rsi;
+            xchgq rdi, rsi;
+            //movq  rdi, rsi;
             call  get_class;
             movl  [r13 - 4], rax;
-            popq  rdi;
+            xchgq rdi, rsi;
         };
     }
 
