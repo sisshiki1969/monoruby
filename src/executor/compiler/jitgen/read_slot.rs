@@ -26,10 +26,10 @@ impl Codegen {
         pc: BcPc,
     ) -> Xmm {
         match ctx.stack_slot[reg] {
-            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
+            LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm();
-                ctx.link_r_xmm(reg, freg);
+                ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
                 self.unbox_float(freg.enc(), side_exit);
@@ -56,10 +56,10 @@ impl Codegen {
 
     fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
         match ctx.stack_slot[reg] {
-            LinkMode::XmmR(freg) | LinkMode::XmmRW(freg) => freg,
+            LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             _ => {
                 let freg = ctx.alloc_xmm();
-                ctx.link_r_xmm(reg, freg);
+                ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
                 self.gen_val_to_f64_assume_integer(freg.enc(), side_exit);

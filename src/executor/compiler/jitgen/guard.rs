@@ -22,13 +22,10 @@ impl Codegen {
     pub(super) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
             INTEGER_CLASS => {
-                //let exit = self.jit.label();
                 monoasm!( &mut self.jit,
                     testq rdi, 0b001;
                     jz side_exit;
                 );
-                //self.guard_unpacked_class(class_id, side_exit);
-                //self.jit.bind_label(exit);
             }
             FLOAT_CLASS => {
                 let exit = self.jit.label();
@@ -38,7 +35,7 @@ impl Codegen {
                     testq rdi, 0b010;
                     jnz exit;
                 );
-                self.guard_unpacked_class(class_id, side_exit);
+                self.guard_unpacked_class(FLOAT_CLASS, side_exit);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
@@ -69,6 +66,10 @@ impl Codegen {
         }
     }
 
+    pub(super) fn guard_float(&mut self, side_exit: DestLabel) {
+        self.guard_class(FLOAT_CLASS, side_exit)
+    }
+
     ///
     /// Float guard and unboxing.
     ///
@@ -88,34 +89,11 @@ impl Codegen {
     /// - rdi, rax
     ///
     pub(super) fn unbox_float(&mut self, xmm: u64, side_exit: DestLabel) {
-        let flonum = self.jit.label();
-        let exit = self.jit.label();
         monoasm!( &mut self.jit,
             testq rdi, 0b001;
             jnz side_exit;
-            testq rdi, 0b010;
-            jnz flonum;
         );
-        self.guard_unpacked_class(FLOAT_CLASS, side_exit);
-        self.heap_to_f64(xmm);
-        monoasm! {&mut self.jit,
-            jmp  exit;
-        flonum:
-        };
-        self.flonum_to_f64(xmm);
-        self.jit.bind_label(exit);
-    }
-
-    pub(super) fn assume_float(&mut self, side_exit: DestLabel) {
-        let exit = self.jit.label();
-        monoasm!( &mut self.jit,
-            testq rdi, 0b001;
-            jnz side_exit;
-            testq rdi, 0b010;
-            jnz exit;
-        );
-        self.guard_unpacked_class(FLOAT_CLASS, side_exit);
-        self.jit.bind_label(exit);
+        self.float_to_f64(xmm, side_exit);
     }
 
     ///
@@ -136,23 +114,33 @@ impl Codegen {
     /// - rdi, rax
     ///
     pub(super) fn unbox_integer_float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
-        let flonum = self.jit.label();
         let integer = self.jit.label();
         let exit = self.jit.label();
-        monoasm!( &mut self.jit,
+        monoasm! { &mut self.jit,
             testq rdi, 0b001;
             jnz integer;
-            testq rdi, 0b010;
-            jnz flonum;
-        );
-        self.guard_unpacked_class(FLOAT_CLASS, side_exit);
-        self.heap_to_f64(xmm);
+        }
+        self.float_to_f64(xmm, side_exit);
         monoasm! {&mut self.jit,
             jmp  exit;
         integer:
             sarq rdi, 1;
             cvtsi2sdq xmm(xmm), rdi;
-            jmp exit;
+        };
+        self.jit.bind_label(exit);
+    }
+
+    fn float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+        let flonum = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            testq rdi, 0b010;
+            jnz flonum;
+        }
+        self.guard_unpacked_class(FLOAT_CLASS, side_exit);
+        self.heap_to_f64(xmm);
+        monoasm! {&mut self.jit,
+            jmp  exit;
         };
         self.jit.bind_label(flonum);
         self.flonum_to_f64(xmm);

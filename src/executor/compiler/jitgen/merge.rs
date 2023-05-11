@@ -45,14 +45,14 @@ impl Codegen {
             let mut ctx = BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, class) in use_set {
                 match target_slot_info[reg] {
-                    LinkMode::None => {}
-                    LinkMode::XmmRW(_) if class => {
+                    LinkMode::Slot => {}
+                    LinkMode::Xmm(_) if class => {
                         let freg = ctx.alloc_xmm();
-                        ctx.link_rw_xmm(reg, freg);
+                        ctx.link_xmm(reg, freg);
                     }
                     _ => {
                         let freg = ctx.alloc_xmm();
-                        ctx.link_r_xmm(reg, freg);
+                        ctx.link_both(reg, freg);
                     }
                 };
             }
@@ -145,17 +145,17 @@ impl Codegen {
         self.jit.bind_label(entry);
         for i in 0..len {
             let reg = SlotId(i as u16);
-            if target_ctx.stack_slot[reg] == LinkMode::None {
+            if target_ctx.stack_slot[reg] == LinkMode::Slot {
                 match src_ctx.stack_slot[reg] {
-                    LinkMode::XmmRW(freg) => {
+                    LinkMode::Xmm(freg) => {
                         let v = src_ctx.xmm[freg].clone();
                         for i in &v {
-                            src_ctx.stack_slot[*i] = LinkMode::XmmR(freg);
+                            src_ctx.stack_slot[*i] = LinkMode::Both(freg);
                         }
                         src_ctx.dealloc_xmm(reg);
                         self.gen_write_back_single(freg, v);
                     }
-                    LinkMode::XmmR(_) => {
+                    LinkMode::Both(_) => {
                         src_ctx.dealloc_xmm(reg);
                     }
                     _ => {}
@@ -168,15 +168,15 @@ impl Codegen {
         for i in 0..len {
             let reg = SlotId(i as u16);
             match (src_ctx.stack_slot[reg], target_ctx.stack_slot[reg]) {
-                (LinkMode::XmmRW(l), LinkMode::XmmRW(r)) => {
+                (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
+                        src_ctx.stack_slot[reg] = LinkMode::Xmm(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
-                        src_ctx.link_rw_xmm(reg, r);
+                        src_ctx.link_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!( &mut self.jit,
@@ -186,15 +186,15 @@ impl Codegen {
                         );
                     }
                 }
-                (LinkMode::XmmR(l), LinkMode::XmmRW(r)) => {
+                (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx.stack_slot[reg] = LinkMode::XmmRW(l);
+                        src_ctx.stack_slot[reg] = LinkMode::Xmm(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
-                        src_ctx.link_rw_xmm(reg, r);
+                        src_ctx.link_xmm(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!( &mut self.jit,
@@ -205,17 +205,17 @@ impl Codegen {
                     }
                     guard_list.push(reg);
                 }
-                (_, LinkMode::None) => {}
-                (LinkMode::XmmRW(l), LinkMode::XmmR(r)) => {
+                (_, LinkMode::Slot) => {}
+                (LinkMode::Xmm(l), LinkMode::Both(r)) => {
                     self.gen_write_back_single(l, vec![reg]);
                     if l == r {
-                        src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
+                        src_ctx.stack_slot[reg] = LinkMode::Both(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
-                        src_ctx.link_r_xmm(reg, r);
+                        src_ctx.link_both(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!( &mut self.jit,
@@ -225,15 +225,15 @@ impl Codegen {
                         );
                     }
                 }
-                (LinkMode::XmmR(l), LinkMode::XmmR(r)) => {
+                (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
-                        src_ctx.stack_slot[reg] = LinkMode::XmmR(l);
+                        src_ctx.stack_slot[reg] = LinkMode::Both(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
                         src_ctx.dealloc_xmm(reg);
-                        src_ctx.link_r_xmm(reg, r);
+                        src_ctx.link_both(reg, r);
                     } else {
                         src_ctx.xmm_swap(l, r);
                         monoasm!( &mut self.jit,
@@ -243,8 +243,8 @@ impl Codegen {
                         );
                     }
                 }
-                (LinkMode::None, LinkMode::XmmR(r)) => {
-                    src_ctx.link_r_xmm(reg, r);
+                (LinkMode::Slot, LinkMode::Both(r)) => {
+                    src_ctx.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
                 _ => unreachable!(),
@@ -261,7 +261,7 @@ impl Codegen {
             eprintln!("      conv: {:?}->{:?}", reg, freg);
         }
         for reg in guard_list {
-            self.gen_assume_float(reg, side_exit);
+            self.slot_guard_float(reg, side_exit);
         }
         monoasm!( &mut self.jit,
             jmp exit;
