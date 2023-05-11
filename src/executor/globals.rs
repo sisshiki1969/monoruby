@@ -502,7 +502,7 @@ impl Globals {
         self.dumped_bc = self.store.func_len();
     }
     #[cfg(any(feature = "emit-asm"))]
-    pub(crate) fn dump_disas(&mut self, sourcemap: Vec<(usize, usize)>, func_id: FuncId) {
+    pub(crate) fn dump_disas(&mut self, sourcemap: Vec<(BcIndex, usize)>, func_id: FuncId) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();
         eprintln!(
             "offset:{:?} code: {} bytes  data: {} bytes",
@@ -543,11 +543,10 @@ impl Globals {
                     },
                 )
                 .for_each(|bc_pos| {
-                    let pc = BcPc::from(&func.bytecode()[bc_pos]);
+                    let pc = BcPc::from(&func.bytecode()[bc_pos.to_usize()]);
                     eprintln!(
-                        ":{:05} {}",
-                        bc_pos,
-                        match pc.format(self, bc_pos) {
+                        "{bc_pos} {}",
+                        match pc.format(self, bc_pos.to_usize()) {
                             Some(s) => s,
                             None => "".to_string(),
                         }

@@ -191,7 +191,7 @@ pub struct BytecodeGen {
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
-    labels: Vec<Option<InstId>>,
+    labels: Vec<Option<BcIndex>>,
     /// loop information.
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// local variables.
@@ -223,7 +223,7 @@ pub struct BytecodeGen {
 }
 
 impl std::ops::Index<Label> for BytecodeGen {
-    type Output = InstId;
+    type Output = BcIndex;
     fn index(&self, index: Label) -> &Self::Output {
         self.labels[index.0].as_ref().unwrap()
     }
@@ -542,7 +542,7 @@ impl BytecodeGen {
 
     /// apply current instruction pointer to the destination label.
     fn apply_label(&mut self, label: Label) {
-        let pos = InstId(self.ir.len() as u32);
+        let pos = BcIndex(self.ir.len() as u32);
         self.labels[label.0] = Some(pos);
     }
 

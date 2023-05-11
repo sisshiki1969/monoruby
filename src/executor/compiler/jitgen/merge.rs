@@ -26,7 +26,7 @@ impl Codegen {
         func: &ISeqInfo,
         fnstore: &Store,
         cc: &mut JitContext,
-        bb_pos: usize,
+        bb_pos: BcIndex,
     ) -> BBContext {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
@@ -84,7 +84,7 @@ impl Codegen {
         &mut self,
         func: &ISeqInfo,
         cc: &mut JitContext,
-        bb_pos: usize,
+        bb_pos: BcIndex,
     ) -> BBContext {
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);

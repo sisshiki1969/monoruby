@@ -376,11 +376,11 @@ impl Codegen {
         kind: CmpKind,
         ret: SlotId,
         pc: BcPc,
-        index: usize,
+        index: BcIndex,
     ) {
         match (pc + 1).get_ir(fnstore) {
             TraceIr::CondBr(_, disp, true, brkind) => {
-                let dest_idx = (index as i32 + disp + 1) as usize;
+                let dest_idx = index + disp + 1;
                 let branch_dest = self.jit.label();
                 if mode.is_float_op(&pc) {
                     match mode {

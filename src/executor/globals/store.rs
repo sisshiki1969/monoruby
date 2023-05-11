@@ -8,7 +8,7 @@ mod function;
 mod iseq;
 pub use class::*;
 pub use function::*;
-pub(crate) use iseq::ISeqInfo;
+pub(crate) use iseq::{BasicBlockId, ISeqInfo};
 
 #[derive(Default)]
 pub(crate) struct Store {
@@ -236,7 +236,7 @@ impl Store {
     pub(crate) fn set_func_data(&mut self, func_id: FuncId) {
         let info = self[func_id].as_ruby_func();
         let regs = info.total_reg_num();
-        let pc = info.get_pc(0);
+        let pc = info.get_top_pc();
         self[func_id].data.set_pc(pc);
         self[func_id].data.set_reg_num(regs as i64);
     }

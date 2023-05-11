@@ -573,9 +573,9 @@ impl std::ops::Add<usize> for BcPcBase {
     }
 }
 
-impl std::ops::Add<InstId> for BcPcBase {
+impl std::ops::Add<BcIndex> for BcPcBase {
     type Output = BcPc;
-    fn add(self, rhs: InstId) -> BcPc {
+    fn add(self, rhs: BcIndex) -> BcPc {
         BcPc(unsafe { std::ptr::NonNull::new(self.as_ptr().offset(rhs.0 as isize)).unwrap() })
     }
 }
@@ -1233,18 +1233,49 @@ impl std::fmt::Debug for DynVar {
 }
 
 ///
-/// ID of instruction.
+/// an index of bytecode instruction.
 ///
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) struct InstId(u32);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd)]
+pub(crate) struct BcIndex(u32);
 
-impl std::fmt::Debug for InstId {
+impl std::fmt::Debug for BcIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, ":{:05}", self.0)
     }
 }
 
-impl InstId {
+impl std::fmt::Display for BcIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":{:05}", self.0)
+    }
+}
+
+impl std::ops::Add<usize> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self::Output {
+        Self((self.0 as usize + rhs) as u32)
+    }
+}
+
+impl std::ops::Add<i64> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: i64) -> Self::Output {
+        Self((self.0 as i64 + rhs) as u32)
+    }
+}
+
+impl std::ops::Add<i32> for BcIndex {
+    type Output = Self;
+    fn add(self, rhs: i32) -> Self::Output {
+        Self((self.0 as i64 + rhs as i64) as u32)
+    }
+}
+
+impl BcIndex {
+    pub(crate) fn from(i: usize) -> Self {
+        Self(i as u32)
+    }
+
     pub(crate) fn to_usize(&self) -> usize {
         self.0 as usize
     }

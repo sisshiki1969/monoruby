@@ -89,9 +89,9 @@ impl ISeqInfo {
     pub(super) fn get_exception_map(
         &self,
     ) -> Vec<(
-        std::ops::Range<usize>,
-        Option<usize>,
-        Option<usize>,
+        std::ops::Range<BcIndex>,
+        Option<BcIndex>,
+        Option<BcIndex>,
         Option<SlotId>,
     )> {
         self.exception_map
@@ -228,19 +228,27 @@ impl ISeqInfo {
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub(in crate::executor) fn get_pc(&self, idx: usize) -> BcPc {
-        BcPc::from(&self.bytecode()[idx])
+    pub(in crate::executor) fn get_pc(&self, idx: BcIndex) -> BcPc {
+        BcPc::from(&self.bytecode()[idx.0 as usize])
+    }
+
+    ///
+    /// Get pc(*BcPc*) for instruction index(*idx*).
+    ///
+    pub(in crate::executor) fn get_top_pc(&self) -> BcPc {
+        BcPc::from(&self.bytecode()[0])
     }
 
     ///
     /// Get an instruction index(*usize*) corresponding to pc(*BcPc*).
     ///
-    pub(in crate::executor) fn get_pc_index(&self, pc: Option<BcPc>) -> usize {
-        if let Some(pos) = pc {
-            pos - self.get_pc(0)
+    pub(in crate::executor) fn get_pc_index(&self, pc: Option<BcPc>) -> BcIndex {
+        let i = if let Some(pos) = pc {
+            pos - self.get_top_pc()
         } else {
             0
-        }
+        };
+        BcIndex::from(i)
     }
 
     ///
@@ -294,16 +302,16 @@ impl ISeqInfo {
     ///
     /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
     ///
-    pub(crate) fn get_bb_info(&self) -> Vec<Option<(usize, Vec<usize>)>> {
+    pub(crate) fn get_bb_info(&self) -> Vec<Option<(BasicBlockId, Vec<BcIndex>)>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(disp) = TraceIr::is_branch(pc) {
-                info[((idx + 1) as i32 + disp) as usize].push(idx);
+                info[((idx + 1) as i32 + disp) as usize].push(BcIndex::from(idx));
             }
         }
         assert_eq!(0, info[self.bytecode_len()].len());
-        let mut bb_id = 1;
+        let mut bb_id = BasicBlockId(1);
         let mut bb_info: Vec<_> = info
             .into_iter()
             .map(|e| {
@@ -320,20 +328,23 @@ impl ISeqInfo {
             let pc = BcPc::from(pc);
             if !TraceIr::is_terminal(pc) {
                 if let Some(ref mut elem) = bb_info[idx + 1] {
-                    elem.1.push(idx);
+                    elem.1.push(BcIndex::from(idx));
                 }
             }
         }
         // a first bytecode is always a start of basic block.
         if bb_info[0].is_none() {
-            bb_info[0] = Some((0, vec![]));
+            bb_info[0] = Some((BasicBlockId(0), vec![]));
         }
-        /*for (id, i, v) in bb_info.iter().enumerate().filter_map(|(i, e)| match e {
-            None => None,
-            Some((id, v)) => Some((id, i, v)),
-        }) {
-            eprintln!("{} {} {:?}", id, i, v);
-        }*/
         bb_info
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BasicBlockId(usize);
+
+impl std::ops::AddAssign<usize> for BasicBlockId {
+    fn add_assign(&mut self, rhs: usize) {
+        *self = Self(self.0 + rhs)
     }
 }

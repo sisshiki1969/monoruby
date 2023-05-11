@@ -86,7 +86,7 @@ impl BytecodeGen {
     }
 
     fn get_pc(&self, info: &ISeqInfo, label: Label) -> BcPc {
-        info.get_pc(self[label].to_usize())
+        info.get_pc(self[label])
     }
 
     fn inst_to_bc(&self, store: &mut Store, inst: &BcIr, idx: usize) -> Bc {

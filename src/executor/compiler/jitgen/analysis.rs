@@ -2,12 +2,12 @@ use super::*;
 
 pub(super) struct LoopAnalysis {
     /// key: dest_idx, value Vec<(src_idx, reginfo)>
-    branch_map: HashMap<usize, Vec<(usize, RegInfo)>>,
+    branch_map: HashMap<BcIndex, Vec<(BcIndex, SlotInfo)>>,
     /// Basic block information
-    bb_info: Vec<Option<(usize, Vec<usize>)>>,
+    bb_info: BasicBlockInfo,
     loop_level: usize,
-    backedge_info: Option<RegInfo>,
-    return_info: Option<RegInfo>,
+    backedge_info: Option<SlotInfo>,
+    return_info: Option<SlotInfo>,
     pc: Option<BcPc>,
 }
 
@@ -18,16 +18,17 @@ impl LoopAnalysis {
     pub(super) fn analyse(
         func: &ISeqInfo,
         fnstore: &Store,
-        bb_pos: usize,
+        bb_pos: BcIndex,
     ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
-        let bb_start_vec: Vec<usize> = ctx
+        let bb_start_vec: Vec<_> = ctx
             .bb_info
             .iter()
             .enumerate()
             .flat_map(|(idx, info)| match info {
                 Some(_) => {
+                    let idx = BcIndex::from(idx);
                     if idx >= bb_pos {
                         Some(idx)
                     } else {
@@ -37,11 +38,11 @@ impl LoopAnalysis {
                 None => None,
             })
             .collect();
-        let mut exit_info = RegInfo::new(regnum);
+        let mut exit_info = SlotInfo::new(regnum);
         for bb_pos in bb_start_vec {
             let branches = ctx.get_branches(bb_pos);
             let reg_info = if branches.is_empty() {
-                RegInfo::new(regnum)
+                SlotInfo::new(regnum)
             } else {
                 let reg_info0 = branches[0].1.clone();
                 branches.into_iter().fold(reg_info0, |mut acc, (_, info)| {
@@ -66,7 +67,7 @@ impl LoopAnalysis {
                 .iter()
                 .enumerate()
                 .flat_map(|(i, state)| {
-                    if state.xmm_link == XmmLink::None || state.is_used != IsUsed::Used {
+                    if state.xmm_link == Link::Slot || state.is_used != IsUsed::Used {
                         None
                     } else {
                         Some((i, state.xmm_link, state.is_used))
@@ -83,7 +84,7 @@ impl LoopAnalysis {
     fn new(func: &ISeqInfo) -> Self {
         Self {
             branch_map: HashMap::default(),
-            bb_info: func.get_bb_info(),
+            bb_info: BasicBlockInfo::from(func.get_bb_info()),
             loop_level: 0,
             backedge_info: None,
             return_info: None,
@@ -91,7 +92,7 @@ impl LoopAnalysis {
         }
     }
 
-    fn add_branch(&mut self, src_idx: usize, reg_info: RegInfo, dest_idx: usize) {
+    fn add_branch(&mut self, src_idx: BcIndex, reg_info: SlotInfo, dest_idx: BcIndex) {
         match self.branch_map.get_mut(&dest_idx) {
             Some(entry) => {
                 entry.push((src_idx, reg_info));
@@ -102,14 +103,14 @@ impl LoopAnalysis {
         }
     }
 
-    fn get_branches(&self, dest_idx: usize) -> Vec<(usize, RegInfo)> {
+    fn get_branches(&self, dest_idx: BcIndex) -> Vec<(BcIndex, SlotInfo)> {
         match self.branch_map.get(&dest_idx) {
             Some(v) => v.clone(),
             None => vec![],
         }
     }
 
-    fn add_backedge(&mut self, incoming_info: &RegInfo) {
+    fn add_backedge(&mut self, incoming_info: &SlotInfo) {
         if let Some(info) = &mut self.backedge_info {
             info.merge(incoming_info);
         } else {
@@ -117,7 +118,7 @@ impl LoopAnalysis {
         }
     }
 
-    fn add_return(&mut self, incoming_info: &RegInfo) {
+    fn add_return(&mut self, incoming_info: &SlotInfo) {
         if let Some(info) = &mut self.return_info {
             info.merge(incoming_info);
         } else {
@@ -125,14 +126,23 @@ impl LoopAnalysis {
         }
     }
 
+    ///
+    /// Scan a single basic block.
+    ///
+    /// ### arguments
+    /// - reg_info: RegInfo  incoming register info.
+    ///
+    /// ### return
+    /// - Some(RegInfo): this bb ends with LoopEnd.
+    /// - None: this bb terminates with Br, Ret, MethodRet, Break.
     fn scan_bb(
         &mut self,
         func: &ISeqInfo,
         fnstore: &Store,
-        mut reg_info: RegInfo,
-        bb_pos: usize,
-    ) -> Option<RegInfo> {
-        for (ofs, pc) in func.bytecode()[bb_pos..].iter().enumerate() {
+        mut reg_info: SlotInfo,
+        bb_pos: BcIndex,
+    ) -> Option<SlotInfo> {
+        for (ofs, pc) in func.bytecode()[bb_pos.to_usize()..].iter().enumerate() {
             self.pc = Some(BcPc::from(pc));
             let idx = bb_pos + ofs;
             match self.pc.unwrap().get_ir(fnstore) {
@@ -413,7 +423,7 @@ impl LoopAnalysis {
                     return None;
                 }
                 TraceIr::Br(disp) => {
-                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
+                    let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info, dest_idx);
                     } else if self.loop_level == 1 {
@@ -423,7 +433,7 @@ impl LoopAnalysis {
                 }
                 TraceIr::CondBr(cond_, disp, _, _) => {
                     reg_info.use_as(cond_, false, TRUE_CLASS);
-                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
+                    let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info.clone(), dest_idx);
                     } else if self.loop_level == 1 {
@@ -431,7 +441,7 @@ impl LoopAnalysis {
                     }
                 }
                 TraceIr::CheckLocal(_, disp) => {
-                    let dest_idx = ((idx + 1) as i32 + disp) as usize;
+                    let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
                         self.add_branch(idx, reg_info.clone(), dest_idx);
                     } else if self.loop_level == 1 {
@@ -451,11 +461,11 @@ impl LoopAnalysis {
 }
 
 #[derive(Debug, Clone)]
-struct RegInfo {
-    info: Vec<RegState>,
+struct SlotInfo {
+    info: Vec<SlotState>,
 }
 
-impl RegInfo {
+impl SlotInfo {
     ///
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* xmm-linked on the back-edge.
@@ -465,8 +475,8 @@ impl RegInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
-                (XmmLink::R(true) | XmmLink::RW, IsUsed::Used) => Some((SlotId(i as u16), true)),
-                (XmmLink::R(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
+                (Link::Both(true) | Link::Xmm, IsUsed::Used) => Some((SlotId(i as u16), true)),
+                (Link::Both(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
                 _ => None,
             })
             .collect()
@@ -487,10 +497,10 @@ impl RegInfo {
     }
 }
 
-impl RegInfo {
+impl SlotInfo {
     fn new(reg_num: usize) -> Self {
         Self {
-            info: vec![RegState::new(); reg_num],
+            info: vec![SlotState::new(); reg_num],
         }
     }
 
@@ -504,15 +514,15 @@ impl RegInfo {
     fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
         self[slot].xmm_link = if use_as_float {
             match self[slot].xmm_link {
-                XmmLink::None => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::RW => XmmLink::RW,
+                Link::Slot => Link::Both(class == FLOAT_CLASS),
+                Link::Both(_) => Link::Both(class == FLOAT_CLASS),
+                Link::Xmm => Link::Xmm,
             }
         } else {
             match self[slot].xmm_link {
-                XmmLink::None => XmmLink::None,
-                XmmLink::R(_) => XmmLink::R(class == FLOAT_CLASS),
-                XmmLink::RW => XmmLink::R(true),
+                Link::Slot => Link::Slot,
+                Link::Both(_) => Link::Both(class == FLOAT_CLASS),
+                Link::Xmm => Link::Both(true),
             }
         };
         if self[slot].is_used != IsUsed::NotUsed {
@@ -525,7 +535,7 @@ impl RegInfo {
     }
 
     fn unlink(&mut self, slot: SlotId) {
-        self[slot].xmm_link = XmmLink::None;
+        self[slot].xmm_link = Link::Slot;
     }
 
     fn unlink_locals(&mut self, func: &ISeqInfo) {
@@ -538,7 +548,7 @@ impl RegInfo {
         if slot.is_zero() {
             return;
         }
-        self[slot].xmm_link = if is_float { XmmLink::RW } else { XmmLink::None };
+        self[slot].xmm_link = if is_float { Link::Xmm } else { Link::Slot };
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
         }
@@ -548,7 +558,7 @@ impl RegInfo {
         if slot.is_zero() {
             return;
         }
-        self[slot].xmm_link = XmmLink::R(true);
+        self[slot].xmm_link = Link::Both(true);
         if self[slot].is_used == IsUsed::ND {
             self[slot].is_used = IsUsed::NotUsed;
         }
@@ -565,72 +575,99 @@ impl RegInfo {
     }
 }
 
-impl std::ops::Index<SlotId> for RegInfo {
-    type Output = RegState;
+impl std::ops::Index<SlotId> for SlotInfo {
+    type Output = SlotState;
     fn index(&self, i: SlotId) -> &Self::Output {
         &self.info[i.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<SlotId> for RegInfo {
+impl std::ops::IndexMut<SlotId> for SlotInfo {
     fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
         &mut self.info[i.0 as usize]
     }
 }
 
-impl std::ops::Index<usize> for RegInfo {
-    type Output = RegState;
+impl std::ops::Index<usize> for SlotInfo {
+    type Output = SlotState;
     fn index(&self, i: usize) -> &Self::Output {
         &self.info[i]
     }
 }
 
-impl std::ops::IndexMut<usize> for RegInfo {
+impl std::ops::IndexMut<usize> for SlotInfo {
     fn index_mut(&mut self, i: usize) -> &mut Self::Output {
         &mut self.info[i]
     }
 }
 
 #[derive(Debug, Clone)]
-struct RegState {
-    xmm_link: XmmLink,
+struct SlotState {
+    xmm_link: Link,
     is_used: IsUsed,
 }
 
-impl RegState {
+impl SlotState {
     fn new() -> Self {
         Self {
-            xmm_link: XmmLink::None,
+            xmm_link: Link::Slot,
             is_used: IsUsed::ND,
         }
     }
 }
 
+///
+/// Link status of slots and xmm registers.
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum XmmLink {
-    None,
-    /// R(isFloat)
-    R(bool),
-    RW,
+enum Link {
+    ///
+    /// Slot
+    ///
+    /// Only the stack slot holds an exact *Value*.
+    ///
+    Slot,
+    /// Both(isFloat)
+    ///
+    /// Both of the stack slot and xmm hold a value.
+    ///
+    /// isFloat means whether the *Value* was coerced into f64.
+    /// When isFloat == true, the slot holds a correct *Value* and the xmm holds an exact f64.
+    /// otherwise, the slot holds a right *Value*, and coerced f64 is stored in the xmm.
+    ///
+    Both(bool),
+    ///
+    /// Only the xmm holds an exact value as f64.
+    ///
+    Xmm,
 }
 
-impl XmmLink {
+impl Link {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, other) {
-            (XmmLink::RW, XmmLink::RW) => XmmLink::RW,
-            (XmmLink::R(true), XmmLink::R(true))
-            | (XmmLink::R(true), XmmLink::RW)
-            | (XmmLink::RW, XmmLink::R(true)) => XmmLink::R(true),
-            (_, XmmLink::R(_)) | (XmmLink::R(_), _) => XmmLink::R(false),
-            _ => XmmLink::None,
+            (Link::Xmm, Link::Xmm) => Link::Xmm,
+            (Link::Both(true), Link::Both(true))
+            | (Link::Both(true), Link::Xmm)
+            | (Link::Xmm, Link::Both(true)) => Link::Both(true),
+            (_, Link::Both(_)) | (Link::Both(_), _) => Link::Both(false),
+            _ => Link::Slot,
         };
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum IsUsed {
+    ///
+    /// Not be used nor be killed.
+    ///
     ND,
+    ///
+    /// Used in any of paths.
+    ///
     Used,
+    ///
+    /// Guaranteed not to be used (= killed) in all paths.
+    ///
     NotUsed,
 }
 

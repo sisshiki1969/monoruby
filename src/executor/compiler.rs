@@ -846,7 +846,7 @@ impl Globals {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{:05}] bytecode:{:?}",
+                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] bytecode:{:?}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -855,7 +855,6 @@ impl Globals {
                 func.name(),
                 func.id(),
                 self_value.class().get_name(self),
-                start_pos,
                 func.bytecode().as_ptr(),
             );
         }

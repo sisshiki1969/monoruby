@@ -22,22 +22,45 @@ mod read_slot;
 ///
 struct JitContext {
     /// Destinatiol labels for jump instructions.
-    labels: HashMap<usize, DestLabel>,
+    labels: HashMap<BcIndex, DestLabel>,
     /// Basic block information.
     /// (bb_id, Vec<src_idx>)
-    bb_info: Vec<Option<(usize, Vec<usize>)>>,
-    /// Current basic block id.
-    bb_pos: usize,
+    bb_info: BasicBlockInfo,
+    /// The start bytecode position of basic block..
+    bb_pos: BcIndex,
     loop_count: usize,
     /// true for a loop, false for a method.
     is_loop: bool,
-    branch_map: HashMap<usize, Vec<BranchEntry>>,
-    backedge_map: HashMap<usize, (DestLabel, MergeInfo, Vec<SlotId>)>,
+    branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
+    backedge_map: HashMap<BcIndex, (DestLabel, MergeInfo, Vec<SlotId>)>,
     start_codepos: usize,
     /// *self* for this loop/method.
     self_value: Value,
     /// source map.
-    sourcemap: Vec<(usize, usize)>,
+    sourcemap: Vec<(BcIndex, usize)>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BasicBlockInfo(Vec<Option<(BasicBlockId, Vec<BcIndex>)>>);
+
+impl std::ops::Deref for BasicBlockInfo {
+    type Target = Vec<Option<(BasicBlockId, Vec<BcIndex>)>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::Index<BcIndex> for BasicBlockInfo {
+    type Output = Option<(BasicBlockId, Vec<BcIndex>)>;
+    fn index(&self, index: BcIndex) -> &Self::Output {
+        &self.0[index.0 as usize]
+    }
+}
+
+impl BasicBlockInfo {
+    fn from(v: Vec<Option<(BasicBlockId, Vec<BcIndex>)>>) -> Self {
+        Self(v)
+    }
 }
 
 impl JitContext {
@@ -47,15 +70,15 @@ impl JitContext {
     fn new(
         func: &ISeqInfo,
         codegen: &mut Codegen,
-        start_pos: usize,
+        start_pos: BcIndex,
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let bb_info = func.get_bb_info();
+        let bb_info = BasicBlockInfo::from(func.get_bb_info());
         let mut labels = HashMap::default();
         bb_info.iter().enumerate().for_each(|(idx, elem)| {
             if elem.is_some() {
-                labels.insert(idx, codegen.jit.label());
+                labels.insert(BcIndex::from(idx), codegen.jit.label());
             }
         });
         Self {
@@ -72,7 +95,13 @@ impl JitContext {
         }
     }
 
-    fn new_branch(&mut self, src_idx: usize, dest: usize, bbctx: BBContext, dest_label: DestLabel) {
+    fn new_branch(
+        &mut self,
+        src_idx: BcIndex,
+        dest: BcIndex,
+        bbctx: BBContext,
+        dest_label: DestLabel,
+    ) {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
@@ -83,7 +112,7 @@ impl JitContext {
     fn new_backedge(
         &mut self,
         bbctx: &BBContext,
-        bb_pos: usize,
+        bb_pos: BcIndex,
         dest_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
@@ -98,7 +127,7 @@ impl JitContext {
 
 #[derive(Debug)]
 struct BranchEntry {
-    src_idx: usize,
+    src_idx: BcIndex,
     bbctx: BBContext,
     dest_label: DestLabel,
 }
@@ -432,7 +461,7 @@ impl MergeInfo {
     fn merge_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_info = MergeInfo::from(&entries[0].bbctx);
         #[cfg(feature = "emit-tir")]
-        eprintln!("  <-{}: {:?}", entries[0].src_idx, merge_info);
+        eprintln!("  <-{:?}: {:?}", entries[0].src_idx, merge_info);
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
@@ -440,7 +469,7 @@ impl MergeInfo {
         } in entries.iter().skip(1)
         {
             #[cfg(feature = "emit-tir")]
-            eprintln!("  <-{_src_idx}: {:?}", bbctx.stack_slot);
+            eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.stack_slot);
             merge_info.merge(bbctx);
         }
         merge_info
@@ -456,7 +485,7 @@ extern "C" fn log_deoptimize(
     v: Option<Value>,
 ) {
     let name = globals[func_id].as_ruby_func().name();
-    let bc_begin = globals[func_id].as_ruby_func().get_pc(0);
+    let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
     if let TraceIr::LoopEnd = pc.get_ir(&globals.store) {
@@ -489,7 +518,7 @@ impl Codegen {
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
-    ) -> (DestLabel, Vec<(usize, usize)>) {
+    ) -> (DestLabel, Vec<(BcIndex, usize)>) {
         let func = fnstore[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
@@ -506,6 +535,7 @@ impl Codegen {
             .enumerate()
             .filter_map(|(idx, v)| match v {
                 Some(_) => {
+                    let idx = BcIndex::from(idx);
                     if idx >= start_pos {
                         Some(idx)
                     } else {
@@ -521,7 +551,7 @@ impl Codegen {
 
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
-            let pc = func.get_pc(0);
+            let pc = func.get_top_pc();
             self.prologue(pc, fnstore);
             let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
             monoasm!( &mut self.jit,
@@ -533,7 +563,7 @@ impl Codegen {
         cc.branch_map.insert(
             start_pos,
             vec![BranchEntry {
-                src_idx: 0,
+                src_idx: BcIndex(0),
                 bbctx: BBContext::new(reg_num, local_num, self_value),
                 dest_label: self.jit.label(),
             }],
@@ -698,7 +728,7 @@ impl Codegen {
         } else {
             self.gen_merging_branches(func, cc, cc.bb_pos)
         };
-        for (ofs, pc) in func.bytecode()[cc.bb_pos..].iter().enumerate() {
+        for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
@@ -1389,7 +1419,7 @@ impl Codegen {
                 }
                 TraceIr::Br(disp) => {
                     let next_idx = cc.bb_pos + ofs + 1;
-                    let dest_idx = (next_idx as i64 + disp as i64) as usize;
+                    let dest_idx = next_idx + disp;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx, branch_dest);
                     monoasm!( &mut self.jit,
@@ -1398,7 +1428,7 @@ impl Codegen {
                     return false;
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
-                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
+                    let dest_idx = cc.bb_pos + ofs + 1 + disp;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(cond_);
@@ -1413,7 +1443,7 @@ impl Codegen {
                 }
                 TraceIr::CondBr(_, _, true, _) => {}
                 TraceIr::CheckLocal(local, disp) => {
-                    let dest_idx = ((cc.bb_pos + ofs + 1) as i32 + disp) as usize;
+                    let dest_idx = cc.bb_pos + ofs + 1 + disp;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(local);
