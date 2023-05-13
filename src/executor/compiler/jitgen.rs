@@ -156,7 +156,7 @@ impl BBContext {
     fn new(reg_num: usize, local_num: usize, self_value: Value) -> Self {
         let xmm = XmmInfo::new();
         Self {
-            stack_slot: StackSlotInfo(vec![LinkMode::Slot; reg_num]),
+            stack_slot: StackSlotInfo(vec![LinkMode::Stack; reg_num]),
             xmm,
             self_value,
             local_num,
@@ -171,7 +171,7 @@ impl BBContext {
         for (i, mode) in stack_slot.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
-                LinkMode::Slot => {}
+                LinkMode::Stack => {}
                 LinkMode::Both(x) => {
                     ctx.stack_slot[reg] = LinkMode::Both(*x);
                     ctx.xmm[*x].push(reg);
@@ -219,9 +219,9 @@ impl BBContext {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                 assert!(self.xmm[freg].contains(&reg));
                 self.xmm[freg].retain(|e| *e != reg);
-                self.stack_slot[reg] = LinkMode::Slot;
+                self.stack_slot[reg] = LinkMode::Stack;
             }
-            LinkMode::Slot => {}
+            LinkMode::Stack => {}
         }
     }
 
@@ -241,7 +241,7 @@ impl BBContext {
                     *x = l;
                 }
             }
-            LinkMode::Slot => {}
+            LinkMode::Stack => {}
         });
     }
 
@@ -254,7 +254,7 @@ impl BBContext {
                 assert_eq!(reg, self.xmm[freg][0]);
                 freg
             }
-            _ => {
+            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack => {
                 self.dealloc_xmm(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
@@ -277,10 +277,14 @@ impl BBContext {
                         .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::Xmm(_)))
                         .cloned()
                         .collect();
-                    Some((Xmm::new(i as u16), v))
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some((Xmm::new(i as u16), v))
+                    }
                 }
             })
-            .filter(|(_, v)| !v.is_empty())
+            //.filter(|(_, v)| !v.is_empty())
             .collect()
     }
 
@@ -302,10 +306,14 @@ impl BBContext {
                         })
                         .cloned()
                         .collect();
-                    Some((Xmm::new(i as u16), v))
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some((Xmm::new(i as u16), v))
+                    }
                 }
             })
-            .filter(|(_, v)| !v.is_empty())
+            //.filter(|(_, v)| !v.is_empty())
             .collect()
     }
 
@@ -394,7 +402,7 @@ enum LinkMode {
     ///
     /// No linkage with any xmm regiter.
     ///
-    Slot,
+    Stack,
 }
 
 #[derive(Clone, PartialEq)]
@@ -407,7 +415,7 @@ impl std::fmt::Debug for StackSlotInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, mode)| match mode {
-                LinkMode::Slot => None,
+                LinkMode::Stack => None,
                 LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
                 LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
             })
@@ -453,7 +461,8 @@ impl MergeInfo {
                     (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                     | (LinkMode::Xmm(l), LinkMode::Both(_)) => LinkMode::Both(*l),
                     (LinkMode::Xmm(l), LinkMode::Xmm(_)) => LinkMode::Xmm(*l),
-                    _ => LinkMode::Slot,
+                    (LinkMode::Both(_) | LinkMode::Xmm(_) | LinkMode::Stack, LinkMode::Stack)
+                    | (LinkMode::Stack, LinkMode::Both(_) | LinkMode::Xmm(_)) => LinkMode::Stack,
                 };
             });
     }
@@ -634,32 +643,7 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value is Integer, and convert to f64.
-    ///
-    /// side-exit if not Integer.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm0: f64
-    ///
-    fn gen_val_to_f64_assume_integer(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
-        let entry = self.jit.label();
-        monoasm!(&mut self.jit,
-        entry:
-            testq rdi, 0b01;
-            jz side_exit;
-            sarq rdi, 1;
-            cvtsi2sdq xmm(xmm), rdi;
-        );
-        entry
-    }
-
-    ///
-    /// Confirm the Value is Float.
+    /// Confirm a value in the slot is Float.
     ///
     /// side-exit if not Float.
     ///
@@ -681,7 +665,7 @@ impl Codegen {
             LinkMode::Xmm(freg) | LinkMode::Both(freg) => {
                 ctx.link_xmm(dst, freg);
             }
-            LinkMode::Slot => {
+            LinkMode::Stack => {
                 self.load_rax(src);
                 self.store_rax(dst);
             }
@@ -1584,20 +1568,23 @@ impl Codegen {
     /// Get *DestLabel* for write-back and fallback to interpreter.
     ///
     fn gen_side_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
-        self.gen_side_deopt_main(pc, Some(ctx))
+        let entry = self.jit.label();
+        self.gen_side_deopt_with_label(pc, Some(ctx), entry);
+        entry
     }
 
     ///
     /// Get *DestLabel* for fallback to interpreter. (without write-back)
     ///
-    pub(super) fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
-        self.gen_side_deopt_main(pc, None)
+    fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
+        let entry = self.jit.label();
+        self.gen_side_deopt_with_label(pc, None, entry);
+        entry
     }
 
-    fn gen_side_deopt_main(&mut self, pc: BcPc, ctx: Option<&BBContext>) -> DestLabel {
+    fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        let entry = self.jit.label();
         self.jit.bind_label(entry);
         if let Some(ctx) = ctx {
             let wb = ctx.get_write_back();
@@ -1627,7 +1614,6 @@ impl Codegen {
             jmp fetch;
         );
         self.jit.select_page(0);
-        entry
     }
 
     ///

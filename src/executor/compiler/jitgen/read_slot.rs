@@ -1,6 +1,12 @@
 use super::*;
 
 impl Codegen {
+    ///
+    /// Read from slots *lhs* and *rhs* as f64, and store in xmm registers.
+    ///
+    /// ### destroy
+    /// - rdi, rax
+    ///
     pub(super) fn xmm_read_binary(
         &mut self,
         ctx: &mut BBContext,
@@ -19,6 +25,13 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Read from a slot *reg* as f64, and store in xmm register.
+    ///
+    /// ### destroy
+    /// - rdi, rax
+    ///
+    ///
     pub(super) fn xmm_read_assume_float(
         &mut self,
         ctx: &mut BBContext,
@@ -27,7 +40,7 @@ impl Codegen {
     ) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            _ => {
+            LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
                 ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
@@ -40,6 +53,12 @@ impl Codegen {
 }
 
 impl Codegen {
+    ///
+    /// Read from a slot *reg* as f64, and store in xmm register.
+    ///
+    /// ### destroy
+    /// - rdi, rax
+    ///
     fn xmm_read_assume(
         &mut self,
         ctx: &mut BBContext,
@@ -54,18 +73,46 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Read from a slot *reg* as f64, and store in xmm register.
+    ///
+    /// ### destroy
+    /// - rdi
+    ///
     fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            _ => {
+            LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
                 ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
-                self.gen_val_to_f64_assume_integer(freg.enc(), side_exit);
+                self.integer_to_f64(freg.enc(), side_exit);
                 freg
             }
         }
+    }
+
+    ///
+    /// Assume the Value is Integer, and convert to f64.
+    ///
+    /// side-exit if not Integer.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    /// - none
+    fn integer_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
+        monoasm!(&mut self.jit,
+            testq rdi, 0b01;
+            jz side_exit;
+            sarq rdi, 1;
+            cvtsi2sdq xmm(xmm), rdi;
+        );
     }
 }
 
@@ -113,7 +160,7 @@ mod test {
         assume_int_to_f64:
             pushq rbp;
         );
-        gen.gen_val_to_f64_assume_integer(0, panic);
+        gen.integer_to_f64(0, panic);
         monoasm!(&mut gen.jit,
             popq rbp;
             ret;

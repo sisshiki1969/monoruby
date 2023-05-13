@@ -45,12 +45,12 @@ impl Codegen {
             let mut ctx = BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, class) in use_set {
                 match target_slot_info[reg] {
-                    LinkMode::Slot => {}
+                    LinkMode::Stack => {}
                     LinkMode::Xmm(_) if class => {
                         let freg = ctx.alloc_xmm();
                         ctx.link_xmm(reg, freg);
                     }
-                    _ => {
+                    LinkMode::Both(_) | LinkMode::Xmm(_) => {
                         let freg = ctx.alloc_xmm();
                         ctx.link_both(reg, freg);
                     }
@@ -145,7 +145,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         for i in 0..len {
             let reg = SlotId(i as u16);
-            if target_ctx.stack_slot[reg] == LinkMode::Slot {
+            if target_ctx.stack_slot[reg] == LinkMode::Stack {
                 match src_ctx.stack_slot[reg] {
                     LinkMode::Xmm(freg) => {
                         let v = src_ctx.xmm[freg].clone();
@@ -158,7 +158,7 @@ impl Codegen {
                     LinkMode::Both(_) => {
                         src_ctx.dealloc_xmm(reg);
                     }
-                    _ => {}
+                    LinkMode::Stack => {}
                 }
             };
         }
@@ -205,7 +205,7 @@ impl Codegen {
                     }
                     guard_list.push(reg);
                 }
-                (_, LinkMode::Slot) => {}
+                (_, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
                     self.gen_write_back_single(l, vec![reg]);
                     if l == r {
@@ -243,7 +243,7 @@ impl Codegen {
                         );
                     }
                 }
-                (LinkMode::Slot, LinkMode::Both(r)) => {
+                (LinkMode::Stack, LinkMode::Both(r)) => {
                     src_ctx.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
@@ -267,12 +267,6 @@ impl Codegen {
             jmp exit;
         );
         self.jit.select_page(0);
-        let side_label = self.gen_side_deopt(pc + 1, &src_ctx);
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        side_exit:
-            jmp side_label;
-        );
-        self.jit.select_page(0);
+        self.gen_side_deopt_with_label(pc + 1, Some(&src_ctx), side_exit);
     }
 }

@@ -8,16 +8,7 @@ impl Codegen {
     /// If the type was not matched, deoptimize and go to *side_exit*.
     ///
     /// ### in
-    ///
     /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - rdi: Value
-    ///
-    /// ### registers destroyed
-    ///
-    /// - rax
     ///
     pub(super) fn guard_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
         match class_id {
@@ -35,7 +26,7 @@ impl Codegen {
                     testq rdi, 0b010;
                     jnz exit;
                 );
-                self.guard_unpacked_class(FLOAT_CLASS, side_exit);
+                self.guard_rvalue(FLOAT_CLASS, side_exit);
                 self.jit.bind_label(exit);
             }
             NIL_CLASS => {
@@ -62,10 +53,19 @@ impl Codegen {
                     jnz side_exit;
                 );
             }
-            _ => self.guard_unpacked_class(class_id, side_exit),
+            _ => self.guard_rvalue(class_id, side_exit),
         }
     }
 
+    ///
+    /// Float guard.
+    ///
+    /// Generate type guard for Float.
+    /// If the type was not matched, deoptimize and go to *side_exit*.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
     pub(super) fn guard_float(&mut self, side_exit: DestLabel) {
         self.guard_class(FLOAT_CLASS, side_exit)
     }
@@ -74,6 +74,7 @@ impl Codegen {
     /// Float guard and unboxing.
     ///
     /// Unbox a Float Value and return f64.
+    ///
     /// If the input Value was not Float, deoptimize and go to *side_exit*.
     ///
     /// ### in
@@ -82,9 +83,9 @@ impl Codegen {
     ///
     /// ### out
     ///
-    /// - xmm0: f64
+    /// - xmm(*xmm*)
     ///
-    /// ### registers destroyed
+    /// ### destroy
     ///
     /// - rdi, rax
     ///
@@ -107,7 +108,7 @@ impl Codegen {
     ///
     /// ### out
     ///
-    /// - xmm(*xmm*): f64
+    /// - xmm(*xmm*)
     ///
     /// ### registers destroyed
     ///
@@ -130,6 +131,18 @@ impl Codegen {
         self.jit.bind_label(exit);
     }
 
+    ///
+    /// Copy the value(f64) of Float to *xmm*.
+    ///
+    /// ### in
+    /// - rdi: Value (must be a flonum or heap-allocated Float)
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
     fn float_to_f64(&mut self, xmm: u64, side_exit: DestLabel) {
         let flonum = self.jit.label();
         let exit = self.jit.label();
@@ -137,7 +150,7 @@ impl Codegen {
             testq rdi, 0b010;
             jnz flonum;
         }
-        self.guard_unpacked_class(FLOAT_CLASS, side_exit);
+        self.guard_rvalue(FLOAT_CLASS, side_exit);
         self.heap_to_f64(xmm);
         monoasm! {&mut self.jit,
             jmp  exit;
@@ -147,6 +160,18 @@ impl Codegen {
         self.jit.bind_label(exit);
     }
 
+    ///
+    /// Copy f64 of flonum to *xmm*.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
     fn flonum_to_f64(&mut self, xmm: u64) {
         let exit = self.jit.label();
         monoasm! {&mut self.jit,
@@ -166,13 +191,28 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Copy f64 of a heap-allocated Float to *xmm*.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - xmm(*xmm*)
+    ///
     fn heap_to_f64(&mut self, xmm: u64) {
         monoasm! {&mut self.jit,
             movq xmm(xmm), [rdi + 16];
         }
     }
 
-    fn guard_unpacked_class(&mut self, class_id: ClassId, side_exit: DestLabel) {
+    ///
+    /// Class guard for RValue.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    fn guard_rvalue(&mut self, class_id: ClassId, side_exit: DestLabel) {
         monoasm!( &mut self.jit,
             testq rdi, 0b111;
             jnz side_exit;
