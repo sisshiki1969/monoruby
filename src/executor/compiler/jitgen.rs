@@ -634,32 +634,7 @@ impl Codegen {
     }
 
     ///
-    /// Assume the Value is Integer, and convert to f64.
-    ///
-    /// side-exit if not Integer.
-    ///
-    /// ### in
-    ///
-    /// - rdi: Value
-    ///
-    /// ### out
-    ///
-    /// - xmm0: f64
-    ///
-    fn gen_val_to_f64_assume_integer(&mut self, xmm: u64, side_exit: DestLabel) -> DestLabel {
-        let entry = self.jit.label();
-        monoasm!(&mut self.jit,
-        entry:
-            testq rdi, 0b01;
-            jz side_exit;
-            sarq rdi, 1;
-            cvtsi2sdq xmm(xmm), rdi;
-        );
-        entry
-    }
-
-    ///
-    /// Confirm the Value is Float.
+    /// Confirm a value in the slot is Float.
     ///
     /// side-exit if not Float.
     ///

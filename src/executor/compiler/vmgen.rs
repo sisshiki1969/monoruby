@@ -157,8 +157,7 @@ impl Codegen {
 
         //BcOp::Ret
         let ret = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rax, [r15];
         };
@@ -166,8 +165,7 @@ impl Codegen {
 
         //BcOp::MethodRet
         let method_ret = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_r15();
+        self.fetch_val_r15();
         monoasm! { &mut self.jit,
             movq rax, r15;
         };
@@ -175,8 +173,7 @@ impl Codegen {
 
         //BcOp::Break
         let block_break = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_r15();
+        self.fetch_val_r15();
         self.block_break();
         monoasm! { &mut self.jit,
             movq rax, r15;
@@ -643,6 +640,22 @@ impl Codegen {
         };
     }
 
+    fn fetch_addr_r15(&mut self) {
+        monoasm! { &mut self.jit,
+            movzxw r15, [r13 - 12];  // r15 <- :1
+            negq r15;
+            lea r15, [r14 + r15 * 8 - (LBP_SELF)];
+        };
+    }
+
+    fn fetch_val_r15(&mut self) {
+        monoasm! { &mut self.jit,
+            movzxw r15, [r13 - 12];  // r15 <- :1
+            negq r15;
+            movq r15, [r14 + r15 * 8 - (LBP_SELF)];
+        };
+    }
+
     ///
     /// Get values of registers(rdi, rsi) and address of r15.
     /// #### args
@@ -888,8 +901,7 @@ impl Codegen {
 
     fn vm_nil(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch2();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq [r15], (NIL_VALUE);
         };
@@ -971,10 +983,7 @@ impl Codegen {
 
     fn vm_range(&mut self, exclude_end: bool) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
-        self.vm_get_rdi();
-        self.vm_get_rsi();
+        self.vm_get_rr_r15();
         monoasm! { &mut self.jit,
             movq rdx, rbx;
             movq rcx, r12;
@@ -995,10 +1004,7 @@ impl Codegen {
     //
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
-        self.vm_get_rdi();
-        self.vm_get_rsi();
+        self.vm_get_rr_r15();
         monoasm! { &mut self.jit,
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
@@ -1069,8 +1075,7 @@ impl Codegen {
 
     fn vm_defined_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rdx, r15;
             movq rdi, rbx;  // &mut Interp
@@ -1084,8 +1089,7 @@ impl Codegen {
 
     fn vm_defined_const(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
@@ -1100,8 +1104,7 @@ impl Codegen {
 
     fn vm_defined_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
@@ -1116,8 +1119,7 @@ impl Codegen {
 
     fn vm_defined_ivar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch3();
-        self.vm_get_addr_r15();
+        self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rdx, r15;
             movl rcx, [r13 - 8];
@@ -1333,8 +1335,7 @@ impl Codegen {
 
     fn vm_singleton_method_def(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        self.fetch2();
-        self.vm_get_r15();
+        self.fetch_val_r15();
         monoasm! { &mut self.jit,
             movq r8, r15;
             movl rdx, [r13 - 8];  // name
