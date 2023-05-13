@@ -267,12 +267,6 @@ impl Codegen {
             jmp exit;
         );
         self.jit.select_page(0);
-        let side_label = self.gen_side_deopt(pc + 1, &src_ctx);
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        side_exit:
-            jmp side_label;
-        );
-        self.jit.select_page(0);
+        self.gen_side_deopt_with_label(pc + 1, Some(&src_ctx), side_exit);
     }
 }

@@ -1559,20 +1559,23 @@ impl Codegen {
     /// Get *DestLabel* for write-back and fallback to interpreter.
     ///
     fn gen_side_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
-        self.gen_side_deopt_main(pc, Some(ctx))
+        let entry = self.jit.label();
+        self.gen_side_deopt_with_label(pc, Some(ctx), entry);
+        entry
     }
 
     ///
     /// Get *DestLabel* for fallback to interpreter. (without write-back)
     ///
-    pub(super) fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
-        self.gen_side_deopt_main(pc, None)
+    fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
+        let entry = self.jit.label();
+        self.gen_side_deopt_with_label(pc, None, entry);
+        entry
     }
 
-    fn gen_side_deopt_main(&mut self, pc: BcPc, ctx: Option<&BBContext>) -> DestLabel {
+    fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        let entry = self.jit.label();
         self.jit.bind_label(entry);
         if let Some(ctx) = ctx {
             let wb = ctx.get_write_back();
@@ -1602,7 +1605,6 @@ impl Codegen {
             jmp fetch;
         );
         self.jit.select_page(0);
-        entry
     }
 
     ///
