@@ -1203,8 +1203,8 @@ impl Codegen {
                     self.write_back_slot(&mut ctx, recv);
                     self.write_back_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
-                    // We must write back and unlink all local vars since they may be accessed by eval.
-                    self.gen_write_back_locals(&mut ctx);
+                    // We must write back and unlink all local vars if this method is eval.
+                    //self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                     } else {

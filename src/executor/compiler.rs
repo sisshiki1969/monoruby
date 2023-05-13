@@ -100,9 +100,28 @@ pub struct Codegen {
     entry_panic: DestLabel,
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
+    ///
     /// Raise error.
-    /// r13: PC
+    ///
+    /// ### in
+    /// - r13: PC
+    ///
+    /// ### destroy
+    /// - caller saved registers
+    ///
     entry_raise: DestLabel,
+    ///
+    /// Convert f64 to Value.
+    ///
+    /// ### in
+    /// - xmm0: f64
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - caller saved registers except rdi
+    ///
     f64_to_val: DestLabel,
     div_by_zero: DestLabel,
     no_block: DestLabel,
