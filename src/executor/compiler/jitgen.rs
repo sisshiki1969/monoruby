@@ -156,7 +156,7 @@ impl BBContext {
     fn new(reg_num: usize, local_num: usize, self_value: Value) -> Self {
         let xmm = XmmInfo::new();
         Self {
-            stack_slot: StackSlotInfo(vec![LinkMode::Slot; reg_num]),
+            stack_slot: StackSlotInfo(vec![LinkMode::Stack; reg_num]),
             xmm,
             self_value,
             local_num,
@@ -171,7 +171,7 @@ impl BBContext {
         for (i, mode) in stack_slot.0.iter().enumerate() {
             let reg = SlotId(i as u16);
             match mode {
-                LinkMode::Slot => {}
+                LinkMode::Stack => {}
                 LinkMode::Both(x) => {
                     ctx.stack_slot[reg] = LinkMode::Both(*x);
                     ctx.xmm[*x].push(reg);
@@ -219,9 +219,9 @@ impl BBContext {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                 assert!(self.xmm[freg].contains(&reg));
                 self.xmm[freg].retain(|e| *e != reg);
-                self.stack_slot[reg] = LinkMode::Slot;
+                self.stack_slot[reg] = LinkMode::Stack;
             }
-            LinkMode::Slot => {}
+            LinkMode::Stack => {}
         }
     }
 
@@ -241,7 +241,7 @@ impl BBContext {
                     *x = l;
                 }
             }
-            LinkMode::Slot => {}
+            LinkMode::Stack => {}
         });
     }
 
@@ -254,7 +254,7 @@ impl BBContext {
                 assert_eq!(reg, self.xmm[freg][0]);
                 freg
             }
-            _ => {
+            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack => {
                 self.dealloc_xmm(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
@@ -277,10 +277,14 @@ impl BBContext {
                         .filter(|reg| matches!(self.stack_slot[**reg], LinkMode::Xmm(_)))
                         .cloned()
                         .collect();
-                    Some((Xmm::new(i as u16), v))
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some((Xmm::new(i as u16), v))
+                    }
                 }
             })
-            .filter(|(_, v)| !v.is_empty())
+            //.filter(|(_, v)| !v.is_empty())
             .collect()
     }
 
@@ -302,10 +306,14 @@ impl BBContext {
                         })
                         .cloned()
                         .collect();
-                    Some((Xmm::new(i as u16), v))
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some((Xmm::new(i as u16), v))
+                    }
                 }
             })
-            .filter(|(_, v)| !v.is_empty())
+            //.filter(|(_, v)| !v.is_empty())
             .collect()
     }
 
@@ -394,7 +402,7 @@ enum LinkMode {
     ///
     /// No linkage with any xmm regiter.
     ///
-    Slot,
+    Stack,
 }
 
 #[derive(Clone, PartialEq)]
@@ -407,7 +415,7 @@ impl std::fmt::Debug for StackSlotInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, mode)| match mode {
-                LinkMode::Slot => None,
+                LinkMode::Stack => None,
                 LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
                 LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
             })
@@ -453,7 +461,8 @@ impl MergeInfo {
                     (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                     | (LinkMode::Xmm(l), LinkMode::Both(_)) => LinkMode::Both(*l),
                     (LinkMode::Xmm(l), LinkMode::Xmm(_)) => LinkMode::Xmm(*l),
-                    _ => LinkMode::Slot,
+                    (LinkMode::Both(_) | LinkMode::Xmm(_) | LinkMode::Stack, LinkMode::Stack)
+                    | (LinkMode::Stack, LinkMode::Both(_) | LinkMode::Xmm(_)) => LinkMode::Stack,
                 };
             });
     }
@@ -656,7 +665,7 @@ impl Codegen {
             LinkMode::Xmm(freg) | LinkMode::Both(freg) => {
                 ctx.link_xmm(dst, freg);
             }
-            LinkMode::Slot => {
+            LinkMode::Stack => {
                 self.load_rax(src);
                 self.store_rax(dst);
             }

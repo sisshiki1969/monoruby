@@ -40,7 +40,7 @@ impl Codegen {
     ) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            _ => {
+            LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
                 ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
@@ -82,7 +82,7 @@ impl Codegen {
     fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
         match ctx.stack_slot[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
-            _ => {
+            LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
                 ctx.link_both(reg, freg);
                 let side_exit = self.gen_side_deopt(pc, ctx);
