@@ -56,7 +56,7 @@ macro_rules! cmp_main {
 macro_rules! cmp_opt_main {
     (($op:ident, $rev_op:ident, $sop:ident, $rev_sop:ident)) => {
         paste! {
-            fn [<cmp_opt_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
+            fn [<condbr_int_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
                 match brkind {
                     BrKind::BrIf => monoasm! { &mut self.jit,
                         [<j $sop>] branch_dest;
@@ -67,7 +67,7 @@ macro_rules! cmp_opt_main {
                 }
             }
 
-            fn [<cmp_opt_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
+            fn [<condbr_float_ $sop>](&mut self, branch_dest: DestLabel, brkind: BrKind) {
                 match brkind {
                     BrKind::BrIf => monoasm! { &mut self.jit,
                         [<j $op>] branch_dest;

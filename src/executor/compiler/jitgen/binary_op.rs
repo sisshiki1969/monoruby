@@ -401,7 +401,7 @@ impl Codegen {
                         }
                         _ => unreachable!(),
                     }
-                    self.cmp_opt_float(kind, branch_dest, brkind);
+                    self.condbr_float(kind, branch_dest, brkind);
                 } else {
                     self.writeback_binary(ctx, &mode);
                     ctx.dealloc_xmm(ret);
@@ -428,7 +428,7 @@ impl Codegen {
                                 );
                             }
                         }
-                        self.cmp_opt_int(kind, branch_dest, brkind);
+                        self.condbr_int(kind, branch_dest, brkind);
                     } else {
                         self.load_binary_args_with_mode(&mode);
                         self.cmp_opt_generic(ctx, kind, branch_dest, brkind, pc);
@@ -494,28 +494,28 @@ impl Codegen {
         }
     }
 
-    pub(super) fn cmp_opt_int(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
+    pub(super) fn condbr_int(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_int_eq(branch_dest, brkind),
-            CmpKind::Ne => self.cmp_opt_int_ne(branch_dest, brkind),
-            CmpKind::Ge => self.cmp_opt_int_ge(branch_dest, brkind),
-            CmpKind::Gt => self.cmp_opt_int_gt(branch_dest, brkind),
-            CmpKind::Le => self.cmp_opt_int_le(branch_dest, brkind),
-            CmpKind::Lt => self.cmp_opt_int_lt(branch_dest, brkind),
-            CmpKind::TEq => self.cmp_opt_int_eq(branch_dest, brkind),
+            CmpKind::Eq => self.condbr_int_eq(branch_dest, brkind),
+            CmpKind::Ne => self.condbr_int_ne(branch_dest, brkind),
+            CmpKind::Ge => self.condbr_int_ge(branch_dest, brkind),
+            CmpKind::Gt => self.condbr_int_gt(branch_dest, brkind),
+            CmpKind::Le => self.condbr_int_le(branch_dest, brkind),
+            CmpKind::Lt => self.condbr_int_lt(branch_dest, brkind),
+            CmpKind::TEq => self.condbr_int_eq(branch_dest, brkind),
             _ => unimplemented!(),
         }
     }
 
-    pub(super) fn cmp_opt_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
+    pub(super) fn condbr_float(&mut self, kind: CmpKind, branch_dest: DestLabel, brkind: BrKind) {
         match kind {
-            CmpKind::Eq => self.cmp_opt_float_eq(branch_dest, brkind),
-            CmpKind::Ne => self.cmp_opt_float_ne(branch_dest, brkind),
-            CmpKind::Ge => self.cmp_opt_float_ge(branch_dest, brkind),
-            CmpKind::Gt => self.cmp_opt_float_gt(branch_dest, brkind),
-            CmpKind::Le => self.cmp_opt_float_le(branch_dest, brkind),
-            CmpKind::Lt => self.cmp_opt_float_lt(branch_dest, brkind),
-            CmpKind::TEq => self.cmp_opt_float_eq(branch_dest, brkind),
+            CmpKind::Eq => self.condbr_float_eq(branch_dest, brkind),
+            CmpKind::Ne => self.condbr_float_ne(branch_dest, brkind),
+            CmpKind::Ge => self.condbr_float_ge(branch_dest, brkind),
+            CmpKind::Gt => self.condbr_float_gt(branch_dest, brkind),
+            CmpKind::Le => self.condbr_float_le(branch_dest, brkind),
+            CmpKind::Lt => self.condbr_float_lt(branch_dest, brkind),
+            CmpKind::TEq => self.condbr_float_eq(branch_dest, brkind),
             _ => unimplemented!(),
         }
     }
