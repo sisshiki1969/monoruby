@@ -38,7 +38,7 @@ impl Codegen {
         reg: SlotId,
         pc: BcPc,
     ) -> Xmm {
-        match ctx.stack_slot[reg] {
+        match ctx.slot_state[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
@@ -46,6 +46,15 @@ impl Codegen {
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
                 self.unbox_float(freg.enc(), side_exit);
+                freg
+            }
+            LinkMode::Fixnum(i) => {
+                let freg = ctx.alloc_xmm();
+                ctx.link_both(reg, freg);
+                let f = self.jit.const_f64(i as f64);
+                monoasm! {&mut self.jit,
+                    movq xmm(freg.enc()), [rip + f];
+                }
                 freg
             }
         }
@@ -80,7 +89,7 @@ impl Codegen {
     /// - rdi
     ///
     fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
-        match ctx.stack_slot[reg] {
+        match ctx.slot_state[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
@@ -88,6 +97,15 @@ impl Codegen {
                 let side_exit = self.gen_side_deopt(pc, ctx);
                 self.load_rdi(reg);
                 self.integer_to_f64(freg.enc(), side_exit);
+                freg
+            }
+            LinkMode::Fixnum(i) => {
+                let freg = ctx.alloc_xmm();
+                ctx.link_both(reg, freg);
+                let f = self.jit.const_f64(i as f64);
+                monoasm! {&mut self.jit,
+                    movq xmm(freg.enc()), [rip + f];
+                }
                 freg
             }
         }

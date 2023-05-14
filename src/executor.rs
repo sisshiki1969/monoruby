@@ -925,45 +925,99 @@ impl BcPc {
             TraceIr::MethodCall {
                 ret,
                 callid,
-                _class,
                 has_splat,
                 info,
+                class,
                 ..
             } => {
-                let name = globals.store[callid].name.unwrap();
+                let callsite = &globals.store[callid];
+                let name = callsite.name.unwrap();
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
-                let op1 = if len == 0 {
-                    format!("{} = {:?}.call {name}()", ret.ret_str(), recv)
-                } else {
-                    format!(
-                        "{} = {:?}.call {name}({:?}; {}){}",
-                        ret.ret_str(),
-                        recv,
-                        args,
-                        len,
-                        if has_splat { "*" } else { "" }
-                    )
-                };
-                format!("{:36} [{}]", op1, _class.get_name(globals))
+                let kw_len = callsite.kw_args.len();
+                let op1 = format!(
+                    "{} = {:?}.{name}({}{}){}",
+                    ret.ret_str(),
+                    recv,
+                    if len == 0 {
+                        "".to_string()
+                    } else {
+                        format!("{:?};{}", args, len)
+                    },
+                    if kw_len == 0 {
+                        "".to_string()
+                    } else {
+                        format!(" kw:{:?};{}", args + len, kw_len)
+                    },
+                    if has_splat { "*" } else { "" }
+                );
+                format!("{:36} [{}]", op1, class.get_name(globals))
+            }
+            TraceIr::MethodCallBlock {
+                ret,
+                callid,
+                has_splat,
+                info,
+                class,
+                ..
+            } => {
+                let callsite = &globals.store[callid];
+                let name = callsite.name.unwrap();
+                let MethodInfo {
+                    recv, args, len, ..
+                } = info;
+                let kw_len = callsite.kw_args.len();
+                let op1 = format!(
+                    "{} = {:?}.{name}({}{}){}",
+                    ret.ret_str(),
+                    recv,
+                    if len == 0 {
+                        "".to_string()
+                    } else {
+                        format!("{:?};{}", args + 1, len)
+                    },
+                    if kw_len == 0 {
+                        "".to_string()
+                    } else {
+                        format!(" kw:{:?};{}", args + len + 1, kw_len)
+                    },
+                    if has_splat { "*" } else { "" }
+                );
+                format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::Super {
-                ret, _class, info, ..
+                ret,
+                callid,
+                class,
+                info,
+                ..
             } => {
+                let callsite = &globals.store[callid];
                 let MethodInfo { args, len, .. } = info;
-                let op1 = if len == 0 {
-                    format!("{} = super()", ret.ret_str())
-                } else {
-                    format!("{} = super({:?}; {})", ret.ret_str(), args, len)
-                };
-                format!("{:36} [{}]", op1, _class.get_name(globals))
+                let kw_len = callsite.kw_args.len();
+                let op1 = format!(
+                    "{} = super({}{}){}",
+                    ret.ret_str(),
+                    if len == 0 {
+                        "".to_string()
+                    } else {
+                        format!("{:?};{}", args, len)
+                    },
+                    if kw_len == 0 {
+                        "".to_string()
+                    } else {
+                        format!(" kw:{:?};{}", args + len, kw_len)
+                    },
+                    ""
+                );
+                format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::InlineCall {
                 ret,
                 method,
-                _class,
                 info,
+                class,
                 ..
             } => {
                 let MethodInfo {
@@ -981,41 +1035,7 @@ impl BcPc {
                         len,
                     )
                 };
-                format!("{:36} [{}]", op1, _class.get_name(globals))
-            }
-            TraceIr::MethodCallBlock {
-                ret,
-                callid,
-                _class,
-                has_splat,
-                info,
-                ..
-            } => {
-                let name = globals.store[callid].name.unwrap();
-                let MethodInfo {
-                    recv, args, len, ..
-                } = info;
-                let op1 = if len == 0 {
-                    format!(
-                        "{} = {:?}.call {name}(&{:?} kw:{:?})",
-                        ret.ret_str(),
-                        recv,
-                        args,
-                        args + 1
-                    )
-                } else {
-                    format!(
-                        "{} = {:?}.call {name}({:?}; {} &{:?} kw:{:?}){}",
-                        ret.ret_str(),
-                        recv,
-                        args + 2,
-                        len,
-                        args,
-                        args + 1,
-                        if has_splat { "*" } else { "" }
-                    )
-                };
-                format!("{:36} [{}]", op1, _class.get_name(globals))
+                format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::Yield {
                 ret,

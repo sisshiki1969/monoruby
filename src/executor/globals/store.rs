@@ -200,7 +200,7 @@ impl Store {
     pub(crate) fn add_callsite(
         &mut self,
         name: Option<IdentId>,
-        arg_num: usize,
+        pos_num: usize,
         kw_pos: SlotId,
         kw_args: HashMap<IdentId, usize>,
         splat_pos: Vec<usize>,
@@ -208,7 +208,7 @@ impl Store {
     ) {
         self.callsite_info.push(CallSiteInfo {
             name,
-            arg_num,
+            pos_num,
             kw_pos,
             kw_args,
             splat_pos,
@@ -264,13 +264,14 @@ pub struct CallSiteInfo {
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Number of positional arguments.
-    pub arg_num: usize,
+    pub pos_num: usize,
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
     /// Positions of splat arguments.
     pub splat_pos: Vec<usize>,
+    /// Position of hash splat arguments.
     pub(crate) hash_splat_pos: Vec<SlotId>,
 }
 

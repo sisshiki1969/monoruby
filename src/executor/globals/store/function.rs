@@ -212,7 +212,6 @@ impl Funcs {
                 }
                 ParamKind::Block(name) => {
                     let name = IdentId::get_id_from_string(name.clone());
-                    args_names.push(Some(name));
                     block_param = Some(name);
                 }
                 _ => {

@@ -218,9 +218,9 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
+        let (args, arg_len, splat_pos) = self.handle_positional_arguments(&mut arglist, loc)?;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let hash_splat = std::mem::take(&mut arglist.hash_splat);
-        let (args, arg_len, splat_pos) = self.handle_positional_arguments(arglist, loc)?;
 
         let kw = if kw_args_list.len() == 0 && hash_splat.is_empty() {
             None
@@ -249,14 +249,19 @@ impl BytecodeGen {
 
     fn handle_positional_arguments(
         &mut self,
-        arglist: ArgList,
+        arglist: &mut ArgList,
         loc: Loc,
     ) -> Result<(BcReg, usize, Vec<usize>)> {
         let with_block = arglist.block.is_some();
         let args = self.next_reg().into();
         if with_block {
-            self.handle_block_param(arglist.block, loc)?;
-        } else if arglist.args.len() == 1 {
+            let block = std::mem::take(&mut arglist.block);
+            self.handle_block_param(block, loc)?;
+        } else if arglist.args.len() == 1
+            && arglist.kw_args.is_empty()
+            && arglist.hash_splat.is_empty()
+            && !arglist.delegate
+        {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
                 let local = self.refer_local(ident).into();
@@ -270,7 +275,7 @@ impl BytecodeGen {
             }
         }
 
-        let (_, arg_len, splat_pos) = self.gen_args(arglist.args)?;
+        let (_, arg_len, splat_pos) = self.gen_args(std::mem::take(&mut arglist.args))?;
         Ok((args, arg_len, splat_pos))
     }
 

@@ -368,15 +368,15 @@ impl Globals {
             },
             RV::Object(rvalue) => match rvalue.kind() {
                 ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
+                ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
-                ObjKind::OBJECT => self.object_inspect(val),
                 ObjKind::RANGE => self.range_tos(val),
+                ObjKind::EXCEPTION => rvalue.as_exception().err.get_error_message(),
                 ObjKind::PROC => Self::proc_tos(val),
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().err.get_error_message(),
                 kind => unreachable!("{:016x} {kind}", val.get()),
             },
         }

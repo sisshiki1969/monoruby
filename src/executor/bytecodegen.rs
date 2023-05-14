@@ -131,7 +131,7 @@ struct CallSite {
     /// Name of method. (None for *super*)
     name: Option<IdentId>,
     /// Number of positional arguments.
-    arg_num: usize,
+    pos_num: usize,
     /// *BcTemp* of keyword arguments.
     kw: Option<KeywordArgs>,
     /// Positions of splat arguments.
@@ -350,7 +350,7 @@ impl BytecodeGen {
     fn add_callsite(
         &mut self,
         name: impl Into<Option<IdentId>>,
-        arg_num: usize,
+        pos_num: usize,
         kw: Option<KeywordArgs>,
         splat_pos: Vec<usize>,
     ) -> CallSiteId {
@@ -358,7 +358,7 @@ impl BytecodeGen {
         let id = self.callsite_offset + self.callsites.len();
         self.callsites.push(CallSite {
             name,
-            arg_num,
+            pos_num,
             kw,
             splat_pos,
         });
