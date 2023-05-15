@@ -46,7 +46,7 @@ impl Codegen {
             for (reg, coerced) in use_set {
                 match target_slot_info[reg] {
                     LinkMode::Stack | LinkMode::Fixnum(_) => {}
-                    LinkMode::Xmm(_) if coerced => {
+                    LinkMode::Xmm(_) if !coerced => {
                         let freg = ctx.alloc_xmm();
                         ctx.link_xmm(reg, freg);
                     }

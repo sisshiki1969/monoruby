@@ -15,6 +15,14 @@ impl LoopAnalysis {
     ///
     /// Liveness analysis for loops.
     ///
+    /// this module analyze the following:
+    ///
+    /// 1) Will the slots of incomming branch be used? or not-used?
+    /// (or not determined)
+    ///
+    /// 2) Type information of a backedge branch of this loop.
+    /// (Float? not Float? or a Value which is coerced into Float?)
+    ///
     pub(super) fn analyse(
         func: &ISeqInfo,
         fnstore: &Store,
@@ -55,28 +63,29 @@ impl LoopAnalysis {
                 break;
             };
         }
-        let info = ctx.backedge_info.unwrap();
-        exit_info.merge(&info);
+        let slot_info = ctx.backedge_info.unwrap();
+        exit_info.merge(&slot_info);
         if let Some(info) = ctx.return_info {
             exit_info.merge(&info);
         }
         #[cfg(feature = "emit-tir")]
         eprintln!(
             "{:?}",
-            info.info
+            slot_info
+                .info
                 .iter()
                 .enumerate()
                 .flat_map(|(i, state)| {
-                    if state.xmm_link == Link::Slot || state.is_used != IsUsed::Used {
+                    if state.ty == Ty::Val || state.used != IsUsed::Used {
                         None
                     } else {
-                        Some((i, state.xmm_link, state.is_used))
+                        Some((i, state.ty, state.used))
                     }
                 })
                 .collect::<Vec<_>>()
         );
 
-        (info.get_loop_used_as_float(), exit_info.get_unused())
+        (slot_info.get_loop_used_as_float(), exit_info.get_unused())
     }
 }
 
@@ -139,7 +148,7 @@ impl LoopAnalysis {
         &mut self,
         func: &ISeqInfo,
         fnstore: &Store,
-        mut reg_info: SlotInfo,
+        mut info: SlotInfo,
         bb_pos: BcIndex,
     ) -> Option<SlotInfo> {
         for (ofs, pc) in func.bytecode()[bb_pos.to_usize()..].iter().enumerate() {
@@ -147,11 +156,14 @@ impl LoopAnalysis {
             let idx = bb_pos + ofs;
             match self.pc.unwrap().get_ir(fnstore) {
                 TraceIr::InitMethod { .. } => {}
-                TraceIr::AliasMethod { .. } => {}
+                TraceIr::AliasMethod { new, old } => {
+                    info.use_non_float(new);
+                    info.use_non_float(old);
+                }
                 TraceIr::MethodDef { .. } => {}
                 TraceIr::SingletonMethodDef { .. } => {}
                 TraceIr::EnsureEnd => {
-                    reg_info.unlink_locals(func);
+                    info.unlink_locals(func);
                 }
                 TraceIr::LoopStart(_) => {
                     self.loop_level += 1;
@@ -159,54 +171,57 @@ impl LoopAnalysis {
                 TraceIr::LoopEnd => {
                     self.loop_level -= 1;
                     if self.loop_level == 0 {
-                        return Some(reg_info);
+                        return Some(info);
                     }
                 }
                 TraceIr::DefinedYield { ret }
                 | TraceIr::DefinedConst { ret, .. }
                 | TraceIr::DefinedGvar { ret, .. }
                 | TraceIr::DefinedIvar { ret, .. }
-                | TraceIr::DefinedMethod { ret, .. }
                 | TraceIr::Integer(ret, ..)
                 | TraceIr::Symbol(ret, ..)
                 | TraceIr::Nil(ret) => {
-                    reg_info.def_as(ret, false);
+                    info.def_as(ret, false);
+                }
+                TraceIr::DefinedMethod { ret, recv, .. } => {
+                    info.def_as(ret, false);
+                    info.use_non_float(recv);
                 }
                 TraceIr::Literal(dst, val) => {
                     if val.class() == FLOAT_CLASS {
-                        reg_info.def_float_const(dst);
+                        info.def_float_const(dst);
                     } else {
-                        reg_info.def_as(dst, false);
+                        info.def_as(dst, false);
                     }
                 }
                 TraceIr::Array { ret, args, len } => {
                     for r in args.0..args.0 + len {
-                        reg_info.use_non_float(SlotId(r));
+                        info.use_non_float(SlotId(r));
                     }
-                    reg_info.def_as(ret, false);
+                    info.def_as(ret, false);
                 }
                 TraceIr::Hash { ret, args, len } => {
                     for r in args.0..args.0 + len * 2 {
-                        reg_info.use_non_float(SlotId(r));
+                        info.use_non_float(SlotId(r));
                     }
-                    reg_info.def_as(ret, false);
+                    info.def_as(ret, false);
                 }
                 TraceIr::Index { ret, base, idx } => {
-                    reg_info.def_as(ret, false);
-                    reg_info.use_non_float(base);
-                    reg_info.use_non_float(idx);
+                    info.def_as(ret, false);
+                    info.use_non_float(base);
+                    info.use_non_float(idx);
                 }
                 TraceIr::Range {
                     ret, start, end, ..
                 } => {
-                    reg_info.def_as(ret, false);
-                    reg_info.use_non_float(start);
-                    reg_info.use_non_float(end);
+                    info.def_as(ret, false);
+                    info.use_non_float(start);
+                    info.use_non_float(end);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    reg_info.use_non_float(src);
-                    reg_info.use_non_float(base);
-                    reg_info.use_non_float(idx);
+                    info.use_non_float(src);
+                    info.use_non_float(base);
+                    info.use_non_float(idx);
                 }
                 TraceIr::ClassDef {
                     ret,
@@ -214,11 +229,11 @@ impl LoopAnalysis {
                     ..
                 }
                 | TraceIr::SingletonClassDef { ret, base, .. } => {
-                    reg_info.use_non_float(base);
-                    reg_info.def_as(ret, false);
+                    info.use_non_float(base);
+                    info.def_as(ret, false);
                 }
                 TraceIr::ModuleDef { ret, .. } => {
-                    reg_info.def_as(ret, false);
+                    info.def_as(ret, false);
                 }
                 TraceIr::LoadConst(dst, _const_id) => {
                     let is_float = if let Some(value) = pc.value() {
@@ -226,53 +241,45 @@ impl LoopAnalysis {
                     } else {
                         false
                     };
-                    reg_info.def_as(dst, is_float);
+                    info.def_as(dst, is_float);
                 }
                 TraceIr::BlockArgProxy(dst, _)
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
                 | TraceIr::LoadGvar { dst, .. }
                 | TraceIr::LoadSvar { dst, .. } => {
-                    reg_info.def_as(dst, false);
+                    info.def_as(dst, false);
                 }
                 TraceIr::StoreConst(src, _)
                 | TraceIr::StoreDynVar(_, src)
                 | TraceIr::StoreIvar(src, ..)
                 | TraceIr::StoreGvar { src, .. } => {
-                    reg_info.use_non_float(src);
+                    info.use_non_float(src);
                 }
                 TraceIr::BitNot { ret, src } => {
-                    reg_info.use_non_float(src);
-                    reg_info.def_as(ret, false);
+                    info.use_non_float(src);
+                    info.def_as(ret, false);
                 }
-                TraceIr::Neg { ret, src } => {
+                TraceIr::Neg { ret, src } | TraceIr::Pos { ret, src } => {
                     let is_float = pc.is_float1();
-                    reg_info.use_as(src, is_float, pc.classid1());
-                    reg_info.def_as(ret, is_float);
-                }
-                TraceIr::Pos { ret, src } => {
-                    let is_float = pc.is_float1();
-                    reg_info.use_as(src, is_float, pc.classid1());
-                    reg_info.def_as(ret, is_float);
+                    info.use_as(src, is_float, pc.classid1());
+                    info.def_as(ret, is_float);
                 }
                 TraceIr::Not { ret, src } => {
-                    reg_info.use_non_float(src);
-                    reg_info.def_as(ret, false);
+                    info.use_non_float(src);
+                    info.def_as(ret, false);
                 }
                 TraceIr::FBinOp { ret, mode, .. } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            reg_info.use_as(lhs, true, pc.classid1());
-                            reg_info.use_as(rhs, true, pc.classid2());
+                            info.use_as(lhs, true, pc.classid1());
+                            info.use_as(rhs, true, pc.classid2());
                         }
-                        OpMode::IR(_, rhs) => {
-                            reg_info.use_as(rhs, true, pc.classid2());
-                        }
-                        OpMode::RI(lhs, _) => {
-                            reg_info.use_as(lhs, true, pc.classid2());
+                        OpMode::IR(_, reg) | OpMode::RI(reg, _) => {
+                            info.use_as(reg, true, pc.classid2());
                         }
                     }
-                    reg_info.def_as(ret, true);
+                    info.def_as(ret, true);
                 }
                 TraceIr::IBinOp {
                     ret,
@@ -284,175 +291,173 @@ impl LoopAnalysis {
                     mode: OpMode::RR(lhs, rhs),
                     ..
                 } => {
-                    reg_info.use_as(lhs, false, pc.classid1());
-                    reg_info.use_as(rhs, false, pc.classid2());
-                    reg_info.def_as(ret, false);
+                    info.use_as(lhs, false, pc.classid1());
+                    info.use_as(rhs, false, pc.classid2());
+                    info.def_as(ret, false);
                 }
                 TraceIr::IBinOp {
                     ret,
-                    mode: OpMode::RI(lhs, _),
+                    mode: OpMode::RI(reg, _),
+                    ..
+                }
+                | TraceIr::IBinOp {
+                    ret,
+                    mode: OpMode::IR(_, reg),
                     ..
                 }
                 | TraceIr::BinOp {
                     ret,
-                    mode: OpMode::RI(lhs, _),
-                    ..
-                } => {
-                    reg_info.use_as(lhs, false, pc.classid1());
-                    reg_info.def_as(ret, false);
-                }
-                TraceIr::IBinOp {
-                    ret,
-                    mode: OpMode::IR(_, rhs),
+                    mode: OpMode::RI(reg, _),
                     ..
                 }
                 | TraceIr::BinOp {
                     ret,
-                    mode: OpMode::IR(_, rhs),
+                    mode: OpMode::IR(_, reg),
                     ..
                 } => {
-                    reg_info.use_as(rhs, false, pc.classid2());
-                    reg_info.def_as(ret, false);
+                    info.use_as(reg, false, pc.classid2());
+                    info.def_as(ret, false);
                 }
                 TraceIr::Cmp(_, dst, mode, _) => {
                     let is_float = mode.is_float_op(pc);
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            reg_info.use_as(lhs, is_float, pc.classid1());
-                            reg_info.use_as(rhs, is_float, pc.classid2());
+                            info.use_as(lhs, is_float, pc.classid1());
+                            info.use_as(rhs, is_float, pc.classid2());
                         }
                         OpMode::RI(lhs, _) => {
-                            reg_info.use_as(lhs, is_float, pc.classid1());
+                            info.use_as(lhs, is_float, pc.classid1());
                         }
                         _ => unreachable!(),
                     }
-                    reg_info.def_as(dst, false);
+                    info.def_as(dst, false);
                 }
                 TraceIr::Mov(dst, src) => {
-                    reg_info.copy(dst, src);
+                    info.copy(dst, src);
                 }
                 TraceIr::ConcatStr(dst, arg, len) => {
                     for r in arg.0..arg.0 + len {
-                        reg_info.use_as(SlotId(r), false, STRING_CLASS);
+                        info.use_as(SlotId(r), false, STRING_CLASS);
                     }
-                    reg_info.def_as(dst, false);
+                    info.def_as(dst, false);
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
                     for r in dst.0..dst.0 + len {
-                        reg_info.def_as(SlotId(r), false);
+                        info.def_as(SlotId(r), false);
                     }
-                    reg_info.use_as(src, false, NIL_CLASS);
+                    info.use_as(src, false, NIL_CLASS);
                 }
                 TraceIr::Yield { ret, args, len, .. } => {
                     for i in 0..len {
-                        reg_info.use_non_float(args + i);
+                        info.use_non_float(args + i);
                     }
-                    reg_info.def_as(ret, false);
+                    info.def_as(ret, false);
                 }
-                TraceIr::MethodCall { ret, info, .. } => {
+                TraceIr::MethodCall {
+                    ret,
+                    info: method_info,
+                    ..
+                }
+                | TraceIr::Super {
+                    ret,
+                    info: method_info,
+                    ..
+                } => {
                     let MethodInfo {
                         recv, args, len, ..
-                    } = info;
-                    reg_info.use_non_float(recv);
+                    } = method_info;
+                    info.use_non_float(recv);
                     for i in 0..len {
-                        reg_info.use_non_float(args + i);
+                        info.use_non_float(args + i);
                     }
-                    reg_info.unlink_locals(func);
-                    reg_info.def_as(ret, false);
+                    //reg_info.unlink_locals(func);
+                    info.def_as(ret, false);
                 }
-                TraceIr::MethodCallBlock { ret, info, .. } => {
+                TraceIr::MethodCallBlock {
+                    ret,
+                    info: method_info,
+                    ..
+                } => {
                     let MethodInfo {
                         recv, args, len, ..
-                    } = info;
-                    reg_info.use_non_float(recv);
+                    } = method_info;
+                    info.use_non_float(recv);
                     for i in 0..len + 1 {
-                        reg_info.use_non_float(args + i);
+                        info.use_non_float(args + i);
                     }
-                    reg_info.unlink_locals(func);
-                    reg_info.def_as(ret, false);
-                }
-                TraceIr::Super { ret, info, .. } => {
-                    let MethodInfo { args, len, .. } = info;
-                    for i in 0..len {
-                        reg_info.use_non_float(args + i);
-                    }
-                    reg_info.unlink_locals(func);
-                    reg_info.def_as(ret, false);
+                    info.unlink_locals(func);
+                    info.def_as(ret, false);
                 }
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
-                    ret, method, info, ..
+                    ret,
+                    method,
+                    info: method_info,
+                    ..
                 } => {
-                    let MethodInfo { recv, args, .. } = info;
+                    let MethodInfo { recv, args, .. } = method_info;
                     match method {
                         InlineMethod::IntegerTof => {
-                            reg_info.use_non_float(recv);
-                            reg_info.def_as(ret, true);
+                            info.use_non_float(recv);
+                            info.def_as(ret, true);
                         }
                         InlineMethod::MathSqrt => {
-                            reg_info.use_non_float(recv);
-                            reg_info.use_as(args, true, FLOAT_CLASS);
-                            reg_info.def_as(ret, true);
+                            info.use_non_float(recv);
+                            info.use_as(args, true, FLOAT_CLASS);
+                            info.def_as(ret, true);
                         }
                         InlineMethod::MathCos => {
-                            reg_info.use_non_float(recv);
-                            reg_info.use_as(args, true, FLOAT_CLASS);
-                            reg_info.def_as(ret, true);
+                            info.use_non_float(recv);
+                            info.use_as(args, true, FLOAT_CLASS);
+                            info.def_as(ret, true);
                         }
                         InlineMethod::MathSin => {
-                            reg_info.use_non_float(recv);
-                            reg_info.use_as(args, true, FLOAT_CLASS);
-                            reg_info.def_as(ret, true);
+                            info.use_non_float(recv);
+                            info.use_as(args, true, FLOAT_CLASS);
+                            info.def_as(ret, true);
                         }
                         InlineMethod::ObjectNil => {
-                            reg_info.use_non_float(recv);
-                            reg_info.def_as(ret, false);
+                            info.use_non_float(recv);
+                            info.def_as(ret, false);
                         }
                     }
                 }
-                TraceIr::Ret(_ret) => {
-                    self.add_return(&reg_info);
-                    return None;
-                }
-                TraceIr::MethodRet(_ret) => {
-                    self.add_return(&reg_info);
-                    return None;
-                }
-                TraceIr::Break(_ret) => {
-                    self.add_return(&reg_info);
+                TraceIr::Ret(_ret) | TraceIr::MethodRet(_ret) | TraceIr::Break(_ret) => {
+                    self.add_return(&info);
                     return None;
                 }
                 TraceIr::Br(disp) => {
                     let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
-                        self.add_branch(idx, reg_info, dest_idx);
+                        self.add_branch(idx, info, dest_idx);
                     } else if self.loop_level == 1 {
-                        self.add_backedge(&reg_info);
+                        self.add_backedge(&info);
                     }
                     return None;
                 }
                 TraceIr::CondBr(cond_, disp, _, _) => {
-                    reg_info.use_as(cond_, false, TRUE_CLASS);
+                    info.use_as(cond_, false, TRUE_CLASS);
                     let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
-                        self.add_branch(idx, reg_info.clone(), dest_idx);
+                        self.add_branch(idx, info.clone(), dest_idx);
                     } else if self.loop_level == 1 {
-                        self.add_backedge(&reg_info);
+                        self.add_backedge(&info);
                     }
                 }
-                TraceIr::CheckLocal(_, disp) => {
+                TraceIr::CheckLocal(src, disp) => {
+                    info.use_non_float(src);
                     let dest_idx = idx + 1 + disp;
                     if disp >= 0 {
-                        self.add_branch(idx, reg_info.clone(), dest_idx);
+                        self.add_branch(idx, info.clone(), dest_idx);
                     } else if self.loop_level == 1 {
-                        self.add_backedge(&reg_info);
+                        self.add_backedge(&info);
                     }
                 }
             }
 
             let next_idx = idx + 1;
             if self.bb_info[next_idx].is_some() {
-                self.add_branch(idx, reg_info, next_idx);
+                self.add_branch(idx, info, next_idx);
                 return None;
             }
         }
@@ -462,7 +467,7 @@ impl LoopAnalysis {
 
 #[derive(Debug, Clone)]
 struct SlotInfo {
-    info: Vec<SlotState>,
+    info: Vec<State>,
 }
 
 impl SlotInfo {
@@ -474,20 +479,23 @@ impl SlotInfo {
         self.info
             .iter()
             .enumerate()
-            .flat_map(|(i, b)| match (b.xmm_link, b.is_used) {
-                (Link::Both(true) | Link::Xmm, IsUsed::Used) => Some((SlotId(i as u16), true)),
-                (Link::Both(false), IsUsed::Used) => Some((SlotId(i as u16), false)),
+            .flat_map(|(i, b)| match (b.ty, b.used) {
+                (Ty::Float, IsUsed::Used) => Some((SlotId(i as u16), true)),
+                (Ty::Both, IsUsed::Used) => Some((SlotId(i as u16), false)),
                 _ => None,
             })
             .collect()
     }
 
+    ///
+    /// Extract unsed slots.
+    ///
     fn get_unused(&self) -> Vec<SlotId> {
         self.info
             .iter()
             .enumerate()
             .flat_map(|(i, state)| {
-                if state.is_used == IsUsed::NotUsed {
+                if state.used == IsUsed::NotUsed {
                     Some(SlotId(i as u16))
                 } else {
                     None
@@ -500,34 +508,38 @@ impl SlotInfo {
 impl SlotInfo {
     fn new(reg_num: usize) -> Self {
         Self {
-            info: vec![SlotState::new(); reg_num],
+            info: vec![State::new(); reg_num],
         }
     }
 
     fn merge(&mut self, other: &Self) {
         for (i, detail) in &mut self.info.iter_mut().enumerate() {
-            detail.xmm_link.merge(&other[i].xmm_link);
-            detail.is_used.merge(&other[i].is_used);
+            detail.ty.merge(&other[i].ty);
+            detail.used.merge(&other[i].used);
         }
     }
 
     fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
-        self[slot].xmm_link = if use_as_float {
-            match self[slot].xmm_link {
-                Link::Slot => Link::Both(class == FLOAT_CLASS),
-                Link::Both(_) => Link::Both(class == FLOAT_CLASS),
-                Link::Xmm => Link::Xmm,
+        self[slot].ty = if use_as_float {
+            if class == FLOAT_CLASS {
+                match self[slot].ty {
+                    Ty::Val | Ty::Both => Ty::Both,
+                    Ty::Float => Ty::Float,
+                }
+            } else {
+                match self[slot].ty {
+                    Ty::Val => Ty::Val,
+                    Ty::Both => Ty::Both,
+                    Ty::Float => Ty::Both,
+                }
             }
         } else {
-            match self[slot].xmm_link {
-                Link::Slot => Link::Slot,
-                Link::Both(_) => Link::Both(class == FLOAT_CLASS),
-                Link::Xmm => Link::Both(true),
+            match self[slot].ty {
+                Ty::Val => Ty::Val,
+                Ty::Both | Ty::Float => Ty::Both,
             }
         };
-        if self[slot].is_used != IsUsed::NotUsed {
-            self[slot].is_used = IsUsed::Used;
-        }
+        self.use_(slot);
     }
 
     fn use_non_float(&mut self, slot: SlotId) {
@@ -535,7 +547,7 @@ impl SlotInfo {
     }
 
     fn unlink(&mut self, slot: SlotId) {
-        self[slot].xmm_link = Link::Slot;
+        self[slot].ty = Ty::Val;
     }
 
     fn unlink_locals(&mut self, func: &ISeqInfo) {
@@ -548,35 +560,39 @@ impl SlotInfo {
         if slot.is_zero() {
             return;
         }
-        self[slot].xmm_link = if is_float { Link::Xmm } else { Link::Slot };
-        if self[slot].is_used == IsUsed::ND {
-            self[slot].is_used = IsUsed::NotUsed;
-        }
+        self[slot].ty = if is_float { Ty::Float } else { Ty::Val };
+        self.def_(slot);
     }
 
     fn def_float_const(&mut self, slot: SlotId) {
         if slot.is_zero() {
             return;
         }
-        self[slot].xmm_link = Link::Both(true);
-        if self[slot].is_used == IsUsed::ND {
-            self[slot].is_used = IsUsed::NotUsed;
-        }
+        self[slot].ty = Ty::Float;
+        self.def_(slot);
     }
 
     fn copy(&mut self, dst: SlotId, src: SlotId) {
-        if self[src].is_used != IsUsed::NotUsed {
-            self[src].is_used = IsUsed::Used;
+        self.use_(src);
+        self.def_(dst);
+        self[dst].ty = self[src].ty;
+    }
+
+    fn use_(&mut self, slot: SlotId) {
+        if self[slot].used != IsUsed::NotUsed {
+            self[slot].used = IsUsed::Used;
         }
-        if self[dst].is_used == IsUsed::ND {
-            self[dst].is_used = IsUsed::NotUsed;
+    }
+
+    fn def_(&mut self, slot: SlotId) {
+        if self[slot].used == IsUsed::ND {
+            self[slot].used = IsUsed::NotUsed;
         }
-        self[dst].xmm_link = self[src].xmm_link;
     }
 }
 
 impl std::ops::Index<SlotId> for SlotInfo {
-    type Output = SlotState;
+    type Output = State;
     fn index(&self, i: SlotId) -> &Self::Output {
         &self.info[i.0 as usize]
     }
@@ -589,7 +605,7 @@ impl std::ops::IndexMut<SlotId> for SlotInfo {
 }
 
 impl std::ops::Index<usize> for SlotInfo {
-    type Output = SlotState;
+    type Output = State;
     fn index(&self, i: usize) -> &Self::Output {
         &self.info[i]
     }
@@ -601,56 +617,57 @@ impl std::ops::IndexMut<usize> for SlotInfo {
     }
 }
 
+///
+/// The state of slots.
+///
 #[derive(Debug, Clone)]
-struct SlotState {
-    xmm_link: Link,
-    is_used: IsUsed,
+struct State {
+    /// Type information for a backedge branch.
+    ty: Ty,
+    /// Whether the slot is used or not.
+    used: IsUsed,
 }
 
-impl SlotState {
+impl State {
     fn new() -> Self {
         Self {
-            xmm_link: Link::Slot,
-            is_used: IsUsed::ND,
+            ty: Ty::Val,
+            used: IsUsed::ND,
         }
     }
 }
 
 ///
-/// Link status of slots and xmm registers.
+/// LType status of slots.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Link {
+enum Ty {
     ///
-    /// Slot
+    /// Value
     ///
-    /// Only the stack slot holds an exact *Value*.
+    /// the slot is defined as non-f64.
     ///
-    Slot,
-    /// Both(isFloat)
+    Val,
     ///
-    /// Both of the stack slot and xmm hold a value.
+    /// Both
     ///
-    /// isFloat means whether the *Value* was coerced into f64.
-    /// When isFloat == true, the slot holds a correct *Value* and the xmm holds an exact f64.
-    /// otherwise, the slot holds a right *Value*, and coerced f64 is stored in the xmm.
+    /// the slot is used as f64 with coercion.
     ///
-    Both(bool),
+    Both,
     ///
-    /// Only the xmm holds an exact value as f64.
+    /// Float
     ///
-    Xmm,
+    /// the slot is defined as f64 or used as f64 without coercion.
+    ///
+    Float,
 }
 
-impl Link {
+impl Ty {
     fn merge(&mut self, other: &Self) {
         *self = match (*self, other) {
-            (Link::Xmm, Link::Xmm) => Link::Xmm,
-            (Link::Both(true), Link::Both(true))
-            | (Link::Both(true), Link::Xmm)
-            | (Link::Xmm, Link::Both(true)) => Link::Both(true),
-            (_, Link::Both(_)) | (Link::Both(_), _) => Link::Both(false),
-            _ => Link::Slot,
+            (_, Ty::Val) | (Ty::Val, _) => Ty::Val,
+            (_, Ty::Both) | (Ty::Both, _) => Ty::Both,
+            (Ty::Float, Ty::Float) => Ty::Float,
         };
     }
 }
