@@ -21,22 +21,45 @@ mod read_slot;
 /// Context for JIT compilation.
 ///
 struct JitContext {
-    /// Destinatiol labels for jump instructions.
+    ///
+    /// Destination labels for jump instructions.
+    ///
     labels: HashMap<BcIndex, DestLabel>,
+    ///
     /// Basic block information.
-    /// (bb_id, Vec<src_idx>)
+    ///
     bb_info: BasicBlockInfo,
-    /// The start bytecode position of basic block..
+    ///
+    /// The start bytecode position of the current basic block.
+    ///
     bb_pos: BcIndex,
+    ///
+    /// Nested loop count.
+    ///
     loop_count: usize,
+    ///
     /// true for a loop, false for a method.
+    ///
     is_loop: bool,
+    ///
+    /// A map for bytecode position and branches.
+    ///
     branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
+    ///
+    /// A map for backword branches.
+    ///
     backedge_map: HashMap<BcIndex, (DestLabel, MergeInfo, Vec<SlotId>)>,
+    ///
+    /// The start offset of a machine code corresponding to thhe current basic block.
+    ///
     start_codepos: usize,
+    ///
     /// *self* for this loop/method.
+    ///
     self_value: Value,
+    ///
     /// source map.
+    ///
     sourcemap: Vec<(BcIndex, usize)>,
 }
 
