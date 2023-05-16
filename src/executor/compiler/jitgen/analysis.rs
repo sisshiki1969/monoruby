@@ -68,22 +68,6 @@ impl LoopAnalysis {
         if let Some(info) = ctx.return_info {
             exit_info.merge(&info);
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!(
-            "{:?}",
-            slot_info
-                .info
-                .iter()
-                .enumerate()
-                .flat_map(|(i, state)| {
-                    if state.ty == Ty::Val || state.used != IsUsed::Used {
-                        None
-                    } else {
-                        Some((i, state.ty, state.used))
-                    }
-                })
-                .collect::<Vec<_>>()
-        );
 
         (slot_info.get_loop_used_as_float(), exit_info.get_unused())
     }

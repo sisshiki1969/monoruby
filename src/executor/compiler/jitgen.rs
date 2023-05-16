@@ -861,17 +861,17 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     ctx.slot_state[ret] = LinkMode::Const(Value::new_symbol(id));
                 }
-                TraceIr::Literal(dst, val) => {
-                    ctx.dealloc_xmm(dst);
+                TraceIr::Literal(ret, val) => {
+                    ctx.dealloc_xmm(ret);
                     if let RV::Float(f) = val.unpack() {
                         let freg = ctx.alloc_xmm();
-                        ctx.link_both(dst, freg);
+                        ctx.link_both(ret, freg);
                         let imm = self.jit.const_f64(f);
                         monoasm!( &mut self.jit,
                             movq xmm(freg.enc()), [rip + imm];
                             movq rax, (Value::new_float(f).get());
                         );
-                        self.store_rax(dst);
+                        self.store_rax(ret);
                     } else {
                         if val.is_packed_value() {
                             monoasm!( &mut self.jit,
@@ -887,7 +887,7 @@ impl Codegen {
                             );
                             self.xmm_restore(&xmm_using);
                         }
-                        self.store_rax(dst);
+                        self.store_rax(ret);
                     }
                 }
                 TraceIr::Array { ret, args, len } => {
@@ -1754,6 +1754,8 @@ impl Codegen {
 
     fn write_back_val(&mut self, reg: SlotId, v: Value) {
         let i = v.get() as i64;
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      wb: Const({:?})->{:?}", v, reg);
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
                 movq [r14 - (conv(reg))], (v.get());
