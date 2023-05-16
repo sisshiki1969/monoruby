@@ -45,6 +45,7 @@ struct JitContext {
     /// A map for bytecode position and branches.
     ///
     branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
+    target_ctx: HashMap<BcIndex, BBContext>,
     ///
     /// A map for backword branches.
     ///
@@ -111,6 +112,7 @@ impl JitContext {
             loop_count: 0,
             is_loop,
             branch_map: HashMap::default(),
+            target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
             start_codepos: 0,
             self_value,
@@ -118,17 +120,27 @@ impl JitContext {
         }
     }
 
-    fn new_branch(
+    fn new_branch(&mut self, src_idx: BcIndex, dest: BcIndex, bbctx: BBContext, entry: DestLabel) {
+        self.branch_map.entry(dest).or_default().push(BranchEntry {
+            src_idx,
+            bbctx,
+            entry,
+            cont: false,
+        })
+    }
+
+    fn new_continue(
         &mut self,
         src_idx: BcIndex,
         dest: BcIndex,
         bbctx: BBContext,
-        dest_label: DestLabel,
+        entry: DestLabel,
     ) {
         self.branch_map.entry(dest).or_default().push(BranchEntry {
             src_idx,
             bbctx,
-            dest_label,
+            entry,
+            cont: true,
         })
     }
 
@@ -152,7 +164,8 @@ impl JitContext {
 struct BranchEntry {
     src_idx: BcIndex,
     bbctx: BBContext,
-    dest_label: DestLabel,
+    entry: DestLabel,
+    cont: bool,
 }
 
 fn conv(reg: SlotId) -> i64 {
@@ -539,14 +552,15 @@ impl MergeInfo {
     }
 
     fn merge_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_info = MergeInfo::from(&entries[0].bbctx);
+        let mut merge_info = MergeInfo::from(&entries.last().unwrap().bbctx);
         #[cfg(feature = "emit-tir")]
         eprintln!("  <-{:?}: {:?}", entries[0].src_idx, merge_info);
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
-            dest_label: _,
-        } in entries.iter().skip(1)
+            entry: _,
+            ..
+        } in entries.iter()
         {
             #[cfg(feature = "emit-tir")]
             eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
@@ -645,7 +659,8 @@ impl Codegen {
             vec![BranchEntry {
                 src_idx: BcIndex(0),
                 bbctx: BBContext::new(reg_num, local_num, self_value),
-                dest_label: self.jit.label(),
+                entry: self.jit.label(),
+                cont: true,
             }],
         );
         for i in bb_start_pos {
@@ -823,15 +838,11 @@ impl Codegen {
         cc: &mut JitContext,
         position: Option<BcPc>,
     ) -> bool {
-        let is_loop = matches!(
-            func.get_pc(cc.bb_pos).get_ir(fnstore),
-            TraceIr::LoopStart(_)
-        );
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
-        let mut ctx = if is_loop {
-            self.gen_merging_branches_loop(func, fnstore, cc, cc.bb_pos)
+        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&cc.bb_pos) {
+            ctx
         } else {
-            self.gen_merging_branches(func, cc, cc.bb_pos)
+            self.gen_merging_branches(func, fnstore, cc)
         };
         for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
@@ -1559,10 +1570,10 @@ impl Codegen {
             let next_idx = cc.bb_pos + ofs + 1;
             if cc.bb_info[next_idx].is_some() {
                 let branch_dest = self.jit.label();
-                cc.new_branch(cc.bb_pos + ofs, next_idx, ctx.clone(), branch_dest);
-                monoasm!( &mut self.jit,
-                    jmp branch_dest;
-                );
+                cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
+                cc.bb_pos = next_idx;
+                let target_ctx = self.gen_merging_branches(func, fnstore, cc);
+                assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
                 return false;
             }
         }

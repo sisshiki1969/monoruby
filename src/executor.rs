@@ -607,6 +607,10 @@ impl BcPc {
         self.0.as_ptr()
     }
 
+    fn is_loop(&self, fnstore: &Store) -> bool {
+        matches!(self.get_ir(fnstore), TraceIr::LoopStart(_))
+    }
+
     pub(crate) fn from(bc: &Bc) -> Self {
         Self(std::ptr::NonNull::from(bc))
     }
