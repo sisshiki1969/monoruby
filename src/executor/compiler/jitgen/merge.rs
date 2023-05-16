@@ -10,13 +10,21 @@ impl Codegen {
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
-                dest_label,
+                entry: dest_label,
+                ..
             } in entries
             {
                 #[cfg(feature = "emit-tir")]
                 eprintln!("  backedge_write_back {_src_idx}->{bb_pos}");
                 bbctx.remove_unused(&unused);
-                self.gen_write_back_for_target(bbctx, &target_ctx, dest_label, target_label, pc);
+                self.gen_write_back_for_target(
+                    bbctx,
+                    &target_ctx,
+                    dest_label,
+                    target_label,
+                    pc,
+                    false,
+                );
             }
         }
     }
@@ -96,7 +104,7 @@ impl Codegen {
                 let entry = entries.remove(0);
                 #[cfg(feature = "emit-tir")]
                 eprintln!("gen_merge bb: {bb_pos}<-{}", entry.src_idx);
-                self.jit.bind_label(entry.dest_label);
+                self.jit.bind_label(entry.entry);
                 return entry.bbctx;
             }
 
@@ -133,13 +141,14 @@ impl Codegen {
         for BranchEntry {
             src_idx: _src_idx,
             mut bbctx,
-            dest_label,
+            entry,
+            cont,
         } in entries
         {
             bbctx.remove_unused(&unused);
             #[cfg(feature = "emit-tir")]
             eprintln!("  write_back {_src_idx}->{_bb_pos} {:?}", bbctx.slot_state);
-            self.gen_write_back_for_target(bbctx, target_ctx, dest_label, cur_label, pc);
+            self.gen_write_back_for_target(bbctx, target_ctx, entry, cur_label, pc, cont);
         }
     }
 
@@ -150,6 +159,7 @@ impl Codegen {
         entry: DestLabel,
         exit: DestLabel,
         pc: BcPc,
+        cont: bool,
     ) {
         #[cfg(feature = "emit-tir")]
         {
@@ -158,8 +168,10 @@ impl Codegen {
         }
         let len = src_ctx.slot_state.0.len();
 
-        self.jit.select_page(1);
-        self.jit.bind_label(entry);
+        if !cont {
+            self.jit.select_page(1);
+            self.jit.bind_label(entry);
+        }
         for i in 0..len {
             let reg = SlotId(i as u16);
             if target_ctx.slot_state[reg] == LinkMode::Stack {
@@ -262,10 +274,12 @@ impl Codegen {
         for reg in guard_list {
             self.slot_guard_float(reg, side_exit);
         }
-        monoasm!( &mut self.jit,
-            jmp exit;
-        );
-        self.jit.select_page(0);
+        if !cont {
+            monoasm!( &mut self.jit,
+                jmp exit;
+            );
+            self.jit.select_page(0);
+        }
         self.gen_side_deopt_with_label(pc + 1, Some(&src_ctx), side_exit);
     }
 
