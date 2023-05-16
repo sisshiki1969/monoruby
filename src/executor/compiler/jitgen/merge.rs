@@ -45,7 +45,7 @@ impl Codegen {
             let mut ctx = BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, coerced) in use_set {
                 match target_slot_info[reg] {
-                    LinkMode::Stack | LinkMode::Fixnum(_) => {}
+                    LinkMode::Stack | LinkMode::Const(_) => {}
                     LinkMode::Xmm(_) if !coerced => {
                         let freg = ctx.alloc_xmm();
                         ctx.link_xmm(reg, freg);
@@ -158,8 +158,8 @@ impl Codegen {
                     LinkMode::Both(_) => {
                         src_ctx.dealloc_xmm(reg);
                     }
-                    LinkMode::Fixnum(i) => {
-                        self.write_back_val(reg, Value::new_integer(i));
+                    LinkMode::Const(v) => {
+                        self.write_back_val(reg, v);
                         src_ctx.slot_state[reg] = LinkMode::Stack;
                     }
                     LinkMode::Stack => {}
@@ -228,7 +228,7 @@ impl Codegen {
                     src_ctx.link_both(reg, r);
                     conv_list.push((reg, r));
                 }
-                (LinkMode::Fixnum(l), LinkMode::Fixnum(r)) if l == r => {}
+                (LinkMode::Const(l), LinkMode::Const(r)) if l == r => {}
                 (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
             }
         }

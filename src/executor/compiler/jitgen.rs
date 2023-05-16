@@ -208,8 +208,8 @@ impl BBContext {
             let reg = SlotId(i as u16);
             match mode {
                 LinkMode::Stack => {}
-                LinkMode::Fixnum(i) => {
-                    ctx.slot_state[reg] = LinkMode::Fixnum(*i);
+                LinkMode::Const(i) => {
+                    ctx.slot_state[reg] = LinkMode::Const(*i);
                 }
                 LinkMode::Both(x) => {
                     ctx.slot_state[reg] = LinkMode::Both(*x);
@@ -262,7 +262,7 @@ impl BBContext {
                 self.xmm[freg].retain(|e| *e != reg);
                 self.slot_state[reg] = LinkMode::Stack;
             }
-            LinkMode::Fixnum(_) => {
+            LinkMode::Const(_) => {
                 self.slot_state[reg] = LinkMode::Stack;
             }
             LinkMode::Stack => {}
@@ -285,7 +285,7 @@ impl BBContext {
                     *x = l;
                 }
             }
-            LinkMode::Stack | LinkMode::Fixnum(_) => {}
+            LinkMode::Stack | LinkMode::Const(_) => {}
         });
     }
 
@@ -298,7 +298,7 @@ impl BBContext {
                 assert_eq!(reg, self.xmm[freg][0]);
                 freg
             }
-            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Fixnum(_) => {
+            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Const(_) => {
                 self.dealloc_xmm(reg);
                 let freg = self.alloc_xmm();
                 self.link_xmm(reg, freg);
@@ -336,7 +336,7 @@ impl BBContext {
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
-                LinkMode::Fixnum(i) => Some((Value::new_integer(*i), SlotId(idx as u16))),
+                LinkMode::Const(v) => Some((*v, SlotId(idx as u16))),
                 _ => None,
             })
             .collect();
@@ -376,9 +376,7 @@ impl BBContext {
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
-                LinkMode::Fixnum(i) if idx <= local_num => {
-                    Some((Value::new_integer(*i), SlotId(idx as u16)))
-                }
+                LinkMode::Const(v) if idx <= local_num => Some((*v, SlotId(idx as u16))),
                 _ => None,
             })
             .collect();
@@ -472,9 +470,9 @@ enum LinkMode {
     ///
     Stack,
     ///
-    /// Fixnum.
+    /// Constant.
     ///
-    Fixnum(i64),
+    Const(Value),
 }
 
 #[derive(Clone, PartialEq)]
@@ -488,7 +486,7 @@ impl std::fmt::Debug for StackSlotInfo {
             .enumerate()
             .flat_map(|(i, mode)| match mode {
                 LinkMode::Stack => None,
-                LinkMode::Fixnum(i) => Some(format!("%{i}:Fixnum({i}) ")),
+                LinkMode::Const(v) => Some(format!("%{i}:Const({:?}) ", v)),
                 LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
                 LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
             })
@@ -534,7 +532,7 @@ impl MergeInfo {
                     (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                     | (LinkMode::Xmm(l), LinkMode::Both(_)) => LinkMode::Both(*l),
                     (LinkMode::Xmm(l), LinkMode::Xmm(_)) => LinkMode::Xmm(*l),
-                    (LinkMode::Fixnum(l), LinkMode::Fixnum(r)) if l == r => LinkMode::Fixnum(*l),
+                    (LinkMode::Const(l), LinkMode::Const(r)) if l == r => LinkMode::Const(*l),
                     _ => LinkMode::Stack,
                 };
             });
@@ -743,8 +741,8 @@ impl Codegen {
                 self.load_rax(src);
                 self.store_rax(dst);
             }
-            LinkMode::Fixnum(i) => {
-                ctx.slot_state[dst] = LinkMode::Fixnum(i);
+            LinkMode::Const(i) => {
+                ctx.slot_state[dst] = LinkMode::Const(i);
             }
         }
     }
@@ -765,8 +763,8 @@ impl Codegen {
                 self.store_rax(reg);
                 ctx.slot_state[reg] = LinkMode::Both(freg);
             }
-            LinkMode::Fixnum(i) => {
-                self.write_back_val(reg, Value::new_integer(i));
+            LinkMode::Const(v) => {
+                self.write_back_val(reg, v);
                 ctx.slot_state[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
@@ -783,9 +781,9 @@ impl Codegen {
                 );
                 ctx.slot_state[reg] = LinkMode::Both(freg);
             }
-            LinkMode::Fixnum(i) => {
+            LinkMode::Const(v) => {
                 monoasm!(&mut self.jit,
-                    movq rax, (Value::new_integer(i).get());
+                    movq rax, (v.get());
                 );
                 ctx.slot_state[reg] = LinkMode::Stack;
             }
@@ -857,15 +855,11 @@ impl Codegen {
                 }
                 TraceIr::Integer(ret, i) => {
                     ctx.dealloc_xmm(ret);
-                    ctx.slot_state[ret] = LinkMode::Fixnum(i as _);
+                    ctx.slot_state[ret] = LinkMode::Const(Value::int32(i));
                 }
                 TraceIr::Symbol(ret, id) => {
                     ctx.dealloc_xmm(ret);
-                    let sym = Value::new_symbol(id).get();
-                    monoasm!( &mut self.jit,
-                      movq rax, (sym);
-                    );
-                    self.store_rax(ret);
+                    ctx.slot_state[ret] = LinkMode::Const(Value::new_symbol(id));
                 }
                 TraceIr::Literal(dst, val) => {
                     ctx.dealloc_xmm(dst);
@@ -1282,6 +1276,8 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::AliasMethod { new, old } => {
+                    self.write_back_slot(&mut ctx, new);
+                    self.write_back_slot(&mut ctx, old);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!( &mut self.jit,
@@ -1757,8 +1753,16 @@ impl Codegen {
     }
 
     fn write_back_val(&mut self, reg: SlotId, v: Value) {
-        monoasm! { &mut self.jit,
-            movq [r14 - (conv(reg))], (v.get());
+        let i = v.get() as i64;
+        if i32::try_from(i).is_ok() {
+            monoasm! { &mut self.jit,
+                movq [r14 - (conv(reg))], (v.get());
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movq rax, (v.get());
+                movq [r14 - (conv(reg))], rax;
+            }
         }
     }
 
