@@ -823,16 +823,8 @@ impl Codegen {
         cc: &mut JitContext,
         position: Option<BcPc>,
     ) -> bool {
-        let is_loop = matches!(
-            func.get_pc(cc.bb_pos).get_ir(fnstore),
-            TraceIr::LoopStart(_)
-        );
         self.jit.bind_label(cc.labels[&cc.bb_pos]);
-        let mut ctx = if is_loop {
-            self.gen_merging_branches_loop(func, fnstore, cc, cc.bb_pos)
-        } else {
-            self.gen_merging_branches(func, cc, cc.bb_pos)
-        };
+        let mut ctx = self.gen_merging_branches(func, fnstore, cc);
         for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
             #[cfg(feature = "emit-asm")]
@@ -1559,7 +1551,7 @@ impl Codegen {
             let next_idx = cc.bb_pos + ofs + 1;
             if cc.bb_info[next_idx].is_some() {
                 let branch_dest = self.jit.label();
-                cc.new_branch(cc.bb_pos + ofs, next_idx, ctx.clone(), branch_dest);
+                cc.new_branch(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 monoasm!( &mut self.jit,
                     jmp branch_dest;
                 );
