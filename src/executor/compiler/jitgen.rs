@@ -558,8 +558,6 @@ impl MergeInfo {
 
     fn merge_entries(entries: &[BranchEntry]) -> Self {
         let mut merge_info = MergeInfo::from(&entries.last().unwrap().bbctx);
-        #[cfg(feature = "emit-tir")]
-        eprintln!("  <-{:?}: {:?}", entries[0].src_idx, merge_info);
         for BranchEntry {
             src_idx: _src_idx,
             bbctx,
@@ -571,6 +569,8 @@ impl MergeInfo {
             eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
             merge_info.merge(bbctx);
         }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("  merged_entries: {:?}", &merge_info.stack_slot);
         merge_info
     }
 }
@@ -876,15 +876,16 @@ impl Codegen {
                 }
                 TraceIr::Literal(ret, val) => {
                     ctx.dealloc_xmm(ret);
-                    if let RV::Float(f) = val.unpack() {
-                        let freg = ctx.alloc_xmm();
-                        ctx.link_both(ret, freg);
-                        let imm = self.jit.const_f64(f);
-                        monoasm!( &mut self.jit,
-                            movq xmm(freg.enc()), [rip + imm];
-                            movq rax, (Value::new_float(f).get());
-                        );
-                        self.store_rax(ret);
+                    if val.class() == FLOAT_CLASS {
+                        ctx.link_const(ret, val);
+                        //let freg = ctx.alloc_xmm();
+                        //ctx.link_both(ret, freg);
+                        //let imm = self.jit.const_f64(f);
+                        //monoasm!( &mut self.jit,
+                        //    movq xmm(freg.enc()), [rip + imm];
+                        //    movq rax, (Value::new_float(f).get());
+                        //);
+                        //self.store_rax(ret);
                     } else {
                         if val.is_packed_value() {
                             monoasm!( &mut self.jit,

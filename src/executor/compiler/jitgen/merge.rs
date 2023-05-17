@@ -49,7 +49,7 @@ impl Codegen {
             let pc = func.get_pc(bb_pos);
             let bb_pos = cc.bb_pos;
             #[cfg(feature = "emit-tir")]
-            eprintln!("gen_merge bb(loop): {bb_pos}");
+            eprintln!("\n===gen_merge bb(loop): {bb_pos}");
             let (use_set, unused) = analysis::LoopAnalysis::analyse(func, bb_pos);
             let cur_label = cc.labels[&bb_pos];
 
@@ -60,11 +60,20 @@ impl Codegen {
             }
 
             let target_slot_info = MergeInfo::merge_entries(&entries).stack_slot;
+
             let mut target_ctx =
                 BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             for (reg, coerced) in use_set {
                 match target_slot_info[reg] {
-                    LinkMode::Stack | LinkMode::Const(_) => {}
+                    LinkMode::Stack => {}
+                    LinkMode::Const(v) => {
+                        if v.class() == FLOAT_CLASS {
+                            target_ctx.dealloc_xmm(reg);
+                            let freg = target_ctx.alloc_xmm();
+                            target_ctx.link_xmm(reg, freg);
+                        } else {
+                        }
+                    }
                     LinkMode::Xmm(_) if !coerced => {
                         target_ctx.dealloc_xmm(reg);
                         let freg = target_ctx.alloc_xmm();
@@ -78,13 +87,13 @@ impl Codegen {
                 };
             }
             #[cfg(feature = "emit-tir")]
-            eprintln!("  merged target:   {:?}", target_ctx.slot_state);
+            eprintln!("  target_ctx:   {:?}", target_ctx.slot_state);
 
             self.write_back_branches(entries, &target_ctx, cur_label, pc + 1, bb_pos, &unused);
 
             cc.new_backedge(&target_ctx, bb_pos, cur_label, unused);
             #[cfg(feature = "emit-tir")]
-            eprintln!("merge_end");
+            eprintln!("===merge_end");
             target_ctx
         } else {
             unreachable!()
@@ -108,8 +117,6 @@ impl Codegen {
             eprintln!("gen_merge bb: {bb_pos}");
 
             let merge_info = MergeInfo::merge_entries(&entries);
-            #[cfg(feature = "emit-tir")]
-            eprintln!("  target: {:?}", merge_info);
 
             let cur_label = cc.labels[&bb_pos];
             let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
@@ -253,6 +260,17 @@ impl Codegen {
                     conv_list.push((reg, r));
                 }
                 (LinkMode::Const(l), LinkMode::Const(r)) if l == r => {}
+                (LinkMode::Const(l), LinkMode::Xmm(r)) => {
+                    if let Some(f) = l.try_float() {
+                        src_ctx.link_xmm(reg, r);
+                        let f = self.jit.const_f64(f);
+                        monoasm!( &mut self.jit,
+                            movq  xmm(r.enc()), [rip + f];
+                        );
+                    } else {
+                        unreachable!()
+                    }
+                }
                 (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
             }
         }
