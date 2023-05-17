@@ -63,28 +63,27 @@ impl Codegen {
 
             let mut target_ctx =
                 BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
+            let mut const_vec = vec![];
             for (reg, coerced) in use_set {
                 match target_slot_info[reg] {
                     LinkMode::Stack => {}
                     LinkMode::Const(v) => {
                         if v.class() == FLOAT_CLASS {
-                            target_ctx.dealloc_xmm(reg);
-                            let freg = target_ctx.alloc_xmm();
-                            target_ctx.link_xmm(reg, freg);
+                            const_vec.push(reg);
                         } else {
                         }
                     }
-                    LinkMode::Xmm(_) if !coerced => {
-                        target_ctx.dealloc_xmm(reg);
-                        let freg = target_ctx.alloc_xmm();
-                        target_ctx.link_xmm(reg, freg);
+                    LinkMode::Xmm(r) if !coerced => {
+                        target_ctx.link_xmm(reg, r);
                     }
-                    LinkMode::Both(_) | LinkMode::Xmm(_) => {
-                        target_ctx.dealloc_xmm(reg);
-                        let freg = target_ctx.alloc_xmm();
-                        target_ctx.link_both(reg, freg);
+                    LinkMode::Both(r) | LinkMode::Xmm(r) => {
+                        target_ctx.link_both(reg, r);
                     }
                 };
+            }
+            for r in const_vec {
+                let freg = target_ctx.alloc_xmm();
+                target_ctx.link_xmm(r, freg);
             }
             #[cfg(feature = "emit-tir")]
             eprintln!("  target_ctx:   {:?}", target_ctx.slot_state);
