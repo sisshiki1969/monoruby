@@ -688,7 +688,7 @@ pub(in crate::executor) enum TraceIr {
 }
 
 impl TraceIr {
-    pub(crate) fn from_bc(pc: BcPc, fnstore: &Store) -> Self {
+    pub(crate) fn from_bc(pc: BcPc) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0xffc0 == 0 {
@@ -770,7 +770,7 @@ impl TraceIr {
                 },
                 30..=31 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
@@ -802,7 +802,7 @@ impl TraceIr {
                 }
                 32..=33 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
@@ -817,7 +817,7 @@ impl TraceIr {
                 }
                 34 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };

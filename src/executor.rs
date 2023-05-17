@@ -607,8 +607,8 @@ impl BcPc {
         self.0.as_ptr()
     }
 
-    fn is_loop(&self, fnstore: &Store) -> bool {
-        matches!(self.get_ir(fnstore), TraceIr::LoopStart(_))
+    fn is_loop(&self) -> bool {
+        matches!(self.get_ir(), TraceIr::LoopStart(_))
     }
 
     pub(crate) fn from(bc: &Bc) -> Self {
@@ -672,8 +672,8 @@ impl std::ops::Deref for BcPc {
 }
 
 impl BcPc {
-    fn get_ir(&self, fnstore: &Store) -> TraceIr {
-        TraceIr::from_bc(*self, fnstore)
+    fn get_ir(&self) -> TraceIr {
+        TraceIr::from_bc(*self)
     }
 }
 
@@ -687,7 +687,7 @@ impl BcPc {
                 ""
             }
         }
-        let s = match self.get_ir(&globals.store) {
+        let s = match TraceIr::from_bc(*self) {
             TraceIr::InitMethod(info) => {
                 format!("init_method {info:?}")
             }

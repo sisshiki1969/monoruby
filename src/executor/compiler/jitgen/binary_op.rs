@@ -371,14 +371,13 @@ impl Codegen {
         &mut self,
         ctx: &mut BBContext,
         cc: &mut JitContext,
-        fnstore: &Store,
         mode: OpMode,
         kind: CmpKind,
         ret: SlotId,
         pc: BcPc,
         index: BcIndex,
     ) {
-        match (pc + 1).get_ir(fnstore) {
+        match (pc + 1).get_ir() {
             TraceIr::CondBr(_, disp, true, brkind) => {
                 let dest_idx = index + disp + 1;
                 let branch_dest = self.jit.label();

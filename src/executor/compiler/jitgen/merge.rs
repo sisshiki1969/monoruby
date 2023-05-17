@@ -32,31 +32,25 @@ impl Codegen {
     pub(super) fn gen_merging_branches(
         &mut self,
         func: &ISeqInfo,
-        fnstore: &Store,
         cc: &mut JitContext,
     ) -> BBContext {
         let bb_pos = cc.bb_pos;
-        let is_loop = func.get_pc(bb_pos).is_loop(fnstore);
+        let is_loop = func.get_pc(bb_pos).is_loop();
         if is_loop {
-            self.gen_merging_branches_loop(func, fnstore, cc)
+            self.gen_merging_branches_loop(func, cc)
         } else {
             self.gen_merging_branches_non_loop(func, cc)
         }
     }
 
-    fn gen_merging_branches_loop(
-        &mut self,
-        func: &ISeqInfo,
-        fnstore: &Store,
-        cc: &mut JitContext,
-    ) -> BBContext {
+    fn gen_merging_branches_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
         let bb_pos = cc.bb_pos;
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
             let bb_pos = cc.bb_pos;
             #[cfg(feature = "emit-tir")]
             eprintln!("gen_merge bb(loop): {bb_pos}");
-            let (use_set, unused) = analysis::LoopAnalysis::analyse(func, fnstore, bb_pos);
+            let (use_set, unused) = analysis::LoopAnalysis::analyse(func, bb_pos);
             let cur_label = cc.labels[&bb_pos];
 
             #[cfg(feature = "emit-tir")]

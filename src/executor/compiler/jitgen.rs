@@ -582,10 +582,10 @@ extern "C" fn log_deoptimize(
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
-    if let TraceIr::LoopEnd = pc.get_ir(&globals.store) {
+    if let TraceIr::LoopEnd = pc.get_ir() {
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
-    } else if let TraceIr::ClassDef { .. } = pc.get_ir(&globals.store) {
+    } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
         eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
@@ -646,7 +646,7 @@ impl Codegen {
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
             let pc = func.get_top_pc();
-            self.prologue(pc, fnstore);
+            self.prologue(pc);
             let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
             monoasm!( &mut self.jit,
                 movq rdi, [r14 - (LBP_SELF)];
@@ -842,14 +842,14 @@ impl Codegen {
         let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&cc.bb_pos) {
             ctx
         } else {
-            self.gen_merging_branches(func, fnstore, cc)
+            self.gen_merging_branches(func, cc)
         };
         for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
                 .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
-            match pc.get_ir(fnstore) {
+            match pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::LoopStart(_) => {
                     cc.loop_count += 1;
@@ -1248,7 +1248,7 @@ impl Codegen {
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
                     let index = cc.bb_pos + ofs + 1;
-                    self.gen_cmp_opt(&mut ctx, cc, fnstore, mode, kind, ret, pc, index);
+                    self.gen_cmp_opt(&mut ctx, cc, mode, kind, ret, pc, index);
                 }
                 TraceIr::Mov(dst, src) => {
                     self.copy_slot(&mut ctx, src, dst);
@@ -1572,7 +1572,7 @@ impl Codegen {
                 let branch_dest = self.jit.label();
                 cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 cc.bb_pos = next_idx;
-                let target_ctx = self.gen_merging_branches(func, fnstore, cc);
+                let target_ctx = self.gen_merging_branches(func, cc);
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
                 return false;
             }

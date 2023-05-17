@@ -23,11 +23,7 @@ impl LoopAnalysis {
     /// 2) Type information of a backedge branch of this loop.
     /// (Float? not Float? or a Value which is coerced into Float?)
     ///
-    pub(super) fn analyse(
-        func: &ISeqInfo,
-        fnstore: &Store,
-        bb_pos: BcIndex,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+    pub(super) fn analyse(func: &ISeqInfo, bb_pos: BcIndex) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(func);
         let regnum = func.total_reg_num();
         let bb_start_vec: Vec<_> = ctx
@@ -58,7 +54,7 @@ impl LoopAnalysis {
                     acc
                 })
             };
-            if let Some(info) = ctx.scan_bb(func, fnstore, reg_info, bb_pos) {
+            if let Some(info) = ctx.scan_bb(func, reg_info, bb_pos) {
                 exit_info = info;
                 break;
             };
@@ -131,14 +127,13 @@ impl LoopAnalysis {
     fn scan_bb(
         &mut self,
         func: &ISeqInfo,
-        fnstore: &Store,
         mut info: SlotInfo,
         bb_pos: BcIndex,
     ) -> Option<SlotInfo> {
         for (ofs, pc) in func.bytecode()[bb_pos.to_usize()..].iter().enumerate() {
             self.pc = Some(BcPc::from(pc));
             let idx = bb_pos + ofs;
-            match self.pc.unwrap().get_ir(fnstore) {
+            match self.pc.unwrap().get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::AliasMethod { new, old } => {
                     info.use_non_float(new);
