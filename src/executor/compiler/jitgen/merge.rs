@@ -66,10 +66,12 @@ impl Codegen {
                 match target_slot_info[reg] {
                     LinkMode::Stack | LinkMode::Const(_) => {}
                     LinkMode::Xmm(_) if !coerced => {
+                        target_ctx.dealloc_xmm(reg);
                         let freg = target_ctx.alloc_xmm();
                         target_ctx.link_xmm(reg, freg);
                     }
                     LinkMode::Both(_) | LinkMode::Xmm(_) => {
+                        target_ctx.dealloc_xmm(reg);
                         let freg = target_ctx.alloc_xmm();
                         target_ctx.link_both(reg, freg);
                     }
@@ -214,7 +216,6 @@ impl Codegen {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
-                        //src_ctx.dealloc_xmm(reg);
                         src_ctx.link_xmm(reg, r);
                     } else {
                         self.xmm_swap(&mut src_ctx, l, r);

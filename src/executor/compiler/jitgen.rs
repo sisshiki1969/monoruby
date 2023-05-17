@@ -265,6 +265,11 @@ impl BBContext {
         self.xmm[freg].push(reg);
     }
 
+    fn link_const(&mut self, reg: SlotId, v: Value) {
+        self.dealloc_xmm(reg);
+        self.slot_state[reg] = LinkMode::Const(v);
+    }
+
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
@@ -746,18 +751,17 @@ impl Codegen {
     /// Copy *src* to *dst*.
     ///
     fn copy_slot(&mut self, ctx: &mut BBContext, src: SlotId, dst: SlotId) {
-        ctx.dealloc_xmm(dst);
         match ctx.slot_state[src] {
             LinkMode::Xmm(freg) | LinkMode::Both(freg) => {
                 ctx.link_xmm(dst, freg);
             }
             LinkMode::Stack => {
-                ctx.slot_state[dst] = LinkMode::Stack;
+                ctx.dealloc_xmm(dst);
                 self.load_rax(src);
                 self.store_rax(dst);
             }
-            LinkMode::Const(i) => {
-                ctx.slot_state[dst] = LinkMode::Const(i);
+            LinkMode::Const(v) => {
+                ctx.link_const(dst, v);
             }
         }
     }
@@ -865,12 +869,10 @@ impl Codegen {
                     }
                 }
                 TraceIr::Integer(ret, i) => {
-                    ctx.dealloc_xmm(ret);
-                    ctx.slot_state[ret] = LinkMode::Const(Value::int32(i));
+                    ctx.link_const(ret, Value::int32(i));
                 }
                 TraceIr::Symbol(ret, id) => {
-                    ctx.dealloc_xmm(ret);
-                    ctx.slot_state[ret] = LinkMode::Const(Value::new_symbol(id));
+                    ctx.link_const(ret, Value::new_symbol(id));
                 }
                 TraceIr::Literal(ret, val) => {
                     ctx.dealloc_xmm(ret);
