@@ -15,7 +15,7 @@ pub(crate) struct Store {
     /// function info.
     functions: function::Funcs,
     /// inline function info.
-    inline: HashMap<FuncId, InlineMethod>,
+    //inline: HashMap<FuncId, InlineMethod>,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -87,7 +87,7 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
-            inline: HashMap::default(),
+            //inline: HashMap::default(),
             constsite_info: vec![],
             callsite_info: vec![],
             classes: vec![ClassInfo::new(); 20],
@@ -168,9 +168,9 @@ impl Store {
             .add_block(mother, outer, optional_params, info, sourceinfo)
     }
 
-    pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
+    /*pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
         self.inline.get(&func_id)
-    }
+    }*/
 
     pub(super) fn add_builtin_func(
         &mut self,
@@ -189,9 +189,9 @@ impl Store {
         self.functions.add_attr_writer(name, ivar_name)
     }
 
-    pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
+    /*pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
         self.inline.insert(func_id, inline_id);
-    }
+    }*/
 
     pub(crate) fn callsite_offset(&self) -> usize {
         self.callsite_info.len()
