@@ -49,7 +49,7 @@ struct JitContext {
     ///
     /// A map for backword branches.
     ///
-    backedge_map: HashMap<BcIndex, (DestLabel, MergeInfo, Vec<SlotId>)>,
+    backedge_map: HashMap<BcIndex, (DestLabel, BBContext, Vec<SlotId>)>,
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
@@ -151,12 +151,8 @@ impl JitContext {
         dest_label: DestLabel,
         unused: Vec<SlotId>,
     ) {
-        let merge_info = MergeInfo {
-            stack_slot: bbctx.slot_state.clone(),
-            local_num: bbctx.local_num,
-        };
         self.backedge_map
-            .insert(bb_pos, (dest_label, merge_info, unused));
+            .insert(bb_pos, (dest_label, bbctx.clone(), unused));
     }
 }
 
@@ -211,30 +207,6 @@ impl BBContext {
             local_num,
             recompile_flag: false,
         }
-    }
-
-    fn from_merge_info(merge_info: &MergeInfo, self_value: Value) -> Self {
-        let stack_slot = &merge_info.stack_slot;
-        let local_num = merge_info.local_num;
-        let mut ctx = Self::new(stack_slot.0.len(), local_num, self_value);
-        for (i, mode) in stack_slot.0.iter().enumerate() {
-            let reg = SlotId(i as u16);
-            match mode {
-                LinkMode::Stack => {}
-                LinkMode::Const(i) => {
-                    ctx.slot_state[reg] = LinkMode::Const(*i);
-                }
-                LinkMode::Both(x) => {
-                    ctx.slot_state[reg] = LinkMode::Both(*x);
-                    ctx.xmm[*x].push(reg);
-                }
-                LinkMode::Xmm(x) => {
-                    ctx.slot_state[reg] = LinkMode::Xmm(*x);
-                    ctx.xmm[*x].push(reg);
-                }
-            }
-        }
-        ctx
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
@@ -323,6 +295,51 @@ impl BBContext {
                 freg
             }
         }
+    }
+
+    fn merge(&mut self, other: &BBContext) {
+        for i in 0..self.slot_state.0.len() {
+            let i = SlotId(i as u16);
+            match (&self.slot_state[i], &other.slot_state[i]) {
+                (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
+                | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
+                (LinkMode::Both(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
+                    self.link_both(i, *l)
+                }
+                (LinkMode::Const(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
+                    let x = self.alloc_xmm();
+                    self.link_both(i, x);
+                }
+                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
+                (LinkMode::Xmm(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
+                    self.link_xmm(i, *l)
+                }
+                (LinkMode::Const(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
+                    let x = self.alloc_xmm();
+                    self.link_xmm(i, x);
+                }
+                (LinkMode::Const(l), LinkMode::Const(r)) if l == r => self.link_const(i, *l),
+                _ => self.dealloc_xmm(i),
+            };
+        }
+    }
+
+    fn merge_entries(entries: &[BranchEntry]) -> Self {
+        let mut merge_ctx = entries.last().unwrap().bbctx.clone();
+        for BranchEntry {
+            src_idx: _src_idx,
+            bbctx,
+            entry: _,
+            ..
+        } in entries.iter()
+        {
+            #[cfg(feature = "emit-tir")]
+            eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
+            merge_ctx.merge(bbctx);
+        }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
+        merge_ctx
     }
 
     fn get_write_back(&self) -> WriteBack {
@@ -523,55 +540,6 @@ impl std::ops::Index<SlotId> for StackSlotInfo {
 impl std::ops::IndexMut<SlotId> for StackSlotInfo {
     fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
         &mut self.0[i.0 as usize]
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct MergeInfo {
-    stack_slot: StackSlotInfo,
-    local_num: usize,
-}
-
-impl MergeInfo {
-    fn from(bbctx: &BBContext) -> Self {
-        Self {
-            stack_slot: bbctx.slot_state.clone(),
-            local_num: bbctx.local_num,
-        }
-    }
-
-    fn merge(&mut self, other: &BBContext) {
-        self.stack_slot
-            .0
-            .iter_mut()
-            .zip(other.slot_state.0.iter())
-            .for_each(|(l, r)| {
-                *l = match (&l, r) {
-                    (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
-                    | (LinkMode::Xmm(l), LinkMode::Both(_)) => LinkMode::Both(*l),
-                    (LinkMode::Xmm(l), LinkMode::Xmm(_)) => LinkMode::Xmm(*l),
-                    (LinkMode::Const(l), LinkMode::Const(r)) if l == r => LinkMode::Const(*l),
-                    _ => LinkMode::Stack,
-                };
-            });
-    }
-
-    fn merge_entries(entries: &[BranchEntry]) -> Self {
-        let mut merge_info = MergeInfo::from(&entries.last().unwrap().bbctx);
-        for BranchEntry {
-            src_idx: _src_idx,
-            bbctx,
-            entry: _,
-            ..
-        } in entries.iter()
-        {
-            #[cfg(feature = "emit-tir")]
-            eprintln!("  <-{:?}: {:?}", _src_idx, bbctx.slot_state);
-            merge_info.merge(bbctx);
-        }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("  merged_entries: {:?}", &merge_info.stack_slot);
-        merge_info
     }
 }
 

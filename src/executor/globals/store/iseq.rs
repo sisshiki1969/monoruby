@@ -308,6 +308,9 @@ impl ISeqInfo {
             let pc = BcPc::from(pc);
             if let Some(disp) = TraceIr::is_branch(pc) {
                 info[((idx + 1) as i32 + disp) as usize].push(BcIndex::from(idx));
+                if !TraceIr::is_terminal(pc) {
+                    info[idx + 1].push(BcIndex::from(idx));
+                }
             }
         }
         assert_eq!(0, info[self.bytecode_len()].len());

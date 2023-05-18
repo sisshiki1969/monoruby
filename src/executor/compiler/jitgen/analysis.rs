@@ -59,13 +59,16 @@ impl LoopAnalysis {
                 break;
             };
         }
-        let slot_info = ctx.backedge_info.unwrap();
-        exit_info.merge(&slot_info);
+        let backedge_info = ctx.backedge_info.unwrap();
+        exit_info.merge(&backedge_info);
         if let Some(info) = ctx.return_info {
             exit_info.merge(&info);
         }
 
-        (slot_info.get_loop_used_as_float(), exit_info.get_unused())
+        (
+            backedge_info.get_loop_used_as_float(),
+            exit_info.get_unused(),
+        )
     }
 }
 
@@ -459,8 +462,8 @@ impl SlotInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, b)| match (b.ty, b.used) {
-                (Ty::Float, IsUsed::Used) => Some((SlotId(i as u16), true)),
-                (Ty::Both, IsUsed::Used) => Some((SlotId(i as u16), false)),
+                (Ty::Float, _) => Some((SlotId(i as u16), true)),
+                (Ty::Both, _) => Some((SlotId(i as u16), false)),
                 _ => None,
             })
             .collect()

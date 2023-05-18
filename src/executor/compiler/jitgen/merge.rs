@@ -4,8 +4,7 @@ impl Codegen {
     pub(super) fn gen_backedge_branches(&mut self, cc: &mut JitContext, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut cc.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
-            let (target_label, merge_info, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
-            let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
+            let (target_label, target_ctx, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
             let pc = func.get_pc(bb_pos);
             for BranchEntry {
                 src_idx: _src_idx,
@@ -36,11 +35,18 @@ impl Codegen {
     ) -> BBContext {
         let bb_pos = cc.bb_pos;
         let is_loop = func.get_pc(bb_pos).is_loop();
-        if is_loop {
+        let res = if is_loop {
+            #[cfg(feature = "emit-tir")]
+            eprintln!("\n===gen_merge bb(loop): {bb_pos}");
             self.gen_merging_branches_loop(func, cc)
         } else {
+            #[cfg(feature = "emit-tir")]
+            eprintln!("\n===gen_merge bb: {bb_pos}");
             self.gen_merging_branches_non_loop(func, cc)
-        }
+        };
+        #[cfg(feature = "emit-tir")]
+        eprintln!("===merge_end\n");
+        res
     }
 
     fn gen_merging_branches_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
@@ -48,8 +54,7 @@ impl Codegen {
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
             let bb_pos = cc.bb_pos;
-            #[cfg(feature = "emit-tir")]
-            eprintln!("\n===gen_merge bb(loop): {bb_pos}");
+
             let (use_set, unused) = analysis::LoopAnalysis::analyse(func, bb_pos);
             let cur_label = cc.labels[&bb_pos];
 
@@ -59,18 +64,17 @@ impl Codegen {
                 eprintln!("  not used: {:?}", unused);
             }
 
-            let target_slot_info = MergeInfo::merge_entries(&entries).stack_slot;
+            let template = BBContext::merge_entries(&entries);
 
             let mut target_ctx =
                 BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
             let mut const_vec = vec![];
             for (reg, coerced) in use_set {
-                match target_slot_info[reg] {
+                match template.slot_state[reg] {
                     LinkMode::Stack => {}
                     LinkMode::Const(v) => {
                         if v.class() == FLOAT_CLASS {
                             const_vec.push(reg);
-                        } else {
                         }
                     }
                     LinkMode::Xmm(r) if !coerced => {
@@ -91,8 +95,7 @@ impl Codegen {
             self.write_back_branches(entries, &target_ctx, cur_label, pc + 1, bb_pos, &unused);
 
             cc.new_backedge(&target_ctx, bb_pos, cur_label, unused);
-            #[cfg(feature = "emit-tir")]
-            eprintln!("===merge_end");
+
             target_ctx
         } else {
             unreachable!()
@@ -106,24 +109,14 @@ impl Codegen {
 
             if entries.len() == 1 {
                 let entry = entries.remove(0);
-                #[cfg(feature = "emit-tir")]
-                eprintln!("gen_merge bb: {bb_pos}<-{}", entry.src_idx);
                 self.jit.bind_label(entry.entry);
                 return entry.bbctx;
             }
 
-            #[cfg(feature = "emit-tir")]
-            eprintln!("gen_merge bb: {bb_pos}");
-
-            let merge_info = MergeInfo::merge_entries(&entries);
-
+            let target_ctx = BBContext::merge_entries(&entries);
             let cur_label = cc.labels[&bb_pos];
-            let target_ctx = BBContext::from_merge_info(&merge_info, cc.self_value);
 
             self.write_back_branches(entries, &target_ctx, cur_label, pc, bb_pos, &[]);
-
-            #[cfg(feature = "emit-tir")]
-            eprintln!("merge_end");
 
             target_ctx
         } else {
@@ -151,6 +144,8 @@ impl Codegen {
             #[cfg(feature = "emit-tir")]
             eprintln!("  write_back {_src_idx}->{_bb_pos} {:?}", bbctx.slot_state);
             self.gen_write_back_for_target(bbctx, target_ctx, entry, cur_label, pc, cont);
+            #[cfg(feature = "emit-tir")]
+            eprintln!("  write_back end");
         }
     }
 
