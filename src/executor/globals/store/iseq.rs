@@ -327,17 +327,11 @@ impl ISeqInfo {
                 }
             })
             .collect();
-        for (idx, pc) in self.bytecode().iter().enumerate() {
-            let pc = BcPc::from(pc);
-            if !TraceIr::is_terminal(pc) {
-                if let Some(ref mut elem) = bb_info[idx + 1] {
-                    elem.1.push(BcIndex::from(idx));
-                }
-            }
-        }
         // a first bytecode is always a start of basic block.
         if bb_info[0].is_none() {
             bb_info[0] = Some((BasicBlockId(0), vec![]));
+        } else {
+            unreachable!()
         }
         bb_info
     }

@@ -477,7 +477,7 @@ impl SlotInfo {
             .iter()
             .enumerate()
             .flat_map(|(i, state)| {
-                if state.used == IsUsed::NotUsed {
+                if state.used == IsUsed::Killed {
                     Some(SlotId(i as u16))
                 } else {
                     None
@@ -561,14 +561,14 @@ impl SlotInfo {
     }
 
     fn use_(&mut self, slot: SlotId) {
-        if self[slot].used != IsUsed::NotUsed {
+        if self[slot].used != IsUsed::Killed {
             self[slot].used = IsUsed::Used;
         }
     }
 
     fn def_(&mut self, slot: SlotId) {
         if self[slot].used == IsUsed::ND {
-            self[slot].used = IsUsed::NotUsed;
+            self[slot].used = IsUsed::Killed;
         }
     }
 }
@@ -667,14 +667,14 @@ enum IsUsed {
     ///
     /// Guaranteed not to be used (= killed) in all paths.
     ///
-    NotUsed,
+    Killed,
 }
 
 impl IsUsed {
     fn merge(&mut self, other: &Self) {
         *self = match (&self, other) {
             (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
-            (IsUsed::NotUsed, IsUsed::NotUsed) => IsUsed::NotUsed,
+            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
             _ => IsUsed::ND,
         };
     }
