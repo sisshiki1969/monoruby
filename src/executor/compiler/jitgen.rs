@@ -73,24 +73,24 @@ struct JitContext {
 }
 
 #[derive(Clone)]
-pub(crate) struct BasicBlockInfo(Vec<Option<(BasicBlockId, Vec<BcIndex>)>>);
+pub(crate) struct BasicBlockInfo(Vec<Vec<BcIndex>>);
 
 impl std::ops::Deref for BasicBlockInfo {
-    type Target = Vec<Option<(BasicBlockId, Vec<BcIndex>)>>;
+    type Target = Vec<Vec<BcIndex>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl std::ops::Index<BcIndex> for BasicBlockInfo {
-    type Output = Option<(BasicBlockId, Vec<BcIndex>)>;
+    type Output = Vec<BcIndex>;
     fn index(&self, index: BcIndex) -> &Self::Output {
         &self.0[index.0 as usize]
     }
 }
 
 impl BasicBlockInfo {
-    fn from(v: Vec<Option<(BasicBlockId, Vec<BcIndex>)>>) -> Self {
+    fn from(v: Vec<Vec<BcIndex>>) -> Self {
         Self(v)
     }
 }
@@ -106,10 +106,29 @@ impl JitContext {
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let bb_info = BasicBlockInfo::from(func.get_bb_info());
+        let info = func.get_bb_info();
+        let mut bb_id = BasicBlockId(0);
+        let mut bbid_ary = vec![];
+        for incoming in &info {
+            if !incoming.is_empty() {
+                bb_id += 1;
+            }
+            bbid_ary.push(bb_id);
+        }
+        bb_id += 1;
+        let mut bb = vec![(vec![], vec![]); bb_id.0];
+        for (i, incoming) in info.iter().enumerate() {
+            let incoming: Vec<_> = incoming.iter().map(|i| bbid_ary[i.0 as usize]).collect();
+            for incoming in &incoming {
+                bb[incoming.0].1.push(bbid_ary[i]);
+            }
+            bb[bbid_ary[i].0].0 = incoming;
+        }
+        //eprintln!("{:?}", bb);
+        let bb_info = BasicBlockInfo::from(info);
         let mut labels = HashMap::default();
         bb_info.iter().enumerate().for_each(|(idx, elem)| {
-            if elem.is_some() {
+            if idx == 0 || !elem.is_empty() {
                 labels.insert(BcIndex::from(idx), codegen.jit.label());
             }
         });
@@ -612,16 +631,17 @@ impl Codegen {
             .bb_info
             .iter()
             .enumerate()
-            .filter_map(|(idx, v)| match v {
-                Some(_) => {
+            .filter_map(|(idx, v)| {
+                if idx == 0 || !v.is_empty() {
                     let idx = BcIndex::from(idx);
                     if idx >= start_pos {
                         Some(idx)
                     } else {
                         None
                     }
+                } else {
+                    None
                 }
-                None => None,
             })
             .collect();
         cc.start_codepos = self.jit.get_current();
@@ -1549,7 +1569,7 @@ impl Codegen {
             }
 
             let next_idx = cc.bb_pos + ofs + 1;
-            if cc.bb_info[next_idx].is_some() {
+            if !cc.bb_info[next_idx].is_empty() {
                 let branch_dest = self.jit.label();
                 cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 cc.bb_pos = next_idx;

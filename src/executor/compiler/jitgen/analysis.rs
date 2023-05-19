@@ -40,16 +40,17 @@ impl LoopAnalysis {
             .bb_info
             .iter()
             .enumerate()
-            .flat_map(|(idx, info)| match info {
-                Some(_) => {
+            .flat_map(|(idx, info)| {
+                if idx == 0 || !info.is_empty() {
                     let idx = BcIndex::from(idx);
                     if idx >= bb_pos {
                         Some(idx)
                     } else {
                         None
                     }
+                } else {
+                    None
                 }
-                None => None,
             })
             .collect();
         let mut exit_info = SlotInfo::new(regnum);
@@ -448,7 +449,7 @@ impl LoopAnalysis {
             }
 
             let next_idx = idx + 1;
-            if self.bb_info[next_idx].is_some() {
+            if !self.bb_info[next_idx].is_empty() {
                 self.add_branch(idx, info, next_idx);
                 return None;
             }

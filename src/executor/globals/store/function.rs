@@ -435,7 +435,15 @@ impl FuncInfo {
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(fmt) = pc.format(globals, i) {
-                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i);
+                eprint!(
+                    "{}:{:05} ",
+                    if i == 0 || !bb_info[i].is_empty() {
+                        "+"
+                    } else {
+                        " "
+                    },
+                    i
+                );
                 eprintln!("{}", fmt);
             };
         }

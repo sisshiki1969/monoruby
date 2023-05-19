@@ -302,43 +302,25 @@ impl ISeqInfo {
     ///
     /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
     ///
-    pub(crate) fn get_bb_info(&self) -> Vec<Option<(BasicBlockId, Vec<BcIndex>)>> {
+    pub(crate) fn get_bb_info(&self) -> Vec<Vec<BcIndex>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(disp) = TraceIr::is_branch(pc) {
-                info[((idx + 1) as i32 + disp) as usize].push(BcIndex::from(idx));
+                let dest = ((idx + 1) as i32 + disp) as usize;
+                info[dest].push(BcIndex::from(idx));
                 if !TraceIr::is_terminal(pc) {
                     info[idx + 1].push(BcIndex::from(idx));
                 }
             }
         }
         assert_eq!(0, info[self.bytecode_len()].len());
-        let mut bb_id = BasicBlockId(1);
-        let mut bb_info: Vec<_> = info
-            .into_iter()
-            .map(|e| {
-                if !e.is_empty() {
-                    let id = bb_id;
-                    bb_id += 1;
-                    Some((id, e))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        // a first bytecode is always a start of basic block.
-        if bb_info[0].is_none() {
-            bb_info[0] = Some((BasicBlockId(0), vec![]));
-        } else {
-            unreachable!()
-        }
-        bb_info
+        info
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BasicBlockId(usize);
+pub(crate) struct BasicBlockId(pub usize);
 
 impl std::ops::AddAssign<usize> for BasicBlockId {
     fn add_assign(&mut self, rhs: usize) {
