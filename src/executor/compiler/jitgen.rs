@@ -55,6 +55,14 @@ struct JitContext {
     ///
     start_codepos: usize,
     ///
+    ///
+    ///
+    total_reg_num: usize,
+    ///
+    ///
+    ///
+    local_num: usize,
+    ///
     /// *self* for this loop/method.
     ///
     self_value: Value,
@@ -105,6 +113,8 @@ impl JitContext {
                 labels.insert(BcIndex::from(idx), codegen.jit.label());
             }
         });
+        let total_reg_num = func.total_reg_num();
+        let local_num = func.local_num();
         Self {
             labels,
             bb_info,
@@ -115,6 +125,8 @@ impl JitContext {
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
             start_codepos: 0,
+            total_reg_num,
+            local_num,
             self_value,
             sourcemap: vec![],
         }
@@ -198,13 +210,13 @@ struct BBContext {
 }
 
 impl BBContext {
-    fn new(reg_num: usize, local_num: usize, self_value: Value) -> Self {
+    fn new(cc: &JitContext) -> Self {
         let xmm = XmmInfo::new();
         Self {
-            slot_state: StackSlotInfo(vec![LinkMode::Stack; reg_num]),
+            slot_state: StackSlotInfo(vec![LinkMode::Stack; cc.total_reg_num]),
             xmm,
-            self_value,
-            local_num,
+            self_value: cc.self_value,
+            local_num: cc.local_num,
             recompile_flag: false,
         }
     }
@@ -612,8 +624,6 @@ impl Codegen {
                 None => None,
             })
             .collect();
-        let reg_num = func.total_reg_num();
-        let local_num = func.local_num();
         cc.start_codepos = self.jit.get_current();
 
         if position.is_none() {
@@ -631,7 +641,7 @@ impl Codegen {
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bbctx: BBContext::new(reg_num, local_num, self_value),
+                bbctx: BBContext::new(&cc),
                 entry: self.jit.label(),
                 cont: true,
             }],

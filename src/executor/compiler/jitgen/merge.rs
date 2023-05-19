@@ -55,7 +55,8 @@ impl Codegen {
             let pc = func.get_pc(bb_pos);
             let bb_pos = cc.bb_pos;
 
-            let (use_set, unused) = analysis::LoopAnalysis::analyse(func, bb_pos);
+            let (use_set, unused) = analysis::LoopAnalysis::analyse(cc, func, bb_pos);
+
             let cur_label = cc.labels[&bb_pos];
 
             #[cfg(feature = "emit-tir")]
@@ -66,8 +67,7 @@ impl Codegen {
 
             let template = BBContext::merge_entries(&entries);
 
-            let mut target_ctx =
-                BBContext::new(func.total_reg_num(), func.local_num(), cc.self_value);
+            let mut target_ctx = BBContext::new(&cc);
             let mut const_vec = vec![];
             for (reg, coerced) in use_set {
                 match template.slot_state[reg] {

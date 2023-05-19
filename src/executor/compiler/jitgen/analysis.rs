@@ -6,7 +6,13 @@ pub(super) struct LoopAnalysis {
     /// Basic block information
     bb_info: BasicBlockInfo,
     loop_level: usize,
+    ///
+    /// Merged slot information of back edge.
+    ///
     backedge_info: Option<SlotInfo>,
+    ///
+    /// Merged slot information of return edge.
+    ///
     return_info: Option<SlotInfo>,
     pc: Option<BcPc>,
 }
@@ -23,9 +29,13 @@ impl LoopAnalysis {
     /// 2) Type information of a backedge branch of this loop.
     /// (Float? not Float? or a Value which is coerced into Float?)
     ///
-    pub(super) fn analyse(func: &ISeqInfo, bb_pos: BcIndex) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let mut ctx = LoopAnalysis::new(func);
-        let regnum = func.total_reg_num();
+    pub(super) fn analyse(
+        cc: &JitContext,
+        func: &ISeqInfo,
+        bb_pos: BcIndex,
+    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        let mut ctx = LoopAnalysis::new(cc);
+        let regnum = cc.total_reg_num;
         let bb_start_vec: Vec<_> = ctx
             .bb_info
             .iter()
@@ -73,10 +83,10 @@ impl LoopAnalysis {
 }
 
 impl LoopAnalysis {
-    fn new(func: &ISeqInfo) -> Self {
+    fn new(cc: &JitContext) -> Self {
         Self {
             branch_map: HashMap::default(),
-            bb_info: BasicBlockInfo::from(func.get_bb_info()),
+            bb_info: cc.bb_info.clone(),
             loop_level: 0,
             backedge_info: None,
             return_info: None,
