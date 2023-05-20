@@ -28,7 +28,7 @@ struct JitContext {
     ///
     /// Basic block information.
     ///
-    bb_info: BasicBlockInfo,
+    bb_info: Incoming,
     ///
     /// The start bytecode position of the current basic block.
     ///
@@ -73,25 +73,61 @@ struct JitContext {
 }
 
 #[derive(Clone)]
-pub(crate) struct BasicBlockInfo(Vec<Vec<BcIndex>>);
+pub(crate) struct Incoming(Vec<Vec<BcIndex>>);
 
-impl std::ops::Deref for BasicBlockInfo {
+impl std::ops::Deref for Incoming {
     type Target = Vec<Vec<BcIndex>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::ops::Index<BcIndex> for BasicBlockInfo {
+impl std::ops::Index<BcIndex> for Incoming {
     type Output = Vec<BcIndex>;
     fn index(&self, index: BcIndex) -> &Self::Output {
         &self.0[index.0 as usize]
     }
 }
 
-impl BasicBlockInfo {
+impl Incoming {
     fn from(v: Vec<Vec<BcIndex>>) -> Self {
         Self(v)
+    }
+}
+
+struct BasicBlockInfo(Vec<BasciBlockInfoEntry>);
+
+impl std::ops::Index<BasicBlockId> for BasicBlockInfo {
+    type Output = BasciBlockInfoEntry;
+    fn index(&self, index: BasicBlockId) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl std::ops::IndexMut<BasicBlockId> for BasicBlockInfo {
+    fn index_mut(&mut self, index: BasicBlockId) -> &mut Self::Output {
+        &mut self.0[index.0]
+    }
+}
+
+impl BasicBlockInfo {
+    fn new(len: usize) -> Self {
+        BasicBlockInfo(vec![BasciBlockInfoEntry::default(); len])
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct BasciBlockInfoEntry {
+    incoming: Vec<BasicBlockId>,
+    outgoing: Vec<BasicBlockId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BasicBlockId(usize);
+
+impl std::ops::AddAssign<usize> for BasicBlockId {
+    fn add_assign(&mut self, rhs: usize) {
+        *self = Self(self.0 + rhs)
     }
 }
 
@@ -107,31 +143,28 @@ impl JitContext {
         self_value: Value,
     ) -> Self {
         let info = func.get_bb_info();
-        let mut bb_id = BasicBlockId(0);
-        let mut bbid_ary = vec![];
+        let mut bb_id = BasicBlockId(1);
+        let mut bbid_table = vec![];
         for incoming in &info {
             if !incoming.is_empty() {
                 bb_id += 1;
             }
-            bbid_ary.push(bb_id);
+            bbid_table.push(bb_id);
         }
         bb_id += 1;
-        let mut bb = vec![(vec![], vec![]); bb_id.0];
+        let mut bb = BasicBlockInfo::new(bb_id.0);
+        let mut labels = HashMap::default();
         for (i, incoming) in info.iter().enumerate() {
-            let incoming: Vec<_> = incoming.iter().map(|i| bbid_ary[i.0 as usize]).collect();
-            for incoming in &incoming {
-                bb[incoming.0].1.push(bbid_ary[i]);
+            if i == 0 || !incoming.is_empty() {
+                labels.insert(BcIndex::from(i), codegen.jit.label());
             }
-            bb[bbid_ary[i].0].0 = incoming;
+            for incoming in incoming.iter().map(|i| bbid_table[i.0 as usize]) {
+                bb[bbid_table[i]].incoming.push(incoming);
+                bb[incoming].outgoing.push(bbid_table[i]);
+            }
         }
         //eprintln!("{:?}", bb);
-        let bb_info = BasicBlockInfo::from(info);
-        let mut labels = HashMap::default();
-        bb_info.iter().enumerate().for_each(|(idx, elem)| {
-            if idx == 0 || !elem.is_empty() {
-                labels.insert(BcIndex::from(idx), codegen.jit.label());
-            }
-        });
+        let bb_info = Incoming::from(info);
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {

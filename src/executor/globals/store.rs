@@ -8,7 +8,7 @@ mod function;
 mod iseq;
 pub use class::*;
 pub use function::*;
-pub(crate) use iseq::{BasicBlockId, ISeqInfo};
+pub(crate) use iseq::ISeqInfo;
 
 #[derive(Default)]
 pub(crate) struct Store {

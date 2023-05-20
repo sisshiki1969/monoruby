@@ -310,20 +310,19 @@ impl ISeqInfo {
                 let dest = ((idx + 1) as i32 + disp) as usize;
                 info[dest].push(BcIndex::from(idx));
                 if !TraceIr::is_terminal(pc) {
+                    // "not taken" edge for conditional branches.
                     info[idx + 1].push(BcIndex::from(idx));
                 }
             }
         }
+        for (idx, pc) in self.bytecode().iter().enumerate() {
+            let pc = BcPc::from(pc);
+            if !info[idx + 1].is_empty() && TraceIr::is_branch(pc).is_none() {
+                // merging edge (back edge).
+                info[idx + 1].push(BcIndex::from(idx));
+            }
+        }
         assert_eq!(0, info[self.bytecode_len()].len());
         info
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BasicBlockId(pub usize);
-
-impl std::ops::AddAssign<usize> for BasicBlockId {
-    fn add_assign(&mut self, rhs: usize) {
-        *self = Self(self.0 + rhs)
     }
 }

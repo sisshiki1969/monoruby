@@ -4,7 +4,7 @@ pub(super) struct LoopAnalysis {
     /// key: dest_idx, value Vec<(src_idx, reginfo)>
     branch_map: HashMap<BcIndex, Vec<(BcIndex, SlotInfo)>>,
     /// Basic block information
-    bb_info: BasicBlockInfo,
+    bb_info: Incoming,
     loop_level: usize,
     ///
     /// Merged slot information of back edge.
