@@ -302,7 +302,7 @@ impl ISeqInfo {
     ///
     /// Some((basic_block_id, Vec of source bytecodes)) => a start bytecode of a basic block.
     ///
-    pub(crate) fn get_bb_info(&self) -> Vec<Vec<BcIndex>> {
+    pub(crate) fn get_incoming(&self) -> Vec<Vec<BcIndex>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
         for (idx, pc) in self.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);

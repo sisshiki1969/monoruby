@@ -28,7 +28,7 @@ struct JitContext {
     ///
     /// Basic block information.
     ///
-    bb_info: Incoming,
+    bb_info: BasicBlockInfo,
     ///
     /// The start bytecode position of the current basic block.
     ///
@@ -89,37 +89,78 @@ impl std::ops::Index<BcIndex> for Incoming {
     }
 }
 
-impl Incoming {
-    fn from(v: Vec<Vec<BcIndex>>) -> Self {
-        Self(v)
-    }
+#[derive(Debug, Clone)]
+struct BasicBlockInfo {
+    info: Vec<BasciBlockInfoEntry>,
+    bb_head: bitvec::vec::BitVec,
 }
-
-struct BasicBlockInfo(Vec<BasciBlockInfoEntry>);
 
 impl std::ops::Index<BasicBlockId> for BasicBlockInfo {
     type Output = BasciBlockInfoEntry;
     fn index(&self, index: BasicBlockId) -> &Self::Output {
-        &self.0[index.0]
+        &self.info[index.0]
     }
 }
 
 impl std::ops::IndexMut<BasicBlockId> for BasicBlockInfo {
     fn index_mut(&mut self, index: BasicBlockId) -> &mut Self::Output {
-        &mut self.0[index.0]
+        &mut self.info[index.0]
     }
 }
 
 impl BasicBlockInfo {
-    fn new(len: usize) -> Self {
-        BasicBlockInfo(vec![BasciBlockInfoEntry::default(); len])
+    fn new(bb_len: usize, incoming: &[Vec<BcIndex>]) -> Self {
+        let bb_head = incoming
+            .iter()
+            .enumerate()
+            .map(|(i, v)| i == 0 || !v.is_empty())
+            .collect();
+        BasicBlockInfo {
+            info: vec![BasciBlockInfoEntry::default(); bb_len],
+            bb_head,
+        }
+    }
+
+    fn is_bb_head(&self, i: BcIndex) -> bool {
+        self.bb_head[i.0 as usize]
+    }
+
+    fn get_start_pos(&self, start_pos: BcIndex) -> Vec<BcIndex> {
+        self.bb_head
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, v)| {
+                if *v {
+                    let idx = BcIndex::from(idx);
+                    if idx >= start_pos {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct BasciBlockInfoEntry {
+    begin: BcIndex,
+    end: BcIndex,
     incoming: Vec<BasicBlockId>,
     outgoing: Vec<BasicBlockId>,
+}
+
+impl std::fmt::Debug for BasciBlockInfoEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{:?}..={:?} in:{:?} out:{:?}]",
+            self.begin, self.end, self.incoming, self.outgoing
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,29 +183,29 @@ impl JitContext {
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let info = func.get_bb_info();
+        let incoming = func.get_incoming();
         let mut bb_id = BasicBlockId(1);
         let mut bbid_table = vec![];
-        for incoming in &info {
+        for incoming in &incoming {
             if !incoming.is_empty() {
                 bb_id += 1;
             }
             bbid_table.push(bb_id);
         }
         bb_id += 1;
-        let mut bb = BasicBlockInfo::new(bb_id.0);
+        let mut bb_info = BasicBlockInfo::new(bb_id.0, &incoming);
         let mut labels = HashMap::default();
-        for (i, incoming) in info.iter().enumerate() {
+        for (i, incoming) in incoming.iter().enumerate() {
             if i == 0 || !incoming.is_empty() {
                 labels.insert(BcIndex::from(i), codegen.jit.label());
             }
+            bb_info[bbid_table[i]].end = BcIndex::from(i);
             for incoming in incoming.iter().map(|i| bbid_table[i.0 as usize]) {
-                bb[bbid_table[i]].incoming.push(incoming);
-                bb[incoming].outgoing.push(bbid_table[i]);
+                bb_info[bbid_table[i]].begin = BcIndex::from(i);
+                bb_info[bbid_table[i]].incoming.push(incoming);
+                bb_info[incoming].outgoing.push(bbid_table[i]);
             }
         }
-        //eprintln!("{:?}", bb);
-        let bb_info = Incoming::from(info);
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
@@ -660,23 +701,6 @@ impl Codegen {
         self.jit.bind_label(entry);
 
         let mut cc = jitgen::JitContext::new(func, self, start_pos, position.is_some(), self_value);
-        let bb_start_pos: Vec<_> = cc
-            .bb_info
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                if idx == 0 || !v.is_empty() {
-                    let idx = BcIndex::from(idx);
-                    if idx >= start_pos {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
         cc.start_codepos = self.jit.get_current();
 
         if position.is_none() {
@@ -699,7 +723,7 @@ impl Codegen {
                 cont: true,
             }],
         );
-        for i in bb_start_pos {
+        for i in cc.bb_info.get_start_pos(start_pos) {
             cc.bb_pos = i;
             if self.compile_bb(fnstore, func, &mut cc, position) {
                 break;
@@ -1602,7 +1626,7 @@ impl Codegen {
             }
 
             let next_idx = cc.bb_pos + ofs + 1;
-            if !cc.bb_info[next_idx].is_empty() {
+            if cc.bb_info.is_bb_head(next_idx) {
                 let branch_dest = self.jit.label();
                 cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 cc.bb_pos = next_idx;

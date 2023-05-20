@@ -4,7 +4,10 @@ pub(super) struct LoopAnalysis {
     /// key: dest_idx, value Vec<(src_idx, reginfo)>
     branch_map: HashMap<BcIndex, Vec<(BcIndex, SlotInfo)>>,
     /// Basic block information
-    bb_info: Incoming,
+    bb_info: BasicBlockInfo,
+    ///
+    /// Loop level.
+    ///
     loop_level: usize,
     ///
     /// Merged slot information of back edge.
@@ -35,29 +38,12 @@ impl LoopAnalysis {
         bb_pos: BcIndex,
     ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let mut ctx = LoopAnalysis::new(cc);
-        let regnum = cc.total_reg_num;
-        let bb_start_vec: Vec<_> = ctx
-            .bb_info
-            .iter()
-            .enumerate()
-            .flat_map(|(idx, info)| {
-                if idx == 0 || !info.is_empty() {
-                    let idx = BcIndex::from(idx);
-                    if idx >= bb_pos {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let mut exit_info = SlotInfo::new(regnum);
-        for bb_pos in bb_start_vec {
+        let total_reg_num = cc.total_reg_num;
+        let mut exit_info = SlotInfo::new(total_reg_num);
+        for bb_pos in ctx.bb_info.get_start_pos(bb_pos) {
             let branches = ctx.get_branches(bb_pos);
             let reg_info = if branches.is_empty() {
-                SlotInfo::new(regnum)
+                SlotInfo::new(total_reg_num)
             } else {
                 let reg_info0 = branches[0].1.clone();
                 branches.into_iter().fold(reg_info0, |mut acc, (_, info)| {
@@ -449,7 +435,7 @@ impl LoopAnalysis {
             }
 
             let next_idx = idx + 1;
-            if !self.bb_info[next_idx].is_empty() {
+            if self.bb_info.is_bb_head(next_idx) {
                 self.add_branch(idx, info, next_idx);
                 return None;
             }

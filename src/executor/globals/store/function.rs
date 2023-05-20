@@ -431,7 +431,7 @@ impl FuncInfo {
             self.kind
         );
         eprintln!("{:?}", info.get_exception_map());
-        let bb_info = info.get_bb_info();
+        let bb_info = info.get_incoming();
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(fmt) = pc.format(globals, i) {
