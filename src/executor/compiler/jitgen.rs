@@ -93,6 +93,8 @@ impl std::ops::Index<BcIndex> for Incoming {
 struct BasicBlockInfo {
     info: Vec<BasciBlockInfoEntry>,
     bb_head: bitvec::vec::BitVec,
+    bb_map: Vec<BasicBlockId>,
+    loops: Vec<(BasicBlockId, BasicBlockId)>,
 }
 
 impl std::ops::Index<BasicBlockId> for BasicBlockInfo {
@@ -108,16 +110,47 @@ impl std::ops::IndexMut<BasicBlockId> for BasicBlockInfo {
     }
 }
 
+impl std::ops::Index<BcIndex> for BasicBlockInfo {
+    type Output = BasciBlockInfoEntry;
+    fn index(&self, index: BcIndex) -> &Self::Output {
+        let id = self.bb_map[index.0 as usize];
+        &self[id]
+    }
+}
+
+impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
+    fn index_mut(&mut self, index: BcIndex) -> &mut Self::Output {
+        let id = self.bb_map[index.0 as usize];
+        &mut self[id]
+    }
+}
+
 impl BasicBlockInfo {
-    fn new(bb_len: usize, incoming: &[Vec<BcIndex>]) -> Self {
+    fn new(incoming: &[Vec<BcIndex>], info: &ISeqInfo) -> Self {
         let bb_head = incoming
             .iter()
             .enumerate()
-            .map(|(i, v)| i == 0 || !v.is_empty())
+            .map(|(i, v)| {
+                i == 0 || !v.is_empty() || {
+                    let pc = BcPc::from(&info.bytecode()[i - 1]);
+                    TraceIr::is_terminal(pc)
+                }
+            })
             .collect();
+        let mut bb_id = BasicBlockId(1);
+        let mut bb_map = vec![];
+        for incoming in incoming {
+            if !incoming.is_empty() {
+                bb_id += 1;
+            }
+            bb_map.push(bb_id);
+        }
+        bb_id += 1;
         BasicBlockInfo {
-            info: vec![BasciBlockInfoEntry::default(); bb_len],
+            info: vec![BasciBlockInfoEntry::default(); bb_id.0],
             bb_head,
+            bb_map,
+            loops: Default::default(),
         }
     }
 
@@ -143,6 +176,17 @@ impl BasicBlockInfo {
             })
             .collect()
     }
+
+    fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
+        self.bb_map[i.0 as usize]
+    }
+
+    fn get_loop(&self, bb_id: BasicBlockId) -> Option<(BasicBlockId, BasicBlockId)> {
+        self.loops
+            .iter()
+            .find(|(begin, end)| (*begin..=*end).contains(&bb_id))
+            .cloned()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -163,7 +207,7 @@ impl std::fmt::Debug for BasciBlockInfoEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
 struct BasicBlockId(usize);
 
 impl std::ops::AddAssign<usize> for BasicBlockId {
@@ -184,28 +228,34 @@ impl JitContext {
         self_value: Value,
     ) -> Self {
         let incoming = func.get_incoming();
-        let mut bb_id = BasicBlockId(1);
-        let mut bbid_table = vec![];
-        for incoming in &incoming {
-            if !incoming.is_empty() {
-                bb_id += 1;
-            }
-            bbid_table.push(bb_id);
-        }
-        bb_id += 1;
-        let mut bb_info = BasicBlockInfo::new(bb_id.0, &incoming);
+        let mut bb_info = BasicBlockInfo::new(&incoming, func);
         let mut labels = HashMap::default();
-        for (i, incoming) in incoming.iter().enumerate() {
-            if i == 0 || !incoming.is_empty() {
-                labels.insert(BcIndex::from(i), codegen.jit.label());
+        let mut loop_stack = vec![];
+        for (i, incoming) in incoming.into_iter().enumerate() {
+            let idx = BcIndex::from(i);
+            if bb_info.is_bb_head(idx) {
+                labels.insert(idx, codegen.jit.label());
             }
-            bb_info[bbid_table[i]].end = BcIndex::from(i);
-            for incoming in incoming.iter().map(|i| bbid_table[i.0 as usize]) {
-                bb_info[bbid_table[i]].begin = BcIndex::from(i);
-                bb_info[bbid_table[i]].incoming.push(incoming);
-                bb_info[incoming].outgoing.push(bbid_table[i]);
+            let pc = func.get_pc(idx);
+            if TraceIr::is_loop_start(pc) {
+                loop_stack.push(idx);
+            } else if TraceIr::is_loop_end(pc) {
+                let start = loop_stack.pop().unwrap();
+                bb_info
+                    .loops
+                    .push((bb_info.get_bb_id(start), bb_info.get_bb_id(idx)));
+            }
+
+            bb_info[idx].end = idx;
+            let incoming: Vec<_> = incoming.into_iter().map(|i| bb_info.get_bb_id(i)).collect();
+            for incoming in incoming {
+                bb_info[idx].begin = idx;
+                bb_info[idx].incoming.push(incoming);
+                let id = bb_info.get_bb_id(idx);
+                bb_info[incoming].outgoing.push(id);
             }
         }
+        assert!(loop_stack.is_empty());
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         Self {
@@ -901,7 +951,11 @@ impl Codegen {
         let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&cc.bb_pos) {
             ctx
         } else {
-            self.gen_merging_branches(func, cc)
+            if let Some(ctx) = self.gen_merging_branches(func, cc) {
+                ctx
+            } else {
+                return false;
+            }
         };
         for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
@@ -1630,7 +1684,11 @@ impl Codegen {
                 let branch_dest = self.jit.label();
                 cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 cc.bb_pos = next_idx;
-                let target_ctx = self.gen_merging_branches(func, cc);
+                let target_ctx = if let Some(ctx) = self.gen_merging_branches(func, cc) {
+                    ctx
+                } else {
+                    return false;
+                };
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
                 return false;
             }

@@ -32,7 +32,7 @@ impl Codegen {
         &mut self,
         func: &ISeqInfo,
         cc: &mut JitContext,
-    ) -> BBContext {
+    ) -> Option<BBContext> {
         let bb_pos = cc.bb_pos;
         let is_loop = func.get_pc(bb_pos).is_loop();
         let res = if is_loop {
@@ -42,11 +42,11 @@ impl Codegen {
         } else {
             #[cfg(feature = "emit-tir")]
             eprintln!("\n===gen_merge bb: {bb_pos}");
-            self.gen_merging_branches_non_loop(func, cc)
+            self.gen_merging_branches_non_loop(func, cc)?
         };
         #[cfg(feature = "emit-tir")]
         eprintln!("===merge_end\n");
-        res
+        Some(res)
     }
 
     fn gen_merging_branches_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
@@ -102,7 +102,11 @@ impl Codegen {
         }
     }
 
-    fn gen_merging_branches_non_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
+    fn gen_merging_branches_non_loop(
+        &mut self,
+        func: &ISeqInfo,
+        cc: &mut JitContext,
+    ) -> Option<BBContext> {
         let bb_pos = cc.bb_pos;
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
@@ -110,7 +114,7 @@ impl Codegen {
             if entries.len() == 1 {
                 let entry = entries.remove(0);
                 self.jit.bind_label(entry.entry);
-                return entry.bbctx;
+                return Some(entry.bbctx);
             }
 
             let target_ctx = BBContext::merge_entries(&entries);
@@ -118,9 +122,9 @@ impl Codegen {
 
             self.write_back_branches(entries, &target_ctx, cur_label, pc, bb_pos, &[]);
 
-            target_ctx
+            Some(target_ctx)
         } else {
-            unreachable!()
+            None
         }
     }
 

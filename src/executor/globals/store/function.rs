@@ -437,7 +437,10 @@ impl FuncInfo {
             if let Some(fmt) = pc.format(globals, i) {
                 eprint!(
                     "{}:{:05} ",
-                    if i == 0 || !bb_info[i].is_empty() {
+                    if i == 0 || !bb_info[i].is_empty() || {
+                        let pc = BcPc::from(&info.bytecode()[i - 1]);
+                        TraceIr::is_terminal(pc)
+                    } {
                         "+"
                     } else {
                         " "

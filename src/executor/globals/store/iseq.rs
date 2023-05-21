@@ -304,25 +304,33 @@ impl ISeqInfo {
     ///
     pub(crate) fn get_incoming(&self) -> Vec<Vec<BcIndex>> {
         let mut info = vec![vec![]; self.bytecode_len() + 1];
-        for (idx, pc) in self.bytecode().iter().enumerate() {
+        for (i, pc) in self.bytecode().iter().enumerate() {
+            let idx = BcIndex::from(i);
             let pc = BcPc::from(pc);
             if let Some(disp) = TraceIr::is_branch(pc) {
-                let dest = ((idx + 1) as i32 + disp) as usize;
-                info[dest].push(BcIndex::from(idx));
+                let dest = ((i + 1) as i32 + disp) as usize;
+                info[dest].push(idx);
                 if !TraceIr::is_terminal(pc) {
                     // "not taken" edge for conditional branches.
-                    info[idx + 1].push(BcIndex::from(idx));
+                    if !info[i + 1].contains(&idx) {
+                        info[i + 1].push(idx);
+                    }
+                }
+            } else if TraceIr::is_loop_end(pc) {
+                info[i + 1].push(idx);
+            }
+        }
+        for (i, pc) in self.bytecode().iter().enumerate() {
+            let idx = BcIndex::from(i);
+            let pc = BcPc::from(pc);
+            if !info[i + 1].is_empty() && TraceIr::is_branch(pc).is_none() {
+                if !info[i + 1].contains(&idx) {
+                    info[i + 1].push(idx);
                 }
             }
         }
-        for (idx, pc) in self.bytecode().iter().enumerate() {
-            let pc = BcPc::from(pc);
-            if !info[idx + 1].is_empty() && TraceIr::is_branch(pc).is_none() {
-                // merging edge (back edge).
-                info[idx + 1].push(BcIndex::from(idx));
-            }
-        }
         assert_eq!(0, info[self.bytecode_len()].len());
+        info.pop();
         info
     }
 }

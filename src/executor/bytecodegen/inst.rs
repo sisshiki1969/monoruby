@@ -1043,4 +1043,16 @@ impl TraceIr {
         let opcode = (op >> 48) as u16;
         opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 // Br or Ret or MethodRet or Break
     }
+
+    pub(crate) fn is_loop_start(pc: BcPc) -> bool {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        opcode == 14 // LoopStart
+    }
+
+    pub(crate) fn is_loop_end(pc: BcPc) -> bool {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        opcode == 15 // LoopEnd
+    }
 }
