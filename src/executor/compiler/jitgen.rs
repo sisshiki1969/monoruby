@@ -1205,6 +1205,7 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     } else {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
@@ -1240,6 +1241,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
+                            return false;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
@@ -1261,6 +1263,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
+                            return false;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
@@ -1307,6 +1310,7 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     } else {
                         self.load_binary_args_with_mode(&mode);
                         self.gen_generic_binop(&ctx, pc, kind, ret);
@@ -1349,6 +1353,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
+                            return false;
                         } else {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
@@ -1433,6 +1438,7 @@ impl Codegen {
                     //self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     } else {
                         self.gen_call(
                             fnstore,
@@ -1463,6 +1469,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     } else {
                         info.args = args + 1;
                         self.gen_call(
@@ -1490,6 +1497,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     } else {
                         self.gen_call(fnstore, &mut ctx, info, callid, None, ret, pc + 1, false);
                     }
