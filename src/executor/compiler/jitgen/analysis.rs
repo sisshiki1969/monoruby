@@ -3,7 +3,7 @@ use super::*;
 pub(super) struct LoopAnalysis {
     /// Basic block information
     bb_info: BasicBlockInfo,
-    bb_scan: Vec<(ExitType, SlotInfo, Vec<BasicBlockId>, Vec<BasicBlockId>)>,
+    bb_scan: Vec<(ExitType, SlotInfo)>,
     total_reg_num: usize,
     backedges: HashMap<BasicBlockId, SlotInfo>,
 }
@@ -39,38 +39,7 @@ impl LoopAnalysis {
 
         let (backedge, exit) = ctx.analyse_loop(begin, end, SlotInfo::new(ctx.total_reg_num));
 
-        return (backedge.get_loop_used_as_float(), exit.get_unused());
-
-        /*
-        let total_reg_num = ctx.total_reg_num;
-        let mut exit_info = SlotInfo::new(total_reg_num);
-        for bb_pos in ctx.bb_info.get_start_pos(bb_pos) {
-            let branches = ctx.get_branches(bb_pos);
-            let reg_info = if branches.is_empty() {
-                SlotInfo::new(total_reg_num)
-            } else {
-                let reg_info0 = branches[0].1.clone();
-                branches.into_iter().fold(reg_info0, |mut acc, (_, info)| {
-                    acc.merge(&info);
-                    acc
-                })
-            };
-            if let Some(info) = ctx.scan_bb(func, reg_info, bb_pos) {
-                exit_info = info;
-                break;
-            };
-        }
-        let backedge_info = ctx.backedge_info.unwrap();
-        exit_info.merge(&backedge_info);
-        if let Some(info) = ctx.return_info {
-            exit_info.merge(&info);
-        }
-
-        (
-            backedge_info.get_loop_used_as_float(),
-            exit_info.get_unused(),
-        )
-        */
+        (backedge.get_loop_used_as_float(), exit.get_unused())
     }
 
     fn analyse_loop(
@@ -87,18 +56,17 @@ impl LoopAnalysis {
         let mut back_edge = None;
         let mut through_edge = None;
         let mut edges = HashMap::default();
-        for (i, (ty, info, incoming, outgoing)) in
-            self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate()
-        {
-            if incoming.is_empty() {
+        for (i, (ty, info, ..)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
+            let bb_id = BasicBlockId(loop_start.0 + i);
+            let BasciBlockInfoEntry { pred, succ, .. } = &self.bb_info[bb_id];
+            if pred.is_empty() {
                 continue;
             }
-            let bb_id = BasicBlockId(loop_start.0 + i);
             if i == 0 {
-                assert_eq!(2, incoming.len());
+                assert_eq!(2, pred.len());
             }
             let mut slots = SlotMerger::new();
-            for src in incoming {
+            for src in pred {
                 if *src < loop_start {
                     // entry edge
                     assert_eq!(0, i);
@@ -106,7 +74,7 @@ impl LoopAnalysis {
                 } else if loop_start <= *src && *src <= loop_end {
                     // inner
                     if bb_id <= *src {
-                        //back edge
+                        // back edge
                         if let Some(backedge) = self.backedges.get(src) {
                             slots.merge(backedge.clone());
                         }
@@ -123,20 +91,19 @@ impl LoopAnalysis {
             let mut slots = if let Some(slots) = slots.0 {
                 slots
             } else {
-                //
+                // no incoming edge
                 continue;
             };
             slots.concat(info);
             match ty {
                 ExitType::Continue => {
-                    for dst in outgoing {
+                    for dst in succ {
                         if loop_end < *dst {
                             assert_eq!(bb_id, loop_end);
                             assert!(through_edge.is_none());
                             through_edge = Some((bb_id, slots.clone()));
                         } else if *dst < loop_start {
                             // backedge of another loop!
-                            //unreachable!()
                         } else if bb_id < *dst {
                             edges.insert((bb_id, *dst), slots.clone());
                         } else if *dst <= bb_id {
@@ -151,7 +118,7 @@ impl LoopAnalysis {
                     }
                 }
                 ExitType::Return => {
-                    assert!(outgoing.is_empty());
+                    assert!(succ.is_empty());
                     return_edge.merge(info.clone());
                 }
             }
@@ -179,11 +146,7 @@ impl LoopAnalysis {
     fn new(cc: &JitContext, func: &ISeqInfo) -> Self {
         let mut bb_scan = vec![];
         for entry in &cc.bb_info.info {
-            let BasciBlockInfoEntry {
-                incoming, outgoing, ..
-            } = entry;
-            let (code, info) = Self::scan_bb2(func, entry);
-            bb_scan.push((code, info, incoming.clone(), outgoing.clone()));
+            bb_scan.push(Self::scan_bb(func, entry));
         }
 
         Self {
@@ -483,7 +446,7 @@ impl LoopAnalysis {
     ///
     /// Scan a single basic block.
     ///
-    fn scan_bb2(func: &ISeqInfo, entry: &BasciBlockInfoEntry) -> (ExitType, SlotInfo) {
+    fn scan_bb(func: &ISeqInfo, entry: &BasciBlockInfoEntry) -> (ExitType, SlotInfo) {
         let mut info = SlotInfo::new(func.total_reg_num());
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {

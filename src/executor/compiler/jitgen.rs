@@ -193,8 +193,8 @@ impl BasicBlockInfo {
 struct BasciBlockInfoEntry {
     begin: BcIndex,
     end: BcIndex,
-    incoming: Vec<BasicBlockId>,
-    outgoing: Vec<BasicBlockId>,
+    pred: Vec<BasicBlockId>,
+    succ: Vec<BasicBlockId>,
 }
 
 impl std::fmt::Debug for BasciBlockInfoEntry {
@@ -202,7 +202,7 @@ impl std::fmt::Debug for BasciBlockInfoEntry {
         write!(
             f,
             "[{:?}..={:?} in:{:?} out:{:?}]",
-            self.begin, self.end, self.incoming, self.outgoing
+            self.begin, self.end, self.pred, self.succ
         )
     }
 }
@@ -250,9 +250,9 @@ impl JitContext {
             let incoming: Vec<_> = incoming.into_iter().map(|i| bb_info.get_bb_id(i)).collect();
             for incoming in incoming {
                 bb_info[idx].begin = idx;
-                bb_info[idx].incoming.push(incoming);
+                bb_info[idx].pred.push(incoming);
                 let id = bb_info.get_bb_id(idx);
-                bb_info[incoming].outgoing.push(id);
+                bb_info[incoming].succ.push(id);
             }
         }
         assert!(loop_stack.is_empty());
