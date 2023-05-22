@@ -6,6 +6,7 @@ pub(super) struct LoopAnalysis {
     bb_scan: Vec<(ExitType, SlotInfo)>,
     total_reg_num: usize,
     backedges: HashMap<BasicBlockId, SlotInfo>,
+    loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
 }
 
 impl LoopAnalysis {
@@ -15,7 +16,7 @@ impl LoopAnalysis {
     /// this module analyze the following:
     ///
     /// 1) Will the slots of incomming branch be used? or not-used?
-    /// (or not determined)
+    /// (or not touched)
     ///
     /// 2) Type information of a backedge branch of this loop.
     /// (Float? not Float? or a Value which is coerced into Float?)
@@ -31,10 +32,10 @@ impl LoopAnalysis {
         let (begin, end) = ctx.bb_info.get_loop(entry_bb).unwrap();
 
         for (loop_start, loop_end) in ctx.bb_info.loops.clone() {
-            let backedge = ctx
-                .analyse_loop(loop_start, loop_end, SlotInfo::new(ctx.total_reg_num))
-                .0;
+            let (backedge, exit) =
+                ctx.analyse_loop(loop_start, loop_end, SlotInfo::new(ctx.total_reg_num));
             ctx.backedges.insert(loop_start, backedge);
+            ctx.loop_exit.insert(loop_start, (loop_end, exit));
         }
 
         let (backedge, exit) = ctx.analyse_loop(begin, end, SlotInfo::new(ctx.total_reg_num));
@@ -43,7 +44,7 @@ impl LoopAnalysis {
     }
 
     fn analyse_loop(
-        &mut self,
+        &self,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         entry: SlotInfo,
@@ -56,22 +57,33 @@ impl LoopAnalysis {
         let mut back_edge = None;
         let mut through_edge = None;
         let mut edges = HashMap::default();
-        for (i, (ty, info, ..)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
+        let mut nest_loop = None;
+        for (i, (ty, info)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
             let bb_id = BasicBlockId(loop_start.0 + i);
+            let mut slots = SlotMerger::new();
             let BasciBlockInfoEntry { pred, succ, .. } = &self.bb_info[bb_id];
+            if let Some((end, _)) = &nest_loop {
+                if bb_id == *end {
+                    let info = std::mem::take(&mut nest_loop).unwrap().1;
+                    let next_bb = BasicBlockId(bb_id.0 + 1);
+                    assert!(self.bb_info[bb_id].succ.contains(&next_bb));
+                    assert!(self.bb_info[next_bb].pred.contains(&bb_id));
+                    edges.insert((bb_id, next_bb), info);
+                }
+                continue;
+            }
             if pred.is_empty() {
                 continue;
             }
             if i == 0 {
                 assert_eq!(2, pred.len());
             }
-            let mut slots = SlotMerger::new();
             for src in pred {
                 if *src < loop_start {
                     // entry edge
                     assert_eq!(0, i);
                     slots.merge(entry.clone());
-                } else if loop_start <= *src && *src <= loop_end {
+                } else if (loop_start..=loop_end).contains(src) {
                     // inner
                     if bb_id <= *src {
                         // back edge
@@ -79,10 +91,10 @@ impl LoopAnalysis {
                             slots.merge(backedge.clone());
                         }
                     } else if let Some(edge) = edges.remove(&(*src, bb_id)) {
+                        // forward edge
                         slots.merge(edge);
                     } else {
                         // no incoming edge
-                        //unreachable!()
                     };
                 } else {
                     unreachable!()
@@ -94,6 +106,11 @@ impl LoopAnalysis {
                 // no incoming edge
                 continue;
             };
+            if let Some((bb_end, loop_exit)) = self.loop_exit.get(&bb_id) {
+                slots.concat(loop_exit);
+                nest_loop = Some((*bb_end, loop_exit.clone()));
+                continue;
+            }
             slots.concat(info);
             match ty {
                 ExitType::Continue => {
@@ -119,7 +136,9 @@ impl LoopAnalysis {
                 }
                 ExitType::Return => {
                     assert!(succ.is_empty());
-                    return_edge.merge(info.clone());
+                    let mut info = info.clone();
+                    info.kill();
+                    return_edge.merge(info);
                 }
             }
         }
@@ -154,6 +173,7 @@ impl LoopAnalysis {
             bb_scan,
             total_reg_num: cc.total_reg_num,
             backedges: HashMap::default(),
+            loop_exit: HashMap::default(),
         }
     }
 }
@@ -218,6 +238,12 @@ impl SlotInfo {
                 detail.ty = other[i].ty;
             }
             detail.used.concat(&other[i].used);
+        }
+    }
+
+    fn kill(&mut self) {
+        for detail in &mut self.info.iter_mut() {
+            detail.used.kill();
         }
     }
 
@@ -432,6 +458,13 @@ impl IsUsed {
             (IsUsed::ND, IsUsed::Used) => IsUsed::Used,
             (IsUsed::ND, IsUsed::Killed) => IsUsed::Killed,
             _ => IsUsed::ND,
+        };
+    }
+
+    fn kill(&mut self) {
+        *self = match &self {
+            IsUsed::Used => IsUsed::Used,
+            _ => IsUsed::Killed,
         };
     }
 }
