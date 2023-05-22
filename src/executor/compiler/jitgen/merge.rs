@@ -55,7 +55,7 @@ impl Codegen {
             let pc = func.get_pc(bb_pos);
             let bb_pos = cc.bb_pos;
 
-            let (use_set, unused) = analysis::LoopAnalysis::analyse(cc, func, bb_pos);
+            let (use_set, unused) = cc.analyse(bb_pos);
 
             let cur_label = cc.labels[&bb_pos];
 

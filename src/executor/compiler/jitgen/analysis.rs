@@ -1,15 +1,6 @@
 use super::*;
 
-pub(super) struct LoopAnalysis {
-    /// Basic block information
-    bb_info: BasicBlockInfo,
-    bb_scan: Vec<(ExitType, SlotInfo)>,
-    total_reg_num: usize,
-    backedges: HashMap<BasicBlockId, SlotInfo>,
-    loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
-}
-
-impl LoopAnalysis {
+impl JitContext {
     ///
     /// Liveness analysis for loops.
     ///
@@ -21,41 +12,32 @@ impl LoopAnalysis {
     /// 2) Type information of a backedge branch of this loop.
     /// (Float? not Float? or a Value which is coerced into Float?)
     ///
-    pub(super) fn analyse(
-        cc: &JitContext,
-        func: &ISeqInfo,
-        bb_pos: BcIndex,
-    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let mut ctx = LoopAnalysis::new(cc, func);
+    pub(super) fn analyse(&mut self, bb_pos: BcIndex) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        let entry_bb = self.bb_info.get_bb_id(bb_pos);
+        let (begin, _) = self.bb_info.get_loop(entry_bb).unwrap();
 
-        let entry_bb = ctx.bb_info.get_bb_id(bb_pos);
-        let (begin, end) = ctx.bb_info.get_loop(entry_bb).unwrap();
-
-        for (loop_start, loop_end) in ctx.bb_info.loops.clone() {
-            let (backedge, exit) =
-                ctx.analyse_loop(loop_start, loop_end, SlotInfo::new(ctx.total_reg_num));
-            ctx.backedges.insert(loop_start, backedge);
-            ctx.loop_exit.insert(loop_start, (loop_end, exit));
-        }
-
-        let (backedge, exit) = ctx.analyse_loop(begin, end, SlotInfo::new(ctx.total_reg_num));
+        let backedge = self.loop_backedges.get(&begin).unwrap();
+        let exit = &self.loop_exit.get(&begin).unwrap().1;
 
         (backedge.get_loop_used_as_float(), exit.get_unused())
+    }
+
+    pub(super) fn initialize_loop_info(&mut self) {
+        for (loop_start, loop_end) in self.bb_info.loops.clone() {
+            let (backedge, exit) = self.analyse_loop(loop_start, loop_end);
+            self.loop_backedges.insert(loop_start, backedge);
+            self.loop_exit.insert(loop_start, (loop_end, exit));
+        }
     }
 
     fn analyse_loop(
         &self,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-        entry: SlotInfo,
     ) -> (SlotInfo, SlotInfo) {
-        /*eprintln!(
-            "\nLoop [{:?}..={:?}]",
-            self.bb_info[loop_start].begin, self.bb_info[loop_end].end
-        );*/
         let mut return_edge = SlotMerger::new();
         let mut back_edge = None;
-        let mut through_edge = None;
+        let mut exit_edge = None;
         let mut edges = HashMap::default();
         let mut nest_loop = None;
         for (i, (ty, info)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
@@ -63,7 +45,9 @@ impl LoopAnalysis {
             let mut slots = SlotMerger::new();
             let BasciBlockInfoEntry { pred, succ, .. } = &self.bb_info[bb_id];
             if let Some((end, _)) = &nest_loop {
+                // In inner loops, we can skip scanning.
                 if bb_id == *end {
+                    // When reached end, make an exit edge to a successor basic block.
                     let info = std::mem::take(&mut nest_loop).unwrap().1;
                     let next_bb = BasicBlockId(bb_id.0 + 1);
                     assert!(self.bb_info[bb_id].succ.contains(&next_bb));
@@ -73,6 +57,7 @@ impl LoopAnalysis {
                 continue;
             }
             if pred.is_empty() {
+                // no predecessor.
                 continue;
             }
             if i == 0 {
@@ -82,19 +67,17 @@ impl LoopAnalysis {
                 if *src < loop_start {
                     // entry edge
                     assert_eq!(0, i);
-                    slots.merge(entry.clone());
+                    slots.merge(SlotInfo::new(self.total_reg_num));
                 } else if (loop_start..=loop_end).contains(src) {
                     // inner
                     if bb_id <= *src {
                         // back edge
-                        if let Some(backedge) = self.backedges.get(src) {
-                            slots.merge(backedge.clone());
-                        }
+                        slots.merge(SlotInfo::new(self.total_reg_num));
                     } else if let Some(edge) = edges.remove(&(*src, bb_id)) {
                         // forward edge
                         slots.merge(edge);
                     } else {
-                        // no incoming edge
+                        // no information for an incoming edge
                     };
                 } else {
                     unreachable!()
@@ -106,31 +89,36 @@ impl LoopAnalysis {
                 // no incoming edge
                 continue;
             };
-            if let Some((bb_end, loop_exit)) = self.loop_exit.get(&bb_id) {
-                slots.concat(loop_exit);
-                nest_loop = Some((*bb_end, loop_exit.clone()));
-                continue;
+            if i != 0 {
+                if let Some((bb_end, loop_exit)) = self.loop_exit.get(&bb_id) {
+                    slots.concat(loop_exit);
+                    nest_loop = Some((*bb_end, slots.clone()));
+                    continue;
+                }
             }
             slots.concat(info);
             match ty {
                 ExitType::Continue => {
                     for dst in succ {
                         if loop_end < *dst {
+                            // exit edge
                             assert_eq!(bb_id, loop_end);
-                            assert!(through_edge.is_none());
-                            through_edge = Some((bb_id, slots.clone()));
+                            assert!(exit_edge.is_none());
+                            exit_edge = Some((bb_id, slots.clone()));
                         } else if *dst < loop_start {
-                            // backedge of another loop!
+                            // backedge of an outer loop
+                            // unreachable in "loop mode"
                         } else if bb_id < *dst {
+                            // forward edge
                             edges.insert((bb_id, *dst), slots.clone());
-                        } else if *dst <= bb_id {
+                        } else {
                             if *dst == loop_start {
+                                // backedge of a current loop
                                 back_edge = Some((bb_id, slots.clone()));
                             } else {
-                                // backedge of an inner block
+                                // backedge of an inner loop
+                                unreachable!("detect backedge of a inner loop.")
                             };
-                        } else {
-                            unreachable!()
                         }
                     }
                 }
@@ -145,7 +133,7 @@ impl LoopAnalysis {
         if let Some((_, slots)) = &back_edge {
             return_edge.merge(slots.clone());
         }
-        if let Some((_, slots)) = through_edge {
+        if let Some((_, slots)) = exit_edge {
             return_edge.merge(slots.clone());
         }
         let exit = match return_edge.0 {
@@ -161,190 +149,7 @@ impl LoopAnalysis {
     }
 }
 
-impl LoopAnalysis {
-    fn new(cc: &JitContext, func: &ISeqInfo) -> Self {
-        let mut bb_scan = vec![];
-        for entry in &cc.bb_info.info {
-            bb_scan.push(Self::scan_bb(func, entry));
-        }
-
-        Self {
-            bb_info: cc.bb_info.clone(),
-            bb_scan,
-            total_reg_num: cc.total_reg_num,
-            backedges: HashMap::default(),
-            loop_exit: HashMap::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SlotInfo {
-    info: Vec<State>,
-}
-
-impl SlotInfo {
-    ///
-    /// Extract a set of registers which will be used as Float in this loop,
-    /// *and* xmm-linked on the back-edge.
-    ///
-    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
-        self.info
-            .iter()
-            .enumerate()
-            .flat_map(|(i, b)| match (b.ty, b.used) {
-                (Ty::Float, _) => Some((SlotId(i as u16), true)),
-                (Ty::Both, _) => Some((SlotId(i as u16), false)),
-                _ => None,
-            })
-            .collect()
-    }
-
-    ///
-    /// Extract unsed slots.
-    ///
-    fn get_unused(&self) -> Vec<SlotId> {
-        self.info
-            .iter()
-            .enumerate()
-            .flat_map(|(i, state)| {
-                if state.used == IsUsed::Killed {
-                    Some(SlotId(i as u16))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
-impl SlotInfo {
-    fn new(reg_num: usize) -> Self {
-        Self {
-            info: vec![State::new(); reg_num],
-        }
-    }
-
-    fn merge(&mut self, other: &Self) {
-        for (i, detail) in &mut self.info.iter_mut().enumerate() {
-            detail.ty.merge(&other[i].ty);
-            detail.used.merge(&other[i].used);
-        }
-    }
-
-    fn concat(&mut self, other: &Self) {
-        for (i, detail) in &mut self.info.iter_mut().enumerate() {
-            if other[i].used != IsUsed::ND {
-                detail.ty = other[i].ty;
-            }
-            detail.used.concat(&other[i].used);
-        }
-    }
-
-    fn kill(&mut self) {
-        for detail in &mut self.info.iter_mut() {
-            detail.used.kill();
-        }
-    }
-
-    fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
-        self[slot].ty = if use_as_float {
-            if class == FLOAT_CLASS {
-                match self[slot].ty {
-                    Ty::Val | Ty::Both => Ty::Both,
-                    Ty::Float => Ty::Float,
-                }
-            } else {
-                match self[slot].ty {
-                    Ty::Val => Ty::Val,
-                    Ty::Both => Ty::Both,
-                    Ty::Float => Ty::Both,
-                }
-            }
-        } else {
-            match self[slot].ty {
-                Ty::Val => Ty::Val,
-                Ty::Both | Ty::Float => Ty::Both,
-            }
-        };
-        self.use_(slot);
-    }
-
-    fn use_non_float(&mut self, slot: SlotId) {
-        self.use_as(slot, false, NIL_CLASS)
-    }
-
-    fn unlink(&mut self, slot: SlotId) {
-        self[slot].ty = Ty::Val;
-    }
-
-    fn unlink_locals(&mut self, func: &ISeqInfo) {
-        for i in 1..1 + func.local_num() as u16 {
-            self.unlink(SlotId(i));
-        }
-    }
-
-    fn def_as(&mut self, slot: SlotId, is_float: bool) {
-        if slot.is_zero() {
-            return;
-        }
-        self[slot].ty = if is_float { Ty::Float } else { Ty::Val };
-        self.def_(slot);
-    }
-
-    fn def_float_const(&mut self, slot: SlotId) {
-        if slot.is_zero() {
-            return;
-        }
-        self[slot].ty = Ty::Float;
-        self.def_(slot);
-    }
-
-    fn copy(&mut self, dst: SlotId, src: SlotId) {
-        self.use_(src);
-        self.def_(dst);
-        self[dst].ty = self[src].ty;
-    }
-
-    fn use_(&mut self, slot: SlotId) {
-        if self[slot].used != IsUsed::Killed {
-            self[slot].used = IsUsed::Used;
-        }
-    }
-
-    fn def_(&mut self, slot: SlotId) {
-        if self[slot].used == IsUsed::ND {
-            self[slot].used = IsUsed::Killed;
-        }
-    }
-}
-
-impl std::ops::Index<SlotId> for SlotInfo {
-    type Output = State;
-    fn index(&self, i: SlotId) -> &Self::Output {
-        &self.info[i.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<SlotId> for SlotInfo {
-    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
-        &mut self.info[i.0 as usize]
-    }
-}
-
-impl std::ops::Index<usize> for SlotInfo {
-    type Output = State;
-    fn index(&self, i: usize) -> &Self::Output {
-        &self.info[i]
-    }
-}
-
-impl std::ops::IndexMut<usize> for SlotInfo {
-    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
-        &mut self.info[i]
-    }
-}
-
+#[derive(Debug)]
 struct SlotMerger(Option<SlotInfo>);
 
 impl SlotMerger {
@@ -361,125 +166,11 @@ impl SlotMerger {
     }
 }
 
-///
-/// The state of slots.
-///
-#[derive(Clone)]
-struct State {
-    /// Type information for a backedge branch.
-    ty: Ty,
-    /// Whether the slot is used or not.
-    used: IsUsed,
-}
-
-impl std::fmt::Debug for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.ty == Ty::Val && self.used == IsUsed::ND {
-            write!(f, "[]")
-        } else {
-            write!(f, "[{:?}/{:?}]", self.ty, self.used)
-        }
-    }
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            ty: Ty::Val,
-            used: IsUsed::ND,
-        }
-    }
-}
-
-///
-/// LType status of slots.
-///
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Ty {
-    ///
-    /// Value
-    ///
-    /// the slot is defined as non-f64.
-    ///
-    Val,
-    ///
-    /// Both
-    ///
-    /// the slot is used as f64 with coercion.
-    ///
-    Both,
-    ///
-    /// Float
-    ///
-    /// the slot is defined as f64 or used as f64 without coercion.
-    ///
-    Float,
-}
-
-impl Ty {
-    fn merge(&mut self, other: &Self) {
-        *self = match (*self, other) {
-            (_, Ty::Val) | (Ty::Val, _) => Ty::Val,
-            (_, Ty::Both) | (Ty::Both, _) => Ty::Both,
-            (Ty::Float, Ty::Float) => Ty::Float,
-        };
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum IsUsed {
-    ///
-    /// Not be used nor be killed.
-    ///
-    ND,
-    ///
-    /// Used in any of paths.
-    ///
-    Used,
-    ///
-    /// Guaranteed not to be used (= killed) in all paths.
-    ///
-    Killed,
-}
-
-impl IsUsed {
-    fn merge(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
-            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
-            _ => IsUsed::ND,
-        };
-    }
-
-    fn concat(&mut self, other: &Self) {
-        *self = match (&self, other) {
-            (IsUsed::Used, _) => IsUsed::Used,
-            (IsUsed::Killed, _) => IsUsed::Killed,
-            (IsUsed::ND, IsUsed::Used) => IsUsed::Used,
-            (IsUsed::ND, IsUsed::Killed) => IsUsed::Killed,
-            _ => IsUsed::ND,
-        };
-    }
-
-    fn kill(&mut self) {
-        *self = match &self {
-            IsUsed::Used => IsUsed::Used,
-            _ => IsUsed::Killed,
-        };
-    }
-}
-
-#[derive(Debug)]
-enum ExitType {
-    Continue,
-    Return,
-}
-
-impl LoopAnalysis {
+impl JitContext {
     ///
     /// Scan a single basic block.
     ///
-    fn scan_bb(func: &ISeqInfo, entry: &BasciBlockInfoEntry) -> (ExitType, SlotInfo) {
+    pub(super) fn scan_bb(func: &ISeqInfo, entry: &BasciBlockInfoEntry) -> (ExitType, SlotInfo) {
         let mut info = SlotInfo::new(func.total_reg_num());
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
@@ -764,4 +455,297 @@ impl LoopAnalysis {
         }
         (ExitType::Continue, info)
     }
+}
+
+#[derive(Clone)]
+pub(super) struct SlotInfo {
+    info: Vec<State>,
+}
+
+impl std::fmt::Debug for SlotInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SlotInfo {{ ")?;
+        for (i, s) in self.info.iter().enumerate() {
+            if s.ty != Ty::Val || s.used != IsUsed::ND {
+                write!(f, "%{i}:{:?} ", s)?;
+            }
+        }
+        write!(f, "}}")
+    }
+}
+
+impl SlotInfo {
+    ///
+    /// Extract a set of registers which will be used as Float in this loop,
+    /// *and* xmm-linked on the back-edge.
+    ///
+    fn get_loop_used_as_float(&self) -> Vec<(SlotId, bool)> {
+        self.info
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| match (b.ty, b.used) {
+                (Ty::Float, _) => Some((SlotId(i as u16), true)),
+                (Ty::Both, _) => Some((SlotId(i as u16), false)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    ///
+    /// Extract unsed slots.
+    ///
+    fn get_unused(&self) -> Vec<SlotId> {
+        self.info
+            .iter()
+            .enumerate()
+            .flat_map(|(i, state)| {
+                if state.used == IsUsed::Killed {
+                    Some(SlotId(i as u16))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl SlotInfo {
+    fn new(reg_num: usize) -> Self {
+        Self {
+            info: vec![State::new(); reg_num],
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        for (i, detail) in &mut self.info.iter_mut().enumerate() {
+            detail.ty.merge(&other[i].ty);
+            detail.used.merge(&other[i].used);
+        }
+    }
+
+    fn concat(&mut self, other: &Self) {
+        for (i, detail) in &mut self.info.iter_mut().enumerate() {
+            if other[i].used != IsUsed::ND {
+                detail.ty = other[i].ty;
+            }
+            detail.used.concat(&other[i].used);
+        }
+    }
+
+    fn kill(&mut self) {
+        for detail in &mut self.info.iter_mut() {
+            detail.used.kill();
+        }
+    }
+
+    fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
+        self[slot].ty = if use_as_float {
+            if class == FLOAT_CLASS {
+                match self[slot].ty {
+                    Ty::Val | Ty::Both => Ty::Both,
+                    Ty::Float => Ty::Float,
+                }
+            } else {
+                match self[slot].ty {
+                    Ty::Val => Ty::Val,
+                    Ty::Both => Ty::Both,
+                    Ty::Float => Ty::Both,
+                }
+            }
+        } else {
+            match self[slot].ty {
+                Ty::Val => Ty::Val,
+                Ty::Both | Ty::Float => Ty::Both,
+            }
+        };
+        self.use_(slot);
+    }
+
+    fn use_non_float(&mut self, slot: SlotId) {
+        self.use_as(slot, false, NIL_CLASS)
+    }
+
+    fn unlink(&mut self, slot: SlotId) {
+        self[slot].ty = Ty::Val;
+    }
+
+    fn unlink_locals(&mut self, func: &ISeqInfo) {
+        for i in 1..1 + func.local_num() as u16 {
+            self.unlink(SlotId(i));
+        }
+    }
+
+    fn def_as(&mut self, slot: SlotId, is_float: bool) {
+        if slot.is_zero() {
+            return;
+        }
+        self[slot].ty = if is_float { Ty::Float } else { Ty::Val };
+        self.def_(slot);
+    }
+
+    fn def_float_const(&mut self, slot: SlotId) {
+        if slot.is_zero() {
+            return;
+        }
+        self[slot].ty = Ty::Float;
+        self.def_(slot);
+    }
+
+    fn copy(&mut self, dst: SlotId, src: SlotId) {
+        self.use_(src);
+        self.def_(dst);
+        self[dst].ty = self[src].ty;
+    }
+
+    fn use_(&mut self, slot: SlotId) {
+        if self[slot].used != IsUsed::Killed {
+            self[slot].used = IsUsed::Used;
+        }
+    }
+
+    fn def_(&mut self, slot: SlotId) {
+        if self[slot].used == IsUsed::ND {
+            self[slot].used = IsUsed::Killed;
+        }
+    }
+}
+
+impl std::ops::Index<SlotId> for SlotInfo {
+    type Output = State;
+    fn index(&self, i: SlotId) -> &Self::Output {
+        &self.info[i.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<SlotId> for SlotInfo {
+    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
+        &mut self.info[i.0 as usize]
+    }
+}
+
+impl std::ops::Index<usize> for SlotInfo {
+    type Output = State;
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.info[i]
+    }
+}
+
+impl std::ops::IndexMut<usize> for SlotInfo {
+    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+        &mut self.info[i]
+    }
+}
+
+///
+/// The state of slots.
+///
+#[derive(Clone)]
+pub(super) struct State {
+    /// Type information for a backedge branch.
+    ty: Ty,
+    /// Whether the slot is used or not.
+    used: IsUsed,
+}
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.ty == Ty::Val && self.used == IsUsed::ND {
+            write!(f, "[]")
+        } else {
+            write!(f, "[{:?}/{:?}]", self.ty, self.used)
+        }
+    }
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            ty: Ty::Val,
+            used: IsUsed::ND,
+        }
+    }
+}
+
+///
+/// LType status of slots.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Ty {
+    ///
+    /// Value
+    ///
+    /// the slot is defined as non-f64.
+    ///
+    Val,
+    ///
+    /// Both
+    ///
+    /// the slot is used as f64 with coercion.
+    ///
+    Both,
+    ///
+    /// Float
+    ///
+    /// the slot is defined as f64 or used as f64 without coercion.
+    ///
+    Float,
+}
+
+impl Ty {
+    fn merge(&mut self, other: &Self) {
+        *self = match (*self, other) {
+            (_, Ty::Val) | (Ty::Val, _) => Ty::Val,
+            (_, Ty::Both) | (Ty::Both, _) => Ty::Both,
+            (Ty::Float, Ty::Float) => Ty::Float,
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum IsUsed {
+    ///
+    /// Not be used nor be killed.
+    ///
+    ND,
+    ///
+    /// Used in any of paths.
+    ///
+    Used,
+    ///
+    /// Guaranteed not to be used (= killed) in all paths.
+    ///
+    Killed,
+}
+
+impl IsUsed {
+    fn merge(&mut self, other: &Self) {
+        *self = match (&self, other) {
+            (IsUsed::Used, _) | (_, IsUsed::Used) => IsUsed::Used,
+            (IsUsed::Killed, IsUsed::Killed) => IsUsed::Killed,
+            _ => IsUsed::ND,
+        };
+    }
+
+    fn concat(&mut self, other: &Self) {
+        *self = match (&self, other) {
+            (IsUsed::Used, _) => IsUsed::Used,
+            (IsUsed::Killed, _) => IsUsed::Killed,
+            (IsUsed::ND, IsUsed::Used) => IsUsed::Used,
+            (IsUsed::ND, IsUsed::Killed) => IsUsed::Killed,
+            _ => IsUsed::ND,
+        };
+    }
+
+    fn kill(&mut self) {
+        *self = match &self {
+            IsUsed::Used => IsUsed::Used,
+            _ => IsUsed::Killed,
+        };
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum ExitType {
+    Continue,
+    Return,
 }

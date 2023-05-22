@@ -2,6 +2,7 @@ use monoasm_macro::monoasm;
 use paste::paste;
 
 use super::*;
+use analysis::{ExitType, SlotInfo};
 
 mod analysis;
 mod binary_op;
@@ -29,6 +30,9 @@ struct JitContext {
     /// Basic block information.
     ///
     bb_info: BasicBlockInfo,
+    bb_scan: Vec<(ExitType, SlotInfo)>,
+    loop_backedges: HashMap<BasicBlockId, SlotInfo>,
+    loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
     ///
     /// The start bytecode position of the current basic block.
     ///
@@ -45,9 +49,12 @@ struct JitContext {
     /// A map for bytecode position and branches.
     ///
     branch_map: HashMap<BcIndex, Vec<BranchEntry>>,
+    ///
+    /// Target context (BBContext) for an each instruction.
+    ///
     target_ctx: HashMap<BcIndex, BBContext>,
     ///
-    /// A map for backword branches.
+    /// A map for backward branches.
     ///
     backedge_map: HashMap<BcIndex, (DestLabel, BBContext, Vec<SlotId>)>,
     ///
@@ -55,11 +62,11 @@ struct JitContext {
     ///
     start_codepos: usize,
     ///
-    ///
+    /// the number of slots.
     ///
     total_reg_num: usize,
     ///
-    ///
+    /// the number of local variables.
     ///
     local_num: usize,
     ///
@@ -255,12 +262,19 @@ impl JitContext {
                 bb_info[incoming].succ.push(id);
             }
         }
+        let mut bb_scan = vec![];
+        for entry in &bb_info.info {
+            bb_scan.push(Self::scan_bb(func, entry));
+        }
         assert!(loop_stack.is_empty());
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
-        Self {
+        let mut cc = Self {
             labels,
             bb_info,
+            bb_scan,
+            loop_backedges: HashMap::default(),
+            loop_exit: HashMap::default(),
             bb_pos: start_pos,
             loop_count: 0,
             is_loop,
@@ -272,7 +286,9 @@ impl JitContext {
             local_num,
             self_value,
             sourcemap: vec![],
-        }
+        };
+        cc.initialize_loop_info();
+        cc
     }
 
     fn new_branch(&mut self, src_idx: BcIndex, dest: BcIndex, bbctx: BBContext, entry: DestLabel) {
