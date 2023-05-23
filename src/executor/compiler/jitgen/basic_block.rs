@@ -18,9 +18,21 @@ impl std::ops::AddAssign<usize> for BasicBlockId {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BasicBlockInfo {
+    ///
+    /// Basic block information.
+    ///
     info: Vec<BasciBlockInfoEntry>,
+    ///
+    /// Whether an each instruction (*BcIndex*) is a beginning of a basic block.
+    ///
     bb_head: bitvec::vec::BitVec,
+    ///
+    /// A map for *BcIndex* -> *BasicBlockId*.
+    ///
     bb_map: Vec<BasicBlockId>,
+    ///
+    /// Loop information. An array of (start:*BasicBlockId*, end:*BasicBlockId*).
+    ///
     pub loops: Vec<(BasicBlockId, BasicBlockId)>,
 }
 
@@ -55,6 +67,8 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 impl BasicBlockInfo {
     pub(crate) fn new(info: &ISeqInfo) -> Self {
         let incoming = info.get_incoming();
+
+        // generate bb_head.
         let bb_head = incoming
             .iter()
             .enumerate()
@@ -65,15 +79,19 @@ impl BasicBlockInfo {
                 }
             })
             .collect();
+
+        // generate bb_bap.
         let mut bb_id = BasicBlockId(1);
         let mut bb_map = vec![];
-        for incoming in &incoming {
-            if !incoming.is_empty() {
+        for i in &incoming {
+            if !i.is_empty() {
                 bb_id += 1;
             }
             bb_map.push(bb_id);
         }
         bb_id += 1;
+
+        // generate bb_info.
         let mut bb_info = BasicBlockInfo {
             info: vec![BasciBlockInfoEntry::default(); bb_id.0],
             bb_head,
@@ -81,6 +99,7 @@ impl BasicBlockInfo {
             loops: Default::default(),
         };
 
+        // generate predecessor and successor.
         let mut loop_stack = vec![];
         for (i, incoming) in incoming.into_iter().enumerate() {
             let idx = BcIndex::from(i);

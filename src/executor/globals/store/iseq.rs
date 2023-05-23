@@ -37,13 +37,21 @@ pub(crate) struct ISeqInfo {
     )>,
     /// the name of arguments.
     pub(in crate::executor) args: ParamsInfo,
+    ///
     /// outer local variables. (dynamic_locals, block_param)
+    ///
     pub outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
+    ///
     /// literal values. (for GC)
+    ///
     pub literals: Vec<Value>,
+    ///
     /// The number of non-temporary registers.
+    ///
     pub non_temp_num: u16,
+    ///
     /// The number of temporary registers.
+    ///
     pub temp_num: u16,
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
