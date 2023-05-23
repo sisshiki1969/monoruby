@@ -39,7 +39,7 @@ struct JitContext {
     ///
     /// The start bytecode position of the current basic block.
     ///
-    bb_pos: BcIndex,
+    cur_pos: BcIndex,
     ///
     /// Nested loop count.
     ///
@@ -63,6 +63,7 @@ struct JitContext {
     ///
     /// The start offset of a machine code corresponding to thhe current basic block.
     ///
+    #[cfg(feature = "emit-asm")]
     start_codepos: usize,
     ///
     /// the number of slots.
@@ -111,7 +112,7 @@ impl JitContext {
         self_value: Value,
     ) -> Self {
         let mut labels = HashMap::default();
-        for i in 0..func.bytecode().len() {
+        for i in 0..func.bytecode_len() {
             let idx = BcIndex::from(i);
             if func.bb_info.is_bb_head(idx) {
                 labels.insert(idx, codegen.jit.label());
@@ -119,27 +120,29 @@ impl JitContext {
         }
         let bb_scan = func.bb_info.init_bb_scan(func);
 
+        #[cfg(feature = "emit-asm")]
+        let start_codepos = codegen.jit.get_current();
+
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
-        let mut cc = Self {
+        Self {
             labels,
             bb_scan,
             loop_backedges: HashMap::default(),
             loop_exit: HashMap::default(),
-            bb_pos: start_pos,
+            cur_pos: start_pos,
             loop_count: 0,
             is_loop,
             branch_map: HashMap::default(),
             target_ctx: HashMap::default(),
             backedge_map: HashMap::default(),
-            start_codepos: 0,
+            #[cfg(feature = "emit-asm")]
+            start_codepos,
             total_reg_num,
             local_num,
             self_value,
             sourcemap: vec![],
-        };
-        cc.initialize_loop_info(func);
-        cc
+        }
     }
 
     fn new_branch(&mut self, src_idx: BcIndex, dest: BcIndex, bbctx: BBContext, entry: DestLabel) {
@@ -617,8 +620,12 @@ impl Codegen {
         let entry = self.jit.label();
         self.jit.bind_label(entry);
 
-        let mut cc = jitgen::JitContext::new(func, self, start_pos, position.is_some(), self_value);
-        cc.start_codepos = self.jit.get_current();
+        let mut ctx = JitContext::new(func, self, start_pos, position.is_some(), self_value);
+        for (loop_start, loop_end) in &func.bb_info.loops {
+            let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
+            ctx.loop_backedges.insert(*loop_start, backedge);
+            ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
+        }
 
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
@@ -631,23 +638,23 @@ impl Codegen {
             self.guard_class(self_value.class(), side_exit);
         }
 
-        cc.branch_map.insert(
+        ctx.branch_map.insert(
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bbctx: BBContext::new(&cc),
+                bbctx: BBContext::new(&ctx),
                 entry: self.jit.label(),
                 cont: true,
             }],
         );
-        for i in func.bb_info.get_start_pos(start_pos) {
-            cc.bb_pos = i;
-            if self.compile_bb(fnstore, func, &mut cc, position) {
+        for i in func.bb_info.get_bb_pos(start_pos) {
+            ctx.cur_pos = i;
+            if self.compile_bb(fnstore, func, &mut ctx, position) {
                 break;
             };
         }
 
-        self.gen_backedge_branches(&mut cc, func);
+        self.gen_backedge_branches(&mut ctx, func);
 
         self.jit.finalize();
 
@@ -658,7 +665,7 @@ impl Codegen {
         }
         #[cfg(feature = "emit-tir")]
         eprintln!("<== finished compile.");
-        (entry, cc.sourcemap)
+        (entry, ctx.sourcemap)
     }
 }
 
@@ -814,8 +821,8 @@ impl Codegen {
         cc: &mut JitContext,
         position: Option<BcPc>,
     ) -> bool {
-        self.jit.bind_label(cc.labels[&cc.bb_pos]);
-        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&cc.bb_pos) {
+        self.jit.bind_label(cc.labels[&cc.cur_pos]);
+        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&cc.cur_pos) {
             ctx
         } else {
             if let Some(ctx) = self.gen_merging_branches(func, cc) {
@@ -824,11 +831,11 @@ impl Codegen {
                 return false;
             }
         };
-        for (ofs, pc) in func.bytecode()[cc.bb_pos.to_usize()..].iter().enumerate() {
+        for (ofs, pc) in func.bytecode()[cc.cur_pos.to_usize()..].iter().enumerate() {
             let pc = BcPc::from(pc);
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
-                .push((cc.bb_pos + ofs, self.jit.get_current() - cc.start_codepos));
+                .push((cc.cur_pos + ofs, self.jit.get_current() - cc.start_codepos));
             match pc.get_ir() {
                 TraceIr::InitMethod { .. } => {}
                 TraceIr::LoopStart(_) => {
@@ -839,7 +846,7 @@ impl Codegen {
                     cc.loop_count -= 1;
                     if cc.is_loop && cc.loop_count == 0 {
                         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
-                        eprintln!("<-- compile finished. end:[{:05}]", cc.bb_pos + ofs);
+                        eprintln!("<-- compile finished. end:[{:05}]", cc.cur_pos + ofs);
                         self.go_deopt(&ctx, pc);
                         break;
                     }
@@ -1231,7 +1238,7 @@ impl Codegen {
                 }
 
                 TraceIr::Cmp(kind, ret, mode, true) => {
-                    let index = cc.bb_pos + ofs + 1;
+                    let index = cc.cur_pos + ofs + 1;
                     self.gen_cmp_opt(&mut ctx, cc, mode, kind, ret, pc, index);
                 }
                 TraceIr::Mov(dst, src) => {
@@ -1517,10 +1524,10 @@ impl Codegen {
                     };
                 }
                 TraceIr::Br(disp) => {
-                    let next_idx = cc.bb_pos + ofs + 1;
+                    let next_idx = cc.cur_pos + ofs + 1;
                     let dest_idx = next_idx + disp;
                     let branch_dest = self.jit.label();
-                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx, branch_dest);
+                    cc.new_branch(cc.cur_pos + ofs, dest_idx, ctx, branch_dest);
                     monoasm!( &mut self.jit,
                         jmp branch_dest;
                     );
@@ -1528,9 +1535,9 @@ impl Codegen {
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
                     self.write_back_slot(&mut ctx, cond_);
-                    let dest_idx = cc.bb_pos + ofs + 1 + disp;
+                    let dest_idx = cc.cur_pos + ofs + 1 + disp;
                     let branch_dest = self.jit.label();
-                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    cc.new_branch(cc.cur_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(cond_);
                     monoasm!( &mut self.jit,
                         orq rax, 0x10;
@@ -1543,9 +1550,9 @@ impl Codegen {
                 }
                 TraceIr::CondBr(_, _, true, _) => {}
                 TraceIr::CheckLocal(local, disp) => {
-                    let dest_idx = cc.bb_pos + ofs + 1 + disp;
+                    let dest_idx = cc.cur_pos + ofs + 1 + disp;
                     let branch_dest = self.jit.label();
-                    cc.new_branch(cc.bb_pos + ofs, dest_idx, ctx.clone(), branch_dest);
+                    cc.new_branch(cc.cur_pos + ofs, dest_idx, ctx.clone(), branch_dest);
                     self.load_rax(local);
                     monoasm!( &mut self.jit,
                         testq rax, rax;
@@ -1554,11 +1561,11 @@ impl Codegen {
                 }
             }
 
-            let next_idx = cc.bb_pos + ofs + 1;
+            let next_idx = cc.cur_pos + ofs + 1;
             if func.bb_info.is_bb_head(next_idx) {
                 let branch_dest = self.jit.label();
-                cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
-                cc.bb_pos = next_idx;
+                cc.new_continue(cc.cur_pos + ofs, next_idx, ctx, branch_dest);
+                cc.cur_pos = next_idx;
                 let target_ctx = if let Some(ctx) = self.gen_merging_branches(func, cc) {
                     ctx
                 } else {

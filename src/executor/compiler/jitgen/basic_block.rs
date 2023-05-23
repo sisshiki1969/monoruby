@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
-pub struct BasicBlockId(pub usize);
+pub(crate) struct BasicBlockId(pub usize);
 
 impl std::ops::Add<usize> for BasicBlockId {
     type Output = Self;
@@ -123,7 +123,7 @@ impl BasicBlockInfo {
     ///
     /// Get position of start instructions (BcIndex) of basic blocks.
     ///
-    pub(super) fn get_start_pos(&self, start_pos: BcIndex) -> Vec<BcIndex> {
+    pub(super) fn get_bb_pos(&self, start_pos: BcIndex) -> Vec<BcIndex> {
         self.bb_head
             .iter()
             .enumerate()

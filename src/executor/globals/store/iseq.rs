@@ -303,7 +303,7 @@ impl ISeqInfo {
     ///
     /// Get bytecode length.
     ///
-    fn bytecode_len(&self) -> usize {
+    pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode().len()
     }
 

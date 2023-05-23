@@ -26,15 +26,7 @@ impl JitContext {
         (backedge.get_loop_used_as_float(), exit.get_unused())
     }
 
-    pub(super) fn initialize_loop_info(&mut self, func: &ISeqInfo) {
-        for (loop_start, loop_end) in &func.bb_info.loops {
-            let (backedge, exit) = self.analyse_loop(func, *loop_start, *loop_end);
-            self.loop_backedges.insert(*loop_start, backedge);
-            self.loop_exit.insert(*loop_start, (*loop_end, exit));
-        }
-    }
-
-    fn analyse_loop(
+    pub(super) fn analyse_loop(
         &self,
         func: &ISeqInfo,
         loop_start: BasicBlockId,
@@ -72,12 +64,12 @@ impl JitContext {
                 if *src < loop_start {
                     // entry edge
                     assert_eq!(0, i);
-                    slots.merge(SlotInfo::new(self.total_reg_num));
+                    slots.merge(SlotInfo::new(func.total_reg_num()));
                 } else if (loop_start..=loop_end).contains(src) {
                     // inner
                     if bb_id <= *src {
                         // back edge
-                        slots.merge(SlotInfo::new(self.total_reg_num));
+                        slots.merge(SlotInfo::new(func.total_reg_num()));
                     } else if let Some(edge) = edges.remove(&(*src, bb_id)) {
                         // forward edge
                         slots.merge(edge);
@@ -143,12 +135,12 @@ impl JitContext {
         }
         let exit = match return_edge.0 {
             Some(slots) => slots.clone(),
-            None => SlotInfo::new(self.total_reg_num),
+            None => SlotInfo::new(func.total_reg_num()),
         };
 
         let backedge = match back_edge {
             Some((_, slots)) => slots,
-            None => SlotInfo::new(self.total_reg_num),
+            None => SlotInfo::new(func.total_reg_num()),
         };
         (backedge, exit)
     }

@@ -33,7 +33,7 @@ impl Codegen {
         func: &ISeqInfo,
         cc: &mut JitContext,
     ) -> Option<BBContext> {
-        let bb_pos = cc.bb_pos;
+        let bb_pos = cc.cur_pos;
         let is_loop = func.get_pc(bb_pos).is_loop();
         let res = if is_loop {
             #[cfg(feature = "emit-tir")]
@@ -50,10 +50,10 @@ impl Codegen {
     }
 
     fn gen_merging_branches_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
-        let bb_pos = cc.bb_pos;
+        let bb_pos = cc.cur_pos;
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
-            let bb_pos = cc.bb_pos;
+            let bb_pos = cc.cur_pos;
 
             let (use_set, unused) = cc.analyse(func, bb_pos);
 
@@ -107,7 +107,7 @@ impl Codegen {
         func: &ISeqInfo,
         cc: &mut JitContext,
     ) -> Option<BBContext> {
-        let bb_pos = cc.bb_pos;
+        let bb_pos = cc.cur_pos;
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
 
