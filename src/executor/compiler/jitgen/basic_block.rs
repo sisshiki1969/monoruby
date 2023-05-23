@@ -53,7 +53,8 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
-    pub(crate) fn new(incoming: &[Vec<BcIndex>], info: &ISeqInfo) -> Self {
+    pub(crate) fn new(info: &ISeqInfo) -> Self {
+        let incoming = info.get_incoming();
         let bb_head = incoming
             .iter()
             .enumerate()
@@ -66,19 +67,45 @@ impl BasicBlockInfo {
             .collect();
         let mut bb_id = BasicBlockId(1);
         let mut bb_map = vec![];
-        for incoming in incoming {
+        for incoming in &incoming {
             if !incoming.is_empty() {
                 bb_id += 1;
             }
             bb_map.push(bb_id);
         }
         bb_id += 1;
-        BasicBlockInfo {
+        let mut bb_info = BasicBlockInfo {
             info: vec![BasciBlockInfoEntry::default(); bb_id.0],
             bb_head,
             bb_map,
             loops: Default::default(),
+        };
+
+        let mut loop_stack = vec![];
+        for (i, incoming) in incoming.into_iter().enumerate() {
+            let idx = BcIndex::from(i);
+            let pc = info.get_pc(idx);
+            if TraceIr::is_loop_start(pc) {
+                loop_stack.push(idx);
+            } else if TraceIr::is_loop_end(pc) {
+                let start = loop_stack.pop().unwrap();
+                bb_info
+                    .loops
+                    .push((bb_info.get_bb_id(start), bb_info.get_bb_id(idx)));
+            }
+
+            bb_info[idx].end = idx;
+            for i in incoming {
+                let incoming = bb_info.get_bb_id(i);
+                bb_info[idx].begin = idx;
+                bb_info[idx].pred.push(incoming);
+                let id = bb_info.get_bb_id(idx);
+                bb_info[incoming].succ.push(id);
+            }
         }
+        assert!(loop_stack.is_empty());
+
+        bb_info
     }
 
     pub(super) fn init_bb_scan(&self, func: &ISeqInfo) -> Vec<(ExitType, SlotInfo)> {
@@ -89,7 +116,7 @@ impl BasicBlockInfo {
         bb_scan
     }
 
-    pub(super) fn is_bb_head(&self, i: BcIndex) -> bool {
+    pub(crate) fn is_bb_head(&self, i: BcIndex) -> bool {
         self.bb_head[i.0 as usize]
     }
 

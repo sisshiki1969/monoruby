@@ -431,16 +431,12 @@ impl FuncInfo {
             self.kind
         );
         eprintln!("{:?}", info.get_exception_map());
-        let bb_info = info.get_incoming();
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(fmt) = pc.format(globals, i) {
                 eprint!(
                     "{}:{:05} ",
-                    if i == 0 || !bb_info[i].is_empty() || {
-                        let pc = BcPc::from(&info.bytecode()[i - 1]);
-                        TraceIr::is_terminal(pc)
-                    } {
+                    if info.bb_info.is_bb_head(BcIndex::from(i)) {
                         "+"
                     } else {
                         " "
