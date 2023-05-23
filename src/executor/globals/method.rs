@@ -63,7 +63,7 @@ impl Globals {
         inline_id: InlineMethod,
     ) -> FuncId {
         let func_id = self.define_builtin_func(class_id, name, address, arity);
-        self.store.add_inline(func_id, inline_id);
+        inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }
 
@@ -98,7 +98,7 @@ impl Globals {
         inline_id: InlineMethod,
     ) -> FuncId {
         let func_id = self.define_builtin_module_func(class_id, name, address, arity);
-        self.store.add_inline(func_id, inline_id);
+        inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }
 

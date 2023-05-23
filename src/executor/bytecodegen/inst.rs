@@ -584,32 +584,40 @@ pub(in crate::executor) enum TraceIr {
     MethodCall {
         ret: SlotId,
         callid: CallSiteId,
-        _class: ClassId,
         has_splat: bool,
-        _version: u32,
         info: MethodInfo,
+        #[allow(dead_code)]
+        class: ClassId,
+        #[allow(dead_code)]
+        version: u32,
     },
     MethodCallBlock {
         ret: SlotId,
         callid: CallSiteId,
-        _class: ClassId,
         has_splat: bool,
-        _version: u32,
         info: MethodInfo,
+        #[allow(dead_code)]
+        class: ClassId,
+        #[allow(dead_code)]
+        version: u32,
     },
     Super {
         ret: SlotId,
         callid: CallSiteId,
-        _class: ClassId,
-        _version: u32,
         info: MethodInfo,
+        #[allow(dead_code)]
+        class: ClassId,
+        #[allow(dead_code)]
+        version: u32,
     },
     InlineCall {
         ret: SlotId,
         method: InlineMethod,
-        _class: ClassId,
-        _version: u32,
         info: MethodInfo,
+        #[allow(dead_code)]
+        class: ClassId,
+        #[allow(dead_code)]
+        version: u32,
     },
     Yield {
         ret: SlotId,
@@ -680,7 +688,7 @@ pub(in crate::executor) enum TraceIr {
 }
 
 impl TraceIr {
-    pub(crate) fn from_bc(pc: BcPc, fnstore: &Store) -> Self {
+    pub(crate) fn from_bc(pc: BcPc) -> Self {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         if opcode & 0xffc0 == 0 {
@@ -761,8 +769,8 @@ impl TraceIr {
                     id: op2,
                 },
                 30..=31 => {
-                    let (_class, _version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let (class, version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
@@ -770,13 +778,15 @@ impl TraceIr {
 
                     if let Some(func_data) = info.func_data {
                         if !has_splat {
-                            if let Some(inline_id) = fnstore.get_inline(func_data.meta.func_id()) {
+                            if let Some(inline_id) =
+                                inline::InlineTable::get_inline(func_data.meta.func_id())
+                            {
                                 return Self::InlineCall {
                                     ret: SlotId::new(op1),
-                                    method: *inline_id,
-                                    _class,
-                                    _version,
+                                    method: inline_id,
                                     info,
+                                    class,
+                                    version,
                                 };
                             }
                         }
@@ -784,39 +794,39 @@ impl TraceIr {
                     Self::MethodCall {
                         ret: SlotId::new(op1),
                         callid: op2.into(),
-                        _class,
                         has_splat,
-                        _version,
                         info,
+                        class,
+                        version,
                     }
                 }
                 32..=33 => {
-                    let (_class, _version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let (class, version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
                     Self::MethodCallBlock {
                         ret: SlotId::new(op1),
                         callid: op2.into(),
-                        _class,
                         has_splat: opcode == 32,
-                        _version,
                         info,
+                        class,
+                        version,
                     }
                 }
                 34 => {
-                    let (_class, _version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1, fnstore) {
+                    let (class, version) = pc.class_version();
+                    let info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
                     Self::Super {
                         ret: SlotId::new(op1),
                         callid: op2.into(),
-                        _class,
-                        _version,
                         info,
+                        class,
+                        version,
                     }
                 }
                 _ => unreachable!("{:016x}", op),
@@ -1031,6 +1041,18 @@ impl TraceIr {
     pub(crate) fn is_terminal(pc: BcPc) -> bool {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
-        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 // Br or Ret or MethodRet
+        opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 // Br or Ret or MethodRet or Break
+    }
+
+    pub(crate) fn is_loop_start(pc: BcPc) -> bool {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        opcode == 14 // LoopStart
+    }
+
+    pub(crate) fn is_loop_end(pc: BcPc) -> bool {
+        let op = pc.op1;
+        let opcode = (op >> 48) as u16;
+        opcode == 15 // LoopEnd
     }
 }

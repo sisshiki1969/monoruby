@@ -38,7 +38,7 @@ impl Codegen {
         reg: SlotId,
         pc: BcPc,
     ) -> Xmm {
-        match ctx.stack_slot[reg] {
+        match ctx.slot_state[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
@@ -47,6 +47,28 @@ impl Codegen {
                 self.load_rdi(reg);
                 self.unbox_float(freg.enc(), side_exit);
                 freg
+            }
+            LinkMode::Const(v) => {
+                if let Some(f) = v.try_float() {
+                    let freg = ctx.alloc_xmm();
+                    ctx.link_xmm(reg, freg);
+                    let f = self.jit.const_f64(f);
+                    monoasm! {&mut self.jit,
+                        movq xmm(freg.enc()), [rip + f];
+                    }
+                    freg
+                } else if let Some(i) = v.try_fixnum() {
+                    let freg = ctx.alloc_xmm();
+                    ctx.link_both(reg, freg);
+                    let f = self.jit.const_f64(i as f64);
+                    monoasm! {&mut self.jit,
+                        movq [r14 - (conv(reg))], (Value::new_integer(i).get());
+                        movq xmm(freg.enc()), [rip + f];
+                    }
+                    freg
+                } else {
+                    unreachable!()
+                }
             }
         }
     }
@@ -80,7 +102,7 @@ impl Codegen {
     /// - rdi
     ///
     fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
-        match ctx.stack_slot[reg] {
+        match ctx.slot_state[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
@@ -89,6 +111,28 @@ impl Codegen {
                 self.load_rdi(reg);
                 self.integer_to_f64(freg.enc(), side_exit);
                 freg
+            }
+            LinkMode::Const(v) => {
+                if let Some(f) = v.try_float() {
+                    let freg = ctx.alloc_xmm();
+                    ctx.link_xmm(reg, freg);
+                    let f = self.jit.const_f64(f);
+                    monoasm! {&mut self.jit,
+                        movq xmm(freg.enc()), [rip + f];
+                    }
+                    freg
+                } else if let Some(i) = v.try_fixnum() {
+                    let freg = ctx.alloc_xmm();
+                    ctx.link_both(reg, freg);
+                    let f = self.jit.const_f64(i as f64);
+                    monoasm! {&mut self.jit,
+                        movq [r14 - (conv(reg))], (Value::new_integer(i).get());
+                        movq xmm(freg.enc()), [rip + f];
+                    }
+                    freg
+                } else {
+                    unreachable!()
+                }
             }
         }
     }

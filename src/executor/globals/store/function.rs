@@ -212,7 +212,6 @@ impl Funcs {
                 }
                 ParamKind::Block(name) => {
                     let name = IdentId::get_id_from_string(name.clone());
-                    args_names.push(Some(name));
                     block_param = Some(name);
                 }
                 _ => {
@@ -432,11 +431,18 @@ impl FuncInfo {
             self.kind
         );
         eprintln!("{:?}", info.get_exception_map());
-        let bb_info = info.get_bb_info();
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);
             if let Some(fmt) = pc.format(globals, i) {
-                eprint!("{}:{:05} ", if bb_info[i].is_some() { "+" } else { " " }, i);
+                eprint!(
+                    "{}:{:05} ",
+                    if info.bb_info.is_bb_head(BcIndex::from(i)) {
+                        "+"
+                    } else {
+                        " "
+                    },
+                    i
+                );
                 eprintln!("{}", fmt);
             };
         }

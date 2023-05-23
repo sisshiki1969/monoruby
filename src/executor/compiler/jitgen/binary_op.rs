@@ -96,26 +96,41 @@ impl Codegen {
                 self.generic_binop(ctx, ret, kind, pc);
             }
             _ => {
-                self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                 match kind {
                     BinOpK::BitOr => {
+                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         monoasm!( &mut self.jit,
                             orq rdi, rsi;
                         );
                     }
                     BinOpK::BitAnd => {
+                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         monoasm!( &mut self.jit,
                             andq rdi, rsi;
                         );
                     }
                     BinOpK::BitXor => {
+                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
                         monoasm!( &mut self.jit,
                             xorq rdi, rsi;
                             addq rdi, 1;
                         );
                     }
-                    BinOpK::Shr => self.gen_shr(deopt),
-                    BinOpK::Shl => self.gen_shl(deopt),
+                    BinOpK::Shr => {
+                        self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
+                        self.gen_shr(deopt);
+                    }
+                    BinOpK::Shl => match mode {
+                        OpMode::RI(lhs, imm) if imm >= 0 && i8::try_from(imm).is_ok() => {
+                            let imm = i8::try_from(imm).unwrap() as u8;
+                            self.load_guard_rdi_fixnum(lhs, deopt);
+                            self.gen_shl_imm(imm, deopt);
+                        }
+                        _ => {
+                            self.load_and_guard_binary_fixnum_with_mode(deopt, &mode);
+                            self.gen_shl(deopt);
+                        }
+                    },
                     _ => unimplemented!(),
                 }
                 self.store_rdi(ret);
@@ -371,14 +386,13 @@ impl Codegen {
         &mut self,
         ctx: &mut BBContext,
         cc: &mut JitContext,
-        fnstore: &Store,
         mode: OpMode,
         kind: CmpKind,
         ret: SlotId,
         pc: BcPc,
         index: BcIndex,
     ) {
-        match (pc + 1).get_ir(fnstore) {
+        match (pc + 1).get_ir() {
             TraceIr::CondBr(_, disp, true, brkind) => {
                 let dest_idx = index + disp + 1;
                 let branch_dest = self.jit.label();
@@ -668,6 +682,21 @@ impl Codegen {
         );
         self.jit.select_page(0);
         self.shift_under(under, after);
+    }
+
+    ///
+    /// lhs << imm(>=0)
+    ///
+    fn gen_shl_imm(&mut self, imm: u8, deopt: DestLabel) {
+        monoasm!( &mut self.jit,
+            movl rcx, (imm);
+            lzcntq rax, rdi;
+            cmpq rax, rcx;
+            jle deopt;
+            subq rdi, 1;
+            shlq rdi, rcx;
+            orq rdi, 1;
+        );
     }
 
     fn generic_binop(&mut self, ctx: &BBContext, ret: SlotId, kind: BinOpK, pc: BcPc) {

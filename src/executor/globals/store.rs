@@ -8,14 +8,14 @@ mod function;
 mod iseq;
 pub use class::*;
 pub use function::*;
-pub(crate) use iseq::{BasicBlockId, ISeqInfo};
+pub(crate) use iseq::ISeqInfo;
 
 #[derive(Default)]
 pub(crate) struct Store {
     /// function info.
     functions: function::Funcs,
     /// inline function info.
-    inline: HashMap<FuncId, InlineMethod>,
+    //inline: HashMap<FuncId, InlineMethod>,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -87,7 +87,7 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
-            inline: HashMap::default(),
+            //inline: HashMap::default(),
             constsite_info: vec![],
             callsite_info: vec![],
             classes: vec![ClassInfo::new(); 20],
@@ -168,9 +168,9 @@ impl Store {
             .add_block(mother, outer, optional_params, info, sourceinfo)
     }
 
-    pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
+    /*pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
         self.inline.get(&func_id)
-    }
+    }*/
 
     pub(super) fn add_builtin_func(
         &mut self,
@@ -189,9 +189,9 @@ impl Store {
         self.functions.add_attr_writer(name, ivar_name)
     }
 
-    pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
+    /*pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
         self.inline.insert(func_id, inline_id);
-    }
+    }*/
 
     pub(crate) fn callsite_offset(&self) -> usize {
         self.callsite_info.len()
@@ -200,7 +200,7 @@ impl Store {
     pub(crate) fn add_callsite(
         &mut self,
         name: Option<IdentId>,
-        arg_num: usize,
+        pos_num: usize,
         kw_pos: SlotId,
         kw_args: HashMap<IdentId, usize>,
         splat_pos: Vec<usize>,
@@ -208,7 +208,7 @@ impl Store {
     ) {
         self.callsite_info.push(CallSiteInfo {
             name,
-            arg_num,
+            pos_num,
             kw_pos,
             kw_args,
             splat_pos,
@@ -264,13 +264,14 @@ pub struct CallSiteInfo {
     /// Name of method. (None for *super*)
     pub name: Option<IdentId>,
     /// Number of positional arguments.
-    pub arg_num: usize,
+    pub pos_num: usize,
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,
     /// Names and positions of keyword arguments.
     pub kw_args: HashMap<IdentId, usize>,
     /// Positions of splat arguments.
     pub splat_pos: Vec<usize>,
+    /// Position of hash splat arguments.
     pub(crate) hash_splat_pos: Vec<SlotId>,
 }
 

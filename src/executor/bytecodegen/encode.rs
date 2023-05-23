@@ -1,3 +1,5 @@
+use crate::jitgen::BasicBlockInfo;
+
 use super::*;
 
 impl BytecodeGen {
@@ -11,7 +13,7 @@ impl BytecodeGen {
         }
         for CallSite {
             name,
-            arg_num,
+            pos_num,
             kw,
             splat_pos,
         } in std::mem::take(&mut self.callsites)
@@ -27,11 +29,11 @@ impl BytecodeGen {
                     .into_iter()
                     .map(|r| self.get_index(&r))
                     .collect();
-                store.add_callsite(name, arg_num, pos, kw_args, splat_pos, hash_splat_pos);
+                store.add_callsite(name, pos_num, pos, kw_args, splat_pos, hash_splat_pos);
             } else {
                 store.add_callsite(
                     name,
-                    arg_num,
+                    pos_num,
                     SlotId(0),
                     HashMap::default(),
                     splat_pos,
@@ -80,8 +82,10 @@ impl BytecodeGen {
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
-
         info.sourcemap = locs;
+
+        info.bb_info = BasicBlockInfo::new(info);
+
         Ok(())
     }
 
