@@ -35,6 +35,15 @@ struct JitContext {
     ///
     bb_scan: Vec<(ExitType, SlotInfo)>,
     loop_backedges: HashMap<BasicBlockId, SlotInfo>,
+    ///
+    /// Loop
+    ///
+    /// ### key
+    /// start basic block.
+    ///
+    /// ### value
+    /// (end basic block, slot_info)
+    ///
     loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
     ///
     /// The start bytecode position of the current basic block.

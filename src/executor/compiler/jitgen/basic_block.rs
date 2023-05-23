@@ -127,6 +127,10 @@ impl BasicBlockInfo {
         bb_info
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.info.len()
+    }
+
     pub(super) fn init_bb_scan(&self, func: &ISeqInfo) -> Vec<(ExitType, SlotInfo)> {
         let mut bb_scan = vec![];
         for entry in &self.info {
