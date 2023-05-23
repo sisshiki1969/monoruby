@@ -1,7 +1,7 @@
 use monoasm_macro::monoasm;
 use paste::paste;
 
-use self::basic_block::BasicBlockInfo;
+pub(crate) use self::basic_block::BasicBlockInfo;
 pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 
 use super::*;
@@ -33,7 +33,6 @@ struct JitContext {
     ///
     /// Basic block information.
     ///
-    bb_info: BasicBlockInfo,
     bb_scan: Vec<(ExitType, SlotInfo)>,
     loop_backedges: HashMap<BasicBlockId, SlotInfo>,
     loop_exit: HashMap<BasicBlockId, (BasicBlockId, SlotInfo)>,
@@ -111,41 +110,19 @@ impl JitContext {
         is_loop: bool,
         self_value: Value,
     ) -> Self {
-        let incoming = func.get_incoming();
-        let mut bb_info = BasicBlockInfo::new(&incoming, func);
         let mut labels = HashMap::default();
-        let mut loop_stack = vec![];
-        for (i, incoming) in incoming.into_iter().enumerate() {
+        for i in 0..func.bytecode().len() {
             let idx = BcIndex::from(i);
-            if bb_info.is_bb_head(idx) {
+            if func.bb_info.is_bb_head(idx) {
                 labels.insert(idx, codegen.jit.label());
             }
-            let pc = func.get_pc(idx);
-            if TraceIr::is_loop_start(pc) {
-                loop_stack.push(idx);
-            } else if TraceIr::is_loop_end(pc) {
-                let start = loop_stack.pop().unwrap();
-                bb_info
-                    .loops
-                    .push((bb_info.get_bb_id(start), bb_info.get_bb_id(idx)));
-            }
-
-            bb_info[idx].end = idx;
-            let incoming: Vec<_> = incoming.into_iter().map(|i| bb_info.get_bb_id(i)).collect();
-            for incoming in incoming {
-                bb_info[idx].begin = idx;
-                bb_info[idx].pred.push(incoming);
-                let id = bb_info.get_bb_id(idx);
-                bb_info[incoming].succ.push(id);
-            }
         }
-        let bb_scan = bb_info.init_bb_scan(func);
-        assert!(loop_stack.is_empty());
+        let bb_scan = func.bb_info.init_bb_scan(func);
+
         let total_reg_num = func.total_reg_num();
         let local_num = func.local_num();
         let mut cc = Self {
             labels,
-            bb_info,
             bb_scan,
             loop_backedges: HashMap::default(),
             loop_exit: HashMap::default(),
@@ -161,7 +138,7 @@ impl JitContext {
             self_value,
             sourcemap: vec![],
         };
-        cc.initialize_loop_info();
+        cc.initialize_loop_info(func);
         cc
     }
 
@@ -663,7 +640,7 @@ impl Codegen {
                 cont: true,
             }],
         );
-        for i in cc.bb_info.get_start_pos(start_pos) {
+        for i in func.bb_info.get_start_pos(start_pos) {
             cc.bb_pos = i;
             if self.compile_bb(fnstore, func, &mut cc, position) {
                 break;
@@ -1578,7 +1555,7 @@ impl Codegen {
             }
 
             let next_idx = cc.bb_pos + ofs + 1;
-            if cc.bb_info.is_bb_head(next_idx) {
+            if func.bb_info.is_bb_head(next_idx) {
                 let branch_dest = self.jit.label();
                 cc.new_continue(cc.bb_pos + ofs, next_idx, ctx, branch_dest);
                 cc.bb_pos = next_idx;

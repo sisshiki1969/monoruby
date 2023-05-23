@@ -1,19 +1,34 @@
 use super::*;
+use crate::executor::compiler::jitgen::BasicBlockInfo;
 
 ///
 /// Information of instruction sequences.
 ///
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ISeqInfo {
-    /// ID of this function.
+    ///
+    /// *FuncId* of this function.
+    ///
     id: Option<FuncId>,
+    ///
+    /// Mother method.
+    ///
     pub(crate) mother: Option<FuncId>,
+    ///
+    /// Name of this function.
+    ///
     name: Option<IdentId>,
+    ///
     /// Bytecode.
+    ///
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
+    ///
     /// Source map.
+    ///
     pub sourcemap: Vec<Loc>,
+    ///
     /// Exception handling map.
+    ///
     exception_map: Vec<(
         std::ops::Range<BcPc>, // range of capturing exception
         Option<BcPc>,          // rescue destination pc
@@ -33,6 +48,10 @@ pub(crate) struct ISeqInfo {
     pub lexical_context: Vec<Module>,
     pub sourceinfo: SourceInfoRef,
     pub(crate) is_block_style: bool,
+    ///
+    /// Basic block information.
+    ///
+    pub bb_info: BasicBlockInfo,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -82,6 +101,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             is_block_style: is_block,
+            bb_info: BasicBlockInfo::default(),
         }
     }
 

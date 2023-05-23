@@ -1,3 +1,5 @@
+use crate::jitgen::BasicBlockInfo;
+
 use super::*;
 
 impl BytecodeGen {
@@ -80,8 +82,36 @@ impl BytecodeGen {
             let err_reg = err_reg.map(|reg| self.get_index(&reg));
             info.exception_push(start..end, rescue, ensure, err_reg);
         }
-
         info.sourcemap = locs;
+
+        let incoming = info.get_incoming();
+        let mut bb_info = BasicBlockInfo::new(&incoming, info);
+        let mut loop_stack = vec![];
+        for (i, incoming) in incoming.into_iter().enumerate() {
+            let idx = BcIndex::from(i);
+            let pc = info.get_pc(idx);
+            if TraceIr::is_loop_start(pc) {
+                loop_stack.push(idx);
+            } else if TraceIr::is_loop_end(pc) {
+                let start = loop_stack.pop().unwrap();
+                bb_info
+                    .loops
+                    .push((bb_info.get_bb_id(start), bb_info.get_bb_id(idx)));
+            }
+
+            bb_info[idx].end = idx;
+            for i in incoming {
+                let incoming = bb_info.get_bb_id(i);
+                bb_info[idx].begin = idx;
+                bb_info[idx].pred.push(incoming);
+                let id = bb_info.get_bb_id(idx);
+                bb_info[incoming].succ.push(id);
+            }
+        }
+        assert!(loop_stack.is_empty());
+
+        info.bb_info = bb_info;
+
         Ok(())
     }
 

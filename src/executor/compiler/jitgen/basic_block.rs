@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
-pub(super) struct BasicBlockId(pub usize);
+pub struct BasicBlockId(pub usize);
 
 impl std::ops::Add<usize> for BasicBlockId {
     type Output = Self;
@@ -16,8 +16,8 @@ impl std::ops::AddAssign<usize> for BasicBlockId {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct BasicBlockInfo {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BasicBlockInfo {
     info: Vec<BasciBlockInfoEntry>,
     bb_head: bitvec::vec::BitVec,
     bb_map: Vec<BasicBlockId>,
@@ -53,7 +53,7 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
-    pub(super) fn new(incoming: &[Vec<BcIndex>], info: &ISeqInfo) -> Self {
+    pub(crate) fn new(incoming: &[Vec<BcIndex>], info: &ISeqInfo) -> Self {
         let bb_head = incoming
             .iter()
             .enumerate()
@@ -115,7 +115,7 @@ impl BasicBlockInfo {
             .collect()
     }
 
-    pub(super) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
+    pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
         self.bb_map[i.0 as usize]
     }
 
@@ -128,7 +128,7 @@ impl BasicBlockInfo {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct BasciBlockInfoEntry {
+pub(crate) struct BasciBlockInfoEntry {
     pub begin: BcIndex,
     pub end: BcIndex,
     pub pred: Vec<BasicBlockId>,

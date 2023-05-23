@@ -2,7 +2,7 @@ use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
-mod jitgen;
+pub mod jitgen;
 pub mod runtime;
 mod vmgen;
 mod wrapper;

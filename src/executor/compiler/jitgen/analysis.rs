@@ -12,9 +12,13 @@ impl JitContext {
     /// 2) Type information of a backedge branch of this loop.
     /// (Float? not Float? or a Value which is coerced into Float?)
     ///
-    pub(super) fn analyse(&mut self, bb_pos: BcIndex) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
-        let entry_bb = self.bb_info.get_bb_id(bb_pos);
-        let (begin, _) = self.bb_info.get_loop(entry_bb).unwrap();
+    pub(super) fn analyse(
+        &mut self,
+        func: &ISeqInfo,
+        bb_pos: BcIndex,
+    ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
+        let entry_bb = func.bb_info.get_bb_id(bb_pos);
+        let (begin, _) = func.bb_info.get_loop(entry_bb).unwrap();
 
         let backedge = self.loop_backedges.get(&begin).unwrap();
         let exit = &self.loop_exit.get(&begin).unwrap().1;
@@ -22,16 +26,17 @@ impl JitContext {
         (backedge.get_loop_used_as_float(), exit.get_unused())
     }
 
-    pub(super) fn initialize_loop_info(&mut self) {
-        for (loop_start, loop_end) in self.bb_info.loops.clone() {
-            let (backedge, exit) = self.analyse_loop(loop_start, loop_end);
-            self.loop_backedges.insert(loop_start, backedge);
-            self.loop_exit.insert(loop_start, (loop_end, exit));
+    pub(super) fn initialize_loop_info(&mut self, func: &ISeqInfo) {
+        for (loop_start, loop_end) in &func.bb_info.loops {
+            let (backedge, exit) = self.analyse_loop(func, *loop_start, *loop_end);
+            self.loop_backedges.insert(*loop_start, backedge);
+            self.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
     }
 
     fn analyse_loop(
         &self,
+        func: &ISeqInfo,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) -> (SlotInfo, SlotInfo) {
@@ -43,15 +48,15 @@ impl JitContext {
         for (i, (ty, info)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
             let bb_id = loop_start + i;
             let mut slots = SlotMerger::new();
-            let BasciBlockInfoEntry { pred, succ, .. } = &self.bb_info[bb_id];
+            let BasciBlockInfoEntry { pred, succ, .. } = &func.bb_info[bb_id];
             if let Some((end, _)) = &nest_loop {
                 // In inner loops, we can skip scanning.
                 if bb_id == *end {
                     // When reached end, make an exit edge to a successor basic block.
                     let info = std::mem::take(&mut nest_loop).unwrap().1;
                     let next_bb = bb_id + 1;
-                    assert!(self.bb_info[bb_id].succ.contains(&next_bb));
-                    assert!(self.bb_info[next_bb].pred.contains(&bb_id));
+                    assert!(func.bb_info[bb_id].succ.contains(&next_bb));
+                    assert!(func.bb_info[next_bb].pred.contains(&bb_id));
                     edges.insert((bb_id, next_bb), info);
                 }
                 continue;
