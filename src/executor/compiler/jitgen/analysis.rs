@@ -1,5 +1,23 @@
 use super::*;
 
+#[derive(Default)]
+struct Edges(HashMap<BasicBlockId, Vec<SlotInfo>>);
+
+impl Edges {
+    fn insert(&mut self, dst_bb: BasicBlockId, info: SlotInfo) {
+        match self.0.get_mut(&dst_bb) {
+            Some(entry) => entry.push(info),
+            None => {
+                self.0.insert(dst_bb, vec![info]);
+            }
+        }
+    }
+
+    fn remove(&mut self, bb: &BasicBlockId) -> Option<Vec<SlotInfo>> {
+        self.0.remove(bb)
+    }
+}
+
 impl JitContext {
     ///
     /// Liveness analysis for loops.
@@ -37,32 +55,22 @@ impl JitContext {
         let mut return_edge = SlotMerger::new();
         let mut back_edge = None;
         let mut exit_edge = None;
-        let mut edges: HashMap<BasicBlockId, Vec<(BasicBlockId, SlotInfo)>> = HashMap::default();
+        let mut edges = Edges::default();
         let mut nest_loop = None;
         for (i, (ty, info)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
             let bb_id = loop_start + i;
             let succ = &func.bb_info[bb_id].succ;
-            if let Some((end, _)) = &nest_loop {
-                // In inner loops, we can skip scanning.
+            if let Some(end) = &nest_loop {
+                // In inner loops, we can skip scanning. (shortcut)
                 if bb_id == *end {
-                    // When reached end, make an exit edge to a successor basic block.
-                    let info = std::mem::take(&mut nest_loop).unwrap().1;
-                    let next_bb = bb_id + 1;
-                    assert!(func.bb_info[bb_id].succ.contains(&next_bb));
-                    assert!(func.bb_info[next_bb].pred.contains(&bb_id));
-                    let record = (bb_id, info);
-                    match edges.get_mut(&next_bb) {
-                        Some(entry) => entry.push(record),
-                        None => {
-                            edges.insert(next_bb, vec![record]);
-                        }
-                    }
+                    // When reached loop's end, go next.
+                    nest_loop = None;
                 }
                 continue;
             }
             let mut slots = SlotMerger::new();
             if let Some(src) = edges.remove(&bb_id) {
-                for (_, info) in src {
+                for info in src {
                     slots.merge(info);
                 }
             } else {
@@ -77,8 +85,13 @@ impl JitContext {
             let mut slots = slots.0.unwrap();
             if i != 0 {
                 if let Some((bb_end, loop_exit)) = self.loop_exit.get(&bb_id) {
+                    // if reached another loop's beginning, use shortcut.
                     slots.concat(loop_exit);
-                    nest_loop = Some((*bb_end, slots.clone()));
+                    nest_loop = Some(*bb_end);
+                    let next_bb = *bb_end + 1;
+                    assert!(func.bb_info[*bb_end].succ.contains(&next_bb));
+                    assert!(func.bb_info[next_bb].pred.contains(bb_end));
+                    edges.insert(next_bb, slots);
                     continue;
                 }
             }
@@ -100,29 +113,20 @@ impl JitContext {
                             slots.concat(exit);
                             assert!(func.bb_info[*end].succ.contains(&next));
                             assert!(func.bb_info[next].pred.contains(&end));
-                            let record = (bb_id, slots);
-                            match edges.get_mut(&next) {
-                                Some(entry) => entry.push(record),
-                                None => {
-                                    edges.insert(next, vec![record]);
-                                }
-                            }
+                            edges.insert(next, slots);
                         } else if bb_id < *dst {
                             // forward edge
-                            let record = (bb_id, slots.clone());
-                            match edges.get_mut(dst) {
-                                Some(entry) => entry.push(record),
-                                None => {
-                                    edges.insert(*dst, vec![record]);
-                                }
-                            }
+                            edges.insert(*dst, slots.clone());
                         } else {
                             if *dst == loop_start {
                                 // backedge of a current loop
                                 back_edge = Some((bb_id, slots.clone()));
                             } else {
                                 // backedge of an inner loop
-                                unreachable!("detect backedge of a inner loop.")
+                                unreachable!(
+                                    "backedge of a inner loop detected. {:?}->{:?}",
+                                    bb_id, dst
+                                )
                             };
                         }
                     }
@@ -135,7 +139,7 @@ impl JitContext {
                 }
             }
         }
-        assert!(edges.is_empty());
+        assert!(edges.0.is_empty());
 
         if let Some((_, slots)) = &back_edge {
             return_edge.merge(slots.clone());
