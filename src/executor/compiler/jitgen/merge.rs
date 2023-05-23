@@ -4,8 +4,9 @@ impl Codegen {
     pub(super) fn gen_backedge_branches(&mut self, cc: &mut JitContext, func: &ISeqInfo) {
         let branch_map = std::mem::take(&mut cc.branch_map);
         for (bb_pos, entries) in branch_map.into_iter() {
-            let (target_label, target_ctx, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
+            let (target_label, mut target_ctx, unused) = cc.backedge_map.remove(&bb_pos).unwrap();
             let pc = func.get_pc(bb_pos);
+            target_ctx.remove_unused(&unused);
             for BranchEntry {
                 src_idx: _src_idx,
                 mut bbctx,
@@ -137,6 +138,8 @@ impl Codegen {
         _bb_pos: BcIndex,
         unused: &[SlotId],
     ) {
+        let mut target_ctx = target_ctx.clone();
+        target_ctx.remove_unused(unused);
         for BranchEntry {
             src_idx: _src_idx,
             mut bbctx,
@@ -144,10 +147,10 @@ impl Codegen {
             cont,
         } in entries
         {
-            bbctx.remove_unused(&unused);
+            bbctx.remove_unused(unused);
             #[cfg(feature = "emit-tir")]
             eprintln!("  write_back {_src_idx}->{_bb_pos} {:?}", bbctx.slot_state);
-            self.gen_write_back_for_target(bbctx, target_ctx, entry, cur_label, pc, cont);
+            self.gen_write_back_for_target(bbctx, &target_ctx, entry, cur_label, pc, cont);
             #[cfg(feature = "emit-tir")]
             eprintln!("  write_back end");
         }
