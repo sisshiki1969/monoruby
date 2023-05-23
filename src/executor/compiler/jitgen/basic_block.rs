@@ -114,12 +114,12 @@ impl BasicBlockInfo {
             }
 
             bb_info[idx].end = idx;
-            for i in incoming {
-                let incoming = bb_info.get_bb_id(i);
+            let dst = bb_info.get_bb_id(idx);
+            for src_idx in incoming {
+                let src = bb_info.get_bb_id(src_idx);
                 bb_info[idx].begin = idx;
-                bb_info[idx].pred.push(incoming);
-                let id = bb_info.get_bb_id(idx);
-                bb_info[incoming].succ.push(id);
+                bb_info[idx].pred.push(src);
+                bb_info[src].succ.push(dst);
             }
         }
         assert!(loop_stack.is_empty());

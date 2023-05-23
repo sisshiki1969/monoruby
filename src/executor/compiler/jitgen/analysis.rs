@@ -18,12 +18,12 @@ impl JitContext {
         bb_pos: BcIndex,
     ) -> (Vec<(SlotId, bool)>, Vec<SlotId>) {
         let entry_bb = func.bb_info.get_bb_id(bb_pos);
-        let (begin, end) = func.bb_info.get_loop(entry_bb).unwrap();
+        let (begin, _end) = func.bb_info.get_loop(entry_bb).unwrap();
 
         let backedge = self.loop_backedges.get(&begin).unwrap();
-        //let last = BasicBlockId(func.bb_info.len() - 1);
-        let exit = self.analyse_loop(func, begin, end).1;
-        eprintln!("{:?} {:?}", func.bb_info[entry_bb].begin, exit);
+        let last = BasicBlockId(func.bb_info.len() - 1);
+        let exit = self.analyse_loop(func, begin, last).1;
+        //eprintln!("{:?} {:?}", func.bb_info[entry_bb].begin, exit);
 
         (backedge.get_loop_used_as_float(), exit.get_unused())
     }
@@ -94,18 +94,19 @@ impl JitContext {
                         } else if *dst < loop_start {
                             // backedge of an outer loop
                             // unreachable in "loop mode"
-                            /*let (end, exit) = self.loop_exit.get(dst).unwrap();
+                            let (end, exit) = self.loop_exit.get(dst).unwrap();
                             let mut slots = slots.clone();
                             let next = *end + 1;
                             slots.concat(exit);
                             assert!(func.bb_info[*end].succ.contains(&next));
                             assert!(func.bb_info[next].pred.contains(&end));
-                            match edges.get_mut(&(bb_id, next)) {
-                                Some(entry) => entry.merge(&slots),
+                            let record = (bb_id, slots);
+                            match edges.get_mut(&next) {
+                                Some(entry) => entry.push(record),
                                 None => {
-                                    edges.insert((bb_id, next), slots);
+                                    edges.insert(next, vec![record]);
                                 }
-                            }*/
+                            }
                         } else if bb_id < *dst {
                             // forward edge
                             let record = (bb_id, slots.clone());
@@ -115,7 +116,6 @@ impl JitContext {
                                     edges.insert(*dst, vec![record]);
                                 }
                             }
-                            //edges.insert(*dst, (bb_id, slots.clone()));
                         } else {
                             if *dst == loop_start {
                                 // backedge of a current loop

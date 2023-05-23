@@ -351,7 +351,7 @@ impl ISeqInfo {
         for (i, pc) in self.bytecode().iter().enumerate() {
             let idx = BcIndex::from(i);
             let pc = BcPc::from(pc);
-            if !info[i + 1].is_empty() && TraceIr::is_branch(pc).is_none() {
+            if !info[i + 1].is_empty() && !TraceIr::is_terminal(pc) {
                 if !info[i + 1].contains(&idx) {
                     info[i + 1].push(idx);
                 }
