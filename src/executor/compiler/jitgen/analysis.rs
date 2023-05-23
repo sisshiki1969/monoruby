@@ -41,7 +41,7 @@ impl JitContext {
         let mut edges = HashMap::default();
         let mut nest_loop = None;
         for (i, (ty, info)) in self.bb_scan[loop_start.0..=loop_end.0].iter().enumerate() {
-            let bb_id = BasicBlockId(loop_start.0 + i);
+            let bb_id = loop_start + i;
             let mut slots = SlotMerger::new();
             let BasciBlockInfoEntry { pred, succ, .. } = &self.bb_info[bb_id];
             if let Some((end, _)) = &nest_loop {
@@ -49,7 +49,7 @@ impl JitContext {
                 if bb_id == *end {
                     // When reached end, make an exit edge to a successor basic block.
                     let info = std::mem::take(&mut nest_loop).unwrap().1;
-                    let next_bb = BasicBlockId(bb_id.0 + 1);
+                    let next_bb = bb_id + 1;
                     assert!(self.bb_info[bb_id].succ.contains(&next_bb));
                     assert!(self.bb_info[next_bb].pred.contains(&bb_id));
                     edges.insert((bb_id, next_bb), info);
