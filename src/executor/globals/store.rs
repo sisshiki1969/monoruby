@@ -79,6 +79,11 @@ impl std::ops::IndexMut<ClassId> for Store {
 impl alloc::GC<RValue> for Store {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
+        self.constsite_info.iter().for_each(|info| {
+            if let Some(v) = info.cache.1 {
+                v.mark(alloc)
+            }
+        });
         self.classes.iter().for_each(|info| info.mark(alloc));
     }
 }

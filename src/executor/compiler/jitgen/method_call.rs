@@ -42,7 +42,7 @@ impl Codegen {
         if !recv.is_zero() {
             gen.guard_class(pc.class_version().0, deopt);
         }
-        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
         let fret = ctx.xmm_write(ret);
         monoasm!( &mut gen.jit,
             sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
@@ -62,7 +62,7 @@ impl Codegen {
         if !recv.is_zero() {
             gen.guard_class(pc.class_version().0, deopt);
         }
-        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
         let fret = ctx.xmm_write(ret);
         let xmm_using = ctx.get_xmm_using();
         gen.xmm_save(&xmm_using);
@@ -90,7 +90,7 @@ impl Codegen {
         if !recv.is_zero() {
             gen.guard_class(pc.class_version().0, deopt);
         }
-        let fsrc = gen.xmm_read_assume_float(ctx, *args, pc);
+        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
         let fret = ctx.xmm_write(ret);
         let xmm_using = ctx.get_xmm_using();
         gen.xmm_save(&xmm_using);

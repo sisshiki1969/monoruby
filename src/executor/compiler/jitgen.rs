@@ -757,82 +757,9 @@ impl Codegen {
         }
     }
 
-    ///
-    /// Write back a corresponding xmm register to the stack slot *reg*.
-    ///
-    /// the xmm will be deallocated.
-    ///
-    fn write_back_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        match ctx.slot_state[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                );
-                self.store_rax(reg);
-                ctx.slot_state[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Const(v) => {
-                self.write_back_val(reg, v);
-                ctx.slot_state[reg] = LinkMode::Stack;
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {}
-        }
-    }
-
-    fn write_back_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
-        reg.iter().for_each(|r| self.write_back_slot(ctx, *r));
-    }
-
-    fn load_slot_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        match ctx.slot_state[reg] {
-            LinkMode::Xmm(freg) => {
-                let f64_to_val = self.f64_to_val;
-                monoasm!( &mut self.jit,
-                    movq xmm0, xmm(freg.enc());
-                    call f64_to_val;
-                );
-                ctx.slot_state[reg] = LinkMode::Both(freg);
-            }
-            LinkMode::Const(v) => {
-                monoasm!(&mut self.jit,
-                    movq rax, (v.get());
-                );
-                ctx.slot_state[reg] = LinkMode::Stack;
-            }
-            LinkMode::Both(_) | LinkMode::Stack => {
-                monoasm!(&mut self.jit,
-                    movq rax, [r14 - (conv(reg))];
-                );
-            }
-        }
-    }
-
-    fn write_back_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
-        for reg in args.0..args.0 + len {
-            self.write_back_slot(ctx, SlotId::new(reg))
-        }
-    }
-
-    fn write_back_args(
-        &mut self,
-        ctx: &mut BBContext,
-        args: SlotId,
-        len: u16,
-        callsite: &CallSiteInfo,
-    ) {
-        let pos_kw_len = len as usize + callsite.kw_args.len();
-        self.write_back_range(ctx, args, pos_kw_len as u16);
-        callsite
-            .hash_splat_pos
-            .iter()
-            .for_each(|r| self.write_back_slot(ctx, *r));
-    }
-
     fn compile_bb(
         &mut self,
-        fnstore: &Store,
+        store: &Store,
         func: &ISeqInfo,
         cc: &mut JitContext,
         position: Option<BcPc>,
@@ -873,38 +800,28 @@ impl Codegen {
                 TraceIr::Symbol(ret, id) => {
                     ctx.link_const(ret, Value::new_symbol(id));
                 }
+                TraceIr::Nil(ret) => {
+                    ctx.link_const(ret, Value::nil());
+                }
                 TraceIr::Literal(ret, val) => {
                     ctx.dealloc_xmm(ret);
-                    if val.class() == FLOAT_CLASS {
+                    if val.is_packed_value() || val.class() == FLOAT_CLASS {
                         ctx.link_const(ret, val);
-                        //let freg = ctx.alloc_xmm();
-                        //ctx.link_both(ret, freg);
-                        //let imm = self.jit.const_f64(f);
-                        //monoasm!( &mut self.jit,
-                        //    movq xmm(freg.enc()), [rip + imm];
-                        //    movq rax, (Value::new_float(f).get());
-                        //);
-                        //self.store_rax(ret);
                     } else {
-                        if val.is_packed_value() {
-                            monoasm!( &mut self.jit,
-                                movq rax, (val.get());
-                            );
-                        } else {
-                            let xmm_using = ctx.get_xmm_using();
-                            self.xmm_save(&xmm_using);
-                            monoasm!( &mut self.jit,
-                              movq rdi, (val.get());
-                              movq rax, (Value::value_deep_copy);
-                              call rax;
-                            );
-                            self.xmm_restore(&xmm_using);
-                        }
+                        let xmm_using = ctx.get_xmm_using();
+                        self.xmm_save(&xmm_using);
+                        monoasm!( &mut self.jit,
+                          movq rdi, (val.get());
+                          movq rax, (Value::value_deep_copy);
+                          call rax;
+                        );
+                        self.xmm_restore(&xmm_using);
+
                         self.store_rax(ret);
                     }
                 }
                 TraceIr::Array { ret, args, len } => {
-                    self.write_back_range(&mut ctx, args, len);
+                    self.fetch_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
                     monoasm!( &mut self.jit,
                         lea  rdi, [r14 - (conv(args))];
@@ -915,7 +832,7 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 TraceIr::Hash { ret, args, len } => {
-                    self.write_back_range(&mut ctx, args, len * 2);
+                    self.fetch_range(&mut ctx, args, len * 2);
                     ctx.dealloc_xmm(ret);
                     monoasm!( &mut self.jit,
                         lea  rdi, [r14 - (conv(args))];
@@ -931,7 +848,7 @@ impl Codegen {
                     end,
                     exclude_end,
                 } => {
-                    self.write_back_slots(&mut ctx, &[start, end]);
+                    self.fetch_slots(&mut ctx, &[start, end]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     self.load_rdi(start);
@@ -948,26 +865,32 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
-                    self.write_back_slots(&mut ctx, &[base, idx]);
+                    self.fetch_slots(&mut ctx, &[base, idx]);
                     ctx.dealloc_xmm(ret);
                     self.jit_get_index(&ctx, ret, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    self.write_back_slots(&mut ctx, &[base, idx, src]);
+                    self.fetch_slots(&mut ctx, &[base, idx, src]);
                     self.jit_index_assign(&ctx, src, base, idx, pc);
                 }
                 TraceIr::LoadConst(dst, id) => {
                     ctx.dealloc_xmm(dst);
-                    if pc.value().map(|v| v.class()) == Some(FLOAT_CLASS) {
-                        let fdst = ctx.alloc_xmm();
-                        ctx.link_both(dst, fdst);
-                        self.load_float_constant(&ctx, dst, fdst, id, pc);
+
+                    if let (version, Some(v)) = store[id].cache {
+                        if let Some(f) = v.try_float() {
+                            let fdst = ctx.alloc_xmm();
+                            ctx.link_both(dst, fdst);
+                            self.load_float_constant(&ctx, dst, fdst, pc, f, version);
+                        } else {
+                            self.load_generic_constant(&ctx, dst, pc, v, version);
+                        }
                     } else {
-                        self.load_generic_constant(&ctx, dst, id, pc);
+                        self.recompile_and_deopt(&mut ctx, position, pc);
+                        return false;
                     }
                 }
                 TraceIr::StoreConst(src, id) => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     self.jit_store_constant(&ctx, id, src);
                 }
                 TraceIr::BlockArgProxy(dst, outer) => {
@@ -1003,7 +926,7 @@ impl Codegen {
                     self.jit_load_ivar(&ctx, id, ret, cached_class, cached_ivarid);
                 }
                 TraceIr::StoreIvar(src, id, cached_class, cached_ivarid) => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     self.jit_store_ivar(&ctx, id, src, pc, cached_class, cached_ivarid);
                 }
                 TraceIr::LoadGvar { dst: ret, name } => {
@@ -1020,7 +943,7 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::StoreGvar { src: val, name } => {
-                    self.write_back_slot(&mut ctx, val);
+                    self.fetch_slot(&mut ctx, val);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm! { &mut self.jit,
@@ -1065,7 +988,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::StoreDynVar(dst, src) => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     monoasm!( &mut self.jit,
                         movq rax, [r14 - (LBP_OUTER)];
                     );
@@ -1080,14 +1003,8 @@ impl Codegen {
                         movq [rax - (offset)], rdi;
                     );
                 }
-                TraceIr::Nil(ret) => {
-                    ctx.dealloc_xmm(ret);
-                    monoasm!( &mut self.jit,
-                        movq [r14 - (conv(ret))], (NIL_VALUE);
-                    );
-                }
                 TraceIr::BitNot { ret, src } => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     ctx.dealloc_xmm(ret);
                     if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1103,7 +1020,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::Not { ret, src } => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     ctx.dealloc_xmm(ret);
                     monoasm!( &mut self.jit,
                         movq rdi, [r14 - (conv(src))];
@@ -1115,7 +1032,7 @@ impl Codegen {
                 }
                 TraceIr::Neg { ret, src } => {
                     if pc.is_float1() {
-                        let fsrc = self.xmm_read_assume_float(&mut ctx, src, pc);
+                        let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(ret);
                         let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         self.xmm_mov(fsrc, fdst);
@@ -1123,7 +1040,7 @@ impl Codegen {
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
                     } else {
-                        self.write_back_slot(&mut ctx, src);
+                        self.fetch_slot(&mut ctx, src);
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1141,11 +1058,11 @@ impl Codegen {
                 }
                 TraceIr::Pos { ret, src } => {
                     if pc.is_float1() {
-                        let fsrc = self.xmm_read_assume_float(&mut ctx, src, pc);
+                        let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(ret);
                         self.xmm_mov(fsrc, fdst);
                     } else {
-                        self.write_back_slot(&mut ctx, src);
+                        self.fetch_slot(&mut ctx, src);
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
@@ -1173,17 +1090,17 @@ impl Codegen {
                 } => {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
+                            let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);
                             let fret = ctx.xmm_write(ret);
                             self.gen_binop_float_rr(kind, &ctx, fret, flhs, frhs);
                         }
                         OpMode::RI(lhs, rhs) => {
-                            let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
+                            let flhs = self.fetch_float_assume_float(&mut ctx, lhs, pc);
                             let fret = ctx.xmm_write(ret);
                             self.gen_binop_float_ri(kind, &ctx, fret, flhs, rhs);
                         }
                         OpMode::IR(lhs, rhs) => {
-                            let frhs = self.xmm_read_assume_float(&mut ctx, rhs, pc);
+                            let frhs = self.fetch_float_assume_float(&mut ctx, rhs, pc);
                             let fret = ctx.xmm_write(ret);
                             self.gen_binop_float_ir(kind, &ctx, fret, lhs, frhs);
                         }
@@ -1206,7 +1123,7 @@ impl Codegen {
                     if mode.is_float_op(&pc) {
                         match mode {
                             OpMode::RR(lhs, rhs) => {
-                                let (flhs, frhs) = self.xmm_read_binary(&mut ctx, lhs, rhs, pc);
+                                let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);
                                 ctx.dealloc_xmm(ret);
                                 monoasm! { &mut self.jit,
                                     xorq rax, rax;
@@ -1215,7 +1132,7 @@ impl Codegen {
                             }
                             OpMode::RI(lhs, rhs) => {
                                 let rhs_label = self.jit.const_f64(rhs as f64);
-                                let flhs = self.xmm_read_assume_float(&mut ctx, lhs, pc);
+                                let flhs = self.fetch_float_assume_float(&mut ctx, lhs, pc);
                                 ctx.dealloc_xmm(ret);
                                 monoasm! { &mut self.jit,
                                     xorq rax, rax;
@@ -1257,7 +1174,7 @@ impl Codegen {
                     self.copy_slot(&mut ctx, src, dst);
                 }
                 TraceIr::ConcatStr(ret, arg, len) => {
-                    self.write_back_range(&mut ctx, arg, len);
+                    self.fetch_range(&mut ctx, arg, len);
                     ctx.dealloc_xmm(ret);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
@@ -1274,7 +1191,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::ExpandArray(src, dst, len) => {
-                    self.write_back_slot(&mut ctx, src);
+                    self.fetch_slot(&mut ctx, src);
                     for reg in dst.0..dst.0 + len {
                         ctx.dealloc_xmm(SlotId(reg));
                     }
@@ -1290,7 +1207,7 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::AliasMethod { new, old } => {
-                    self.write_back_slots(&mut ctx, &[new, old]);
+                    self.fetch_slots(&mut ctx, &[new, old]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!( &mut self.jit,
@@ -1316,8 +1233,8 @@ impl Codegen {
                     let MethodInfo {
                         args, len, recv, ..
                     } = info;
-                    self.write_back_slot(&mut ctx, recv);
-                    self.write_back_args(&mut ctx, args, len, &fnstore[callid]);
+                    self.fetch_slot(&mut ctx, recv);
+                    self.fetch_args(&mut ctx, args, len, &store[callid]);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars if this method is eval.
                     //self.gen_write_back_locals(&mut ctx);
@@ -1325,16 +1242,7 @@ impl Codegen {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return false;
                     } else {
-                        self.gen_call(
-                            fnstore,
-                            &mut ctx,
-                            info,
-                            callid,
-                            None,
-                            ret,
-                            pc + 1,
-                            has_splat,
-                        );
+                        self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, has_splat);
                     }
                 }
                 TraceIr::MethodCallBlock {
@@ -1347,8 +1255,8 @@ impl Codegen {
                     let MethodInfo {
                         args, len, recv, ..
                     } = info;
-                    self.write_back_slot(&mut ctx, recv);
-                    self.write_back_args(&mut ctx, args, len + 1, &fnstore[callid]);
+                    self.fetch_slot(&mut ctx, recv);
+                    self.fetch_args(&mut ctx, args, len + 1, &store[callid]);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars since they may be accessed from block.
                     self.gen_write_back_locals(&mut ctx);
@@ -1358,7 +1266,7 @@ impl Codegen {
                     } else {
                         info.args = args + 1;
                         self.gen_call(
-                            fnstore,
+                            store,
                             &mut ctx,
                             info,
                             callid,
@@ -1375,8 +1283,8 @@ impl Codegen {
                     let MethodInfo {
                         args, len, recv, ..
                     } = info;
-                    self.write_back_slot(&mut ctx, recv);
-                    self.write_back_range(&mut ctx, args, len);
+                    self.fetch_slot(&mut ctx, recv);
+                    self.fetch_range(&mut ctx, args, len);
                     ctx.dealloc_xmm(ret);
                     // We must write back and unlink all local vars since they may be accessed by eval.
                     self.gen_write_back_locals(&mut ctx);
@@ -1384,13 +1292,13 @@ impl Codegen {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return false;
                     } else {
-                        self.gen_call(fnstore, &mut ctx, info, callid, None, ret, pc + 1, false);
+                        self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, false);
                     }
                 }
                 TraceIr::InlineCall {
                     ret, method, info, ..
                 } => {
-                    self.write_back_slot(&mut ctx, info.recv);
+                    self.fetch_slot(&mut ctx, info.recv);
                     self.gen_inlinable(&mut ctx, &info, &method, ret, pc);
                 }
                 TraceIr::Yield {
@@ -1400,8 +1308,8 @@ impl Codegen {
                     callid,
                 } => {
                     ctx.dealloc_xmm(ret);
-                    self.write_back_range(&mut ctx, args, len);
-                    self.gen_yield(&ctx, fnstore, args, len, ret, callid, pc);
+                    self.fetch_range(&mut ctx, args, len);
+                    self.gen_yield(&ctx, store, args, len, ret, callid, pc);
                 }
                 TraceIr::MethodArgs(_) => {}
                 TraceIr::MethodDef { name, func_id } => {
@@ -1468,7 +1376,7 @@ impl Codegen {
                 }
                 TraceIr::DefinedMethod { ret, recv, name } => {
                     ctx.dealloc_xmm(ret);
-                    self.write_back_slot(&mut ctx, recv);
+                    self.fetch_slot(&mut ctx, recv);
                     monoasm! { &mut self.jit,
                         movq rdi, rbx;  // &mut Interp
                         movq rsi, r12;  // &mut Globals
@@ -1503,13 +1411,13 @@ impl Codegen {
                 }
                 TraceIr::Ret(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
-                    self.load_slot_to_rax(&mut ctx, lhs);
+                    self.fetch_to_rax(&mut ctx, lhs);
                     self.epilogue();
                     return false;
                 }
                 TraceIr::MethodRet(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
-                    self.load_slot_to_rax(&mut ctx, lhs);
+                    self.fetch_to_rax(&mut ctx, lhs);
                     monoasm! { &mut self.jit,
                         movq r13, ((pc + 1).get_u64());
                     };
@@ -1518,7 +1426,7 @@ impl Codegen {
                 }
                 TraceIr::Break(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
-                    self.load_slot_to_rax(&mut ctx, lhs);
+                    self.fetch_to_rax(&mut ctx, lhs);
                     self.block_break();
                     self.epilogue();
                     return false;
@@ -1545,7 +1453,7 @@ impl Codegen {
                     return false;
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
-                    self.write_back_slot(&mut ctx, cond_);
+                    self.fetch_slot(&mut ctx, cond_);
                     let dest_idx = cc.cur_pos + ofs + 1 + disp;
                     let branch_dest = self.jit.label();
                     cc.new_branch(cc.cur_pos + ofs, dest_idx, ctx.clone(), branch_dest);

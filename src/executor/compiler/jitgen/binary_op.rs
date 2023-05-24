@@ -399,7 +399,7 @@ impl Codegen {
                 if mode.is_float_op(&pc) {
                     match mode {
                         OpMode::RR(lhs, rhs) => {
-                            let (flhs, frhs) = self.xmm_read_binary(ctx, lhs, rhs, pc);
+                            let (flhs, frhs) = self.fetch_float_binary(ctx, lhs, rhs, pc);
                             ctx.dealloc_xmm(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), xmm(frhs.enc());
@@ -407,7 +407,7 @@ impl Codegen {
                         }
                         OpMode::RI(lhs, rhs) => {
                             let rhs_label = self.jit.const_f64(rhs as f64);
-                            let flhs = self.xmm_read_assume_float(ctx, lhs, pc);
+                            let flhs = self.fetch_float_assume_float(ctx, lhs, pc);
                             ctx.dealloc_xmm(ret);
                             monoasm! { &mut self.jit,
                                 ucomisd xmm(flhs.enc()), [rip + rhs_label];
@@ -539,10 +539,10 @@ impl Codegen {
     pub(super) fn writeback_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.write_back_slots(ctx, &[*lhs, *rhs]);
+                self.fetch_slots(ctx, &[*lhs, *rhs]);
             }
             OpMode::RI(r, _) | OpMode::IR(_, r) => {
-                self.write_back_slot(ctx, *r);
+                self.fetch_slot(ctx, *r);
             }
         }
     }

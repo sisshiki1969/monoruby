@@ -2,12 +2,92 @@ use super::*;
 
 impl Codegen {
     ///
-    /// Read from slots *lhs* and *rhs* as f64, and store in xmm registers.
+    /// Fetch *reg* and store in a corresponding stack slot.
+    ///
+    pub(super) fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        match ctx.slot_state[reg] {
+            LinkMode::Xmm(freg) => {
+                let f64_to_val = self.f64_to_val;
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(freg.enc());
+                    call f64_to_val;
+                );
+                self.store_rax(reg);
+                ctx.slot_state[reg] = LinkMode::Both(freg);
+            }
+            LinkMode::Const(v) => {
+                self.write_back_val(reg, v);
+                ctx.slot_state[reg] = LinkMode::Stack;
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {}
+        }
+    }
+
+    ///
+    /// Fetch *reg*s and store in corresponding stack slots.
+    ///
+    pub(super) fn fetch_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
+        reg.iter().for_each(|r| self.fetch_slot(ctx, *r));
+    }
+
+    ///
+    /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
+    ///
+    pub(super) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
+        for reg in args.0..args.0 + len {
+            self.fetch_slot(ctx, SlotId::new(reg))
+        }
+    }
+
+    pub(super) fn fetch_args(
+        &mut self,
+        ctx: &mut BBContext,
+        args: SlotId,
+        len: u16,
+        callsite: &CallSiteInfo,
+    ) {
+        let pos_kw_len = len as usize + callsite.kw_args.len();
+        self.fetch_range(ctx, args, pos_kw_len as u16);
+        callsite
+            .hash_splat_pos
+            .iter()
+            .for_each(|r| self.fetch_slot(ctx, *r));
+    }
+
+    ///
+    /// Fetch *arg* and store in *rax*.
+    ///
+    pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
+        match ctx.slot_state[reg] {
+            LinkMode::Xmm(freg) => {
+                let f64_to_val = self.f64_to_val;
+                monoasm!( &mut self.jit,
+                    movq xmm0, xmm(freg.enc());
+                    call f64_to_val;
+                );
+                ctx.slot_state[reg] = LinkMode::Both(freg);
+            }
+            LinkMode::Const(v) => {
+                monoasm!(&mut self.jit,
+                    movq rax, (v.get());
+                );
+                ctx.slot_state[reg] = LinkMode::Stack;
+            }
+            LinkMode::Both(_) | LinkMode::Stack => {
+                monoasm!(&mut self.jit,
+                    movq rax, [r14 - (conv(reg))];
+                );
+            }
+        }
+    }
+
+    ///
+    /// Fetch *lhs* and *rhs* as f64, and store in xmm registers.
     ///
     /// ### destroy
     /// - rdi, rax
     ///
-    pub(super) fn xmm_read_binary(
+    pub(super) fn fetch_float_binary(
         &mut self,
         ctx: &mut BBContext,
         lhs: SlotId,
@@ -16,23 +96,23 @@ impl Codegen {
     ) -> (Xmm, Xmm) {
         if lhs != rhs {
             (
-                self.xmm_read_assume(ctx, lhs, pc.classid1(), pc),
-                self.xmm_read_assume(ctx, rhs, pc.classid2(), pc),
+                self.fetch_float_assume(ctx, lhs, pc.classid1(), pc),
+                self.fetch_float_assume(ctx, rhs, pc.classid2(), pc),
             )
         } else {
-            let lhs = self.xmm_read_assume(ctx, lhs, pc.classid1(), pc);
+            let lhs = self.fetch_float_assume(ctx, lhs, pc.classid1(), pc);
             (lhs, lhs)
         }
     }
 
     ///
-    /// Read from a slot *reg* as f64, and store in xmm register.
+    /// Fetch *reg* as f64, and store in xmm register.
     ///
     /// ### destroy
     /// - rdi, rax
     ///
     ///
-    pub(super) fn xmm_read_assume_float(
+    pub(super) fn fetch_float_assume_float(
         &mut self,
         ctx: &mut BBContext,
         reg: SlotId,
@@ -81,7 +161,7 @@ impl Codegen {
     /// ### destroy
     /// - rdi, rax
     ///
-    fn xmm_read_assume(
+    fn fetch_float_assume(
         &mut self,
         ctx: &mut BBContext,
         rhs: SlotId,
@@ -89,8 +169,8 @@ impl Codegen {
         pc: BcPc,
     ) -> Xmm {
         match class {
-            INTEGER_CLASS => self.xmm_read_assume_integer(ctx, rhs, pc),
-            FLOAT_CLASS => self.xmm_read_assume_float(ctx, rhs, pc),
+            INTEGER_CLASS => self.fetch_float_assume_integer(ctx, rhs, pc),
+            FLOAT_CLASS => self.fetch_float_assume_float(ctx, rhs, pc),
             _ => unreachable!(),
         }
     }
@@ -101,7 +181,7 @@ impl Codegen {
     /// ### destroy
     /// - rdi
     ///
-    fn xmm_read_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
+    fn fetch_float_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
         match ctx.slot_state[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {

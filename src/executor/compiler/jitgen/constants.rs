@@ -21,32 +21,19 @@ impl Codegen {
         &mut self,
         ctx: &BBContext,
         dst: SlotId,
-        id: ConstSiteId,
         pc: BcPc,
+        v: Value,
+        version: usize,
     ) {
-        let cached_value = self.jit.const_i64(0);
-        let cached_const_version = self.jit.const_i64(-1);
+        let cached_const_version = self.jit.const_i64(version as _);
         let global_const_version = self.const_version;
-        let slow_path = self.jit.label();
-        let exit = self.jit.label();
-
-        self.jit.select_page(1);
-        self.jit.bind_label(slow_path);
-        self.get_constant(ctx, id, pc);
-        monoasm!( &mut self.jit,
-            movq [rip + cached_value], rax;
-            movq rdi, [rip + global_const_version];
-            movq [rip + cached_const_version], rdi;
-            jmp  exit;
-        );
-        self.jit.select_page(0);
+        let deopt = self.gen_side_deopt(pc, ctx);
 
         monoasm!( &mut self.jit,
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
-            jne  slow_path;
-            movq rax, [rip + cached_value];
-        exit:
+            jne  deopt;
+            movq rax, (v.get());
         );
         self.store_rax(dst);
     }
@@ -56,46 +43,27 @@ impl Codegen {
         ctx: &BBContext,
         dst: SlotId,
         fdst: Xmm,
-        id: ConstSiteId,
         pc: BcPc,
+        f: f64,
+        version: usize,
     ) {
-        let cached_value = self.jit.const_i64(0);
-        let cached_const_version = self.jit.const_i64(-1);
+        let cached_const_version = self.jit.const_i64(version as _);
         let global_const_version = self.const_version;
-        let slow_path = self.jit.label();
-        let exit = self.jit.label();
 
-        let cached_float = self.jit.const_f64(0.0);
-        let side_exit = self.gen_side_deopt(pc, ctx);
-
-        self.jit.select_page(1);
-        self.jit.bind_label(slow_path);
-        self.get_constant(ctx, id, pc);
-        monoasm!( &mut self.jit,
-            movq [rip + cached_value], rax;
-            movq rdi, rax;
-        );
-        self.unbox_float(0, side_exit);
-        monoasm!( &mut self.jit,
-            movq [rip + cached_float], xmm0;
-            movq rax, [rip + global_const_version];
-            movq [rip + cached_const_version], rax;
-            jmp  exit;
-        );
-        self.jit.select_page(0);
+        let cached_float = self.jit.const_f64(f);
+        let deopt = self.gen_side_deopt(pc, ctx);
 
         monoasm!( &mut self.jit,
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
-            jne  slow_path;
-        exit:
+            jne  deopt;
             movq xmm(fdst.enc()), [rip + cached_float];
-            movq rax, [rip + cached_value];
+            movq rax, (Value::new_float(f).get());
         );
         self.store_rax(dst);
     }
 
-    fn get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
+    /*fn get_constant(&mut self, ctx: &BBContext, id: ConstSiteId, pc: BcPc) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!( &mut self.jit,
@@ -107,5 +75,5 @@ impl Codegen {
         );
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
-    }
+    }*/
 }
