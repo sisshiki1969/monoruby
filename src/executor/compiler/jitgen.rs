@@ -636,16 +636,19 @@ impl Codegen {
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
 
-        if position.is_none() {
+        let pc = if let Some(pc) = position {
+            pc
+        } else {
             // generate prologue and class guard of *self* for a method
             let pc = func.get_top_pc();
             self.prologue(pc);
-            let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
-            monoasm!( &mut self.jit,
-                movq rdi, [r14 - (LBP_SELF)];
-            );
-            self.guard_class(self_value.class(), side_exit);
-        }
+            pc
+        };
+        let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
+        monoasm!( &mut self.jit,
+            movq rdi, [r14 - (LBP_SELF)];
+        );
+        self.guard_class(self_value.class(), side_exit);
 
         ctx.branch_map.insert(
             start_pos,
@@ -776,6 +779,10 @@ impl Codegen {
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
+    }
+
+    fn write_back_slots(&mut self, ctx: &mut BBContext, reg: &[SlotId]) {
+        reg.iter().for_each(|r| self.write_back_slot(ctx, *r));
     }
 
     fn load_slot_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
@@ -924,8 +931,7 @@ impl Codegen {
                     end,
                     exclude_end,
                 } => {
-                    self.write_back_slot(&mut ctx, start);
-                    self.write_back_slot(&mut ctx, end);
+                    self.write_back_slots(&mut ctx, &[start, end]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     self.load_rdi(start);
@@ -942,15 +948,12 @@ impl Codegen {
                     self.store_rax(ret);
                 }
                 TraceIr::Index { ret, base, idx } => {
-                    self.write_back_slot(&mut ctx, base);
-                    self.write_back_slot(&mut ctx, idx);
+                    self.write_back_slots(&mut ctx, &[base, idx]);
                     ctx.dealloc_xmm(ret);
                     self.jit_get_index(&ctx, ret, base, idx, pc);
                 }
                 TraceIr::IndexAssign { src, base, idx } => {
-                    self.write_back_slot(&mut ctx, base);
-                    self.write_back_slot(&mut ctx, idx);
-                    self.write_back_slot(&mut ctx, src);
+                    self.write_back_slots(&mut ctx, &[base, idx, src]);
                     self.jit_index_assign(&ctx, src, base, idx, pc);
                 }
                 TraceIr::LoadConst(dst, id) => {
@@ -1287,8 +1290,7 @@ impl Codegen {
                     self.xmm_restore(&xmm_using);
                 }
                 TraceIr::AliasMethod { new, old } => {
-                    self.write_back_slot(&mut ctx, new);
-                    self.write_back_slot(&mut ctx, old);
+                    self.write_back_slots(&mut ctx, &[new, old]);
                     let xmm_using = ctx.get_xmm_using();
                     self.xmm_save(&xmm_using);
                     monoasm!( &mut self.jit,

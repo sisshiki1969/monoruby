@@ -539,14 +539,10 @@ impl Codegen {
     pub(super) fn writeback_binary(&mut self, ctx: &mut BBContext, mode: &OpMode) {
         match mode {
             OpMode::RR(lhs, rhs) => {
-                self.write_back_slot(ctx, *lhs);
-                self.write_back_slot(ctx, *rhs);
+                self.write_back_slots(ctx, &[*lhs, *rhs]);
             }
-            OpMode::RI(lhs, _) => {
-                self.write_back_slot(ctx, *lhs);
-            }
-            OpMode::IR(_, rhs) => {
-                self.write_back_slot(ctx, *rhs);
+            OpMode::RI(r, _) | OpMode::IR(_, r) => {
+                self.write_back_slot(ctx, *r);
             }
         }
     }
