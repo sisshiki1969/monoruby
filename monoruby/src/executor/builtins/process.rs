@@ -22,6 +22,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 /// - times -> Process::Tms
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
+#[monoruby_builtin]
 fn times(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -66,6 +67,7 @@ fn times(
 /// - pid -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/pid.html]
+#[monoruby_builtin]
 fn pid(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -82,6 +84,7 @@ fn pid(
 /// - clock_gettime(clock_id, unit=:float_second) -> Float | Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
+#[monoruby_builtin]
 fn clock_gettime(
     _vm: &mut Executor,
     globals: &mut Globals,

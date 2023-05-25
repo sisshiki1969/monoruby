@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
 }
 
+#[monoruby_builtin]
 fn sync(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -20,6 +21,7 @@ fn sync(
     Ok(Value::bool(false))
 }
 
+#[monoruby_builtin]
 fn assign_sync(
     _vm: &mut Executor,
     _globals: &mut Globals,

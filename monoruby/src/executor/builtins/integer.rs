@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - [TODO] times -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
+#[monoruby_builtin]
 fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     let count = match lfp.self_val().try_fixnum() {
         Some(i) => i,
@@ -80,6 +81,7 @@ impl Iterator for NegStep {
 /// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator::ArithmeticSequence
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
+#[monoruby_builtin]
 fn step(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -124,6 +126,7 @@ fn step(
 /// - chr(encoding) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
+#[monoruby_builtin]
 fn chr(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -139,6 +142,7 @@ fn chr(
     Err(MonorubyErr::char_out_of_range(globals, lfp.self_val()))
 }
 
+#[monoruby_builtin]
 fn to_f(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -161,6 +165,7 @@ fn to_f(
 /// - to_int -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
+#[monoruby_builtin]
 fn to_i(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -177,6 +182,7 @@ fn to_i(
 /// - self + other -> Numeric
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
+#[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     Executor::check_number_of_arguments(len, 1..=1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {

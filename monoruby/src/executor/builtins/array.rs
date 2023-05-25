@@ -32,6 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
 ///
 /// TODO: Support arguments.
+#[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::new_array_with_class(vec![], class);
@@ -46,6 +47,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 /// - size -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
+#[monoruby_builtin]
 fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -63,6 +65,7 @@ fn size(
 /// - self + other -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2b.html]
+#[monoruby_builtin]
 fn add(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -91,6 +94,7 @@ fn add(
 /// - self << obj -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=3c=3c.html]
+#[monoruby_builtin]
 fn shl(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -111,6 +115,7 @@ fn shl(
 /// - self[start, length] -> Array | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d.html]
+#[monoruby_builtin]
 fn index(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -133,6 +138,7 @@ fn index(
 /// - self[nth] = val
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=5b=5d=3d.html]
+#[monoruby_builtin]
 fn index_assign(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -174,6 +180,7 @@ fn index_assign(
 /// - reduce(init = self.first) {|result, item| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
+#[monoruby_builtin]
 fn inject(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -209,6 +216,7 @@ fn inject(
 /// TODO: support recursive join for Array class arguments.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
+#[monoruby_builtin]
 fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     Executor::check_number_of_arguments(len, 0..=1)?;
     let sep = if len == 0 {
@@ -241,6 +249,7 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 /// - sum(init=0) {|e| expr } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
+#[monoruby_builtin]
 fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     Executor::check_number_of_arguments(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
@@ -270,6 +279,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 /// - [NOT SUPPORTED] each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
+#[monoruby_builtin]
 fn each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -296,6 +306,7 @@ fn each(
 /// - [NOT SUPPORTED] map -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
+#[monoruby_builtin]
 fn map(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -328,6 +339,7 @@ fn map(
 /// - detect([NOT SUPPORTED]ifnone = nil) {|item| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
+#[monoruby_builtin]
 fn detect(
     vm: &mut Executor,
     globals: &mut Globals,

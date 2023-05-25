@@ -1,0 +1,15 @@
+[package]
+name = "monoruby-attr"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+paste = "1.0.12"
+proc-macro2 = "1.0.52"
+quote = "1.0.24"
+syn = { version = "1.0.109", features = ["full", "extra-traits"] }

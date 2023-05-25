@@ -59,6 +59,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/s/new.html]
+#[monoruby_builtin]
 fn object_new(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -80,6 +81,7 @@ fn object_new(
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
+#[monoruby_builtin]
 fn is_a(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -97,6 +99,7 @@ fn is_a(
 /// - nil? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
+#[monoruby_builtin]
 fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
@@ -107,6 +110,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
 /// - dup -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
+#[monoruby_builtin]
 fn dup(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -123,6 +127,7 @@ fn dup(
 /// - puts(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
+#[monoruby_builtin]
 fn puts(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -158,6 +163,7 @@ fn puts(
 /// - print(*arg) -> nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
+#[monoruby_builtin]
 fn print(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -177,6 +183,7 @@ fn print(
 /// - block_given? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/block_given=3f.html]
+#[monoruby_builtin]
 fn block_given(
     vm: &mut Executor,
     _globals: &mut Globals,
@@ -193,6 +200,7 @@ fn block_given(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
+#[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     let s = globals.tos(lfp.self_val());
     Ok(Value::new_string(s))
@@ -204,6 +212,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
 /// - p(*arg) -> object | Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
+#[monoruby_builtin]
 fn p(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let mut buf = String::new();
     for v in arg.iter(len) {
@@ -221,6 +230,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg, len: usize)
     })
 }
 
+#[monoruby_builtin]
 fn assert(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -239,6 +249,7 @@ fn assert(
     Ok(Value::nil())
 }
 
+#[monoruby_builtin]
 fn dump(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -256,6 +267,7 @@ fn dump(
 /// - respond_to?(name, include_all = false) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
+#[monoruby_builtin]
 fn respond_to(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -279,6 +291,7 @@ fn respond_to(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/inspect.html]
+#[monoruby_builtin]
 fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -296,6 +309,7 @@ fn inspect(
 /// - class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/class.html]
+#[monoruby_builtin]
 fn class(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -312,6 +326,7 @@ fn class(
 /// - instance_of?(klass) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_of=3f.html]
+#[monoruby_builtin]
 fn instance_of(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -330,6 +345,7 @@ fn instance_of(
 /// - rand(range) -> Integer | Float | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
+#[monoruby_builtin]
 fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -358,6 +374,7 @@ fn rand(
 /// - singleton_class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
+#[monoruby_builtin]
 fn singleton_class(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -374,6 +391,7 @@ fn singleton_class(
 /// - instance_variable_defined?(var) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
+#[monoruby_builtin]
 fn instance_variable_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -396,6 +414,7 @@ fn instance_variable_defined(
 /// - instance_variable_set(var, value) -> Object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
+#[monoruby_builtin]
 fn instance_variable_set(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -415,6 +434,7 @@ fn instance_variable_set(
 /// - instance_variable_get(var) -> Object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
+#[monoruby_builtin]
 fn instance_variable_get(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -433,6 +453,7 @@ fn instance_variable_get(
 /// - Integer(arg, base = 0, exception: true) -> Integer | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
+#[monoruby_builtin]
 fn kernel_integer(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -491,6 +512,7 @@ fn load(
 /// - require(feature) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
+#[monoruby_builtin]
 fn require(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -509,6 +531,7 @@ fn require(
 /// - require_relative(relative_feature) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require_relative.html]
+#[monoruby_builtin]
 fn require_relative(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -558,6 +581,7 @@ fn prepare_command_arg(input: String) -> (String, Vec<String>) {
 /// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
+#[monoruby_builtin]
 fn system(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -587,6 +611,7 @@ fn system(
 /// - `command` -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
+#[monoruby_builtin]
 fn command(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -613,6 +638,7 @@ fn command(
 /// - abort(message) -> ()
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.htmll]
+#[monoruby_builtin]
 fn abort(
     _vm: &mut Executor,
     globals: &mut Globals,

@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals, class: ClassId) {
 /// - srand(number) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
+#[monoruby_builtin]
 fn srand(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -42,6 +43,7 @@ fn srand(
 /// - rand(range) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
+#[monoruby_builtin]
 fn rand(
     _vm: &mut Executor,
     globals: &mut Globals,

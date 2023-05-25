@@ -26,6 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - self == obj -> bool
 ///
 /// []
+#[monoruby_builtin]
 fn eq(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -45,6 +46,7 @@ fn eq(
 /// - self === obj -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
+#[monoruby_builtin]
 fn teq(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -60,6 +62,7 @@ fn teq(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
+#[monoruby_builtin]
 fn tos(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -76,6 +79,7 @@ fn tos(
 /// - constants(inherit = true) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
+#[monoruby_builtin]
 fn constants(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -99,6 +103,7 @@ fn constants(
 /// !! Currently, this method returns only the methods that is defined in *self*.
 ///
 /// TODO: support inherited_too.
+#[monoruby_builtin]
 fn instance_methods(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -118,6 +123,7 @@ fn instance_methods(
 /// - attr_reader(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
+#[monoruby_builtin]
 fn attr_reader(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -140,6 +146,7 @@ fn attr_reader(
 /// - attr_writer(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
+#[monoruby_builtin]
 fn attr_writer(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -162,6 +169,7 @@ fn attr_writer(
 /// - attr_accessor(*name) -> [Symbol]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
+#[monoruby_builtin]
 fn attr_accessor(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -186,6 +194,7 @@ fn attr_accessor(
 /// - module_function(*name) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
+#[monoruby_builtin]
 fn module_function(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -215,6 +224,7 @@ fn module_function(
 /// - include(*mod) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
+#[monoruby_builtin]
 fn include(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -237,6 +247,7 @@ fn include(
 /// - private(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
+#[monoruby_builtin]
 fn private(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -252,6 +263,7 @@ fn private(
 /// - protected(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
+#[monoruby_builtin]
 fn protected(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -267,6 +279,7 @@ fn protected(
 /// - public(names) -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
+#[monoruby_builtin]
 fn public(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -312,6 +325,7 @@ fn change_visi(
 /// - method_defined?(name, inherit=true) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
+#[monoruby_builtin]
 fn method_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -329,6 +343,7 @@ fn method_defined(
 /// - alias_method(new, original) -> Symbol
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
+#[monoruby_builtin]
 fn alias_method(
     _vm: &mut Executor,
     globals: &mut Globals,
