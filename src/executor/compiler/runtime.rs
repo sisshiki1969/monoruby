@@ -432,7 +432,7 @@ pub(super) extern "C" fn set_array_integer_index(
     }
 }
 
-///
+/*///
 /// Get Constant.
 ///
 /// rax: Option<Value>
@@ -449,7 +449,7 @@ pub(super) extern "C" fn get_constant(
             None
         }
     }
-}
+}*/
 
 ///
 /// Set Constant.

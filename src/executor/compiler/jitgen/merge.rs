@@ -46,7 +46,7 @@ impl Codegen {
             self.gen_merging_branches_non_loop(func, cc)?
         };
         #[cfg(feature = "emit-tir")]
-        eprintln!("===merge_end\n");
+        eprintln!("===merge_end");
         Some(res)
     }
 
@@ -71,7 +71,7 @@ impl Codegen {
             let mut target_ctx = BBContext::new(&cc);
             let mut const_vec = vec![];
             for (reg, coerced) in use_set {
-                match template.slot_state[reg] {
+                match template[reg] {
                     LinkMode::Stack => {}
                     LinkMode::Const(v) => {
                         if v.class() == FLOAT_CLASS {
@@ -149,10 +149,10 @@ impl Codegen {
         {
             bbctx.remove_unused(unused);
             #[cfg(feature = "emit-tir")]
-            eprintln!("  write_back {_src_idx}->{_bb_pos} {:?}", bbctx.slot_state);
+            eprintln!("  ***write_back {_src_idx}->{_bb_pos}");
             self.gen_write_back_for_target(bbctx, &target_ctx, entry, cur_label, pc, cont);
             #[cfg(feature = "emit-tir")]
-            eprintln!("  write_back end");
+            eprintln!("  ***write_back end");
         }
     }
 
@@ -167,10 +167,10 @@ impl Codegen {
     ) {
         #[cfg(feature = "emit-tir")]
         {
-            eprintln!("      src:    {:?}", src_ctx.slot_state);
-            eprintln!("      target: {:?}", target_ctx.slot_state);
+            eprintln!("    src:    {:?}", src_ctx.slot_state);
+            eprintln!("    target: {:?}", target_ctx.slot_state);
         }
-        let len = src_ctx.slot_state.0.len();
+        let len = src_ctx.reg_num();
 
         if !cont {
             self.jit.select_page(1);
@@ -178,22 +178,26 @@ impl Codegen {
         }
         for i in 0..len {
             let reg = SlotId(i as u16);
-            if target_ctx.slot_state[reg] == LinkMode::Stack {
-                match src_ctx.slot_state[reg] {
+            if target_ctx[reg] == LinkMode::Stack {
+                match src_ctx[reg] {
                     LinkMode::Xmm(freg) => {
                         let v = src_ctx.xmm[freg].clone();
+                        #[cfg(feature = "emit-tir")]
+                        eprintln!("      wb: {:?}->{:?}", freg, v);
                         for i in &v {
-                            src_ctx.slot_state[*i] = LinkMode::Both(freg);
+                            src_ctx[*i] = LinkMode::Both(freg);
                         }
                         src_ctx.dealloc_xmm(reg);
-                        self.gen_write_back_single(freg, v);
+                        self.gen_write_back_xmm(freg, v);
                     }
                     LinkMode::Both(_) => {
                         src_ctx.dealloc_xmm(reg);
                     }
                     LinkMode::Const(v) => {
-                        self.write_back_val(reg, v);
-                        src_ctx.slot_state[reg] = LinkMode::Stack;
+                        #[cfg(feature = "emit-tir")]
+                        eprintln!("      wb: Const({:?})->{:?}", v, reg);
+                        self.gen_write_back_constant(reg, v);
+                        src_ctx[reg] = LinkMode::Stack;
                     }
                     LinkMode::Stack => {}
                 }
@@ -204,10 +208,10 @@ impl Codegen {
         let mut guard_list = vec![];
         for i in 0..len {
             let reg = SlotId(i as u16);
-            match (src_ctx.slot_state[reg], target_ctx.slot_state[reg]) {
+            match (src_ctx[reg], target_ctx[reg]) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx.slot_state[reg] = LinkMode::Xmm(l);
+                        src_ctx[reg] = LinkMode::Xmm(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
@@ -219,7 +223,7 @@ impl Codegen {
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx.slot_state[reg] = LinkMode::Xmm(l);
+                        src_ctx[reg] = LinkMode::Xmm(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
@@ -232,9 +236,12 @@ impl Codegen {
                 }
                 (_, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    self.gen_write_back_single(l, vec![reg]);
+                    let v = vec![reg];
+                    #[cfg(feature = "emit-tir")]
+                    eprintln!("      wb: {:?}->{:?}", l, v);
+                    self.gen_write_back_xmm(l, v);
                     if l == r {
-                        src_ctx.slot_state[reg] = LinkMode::Both(l);
+                        src_ctx[reg] = LinkMode::Both(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
@@ -246,7 +253,7 @@ impl Codegen {
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
-                        src_ctx.slot_state[reg] = LinkMode::Both(l);
+                        src_ctx[reg] = LinkMode::Both(l);
                     } else if src_ctx.xmm[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
@@ -275,8 +282,6 @@ impl Codegen {
                 (l, r) => unreachable!("src:{:?} target:{:?}", l, r),
             }
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      src_end:{:?}", src_ctx.slot_state);
 
         let side_exit = self.jit.label();
         for (reg, freg) in conv_list {

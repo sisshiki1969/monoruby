@@ -1874,6 +1874,25 @@ mod test {
     }
 
     #[test]
+    fn test_constant_cache_miss() {
+        run_test_once(
+            r#"
+            $a = []
+            C = 100
+            
+            for i in 0..19
+              if i == 10
+                C = 10
+              end
+              $a << C
+            end
+
+            $a
+            "#,
+        );
+    }
+
+    #[test]
     fn test_constant_in_method() {
         run_test(
             r#"

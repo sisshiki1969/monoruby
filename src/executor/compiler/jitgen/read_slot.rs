@@ -5,7 +5,7 @@ impl Codegen {
     /// Fetch *reg* and store in a corresponding stack slot.
     ///
     pub(super) fn fetch_slot(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        match ctx.slot_state[reg] {
+        match ctx[reg] {
             LinkMode::Xmm(freg) => {
                 let f64_to_val = self.f64_to_val;
                 monoasm!( &mut self.jit,
@@ -13,11 +13,11 @@ impl Codegen {
                     call f64_to_val;
                 );
                 self.store_rax(reg);
-                ctx.slot_state[reg] = LinkMode::Both(freg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Const(v) => {
-                self.write_back_val(reg, v);
-                ctx.slot_state[reg] = LinkMode::Stack;
+                self.gen_write_back_constant(reg, v);
+                ctx[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {}
         }
@@ -58,20 +58,20 @@ impl Codegen {
     /// Fetch *arg* and store in *rax*.
     ///
     pub(super) fn fetch_to_rax(&mut self, ctx: &mut BBContext, reg: SlotId) {
-        match ctx.slot_state[reg] {
+        match ctx[reg] {
             LinkMode::Xmm(freg) => {
                 let f64_to_val = self.f64_to_val;
                 monoasm!( &mut self.jit,
                     movq xmm0, xmm(freg.enc());
                     call f64_to_val;
                 );
-                ctx.slot_state[reg] = LinkMode::Both(freg);
+                ctx[reg] = LinkMode::Both(freg);
             }
             LinkMode::Const(v) => {
                 monoasm!(&mut self.jit,
                     movq rax, (v.get());
                 );
-                ctx.slot_state[reg] = LinkMode::Stack;
+                ctx[reg] = LinkMode::Stack;
             }
             LinkMode::Both(_) | LinkMode::Stack => {
                 monoasm!(&mut self.jit,
@@ -118,7 +118,7 @@ impl Codegen {
         reg: SlotId,
         pc: BcPc,
     ) -> Xmm {
-        match ctx.slot_state[reg] {
+        match ctx[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();
@@ -182,7 +182,7 @@ impl Codegen {
     /// - rdi
     ///
     fn fetch_float_assume_integer(&mut self, ctx: &mut BBContext, reg: SlotId, pc: BcPc) -> Xmm {
-        match ctx.slot_state[reg] {
+        match ctx[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => freg,
             LinkMode::Stack => {
                 let freg = ctx.alloc_xmm();

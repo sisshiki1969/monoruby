@@ -204,16 +204,12 @@ fn conv(reg: SlotId) -> i64 {
 
 struct WriteBack {
     xmm: Vec<(Xmm, Vec<SlotId>)>,
-    fixnum: Vec<(Value, SlotId)>,
+    constant: Vec<(Value, SlotId)>,
 }
 
 impl WriteBack {
-    fn new(xmm: Vec<(Xmm, Vec<SlotId>)>, fixnum: Vec<(Value, SlotId)>) -> Self {
-        Self { xmm, fixnum }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.xmm.is_empty() && self.fixnum.is_empty()
+    fn new(xmm: Vec<(Xmm, Vec<SlotId>)>, constant: Vec<(Value, SlotId)>) -> Self {
+        Self { xmm, constant }
     }
 }
 
@@ -231,16 +227,33 @@ struct BBContext {
     recompile_flag: bool,
 }
 
+impl std::ops::Deref for BBContext {
+    type Target = StackSlotInfo;
+    fn deref(&self) -> &Self::Target {
+        &self.slot_state
+    }
+}
+
+impl std::ops::DerefMut for BBContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot_state
+    }
+}
+
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         let xmm = XmmInfo::new();
         Self {
-            slot_state: StackSlotInfo(vec![LinkMode::Stack; cc.total_reg_num]),
+            slot_state: StackSlotInfo::new(cc.total_reg_num),
             xmm,
             self_value: cc.self_value,
             local_num: cc.local_num,
             recompile_flag: false,
         }
+    }
+
+    fn reg_num(&self) -> usize {
+        self.slot_state.len()
     }
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
@@ -261,33 +274,33 @@ impl BBContext {
 
     fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
         self.dealloc_xmm(reg);
-        self.slot_state[reg] = LinkMode::Xmm(freg);
+        self[reg] = LinkMode::Xmm(freg);
         self.xmm[freg].push(reg);
     }
 
     fn link_both(&mut self, reg: SlotId, freg: Xmm) {
         self.dealloc_xmm(reg);
-        self.slot_state[reg] = LinkMode::Both(freg);
+        self[reg] = LinkMode::Both(freg);
         self.xmm[freg].push(reg);
     }
 
     fn link_const(&mut self, reg: SlotId, v: Value) {
         self.dealloc_xmm(reg);
-        self.slot_state[reg] = LinkMode::Const(v);
+        self[reg] = LinkMode::Const(v);
     }
 
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
     fn dealloc_xmm(&mut self, reg: SlotId) {
-        match self.slot_state[reg] {
+        match self[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                 assert!(self.xmm[freg].contains(&reg));
                 self.xmm[freg].retain(|e| *e != reg);
-                self.slot_state[reg] = LinkMode::Stack;
+                self[reg] = LinkMode::Stack;
             }
             LinkMode::Const(_) => {
-                self.slot_state[reg] = LinkMode::Stack;
+                self[reg] = LinkMode::Stack;
             }
             LinkMode::Stack => {}
         }
@@ -301,7 +314,7 @@ impl BBContext {
 
     fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
         self.xmm.0.swap(l.0 as usize, r.0 as usize);
-        self.slot_state.0.iter_mut().for_each(|mode| match mode {
+        self.slots.iter_mut().for_each(|mode| match mode {
             LinkMode::Both(x) | LinkMode::Xmm(x) => {
                 if *x == l {
                     *x = r;
@@ -317,7 +330,7 @@ impl BBContext {
     /// Allocate new xmm register to the given stack slot for read/write f64.
     ///
     fn xmm_write(&mut self, reg: SlotId) -> Xmm {
-        match self.slot_state[reg] {
+        match self[reg] {
             LinkMode::Xmm(freg) if self.xmm[freg].len() == 1 => {
                 assert_eq!(reg, self.xmm[freg][0]);
                 freg
@@ -332,9 +345,9 @@ impl BBContext {
     }
 
     fn merge(&mut self, other: &BBContext) {
-        for i in 0..self.slot_state.0.len() {
+        for i in 0..self.slots.len() {
             let i = SlotId(i as u16);
-            match (&self.slot_state[i], &other.slot_state[i]) {
+            match (&self[i], &other[i]) {
                 (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
                 | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
                 (LinkMode::Both(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
@@ -388,7 +401,7 @@ impl BBContext {
                 } else {
                     let v: Vec<_> = self.xmm.0[i]
                         .iter()
-                        .filter(|reg| matches!(self.slot_state[**reg], LinkMode::Xmm(_)))
+                        .filter(|reg| matches!(self[**reg], LinkMode::Xmm(_)))
                         .cloned()
                         .collect();
                     if v.is_empty() {
@@ -400,8 +413,7 @@ impl BBContext {
             })
             .collect();
         let fixnum = self
-            .slot_state
-            .0
+            .slots
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
@@ -426,8 +438,7 @@ impl BBContext {
                     let v: Vec<_> = self.xmm.0[i]
                         .iter()
                         .filter(|reg| {
-                            reg.0 as usize <= local_num
-                                && matches!(self.slot_state[**reg], LinkMode::Xmm(_))
+                            reg.0 as usize <= local_num && matches!(self[**reg], LinkMode::Xmm(_))
                         })
                         .cloned()
                         .collect();
@@ -440,8 +451,7 @@ impl BBContext {
             })
             .collect();
         let fixnum = self
-            .slot_state
-            .0
+            .slots
             .iter()
             .enumerate()
             .filter_map(|(idx, mode)| match mode {
@@ -545,12 +555,14 @@ enum LinkMode {
 }
 
 #[derive(Clone, PartialEq)]
-struct StackSlotInfo(Vec<LinkMode>);
+struct StackSlotInfo {
+    slots: Vec<LinkMode>,
+}
 
 impl std::fmt::Debug for StackSlotInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s: String = self
-            .0
+            .slots
             .iter()
             .enumerate()
             .flat_map(|(i, mode)| match mode {
@@ -567,13 +579,25 @@ impl std::fmt::Debug for StackSlotInfo {
 impl std::ops::Index<SlotId> for StackSlotInfo {
     type Output = LinkMode;
     fn index(&self, i: SlotId) -> &Self::Output {
-        &self.0[i.0 as usize]
+        &self.slots[i.0 as usize]
     }
 }
 
 impl std::ops::IndexMut<SlotId> for StackSlotInfo {
     fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
-        &mut self.0[i.0 as usize]
+        &mut self.slots[i.0 as usize]
+    }
+}
+
+impl StackSlotInfo {
+    fn new(reg_num: usize) -> Self {
+        StackSlotInfo {
+            slots: vec![LinkMode::Stack; reg_num],
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.slots.len()
     }
 }
 
@@ -590,10 +614,8 @@ extern "C" fn log_deoptimize(
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();
     if let TraceIr::LoopEnd = pc.get_ir() {
+        // normal exit from jit'ed loop
         eprint!("<-- exited from JIT code in {} {:?}.", name, func_id);
-        eprintln!("    [{:05}] {fmt}", index);
-    } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
-        eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
         eprintln!("    [{:05}] {fmt}", index);
     } else {
         match globals.deopt_stats.get_mut(&(func_id, index)) {
@@ -602,7 +624,15 @@ extern "C" fn log_deoptimize(
                 globals.deopt_stats.insert((func_id, index), 1);
             }
         };
-        if let Some(v) = v {
+        if let TraceIr::LoadConst(..) = pc.get_ir() {
+            // inline constant cache miss
+            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt}", index);
+        } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
+            // error in class def (illegal superclass etc.)
+            eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
+            eprintln!("    [{:05}] {fmt}", index);
+        } else if let Some(v) = v {
             eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt} caused by {}", index, globals.tos(v));
         } else {
@@ -615,12 +645,12 @@ extern "C" fn log_deoptimize(
 impl Codegen {
     pub(super) fn compile(
         &mut self,
-        fnstore: &Store,
+        store: &Store,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
     ) -> (DestLabel, Vec<(BcIndex, usize)>) {
-        let func = fnstore[func_id].as_ruby_func();
+        let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
@@ -661,7 +691,7 @@ impl Codegen {
         );
         for i in func.bb_info.get_bb_pos(start_pos) {
             ctx.cur_pos = i;
-            if self.compile_bb(fnstore, func, &mut ctx, position) {
+            if self.compile_bb(store, func, &mut ctx, position) {
                 break;
             };
         }
@@ -742,7 +772,7 @@ impl Codegen {
     /// Copy *src* to *dst*.
     ///
     fn copy_slot(&mut self, ctx: &mut BBContext, src: SlotId, dst: SlotId) {
-        match ctx.slot_state[src] {
+        match ctx[src] {
             LinkMode::Xmm(freg) | LinkMode::Both(freg) => {
                 ctx.link_xmm(dst, freg);
             }
@@ -1584,19 +1614,17 @@ impl Codegen {
     ///
     fn gen_write_back(&mut self, wb: WriteBack) {
         for (freg, v) in wb.xmm {
-            self.gen_write_back_single(freg, v);
+            self.gen_write_back_xmm(freg, v);
         }
-        for (v, slot) in wb.fixnum {
-            self.write_back_val(slot, v);
+        for (v, slot) in wb.constant {
+            self.gen_write_back_constant(slot, v);
         }
     }
 
-    fn gen_write_back_single(&mut self, freg: Xmm, v: Vec<SlotId>) {
+    fn gen_write_back_xmm(&mut self, freg: Xmm, v: Vec<SlotId>) {
         if v.is_empty() {
             return;
         }
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      wb: {:?}->{:?}", freg, v);
         let f64_to_val = self.f64_to_val;
         monoasm!( &mut self.jit,
             movq xmm0, xmm(freg.enc());
@@ -1616,6 +1644,9 @@ impl Codegen {
     ///
     /// Get *DestLabel* for write-back and fallback to interpreter.
     ///
+    /// ### in
+    /// - rdi: deopt-reason:Value
+    ///
     fn gen_side_deopt(&mut self, pc: BcPc, ctx: &BBContext) -> DestLabel {
         let entry = self.jit.label();
         self.gen_side_deopt_with_label(pc, Some(ctx), entry);
@@ -1624,6 +1655,9 @@ impl Codegen {
 
     ///
     /// Get *DestLabel* for fallback to interpreter. (without write-back)
+    ///
+    /// ### in
+    /// - rdi: deopt-reason:Value
     ///
     fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
         let entry = self.jit.label();
@@ -1637,13 +1671,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         if let Some(ctx) = ctx {
             let wb = ctx.get_write_back();
-            if !wb.is_empty() {
-                #[cfg(feature = "emit-tir")]
-                eprintln!("--gen deopt");
-                self.gen_write_back(wb);
-                #[cfg(feature = "emit-tir")]
-                eprintln!("--gen deopt end");
-            }
+            self.gen_write_back(wb);
         }
         let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
@@ -1680,10 +1708,8 @@ impl Codegen {
         self.load_rsi(rhs);
     }
 
-    fn write_back_val(&mut self, reg: SlotId, v: Value) {
+    fn gen_write_back_constant(&mut self, reg: SlotId, v: Value) {
         let i = v.get() as i64;
-        #[cfg(feature = "emit-tir")]
-        eprintln!("      wb: Const({:?})->{:?}", v, reg);
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
                 movq [r14 - (conv(reg))], (v.get());
