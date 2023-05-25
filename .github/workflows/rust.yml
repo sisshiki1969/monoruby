@@ -28,8 +28,9 @@ jobs:
           rustup component add llvm-tools-preview
       - name: Build
         run: cargo build
-      - name: Run tests
+      - name: chdir
         run: cd monoruby
+      - name: Run tests
         run: LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo nextest run
       - name: Run tests
         run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" cargo run -- test.rb
