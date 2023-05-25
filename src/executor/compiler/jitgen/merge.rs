@@ -87,8 +87,7 @@ impl Codegen {
                 };
             }
             for r in const_vec {
-                let freg = target_ctx.alloc_xmm();
-                target_ctx.link_xmm(r, freg);
+                target_ctx.link_new_xmm(r);
             }
             #[cfg(feature = "emit-tir")]
             eprintln!("  target_ctx:   {:?}", target_ctx.slot_state);
@@ -181,26 +180,22 @@ impl Codegen {
             if target_ctx[reg] == LinkMode::Stack {
                 match src_ctx[reg] {
                     LinkMode::Xmm(freg) => {
-                        let v = src_ctx.xmm[freg].clone();
                         #[cfg(feature = "emit-tir")]
-                        eprintln!("      wb: {:?}->{:?}", freg, v);
+                        eprintln!("      wb: {:?}->{:?}", freg, &src_ctx[freg]);
+                        let v = src_ctx[freg].to_vec();
                         for i in &v {
                             src_ctx[*i] = LinkMode::Both(freg);
                         }
-                        src_ctx.dealloc_xmm(reg);
-                        self.gen_write_back_xmm(freg, v);
-                    }
-                    LinkMode::Both(_) => {
-                        src_ctx.dealloc_xmm(reg);
+                        self.gen_write_back_xmm(freg, &v);
                     }
                     LinkMode::Const(v) => {
                         #[cfg(feature = "emit-tir")]
                         eprintln!("      wb: Const({:?})->{:?}", v, reg);
                         self.gen_write_back_constant(reg, v);
-                        src_ctx[reg] = LinkMode::Stack;
                     }
-                    LinkMode::Stack => {}
+                    LinkMode::Both(_) | LinkMode::Stack => {}
                 }
+                src_ctx.dealloc_xmm(reg);
             };
         }
 
@@ -212,7 +207,7 @@ impl Codegen {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
                         src_ctx[reg] = LinkMode::Xmm(l);
-                    } else if src_ctx.xmm[r].is_empty() {
+                    } else if src_ctx[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
@@ -224,7 +219,7 @@ impl Codegen {
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
                         src_ctx[reg] = LinkMode::Xmm(l);
-                    } else if src_ctx.xmm[r].is_empty() {
+                    } else if src_ctx[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
@@ -236,13 +231,12 @@ impl Codegen {
                 }
                 (_, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    let v = vec![reg];
                     #[cfg(feature = "emit-tir")]
-                    eprintln!("      wb: {:?}->{:?}", l, v);
-                    self.gen_write_back_xmm(l, v);
+                    eprintln!("      wb: {:?}->{:?}", l, &[reg]);
+                    self.gen_write_back_xmm(l, &[reg]);
                     if l == r {
                         src_ctx[reg] = LinkMode::Both(l);
-                    } else if src_ctx.xmm[r].is_empty() {
+                    } else if src_ctx[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );
@@ -254,7 +248,7 @@ impl Codegen {
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
                         src_ctx[reg] = LinkMode::Both(l);
-                    } else if src_ctx.xmm[r].is_empty() {
+                    } else if src_ctx[r].is_empty() {
                         monoasm!( &mut self.jit,
                             movq  xmm(r.enc()), xmm(l.enc());
                         );

@@ -6,6 +6,7 @@ pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 
 use super::*;
 use analysis::{ExitType, SlotInfo};
+use slot::StackSlotInfo;
 
 mod analysis;
 mod basic_block;
@@ -17,6 +18,7 @@ mod init_method;
 mod merge;
 mod method_call;
 mod read_slot;
+mod slot;
 
 //
 // Just-in-time compiler module.
@@ -220,8 +222,6 @@ impl WriteBack {
 struct BBContext {
     /// Information for stack slots.
     slot_state: StackSlotInfo,
-    /// Information for xmm registers.
-    xmm: XmmInfo,
     self_value: Value,
     local_num: usize,
     recompile_flag: bool,
@@ -242,10 +242,8 @@ impl std::ops::DerefMut for BBContext {
 
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
-        let xmm = XmmInfo::new();
         Self {
-            slot_state: StackSlotInfo::new(cc.total_reg_num),
-            xmm,
+            slot_state: StackSlotInfo::new(cc),
             self_value: cc.self_value,
             local_num: cc.local_num,
             recompile_flag: false,
@@ -258,117 +256,6 @@ impl BBContext {
 
     fn remove_unused(&mut self, unused: &[SlotId]) {
         unused.iter().for_each(|reg| self.dealloc_xmm(*reg));
-    }
-
-    ///
-    /// Allocate a new xmm register.
-    ///
-    fn alloc_xmm(&mut self) -> Xmm {
-        for (flhs, xmm) in self.xmm.0.iter_mut().enumerate() {
-            if xmm.is_empty() {
-                return Xmm(flhs as u16);
-            }
-        }
-        unreachable!("no xmm reg is vacant.")
-    }
-
-    fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
-        self.dealloc_xmm(reg);
-        self[reg] = LinkMode::Xmm(freg);
-        self.xmm[freg].push(reg);
-    }
-
-    fn link_both(&mut self, reg: SlotId, freg: Xmm) {
-        self.dealloc_xmm(reg);
-        self[reg] = LinkMode::Both(freg);
-        self.xmm[freg].push(reg);
-    }
-
-    fn link_const(&mut self, reg: SlotId, v: Value) {
-        self.dealloc_xmm(reg);
-        self[reg] = LinkMode::Const(v);
-    }
-
-    ///
-    /// Deallocate an xmm register corresponding to the stack slot *reg*.
-    ///
-    fn dealloc_xmm(&mut self, reg: SlotId) {
-        match self[reg] {
-            LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
-                assert!(self.xmm[freg].contains(&reg));
-                self.xmm[freg].retain(|e| *e != reg);
-                self[reg] = LinkMode::Stack;
-            }
-            LinkMode::Const(_) => {
-                self[reg] = LinkMode::Stack;
-            }
-            LinkMode::Stack => {}
-        }
-    }
-
-    fn dealloc_locals(&mut self) {
-        for reg in 1..1 + self.local_num as u16 {
-            self.dealloc_xmm(SlotId(reg));
-        }
-    }
-
-    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
-        self.xmm.0.swap(l.0 as usize, r.0 as usize);
-        self.slots.iter_mut().for_each(|mode| match mode {
-            LinkMode::Both(x) | LinkMode::Xmm(x) => {
-                if *x == l {
-                    *x = r;
-                } else if *x == r {
-                    *x = l;
-                }
-            }
-            LinkMode::Stack | LinkMode::Const(_) => {}
-        });
-    }
-
-    ///
-    /// Allocate new xmm register to the given stack slot for read/write f64.
-    ///
-    fn xmm_write(&mut self, reg: SlotId) -> Xmm {
-        match self[reg] {
-            LinkMode::Xmm(freg) if self.xmm[freg].len() == 1 => {
-                assert_eq!(reg, self.xmm[freg][0]);
-                freg
-            }
-            LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Const(_) => {
-                self.dealloc_xmm(reg);
-                let freg = self.alloc_xmm();
-                self.link_xmm(reg, freg);
-                freg
-            }
-        }
-    }
-
-    fn merge(&mut self, other: &BBContext) {
-        for i in 0..self.slots.len() {
-            let i = SlotId(i as u16);
-            match (&self[i], &other[i]) {
-                (LinkMode::Both(l), LinkMode::Both(_) | LinkMode::Xmm(_))
-                | (LinkMode::Xmm(l), LinkMode::Both(_)) => self.link_both(i, *l),
-                (LinkMode::Both(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
-                    self.link_both(i, *l)
-                }
-                (LinkMode::Const(l), LinkMode::Both(_)) if l.class() == FLOAT_CLASS => {
-                    let x = self.alloc_xmm();
-                    self.link_both(i, x);
-                }
-                (LinkMode::Xmm(l), LinkMode::Xmm(_)) => self.link_xmm(i, *l),
-                (LinkMode::Xmm(l), LinkMode::Const(r)) if r.class() == FLOAT_CLASS => {
-                    self.link_xmm(i, *l)
-                }
-                (LinkMode::Const(l), LinkMode::Xmm(_)) if l.class() == FLOAT_CLASS => {
-                    let x = self.alloc_xmm();
-                    self.link_xmm(i, x);
-                }
-                (LinkMode::Const(l), LinkMode::Const(r)) if l == r => self.link_const(i, *l),
-                _ => self.dealloc_xmm(i),
-            };
-        }
     }
 
     fn merge_entries(entries: &[BranchEntry]) -> Self {
@@ -387,94 +274,6 @@ impl BBContext {
         #[cfg(feature = "emit-tir")]
         eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
         merge_ctx
-    }
-
-    fn get_write_back(&self) -> WriteBack {
-        let xmm = self
-            .xmm
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if v.is_empty() {
-                    None
-                } else {
-                    let v: Vec<_> = self.xmm.0[i]
-                        .iter()
-                        .filter(|reg| matches!(self[**reg], LinkMode::Xmm(_)))
-                        .cloned()
-                        .collect();
-                    if v.is_empty() {
-                        None
-                    } else {
-                        Some((Xmm::new(i as u16), v))
-                    }
-                }
-            })
-            .collect();
-        let fixnum = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, mode)| match mode {
-                LinkMode::Const(v) => Some((*v, SlotId(idx as u16))),
-                _ => None,
-            })
-            .collect();
-        WriteBack::new(xmm, fixnum)
-    }
-
-    fn get_locals_write_back(&self) -> WriteBack {
-        let local_num = self.local_num;
-        let xmm = self
-            .xmm
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if v.is_empty() {
-                    None
-                } else {
-                    let v: Vec<_> = self.xmm.0[i]
-                        .iter()
-                        .filter(|reg| {
-                            reg.0 as usize <= local_num && matches!(self[**reg], LinkMode::Xmm(_))
-                        })
-                        .cloned()
-                        .collect();
-                    if v.is_empty() {
-                        None
-                    } else {
-                        Some((Xmm::new(i as u16), v))
-                    }
-                }
-            })
-            .collect();
-        let fixnum = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, mode)| match mode {
-                LinkMode::Const(v) if idx <= local_num => Some((*v, SlotId(idx as u16))),
-                _ => None,
-            })
-            .collect();
-        WriteBack::new(xmm, fixnum)
-    }
-
-    fn get_xmm_using(&self) -> Vec<Xmm> {
-        self.xmm
-            .0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(Xmm::new(i as u16))
-                }
-            })
-            .collect()
     }
 }
 
@@ -552,53 +351,6 @@ enum LinkMode {
     /// Constant.
     ///
     Const(Value),
-}
-
-#[derive(Clone, PartialEq)]
-struct StackSlotInfo {
-    slots: Vec<LinkMode>,
-}
-
-impl std::fmt::Debug for StackSlotInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s: String = self
-            .slots
-            .iter()
-            .enumerate()
-            .flat_map(|(i, mode)| match mode {
-                LinkMode::Stack => None,
-                LinkMode::Const(v) => Some(format!("%{i}:Const({:?}) ", v)),
-                LinkMode::Both(x) => Some(format!("%{i}:Both({x:?}) ")),
-                LinkMode::Xmm(x) => Some(format!("%{i}:Xmm({x:?}) ")),
-            })
-            .collect();
-        write!(f, "[{s}]")
-    }
-}
-
-impl std::ops::Index<SlotId> for StackSlotInfo {
-    type Output = LinkMode;
-    fn index(&self, i: SlotId) -> &Self::Output {
-        &self.slots[i.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<SlotId> for StackSlotInfo {
-    fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
-        &mut self.slots[i.0 as usize]
-    }
-}
-
-impl StackSlotInfo {
-    fn new(reg_num: usize) -> Self {
-        StackSlotInfo {
-            slots: vec![LinkMode::Stack; reg_num],
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.slots.len()
-    }
 }
 
 #[cfg(feature = "log-jit")]
@@ -908,8 +660,7 @@ impl Codegen {
 
                     if let (version, Some(v)) = store[id].cache {
                         if let Some(f) = v.try_float() {
-                            let fdst = ctx.alloc_xmm();
-                            ctx.link_both(dst, fdst);
+                            let fdst = ctx.link_new_both(dst);
                             self.load_float_constant(&ctx, dst, fdst, pc, f, version);
                         } else {
                             self.load_generic_constant(&ctx, dst, pc, v, version);
@@ -1064,8 +815,8 @@ impl Codegen {
                     if pc.is_float1() {
                         let fsrc = self.fetch_float_assume_float(&mut ctx, src, pc);
                         let fdst = ctx.xmm_write(ret);
-                        let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         self.xmm_mov(fsrc, fdst);
+                        let imm = self.jit.const_i64(0x8000_0000_0000_0000u64 as i64);
                         monoasm!( &mut self.jit,
                             xorps xmm(fdst.enc()), [rip + imm];
                         );
@@ -1586,7 +1337,7 @@ impl Codegen {
             monoasm!( &mut self.jit,
             error:
             );
-            self.gen_write_back(wb);
+            self.gen_write_back(&wb);
             monoasm!( &mut self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;
@@ -1598,7 +1349,7 @@ impl Codegen {
                 testq rax, rax; // Option<Value>
                 jne  cont;
             );
-            self.gen_write_back(wb);
+            self.gen_write_back(&wb);
             monoasm!( &mut self.jit,
                 movq r13, ((pc + 1).get_u64());
                 jmp  raise;
@@ -1612,16 +1363,16 @@ impl Codegen {
     ///
     /// xmms are not deallocated.
     ///
-    fn gen_write_back(&mut self, wb: WriteBack) {
-        for (freg, v) in wb.xmm {
-            self.gen_write_back_xmm(freg, v);
+    fn gen_write_back(&mut self, wb: &WriteBack) {
+        for (freg, v) in &wb.xmm {
+            self.gen_write_back_xmm(*freg, v);
         }
-        for (v, slot) in wb.constant {
-            self.gen_write_back_constant(slot, v);
+        for (v, slot) in &wb.constant {
+            self.gen_write_back_constant(*slot, *v);
         }
     }
 
-    fn gen_write_back_xmm(&mut self, freg: Xmm, v: Vec<SlotId>) {
+    fn gen_write_back_xmm(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
@@ -1631,13 +1382,13 @@ impl Codegen {
             call f64_to_val;
         );
         for reg in v {
-            self.store_rax(reg);
+            self.store_rax(*reg);
         }
     }
 
     fn gen_write_back_locals(&mut self, ctx: &mut BBContext) {
         let wb = ctx.get_locals_write_back();
-        self.gen_write_back(wb);
+        self.gen_write_back(&wb);
         ctx.dealloc_locals();
     }
 
@@ -1671,7 +1422,7 @@ impl Codegen {
         self.jit.bind_label(entry);
         if let Some(ctx) = ctx {
             let wb = ctx.get_write_back();
-            self.gen_write_back(wb);
+            self.gen_write_back(&wb);
         }
         let fetch = self.vm_fetch;
         monoasm!( &mut self.jit,
