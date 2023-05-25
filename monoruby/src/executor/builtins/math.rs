@@ -17,6 +17,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 /// - sqrt(x) -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sqrt.html]
+#[monoruby_builtin]
 fn sqrt(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -40,6 +41,7 @@ fn sqrt(
 /// - sin(x) -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/sin.html]
+#[monoruby_builtin]
 fn sin(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -63,6 +65,7 @@ fn sin(
 /// - cos(x) -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Math/m/cos.html]
+#[monoruby_builtin]
 fn cos(
     _vm: &mut Executor,
     globals: &mut Globals,

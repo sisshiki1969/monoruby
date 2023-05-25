@@ -1,0 +1,52 @@
+[package]
+name = "monoruby"
+version = "0.2.0"
+authors = ["monochrome <sisshiki@mac.com>"]
+description = "another Ruby interpreter with JIT compiler."
+repository = "https://github.com/sisshiki1969/monoruby"
+edition = "2021"
+license = "MIT"
+default-run = "monoruby"
+build = "build.rs"
+
+[[bin]]
+name = "monoruby"
+
+[[bin]]
+name = "irm"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+emit-asm = []
+emit-bc = []
+emit-tir = []
+log-jit = []
+gc-debug = []
+gc-stress = []
+
+[dependencies]
+clap = { version = "4.1.4", features = ["derive"] }
+rustyline = "11.0.0"
+paste = "1.0.7"
+monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
+monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
+ruruby-parse = { git = "https://github.com/sisshiki1969/ruruby-parse.git" }
+monoruby-attr = { path = "../monoruby_attr" }
+num = "0.4.0"
+fxhash = "0.2.1"
+tempfile ="3.3.0"
+dtoa = "1.0"
+chrono = "0.4.19"
+smallvec = { version = "1.10.0", features = ["const_generics"] }
+escape_string = "0.1.2"
+hex = "0.4.3"
+rand = "0.8.5"
+indexmap = "1.9.2"
+regex = "1.7.1"
+fancy-regex = "0.11.0"
+libc = "0.2.139"
+getrandom = "0.2.8"
+sfmt = "0.7.0"
+dirs = "4.0.0"
+bitvec = "1.0.1"

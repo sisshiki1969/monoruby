@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new(first, last, exclude_end = false) -> Range
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
+#[monoruby_builtin]
 fn range_new(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -31,6 +32,7 @@ fn range_new(
 /// - begin -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
+#[monoruby_builtin]
 fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     Ok(lfp.self_val().as_range().start)
 }
@@ -39,6 +41,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize)
 /// - end -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
+#[monoruby_builtin]
 fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     Ok(lfp.self_val().as_range().end)
 }
@@ -47,6 +50,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
 /// - exclude_end? -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
+#[monoruby_builtin]
 fn exclude_end(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -64,6 +68,7 @@ fn exclude_end(
 /// - [NOT SUPPORTED] each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
+#[monoruby_builtin]
 fn each(
     vm: &mut Executor,
     globals: &mut Globals,

@@ -1,3 +1,5 @@
+use monoruby_attr::monoruby_builtin;
+
 use crate::*;
 
 //
@@ -16,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - [NOT SUPPORTED] new(superclass = Object) {|klass| ... } -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
+#[monoruby_builtin]
 fn class_new(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -40,8 +43,9 @@ fn class_new(
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
 ///
 /// !! We must call Object#initialize.
+#[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    let obj = allocate(vm, globals, lfp, arg, 0)?;
+    let obj = __allocate(vm, globals, lfp, arg, 0)?;
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)
 }
@@ -50,6 +54,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 /// - superclass -> Class | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
+#[monoruby_builtin]
 fn superclass(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -65,6 +70,7 @@ fn superclass(
 /// - allocate -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
+#[monoruby_builtin]
 fn allocate(
     _vm: &mut Executor,
     _globals: &mut Globals,

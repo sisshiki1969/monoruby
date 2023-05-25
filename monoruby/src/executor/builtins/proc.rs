@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 /// ### Proc.new
+#[monoruby_builtin]
 fn new(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -25,6 +26,7 @@ fn new(
 }
 
 /// ### Proc#call
+#[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let self_ = lfp.self_val();
     let block_data = self_.as_proc();

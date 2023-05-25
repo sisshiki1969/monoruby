@@ -29,6 +29,7 @@ jobs:
       - name: Build
         run: cargo build
       - name: Run tests
+        run: cd monoruby
         run: LLVM_PROFILE_FILE="monoruby-%p-%m.profraw" cargo nextest run
       - name: Run tests
         run: LLVM_PROFILE_FILE="monoruby-bin-%p-%m.profraw" cargo run -- test.rb

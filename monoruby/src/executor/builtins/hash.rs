@@ -55,6 +55,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new(ifnone = nil) -> Hash
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
+#[monoruby_builtin]
 fn new(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -73,6 +74,7 @@ fn new(
 /// - size -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
+#[monoruby_builtin]
 fn size(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -89,6 +91,7 @@ fn size(
 /// - store(key, value) -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d=3d.html]
+#[monoruby_builtin]
 fn index_assign(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -106,6 +109,7 @@ fn index_assign(
 /// - self[key] -> object | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d.html]
+#[monoruby_builtin]
 fn index(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -122,6 +126,7 @@ fn index(
 /// - clear -> self
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
+#[monoruby_builtin]
 fn clear(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -138,6 +143,7 @@ fn clear(
 /// - keys -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keys.html]
+#[monoruby_builtin]
 fn keys(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -154,6 +160,7 @@ fn keys(
 /// - values -> [object]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/values.html]
+#[monoruby_builtin]
 fn values(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -173,6 +180,7 @@ fn values(
 /// - [NOT SUPPORTED] each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each.html]
+#[monoruby_builtin]
 fn each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -200,6 +208,7 @@ fn each(
 /// - member?(key) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/has_key=3f.html]
+#[monoruby_builtin]
 fn include(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -216,6 +225,7 @@ fn include(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
+#[monoruby_builtin]
 fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -233,6 +243,7 @@ fn inspect(
 /// - self[key] -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
+#[monoruby_builtin]
 fn env_index(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -258,6 +269,7 @@ fn env_index(
 /// - fetch(key) {|key| ... } -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
+#[monoruby_builtin]
 fn env_fetch(
     vm: &mut Executor,
     globals: &mut Globals,

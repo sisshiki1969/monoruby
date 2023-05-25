@@ -17,6 +17,7 @@ mod value;
 // use alloc::*;
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
+pub use monoruby_attr::monoruby_builtin;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 pub type IndexSet<T> = indexmap::IndexSet<T>;
 pub use executor::bytecodegen::BytecodeGen;

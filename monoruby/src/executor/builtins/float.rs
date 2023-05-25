@@ -9,6 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);
 }
 
+#[monoruby_builtin]
 fn tof(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -19,6 +20,7 @@ fn tof(
     Ok(lfp.self_val())
 }
 
+#[monoruby_builtin]
 fn toi(
     _vm: &mut Executor,
     _globals: &mut Globals,

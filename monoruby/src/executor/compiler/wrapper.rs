@@ -119,8 +119,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, r14;    // rdx <- lfp
-            movq r9, (abs_address);
-            movq rax, (wrapper);
+            movq rax, (abs_address);
             call rax;
 
             leave;
@@ -198,7 +197,7 @@ impl Codegen {
     }
 }
 
-#[allow(improper_ctypes_definitions)]
+/*#[allow(improper_ctypes_definitions)]
 pub extern "C" fn wrapper(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -214,4 +213,4 @@ pub extern "C" fn wrapper(
             None
         }
     }
-}
+}*/

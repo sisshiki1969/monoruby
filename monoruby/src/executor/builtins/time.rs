@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// - now -> Time
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
+#[monoruby_builtin]
 fn now(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -38,6 +39,7 @@ fn now(
 /// - inspect -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
+#[monoruby_builtin]
 fn inspect(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -54,6 +56,7 @@ fn inspect(
 /// - to_s -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
+#[monoruby_builtin]
 fn to_s(
     _vm: &mut Executor,
     _globals: &mut Globals,
@@ -74,6 +77,7 @@ fn to_s(
 /// - strftime(format) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
+#[monoruby_builtin]
 fn strftime(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -97,6 +101,7 @@ fn strftime(
 /// - self - time -> Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
+#[monoruby_builtin]
 fn sub(
     _vm: &mut Executor,
     globals: &mut Globals,

@@ -19,6 +19,7 @@ pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
 /// - write(path, string, offset=nil, opt={}) -> Integer
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
+#[monoruby_builtin]
 fn write(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -53,6 +54,7 @@ fn write(
 /// - read(path, [NOT SUPPORTED]**opt) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
+#[monoruby_builtin]
 fn read(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -88,6 +90,7 @@ fn read(
 /// TODO: support ~USER
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
+#[monoruby_builtin]
 fn expand_path(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -155,6 +158,7 @@ fn expand_path(
 /// - dirname(filename, level=1) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
+#[monoruby_builtin]
 fn dirname(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -178,6 +182,7 @@ fn dirname(
 /// - exist?(path) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
+#[monoruby_builtin]
 fn exist(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -252,8 +257,8 @@ mod test {
 
     #[test]
     fn read() {
-        run_test(r##"File.read("LICENSE")"##);
-        run_test(r##"File.exist?("LICENSE")"##);
-        run_test(r##"File.exist?("LICENCE")"##);
+        run_test(r##"File.read("../LICENSE")"##);
+        run_test(r##"File.exist?("../LICENSE")"##);
+        run_test(r##"File.exist?("../LICENCE")"##);
     }
 }

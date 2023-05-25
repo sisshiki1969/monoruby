@@ -20,6 +20,7 @@ pub(crate) fn init(globals: &mut Globals) {
 /// - compile(string, option=nil, code=nil) -> Regexp
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
+#[monoruby_builtin]
 fn regexp_new(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -39,6 +40,7 @@ fn regexp_new(
 /// - quote(string) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
+#[monoruby_builtin]
 fn regexp_escape(
     _vm: &mut Executor,
     globals: &mut Globals,
@@ -57,6 +59,7 @@ fn regexp_escape(
 /// - last_match(nth) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/last_match.html]
+#[monoruby_builtin]
 fn regexp_last_match(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -77,6 +80,7 @@ fn regexp_last_match(
 /// - self =~ string -> Integer | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
+#[monoruby_builtin]
 fn regexp_match(
     vm: &mut Executor,
     globals: &mut Globals,
