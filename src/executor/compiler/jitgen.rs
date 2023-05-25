@@ -6,7 +6,7 @@ pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
 
 use super::*;
 use analysis::{ExitType, SlotInfo};
-use slot::StackSlotInfo;
+use slot::SlotState;
 
 mod analysis;
 mod basic_block;
@@ -221,14 +221,14 @@ impl WriteBack {
 #[derive(Debug, Clone, PartialEq)]
 struct BBContext {
     /// Information for stack slots.
-    slot_state: StackSlotInfo,
+    slot_state: SlotState,
     self_value: Value,
     local_num: usize,
     recompile_flag: bool,
 }
 
 impl std::ops::Deref for BBContext {
-    type Target = StackSlotInfo;
+    type Target = SlotState;
     fn deref(&self) -> &Self::Target {
         &self.slot_state
     }
@@ -243,7 +243,7 @@ impl std::ops::DerefMut for BBContext {
 impl BBContext {
     fn new(cc: &JitContext) -> Self {
         Self {
-            slot_state: StackSlotInfo::new(cc),
+            slot_state: SlotState::new(cc),
             self_value: cc.self_value,
             local_num: cc.local_num,
             recompile_flag: false,
@@ -287,30 +287,6 @@ impl InlineCached {
     fn new(pc: BcPc) -> Self {
         let (class_id, version) = (pc - 1).class_version();
         InlineCached { class_id, version }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-#[repr(transparent)]
-struct XmmInfo([Vec<SlotId>; 14]);
-
-impl XmmInfo {
-    fn new() -> Self {
-        let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
-        Self(v.try_into().unwrap())
-    }
-}
-
-impl std::ops::Index<Xmm> for XmmInfo {
-    type Output = Vec<SlotId>;
-    fn index(&self, index: Xmm) -> &Self::Output {
-        &self.0[index.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<Xmm> for XmmInfo {
-    fn index_mut(&mut self, index: Xmm) -> &mut Self::Output {
-        &mut self.0[index.0 as usize]
     }
 }
 
@@ -504,6 +480,17 @@ impl Codegen {
                 movq  xmm(dst.enc()), xmm(src.enc());
             );
         }
+    }
+
+    ///
+    /// swap xmm(*l*) and xmm(*r*).
+    ///
+    fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
+        monoasm!( &mut self.jit,
+            movq  xmm0, xmm(l.enc());
+            movq  xmm(l.enc()), xmm(r.enc());
+            movq  xmm(r.enc()), xmm0;
+        );
     }
 
     ///
@@ -1365,17 +1352,19 @@ impl Codegen {
     ///
     fn gen_write_back(&mut self, wb: &WriteBack) {
         for (freg, v) in &wb.xmm {
-            self.gen_write_back_xmm(*freg, v);
+            self.gen_xmm_to_stack(*freg, v);
         }
         for (v, slot) in &wb.constant {
             self.gen_write_back_constant(*slot, *v);
         }
     }
 
-    fn gen_write_back_xmm(&mut self, freg: Xmm, v: &[SlotId]) {
+    fn gen_xmm_to_stack(&mut self, freg: Xmm, v: &[SlotId]) {
         if v.is_empty() {
             return;
         }
+        #[cfg(feature = "emit-tir")]
+        eprintln!("      wb: {:?}->{:?}", freg, v);
         let f64_to_val = self.f64_to_val;
         monoasm!( &mut self.jit,
             movq xmm0, xmm(freg.enc());

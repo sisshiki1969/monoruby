@@ -1,14 +1,14 @@
 use super::*;
 
 #[derive(Clone, PartialEq)]
-pub(super) struct StackSlotInfo {
+pub(super) struct SlotState {
     slots: Vec<LinkMode>,
     /// Information for xmm registers.
-    xmm: XmmInfo,
+    xmm: [Vec<SlotId>; 14],
     local_num: usize,
 }
 
-impl std::fmt::Debug for StackSlotInfo {
+impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s: String = self
             .slots
@@ -25,31 +25,27 @@ impl std::fmt::Debug for StackSlotInfo {
     }
 }
 
-impl std::ops::Index<SlotId> for StackSlotInfo {
+impl std::ops::Index<SlotId> for SlotState {
     type Output = LinkMode;
     fn index(&self, i: SlotId) -> &Self::Output {
         &self.slots[i.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<SlotId> for StackSlotInfo {
+impl std::ops::IndexMut<SlotId> for SlotState {
     fn index_mut(&mut self, i: SlotId) -> &mut Self::Output {
         &mut self.slots[i.0 as usize]
     }
 }
 
-impl std::ops::Index<Xmm> for StackSlotInfo {
-    type Output = [SlotId];
-    fn index(&self, i: Xmm) -> &Self::Output {
-        &self.xmm[i]
-    }
-}
-
-impl StackSlotInfo {
+impl SlotState {
     pub(super) fn new(cc: &JitContext) -> Self {
-        StackSlotInfo {
+        SlotState {
             slots: vec![LinkMode::Stack; cc.total_reg_num],
-            xmm: XmmInfo::new(),
+            xmm: {
+                let v: Vec<Vec<SlotId>> = (0..14).map(|_| vec![]).collect();
+                v.try_into().unwrap()
+            },
             local_num: cc.local_num,
         }
     }
@@ -58,11 +54,15 @@ impl StackSlotInfo {
         self.slots.len()
     }
 
+    pub(super) fn is_xmm_vacant(&self, xmm: Xmm) -> bool {
+        self.xmm[xmm.0 as usize].is_empty()
+    }
+
     ///
     /// Allocate a new xmm register.
     ///
     fn alloc_xmm(&mut self) -> Xmm {
-        for (flhs, xmm) in self.xmm.0.iter_mut().enumerate() {
+        for (flhs, xmm) in self.xmm.iter_mut().enumerate() {
             if xmm.is_empty() {
                 return Xmm(flhs as u16);
             }
@@ -73,7 +73,7 @@ impl StackSlotInfo {
     pub(super) fn link_xmm(&mut self, reg: SlotId, freg: Xmm) {
         self.dealloc_xmm(reg);
         self[reg] = LinkMode::Xmm(freg);
-        self.xmm[freg].push(reg);
+        self.xmm[freg.0 as usize].push(reg);
     }
 
     pub(super) fn link_new_xmm(&mut self, reg: SlotId) -> Xmm {
@@ -85,7 +85,7 @@ impl StackSlotInfo {
     pub(super) fn link_both(&mut self, reg: SlotId, freg: Xmm) {
         self.dealloc_xmm(reg);
         self[reg] = LinkMode::Both(freg);
-        self.xmm[freg].push(reg);
+        self.xmm[freg.0 as usize].push(reg);
     }
 
     pub(super) fn link_new_both(&mut self, reg: SlotId) -> Xmm {
@@ -99,14 +99,24 @@ impl StackSlotInfo {
         self[reg] = LinkMode::Const(v);
     }
 
+    pub(super) fn xmm_to_both(&mut self, freg: Xmm) {
+        for i in &self.xmm[freg.0 as usize] {
+            self.slots[i.0 as usize] = LinkMode::Both(freg);
+        }
+    }
+
+    pub(super) fn xmm_slots(&self, i: Xmm) -> &[SlotId] {
+        &self.xmm[i.0 as usize]
+    }
+
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
     pub(super) fn dealloc_xmm(&mut self, reg: SlotId) {
         match self[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
-                assert!(self.xmm[freg].contains(&reg));
-                self.xmm[freg].retain(|e| *e != reg);
+                assert!(self.xmm[freg.0 as usize].contains(&reg));
+                self.xmm[freg.0 as usize].retain(|e| *e != reg);
                 self[reg] = LinkMode::Stack;
             }
             LinkMode::Const(_) => {
@@ -123,7 +133,7 @@ impl StackSlotInfo {
     }
 
     pub(super) fn xmm_swap(&mut self, l: Xmm, r: Xmm) {
-        self.xmm.0.swap(l.0 as usize, r.0 as usize);
+        self.xmm.swap(l.0 as usize, r.0 as usize);
         self.slots.iter_mut().for_each(|mode| match mode {
             LinkMode::Both(x) | LinkMode::Xmm(x) => {
                 if *x == l {
@@ -141,8 +151,8 @@ impl StackSlotInfo {
     ///
     pub(super) fn xmm_write(&mut self, reg: SlotId) -> Xmm {
         match self[reg] {
-            LinkMode::Xmm(freg) if self.xmm[freg].len() == 1 => {
-                assert_eq!(reg, self.xmm[freg][0]);
+            LinkMode::Xmm(freg) if self.xmm[freg.0 as usize].len() == 1 => {
+                assert_eq!(reg, self.xmm[freg.0 as usize][0]);
                 freg
             }
             LinkMode::Xmm(_) | LinkMode::Both(_) | LinkMode::Stack | LinkMode::Const(_) => {
@@ -184,14 +194,13 @@ impl StackSlotInfo {
     pub(super) fn get_write_back(&self) -> WriteBack {
         let xmm = self
             .xmm
-            .0
             .iter()
             .enumerate()
             .filter_map(|(i, v)| {
                 if v.is_empty() {
                     None
                 } else {
-                    let v: Vec<_> = self.xmm.0[i]
+                    let v: Vec<_> = self.xmm[i]
                         .iter()
                         .filter(|reg| matches!(self[**reg], LinkMode::Xmm(_)))
                         .cloned()
@@ -220,14 +229,13 @@ impl StackSlotInfo {
         let local_num = self.local_num;
         let xmm = self
             .xmm
-            .0
             .iter()
             .enumerate()
             .filter_map(|(i, v)| {
                 if v.is_empty() {
                     None
                 } else {
-                    let v: Vec<_> = self.xmm.0[i]
+                    let v: Vec<_> = self.xmm[i]
                         .iter()
                         .filter(|reg| {
                             reg.0 as usize <= local_num && matches!(self[**reg], LinkMode::Xmm(_))
@@ -242,7 +250,7 @@ impl StackSlotInfo {
                 }
             })
             .collect();
-        let fixnum = self
+        let constants = self
             .slots
             .iter()
             .enumerate()
@@ -251,12 +259,11 @@ impl StackSlotInfo {
                 _ => None,
             })
             .collect();
-        WriteBack::new(xmm, fixnum)
+        WriteBack::new(xmm, constants)
     }
 
     pub(super) fn get_xmm_using(&self) -> Vec<Xmm> {
         self.xmm
-            .0
             .iter()
             .enumerate()
             .filter_map(|(i, v)| {

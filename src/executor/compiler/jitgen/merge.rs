@@ -180,13 +180,8 @@ impl Codegen {
             if target_ctx[reg] == LinkMode::Stack {
                 match src_ctx[reg] {
                     LinkMode::Xmm(freg) => {
-                        #[cfg(feature = "emit-tir")]
-                        eprintln!("      wb: {:?}->{:?}", freg, &src_ctx[freg]);
-                        let v = src_ctx[freg].to_vec();
-                        for i in &v {
-                            src_ctx[*i] = LinkMode::Both(freg);
-                        }
-                        self.gen_write_back_xmm(freg, &v);
+                        src_ctx.xmm_to_both(freg);
+                        self.gen_xmm_to_stack(freg, src_ctx.xmm_slots(freg));
                     }
                     LinkMode::Const(v) => {
                         #[cfg(feature = "emit-tir")]
@@ -206,55 +201,47 @@ impl Codegen {
             match (src_ctx[reg], target_ctx[reg]) {
                 (LinkMode::Xmm(l), LinkMode::Xmm(r)) => {
                     if l == r {
-                        src_ctx[reg] = LinkMode::Xmm(l);
-                    } else if src_ctx[r].is_empty() {
-                        monoasm!( &mut self.jit,
-                            movq  xmm(r.enc()), xmm(l.enc());
-                        );
+                    } else if src_ctx.is_xmm_vacant(r) {
+                        self.xmm_mov(l, r);
                         src_ctx.link_xmm(reg, r);
                     } else {
-                        self.xmm_swap(&mut src_ctx, l, r);
+                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Xmm(r)) => {
                     if l == r {
                         src_ctx[reg] = LinkMode::Xmm(l);
-                    } else if src_ctx[r].is_empty() {
-                        monoasm!( &mut self.jit,
-                            movq  xmm(r.enc()), xmm(l.enc());
-                        );
+                    } else if src_ctx.is_xmm_vacant(r) {
+                        self.xmm_mov(l, r);
                         src_ctx.link_xmm(reg, r);
                     } else {
-                        self.xmm_swap(&mut src_ctx, l, r);
+                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                     }
                     guard_list.push(reg);
                 }
-                (_, LinkMode::Stack) => {}
+                (LinkMode::Stack, LinkMode::Stack) => {}
                 (LinkMode::Xmm(l), LinkMode::Both(r)) => {
-                    #[cfg(feature = "emit-tir")]
-                    eprintln!("      wb: {:?}->{:?}", l, &[reg]);
-                    self.gen_write_back_xmm(l, &[reg]);
+                    self.gen_xmm_to_stack(l, &[reg]);
                     if l == r {
                         src_ctx[reg] = LinkMode::Both(l);
-                    } else if src_ctx[r].is_empty() {
-                        monoasm!( &mut self.jit,
-                            movq  xmm(r.enc()), xmm(l.enc());
-                        );
+                    } else if src_ctx.is_xmm_vacant(r) {
+                        self.xmm_mov(l, r);
                         src_ctx.link_both(reg, r);
                     } else {
-                        self.xmm_swap(&mut src_ctx, l, r);
+                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Both(l), LinkMode::Both(r)) => {
                     if l == r {
-                        src_ctx[reg] = LinkMode::Both(l);
-                    } else if src_ctx[r].is_empty() {
-                        monoasm!( &mut self.jit,
-                            movq  xmm(r.enc()), xmm(l.enc());
-                        );
+                    } else if src_ctx.is_xmm_vacant(r) {
+                        self.xmm_mov(l, r);
                         src_ctx.link_both(reg, r);
                     } else {
-                        self.xmm_swap(&mut src_ctx, l, r);
+                        src_ctx.xmm_swap(l, r);
+                        self.xmm_swap(l, r);
                     }
                 }
                 (LinkMode::Stack, LinkMode::Both(r)) => {
@@ -294,14 +281,5 @@ impl Codegen {
             self.jit.select_page(0);
         }
         self.gen_side_deopt_with_label(pc + 1, Some(&src_ctx), side_exit);
-    }
-
-    fn xmm_swap(&mut self, ctx: &mut BBContext, l: Xmm, r: Xmm) {
-        ctx.xmm_swap(l, r);
-        monoasm!( &mut self.jit,
-            movq  xmm0, xmm(l.enc());
-            movq  xmm(l.enc()), xmm(r.enc());
-            movq  xmm(r.enc()), xmm0;
-        );
     }
 }
