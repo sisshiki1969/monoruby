@@ -38,7 +38,7 @@ fxhash = "0.2.1"
 tempfile ="3.3.0"
 dtoa = "1.0"
 chrono = "0.4.19"
-smallvec = { path = "../rust-smallvec", features = ["const_generics"] }
+smallvec = { path = "../rust-smallvec", features = ["const_generics", "union"] }
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.8.5"
