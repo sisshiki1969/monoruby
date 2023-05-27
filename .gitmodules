@@ -1,0 +1,6 @@
+[submodule "monoruby/rust-smallvec"]
+	path = monoruby/rust-smallvec
+	url = https://github.com/servo/rust-smallvec.git
+[submodule "rust-smallvec"]
+	path = rust-smallvec
+	url = https://github.com/servo/rust-smallvec.git
