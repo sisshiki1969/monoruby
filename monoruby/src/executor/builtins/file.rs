@@ -257,8 +257,8 @@ mod test {
 
     #[test]
     fn read() {
-        run_test(r##"File.read("../LICENSE")"##);
-        run_test(r##"File.exist?("../LICENSE")"##);
-        run_test(r##"File.exist?("../LICENCE")"##);
+        run_test(r##"File.read("../LICENSE-MIT")"##);
+        run_test(r##"File.exist?("../LICENSE-MIT")"##);
+        run_test(r##"File.exist?("../LICENCE-MIT")"##);
     }
 }
