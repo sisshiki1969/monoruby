@@ -367,6 +367,7 @@ pub(super) extern "C" fn get_index(
 ) -> Option<Value> {
     let base_classid = base.class();
     class_slot.base = base_classid;
+    class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
             return match base.as_array().get_elem1(globals, index) {
@@ -379,7 +380,6 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    class_slot.idx = index.class();
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index])
 }
 
@@ -397,6 +397,7 @@ pub(super) extern "C" fn set_index(
 ) -> Option<Value> {
     let base_classid = base.class();
     class_slot.base = base_classid;
+    class_slot.idx = index.class();
     match base_classid {
         ARRAY_CLASS => {
             if let Some(idx) = index.try_fixnum() {
@@ -412,7 +413,6 @@ pub(super) extern "C" fn set_index(
         }
         _ => {}
     }
-    class_slot.idx = index.class();
     vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
 }
 

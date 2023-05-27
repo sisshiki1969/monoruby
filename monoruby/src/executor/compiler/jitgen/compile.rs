@@ -99,6 +99,9 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            let exit = self.jit.label();
+            let heap = self.jit.label();
+            let generic = self.jit.label();
             let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
@@ -109,13 +112,40 @@ impl Codegen {
                 testq rsi, 0b01;
                 jeq deopt;
                 sarq rsi, 1;
+                // lower range check
+                cmpq rsi, 0;
+                jlt generic;
+                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                jne generic;
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (ARRAY_INLINE_CAPA);
+                jgt  heap;
+                // upper range check
+                cmpq rsi, rax;
+                jge  generic;
+                movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
+                jmp exit;
+            heap:
+                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                // upper range check
+                cmpq rsi, rax;
+                jge generic;
+                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                movq rax, [rdi + rsi * 8];
             };
+            self.jit.select_page(1);
+            self.jit.bind_label(generic);
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
                 movq rax, (runtime::get_array_integer_index);
                 call rax;
             };
             self.xmm_restore(&xmm_using);
+            monoasm! { &mut self.jit,
+                jmp  exit;
+            };
+            self.jit.select_page(0);
+            self.jit.bind_label(exit);
         } else {
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
@@ -143,6 +173,9 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
+            let exit = self.jit.label();
+            let heap = self.jit.label();
+            let generic = self.jit.label();
             let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
@@ -153,7 +186,31 @@ impl Codegen {
                 testq rsi, 0b01;
                 jeq deopt;
                 sarq rsi, 1;
+                // lower range check
+                cmpq rsi, 0;
+                jlt generic;
+                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                jne generic;
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (ARRAY_INLINE_CAPA);
+                jgt  heap;
+                // upper range check
+                cmpq rsi, rax;
+                jge  generic;
+                movq rax, [r14 - (conv(src))];
+                movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
+                jmp exit;
+            heap:
+                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                // upper range check
+                cmpq rsi, rax;
+                jge generic;
+                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                movq rax, [r14 - (conv(src))];
+                movq [rdi + rsi * 8], rax;
             };
+            self.jit.select_page(1);
+            self.jit.bind_label(generic);
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
                 movq rdx, rbx;
@@ -163,6 +220,11 @@ impl Codegen {
                 call rax;
             };
             self.xmm_restore(&xmm_using);
+            monoasm! { &mut self.jit,
+                jmp  exit;
+            };
+            self.jit.select_page(0);
+            self.jit.bind_label(exit);
         } else {
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,

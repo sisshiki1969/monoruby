@@ -17,6 +17,11 @@ mod regexp;
 mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
+pub const RVALUE_OFFSET_KIND: usize = 2;
+pub const RVALUE_OFFSET_ARY_CAPA: usize = 16;
+pub const RVALUE_OFFSET_INLINE: usize = 24;
+pub const RVALUE_OFFSET_HEAP_PTR: usize = 24;
+pub const RVALUE_OFFSET_HEAP_LEN: usize = 32;
 
 /// Heap-allocated objects.
 #[repr(C)]

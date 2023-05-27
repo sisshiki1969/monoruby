@@ -403,7 +403,7 @@ impl Codegen {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
-                    cmpw [rdi + 2], (ObjKind::OBJECT);
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [rdi + rsi * 8 + 16];
                 exit:
@@ -471,7 +471,7 @@ impl Codegen {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
-                    cmpw [rdi + 2], (ObjKind::OBJECT);
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [r14 - (conv(args))];  //val: Value
                     movq [rdi + rsi * 8 + 16], rax;
@@ -503,7 +503,7 @@ impl Codegen {
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
                 jeq  slow_path;
-                cmpw [rdi + 2], (ObjKind::OBJECT);
+                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
                 jne  no_inline;
                 cmpl rsi, (OBJECT_INLINE_IVAR);
                 jge no_inline;

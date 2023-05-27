@@ -2,8 +2,11 @@ use crate::*;
 use smallvec::smallvec;
 use smallvec::SmallVec;
 
+pub const ARRAY_INLINE_CAPA: usize = 5;
+
+#[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct ArrayInner(SmallVec<[Value; 4]>);
+pub struct ArrayInner(SmallVec<[Value; ARRAY_INLINE_CAPA]>);
 
 impl std::ops::Deref for ArrayInner {
     type Target = [Value];
