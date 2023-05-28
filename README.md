@@ -115,12 +115,12 @@ or
 > ./irm.sh
 ```
 
-## how to install
+## How to install
 
 To install monoruby,
 
 ```sh
-> cargo install --path .
+> cargo install --path monoruby
 ```
 
 Now, you can play with monoruby.
