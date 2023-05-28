@@ -1,3 +1,0 @@
-[submodule "rust-smallvec"]
-	path = rust-smallvec
-	url = https://github.com/sisshiki1969/rust-smallvec.git

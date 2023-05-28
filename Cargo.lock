@@ -936,7 +936,7 @@ dependencies = [
  "ruruby-parse",
  "rustyline",
  "sfmt",
- "smallvec 1.10.0",
+ "smallvec 1.10.0 (git+https://github.com/sisshiki1969/rust-smallvec.git)",
  "tempfile",
 ]
 
@@ -1510,6 +1510,11 @@ name = "smallvec"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
+
+[[package]]
+name = "smallvec"
+version = "1.10.0"
+source = "git+https://github.com/sisshiki1969/rust-smallvec.git#8f50cba60d501383ac664f6070f3555e23e6bc11"
 
 [[package]]
 name = "socket2"

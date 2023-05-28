@@ -1,5 +1,5 @@
 [workspace]
-members = ["monoruby", "monoruby_attr"]
+members = ["monoruby", "monoruby_attr", "rust-smallvec"]
 
 [profile.dev]
 opt-level = 1
