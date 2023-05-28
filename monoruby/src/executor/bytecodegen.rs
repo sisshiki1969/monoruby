@@ -483,7 +483,13 @@ impl BytecodeGen {
         let name = IdentId::get_id(ident);
         match self.locals.get(&name) {
             Some(local) => BcLocal(*local),
-            None => panic!("undefined local var `{}`", ident),
+            None => {
+                self.locals
+                    .iter()
+                    .for_each(|(k, v)| eprintln!("{}:{:?}", v, k));
+                eprintln!("{}", self.sourceinfo.path.to_string_lossy().as_ref());
+                panic!("undefined local var `{}`", ident);
+            }
         }
     }
 

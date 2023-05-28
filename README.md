@@ -3,7 +3,7 @@
 [![Rust](https://github.com/sisshiki1969/monoruby/actions/workflows/rust.yml/badge.svg?branch=master)](https://github.com/sisshiki1969/monoruby/actions/workflows/rust.yml)
 [![codecov](https://codecov.io/gh/sisshiki1969/monoruby/branch/master/graph/badge.svg?token=vAvpafdKER)](https://codecov.io/gh/sisshiki1969/monoruby)
 
-another toy Ruby implementation with a fast JIT compiler written in Rust.
+Ruby implementation with yet another JIT compiler written in Rust.
 
 ## Features
 
@@ -22,7 +22,7 @@ This project still remains in alpha stage. Currently, functionalities described 
 - if-then-elsif-end statement
 - for-in statement
 - while/until statement and postfix while/until modifier
-- begin-rescue=ensure statement
+- begin-rescue-ensure statement
 - Object-oriented features
   - classes: Object, Integer, Float, String, Symbol, Class, Array, Hash, Proc, ..
   - superclass and singleton class and methods
@@ -43,13 +43,13 @@ This project still remains in alpha stage. Currently, functionalities described 
 
 |                     |   3.2.0| 3.2.0 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
-|loop_whileloop       |   3.035|        3.034|       23.642|
-|qsort*               |124.288k|     331.889k|     520.898k|
-|app_fib              |   3.672|       14.480|       17.158|
-|tarai*               |   2.969|       13.138|       14.219|
-|so_mandelbrot        |   0.609|        0.959|       16.530|
-|so_nbody             |   1.075|        1.719|        6.183|
-|app_aobench          |   0.027|        0.047|        0.134|
+|loop_whileloop       |   3.061|        3.058|       20.708|
+|qsort*               |  1.429k|       3.436k|       6.188k|
+|app_fib              |   3.723|       14.790|       18.564|
+|tarai*               |   3.019|       13.356|       14.279|
+|so_mandelbrot        |   0.623|        0.978|       20.194|
+|so_nbody             |   1.105|        1.750|        7.650|
+|app_aobench          |   0.027|        0.048|        0.138|
 
 |                     |   3.2.0| 3.2.0 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
@@ -63,27 +63,27 @@ This project still remains in alpha stage. Currently, functionalities described 
 
 |                     |   3.2.0| 3.2.0 --yjit|     monoruby|
 |:--------------------|-------:|------------:|------------:|
-|integer_times*       |  41.014|       42.531|      113.344|
 |vm_const             |135.574M|     133.186M|       1.076G|
 |vm_const_many        | 10.765M|      60.566M|      63.591M|
 |vm_method_with_block |  8.399M|       8.239M|      37.176M|
 |vm_block             | 32.759M|      61.373M|      93.229M|
 |vm_yield             |   1.179|        1.158|        4.037|
 
-|                     |   3.2.0| 3.2.0 --yjit|     monoruby|
-|:--------------------|-------:|------------:|------------:|
-|to_f*                | 14.402M|      14.480M|     281.587M|
-|math_sqrt*           |  9.878M|       9.955M|      76.104M|
-|math_sin*            |  6.031M|       6.156M|      16.321M|
-|math_cos*            |  6.132M|       6.288M|      15.967M|
+## Prerequisites
 
-## How to run
+### Platform
+
+Currently, only x86-64/linux is supported.
+
+### Build
 
 To build monoruby, You'll need installation of Rust.
 Please be aware that **only nightly Rust works** for monoruby.
 
 [Check here to install Rust](https://www.rust-lang.org/ja/tools/install),
 and [see here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
+
+## How to run
 
 To run ruby program file on monoruby,
 
