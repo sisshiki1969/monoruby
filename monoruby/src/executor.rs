@@ -1,4 +1,6 @@
 use super::*;
+use monoasm::*;
+use monoasm_macro::*;
 use ruruby_parse::Node;
 
 mod builtins;
@@ -1477,14 +1479,39 @@ impl FuncData {
     }
 }
 
-///
-/// Compile the Ruby method.
-///
-extern "C" fn exec_jit_compile(
+extern "C" fn exec_jit_compile_patch(
     globals: &mut Globals,
     func_id: FuncId,
     self_value: Value,
-) -> monoasm::CodePtr {
+    entry: DestLabel,
+) {
+    let code_entry = exec_jit_compile(globals, func_id, self_value);
+    let codegen = &mut globals.codegen;
+    let old = codegen.jit.get_page();
+    codegen.jit.select_page(1);
+    let stub = codegen.jit.label();
+    let vm_entry = codegen.vm_entry;
+    codegen.jit.bind_label(stub);
+    monoasm!( &mut codegen.jit,
+        movq rdi, [r14 - (LBP_SELF)];
+    );
+    codegen.guard_class(self_value.class(), vm_entry);
+    monoasm! { &mut codegen.jit,
+        movq rax, (code_entry.as_ptr());
+        jmp rax;
+    }
+    codegen.jit.finalize();
+    codegen.jit.select_page(old);
+    let stub = codegen.jit.get_label_address(stub);
+    let patch_point = globals.codegen.jit.get_label_address(entry);
+    let offset = stub - patch_point - 5;
+    unsafe { *(patch_point.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
+}
+
+///
+/// Compile the Ruby method.
+///
+fn exec_jit_compile(globals: &mut Globals, func_id: FuncId, self_value: Value) -> monoasm::CodePtr {
     globals[func_id].data.meta.set_jit();
     let label = globals.jit_compile_ruby(func_id, self_value, None);
     globals.codegen.jit.get_label_address(label)

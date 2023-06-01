@@ -40,12 +40,9 @@ impl Codegen {
             // save arg len.
             pushq rdi;
             movq rdi, r12;
-            movq rax, (exec_jit_compile);
+            movq rcx, (entry.to_usize());
+            movq rax, (exec_jit_compile_patch);
             call rax;
-            lea rdi, [rip + entry];
-            addq rdi, 5;
-            subq rax, rdi;
-            movl [rdi - 4], rax;
             // restore arg len to rdx.
             popq rdx;
             addq rsp, 1024;

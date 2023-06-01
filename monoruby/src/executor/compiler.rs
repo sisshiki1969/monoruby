@@ -1,4 +1,3 @@
-use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
@@ -98,7 +97,7 @@ pub struct Codegen {
     alloc_flag: DestLabel,
     const_version: DestLabel,
     entry_panic: DestLabel,
-    vm_entry: DestLabel,
+    pub(super) vm_entry: DestLabel,
     vm_fetch: DestLabel,
     ///
     /// Raise error.

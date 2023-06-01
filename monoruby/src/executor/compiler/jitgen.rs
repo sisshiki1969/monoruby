@@ -381,7 +381,6 @@ impl Codegen {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = std::time::Instant::now();
 
-        //self.jit.align16();
         let entry = self.jit.label();
         self.jit.bind_label(entry);
         store[func_id].add_jit_code(self_value.class(), entry);
@@ -396,19 +395,16 @@ impl Codegen {
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
 
-        let pc = if let Some(pc) = position {
-            pc
-        } else {
+        /*monoasm!( &mut self.jit,
+            movq rdi, [r14 - (LBP_SELF)];
+        );
+        self.guard_class(self_value.class(), self.vm_entry);*/
+
+        if position.is_none() {
             // generate prologue and class guard of *self* for a method
             let pc = func.get_top_pc();
             self.prologue(pc);
-            pc
         };
-        let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
-        monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LBP_SELF)];
-        );
-        self.guard_class(self_value.class(), side_exit);
 
         ctx.branch_map.insert(
             start_pos,
@@ -1402,11 +1398,11 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
+    /*fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
         let entry = self.jit.label();
         self.gen_side_deopt_with_label(pc, None, entry);
         entry
-    }
+    }*/
 
     fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());
