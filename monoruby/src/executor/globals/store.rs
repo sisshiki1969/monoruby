@@ -1,3 +1,4 @@
+use monoasm::DestLabel;
 use ruruby_parse::LvarCollector;
 
 use super::*;

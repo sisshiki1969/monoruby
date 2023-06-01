@@ -255,7 +255,17 @@ impl Codegen {
                 self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
             }
             FuncKind::ISeq(_) => {
-                self.method_call_cached(ctx, store, callid, method_info, ret, block, pc, has_splat);
+                self.method_call_cached(
+                    ctx,
+                    store,
+                    callid,
+                    method_info,
+                    ret,
+                    block,
+                    pc,
+                    has_splat,
+                    cached.class_id,
+                );
             }
         };
     }
@@ -621,6 +631,7 @@ impl Codegen {
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
+        recv_classid: ClassId,
     ) {
         let func_data = method_info.func_data.unwrap();
         let xmm_using = ctx.get_xmm_using();
@@ -697,6 +708,10 @@ impl Codegen {
             // set pc.
             movq r13, (func_data.pc().get_u64());
         );
+        /*match store[callee_func_id].get_jit_code(recv_classid) {
+            Some(dest) => self.call_label(dest),
+            None => self.call_codeptr(func_data.codeptr.unwrap()),
+        };*/
         self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);

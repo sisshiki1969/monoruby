@@ -285,6 +285,8 @@ pub struct FuncInfo {
     name: Option<IdentId>,
     pub(in crate::executor) data: FuncData,
     pub(in crate::executor) kind: FuncKind,
+    /// JIT code entries for each class of *self*.
+    jit_entry: HashMap<ClassId, DestLabel>,
 }
 
 impl alloc::GC<RValue> for FuncInfo {
@@ -310,6 +312,7 @@ impl FuncInfo {
                 meta: Meta::vm_method(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
+            jit_entry: Default::default(),
         }
     }
 
@@ -329,6 +332,7 @@ impl FuncInfo {
                 meta: Meta::vm_method(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
+            jit_entry: Default::default(),
         }
     }
 
@@ -346,6 +350,7 @@ impl FuncInfo {
                 meta: Meta::vm_classdef(func_id, 0),
             },
             kind: FuncKind::ISeq(info),
+            jit_entry: Default::default(),
         }
     }
 
@@ -361,6 +366,7 @@ impl FuncInfo {
             kind: FuncKind::Builtin {
                 abs_address: address as *const u8 as u64,
             },
+            jit_entry: Default::default(),
         }
     }
 
@@ -373,6 +379,7 @@ impl FuncInfo {
                 meta: Meta::native(func_id, 0),
             },
             kind: FuncKind::AttrReader { ivar_name },
+            jit_entry: Default::default(),
         }
     }
 
@@ -385,6 +392,7 @@ impl FuncInfo {
                 meta: Meta::native(func_id, 1),
             },
             kind: FuncKind::AttrWriter { ivar_name },
+            jit_entry: Default::default(),
         }
     }
 
@@ -411,6 +419,14 @@ impl FuncInfo {
             FuncKind::ISeq(_) => true,
             _ => false,
         }
+    }
+
+    pub(crate) fn add_jit_code(&mut self, self_class: ClassId, entry: DestLabel) {
+        self.jit_entry.insert(self_class, entry);
+    }
+
+    pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
+        self.jit_entry.get(&self_class).cloned()
     }
 }
 

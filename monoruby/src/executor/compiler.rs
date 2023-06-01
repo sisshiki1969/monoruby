@@ -430,6 +430,19 @@ impl Codegen {
         self.pop_frame();
     }
 
+    /// ## in
+    ///
+    /// ## out
+    /// - rax : result
+    fn call_label(&mut self, label: DestLabel) {
+        self.push_frame();
+        self.set_lfp();
+        monoasm!( &mut self.jit,
+            call label;
+        );
+        self.pop_frame();
+    }
+
     ///
     /// calculate an offset of stack pointer.
     ///
@@ -877,12 +890,13 @@ impl Globals {
                 func.bytecode().as_ptr(),
             );
         }
-        let (label, _sourcemap) = self
-            .codegen
-            .compile(&self.store, func_id, self_value, position);
+        let (label, _sourcemap) =
+            self.codegen
+                .compile(&mut self.store, func_id, self_value, position);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);
+
         label
     }
 }

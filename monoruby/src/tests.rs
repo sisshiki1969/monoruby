@@ -2428,4 +2428,38 @@ mod test {
             "#,
         );
     }
+
+    #[test]
+    fn polymorphic_call() {
+        run_test_with_prelude(
+            r#"
+            $res = []
+            x.each do |e|
+              $res << e.g
+            end
+            $res
+            "#,
+            r#"
+            class S
+              def g
+                f
+              end
+            end
+
+            class A < S
+              def f
+                1
+              end
+            end
+
+            class B < S
+              def f
+                2
+              end
+            end
+
+            x = [A.new, B.new, A.new, B.new, A.new, B.new, B.new, A.new, B.new, A.new, B.new]
+            "#,
+        );
+    }
 }

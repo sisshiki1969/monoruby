@@ -520,8 +520,7 @@ impl Codegen {
             movq r15, (self.dispatch.as_ptr());
             addq r13, 16;
             movzxw rax, [r13 - 10]; // rax <- :0
-            movq rax, [r15 + rax * 8];
-            jmp rax;
+            jmp [r15 + rax * 8];
         };
     }
 

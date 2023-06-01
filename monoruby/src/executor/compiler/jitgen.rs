@@ -373,19 +373,21 @@ extern "C" fn log_deoptimize(
 impl Codegen {
     pub(super) fn compile(
         &mut self,
-        store: &Store,
+        store: &mut Store,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
     ) -> (DestLabel, Vec<(BcIndex, usize)>) {
-        let func = store[func_id].as_ruby_func();
-        let start_pos = func.get_pc_index(position);
-
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = std::time::Instant::now();
 
+        //self.jit.align16();
         let entry = self.jit.label();
         self.jit.bind_label(entry);
+        store[func_id].add_jit_code(self_value.class(), entry);
+
+        let func = store[func_id].as_ruby_func();
+        let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, self, start_pos, position.is_some(), self_value);
         for (loop_start, loop_end) in &func.bb_info.loops {
@@ -435,6 +437,7 @@ impl Codegen {
         }
         #[cfg(feature = "emit-tir")]
         eprintln!("<== finished compile.");
+
         (entry, ctx.sourcemap)
     }
 }
