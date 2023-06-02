@@ -373,17 +373,16 @@ extern "C" fn log_deoptimize(
 impl Codegen {
     pub(super) fn compile(
         &mut self,
-        store: &mut Store,
+        store: &Store,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
-    ) -> (DestLabel, Vec<(BcIndex, usize)>) {
+        entry_label: DestLabel,
+    ) -> Vec<(BcIndex, usize)> {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = std::time::Instant::now();
 
-        let entry = self.jit.label();
-        self.jit.bind_label(entry);
-        store[func_id].add_jit_code(self_value.class(), entry);
+        self.jit.bind_label(entry_label);
 
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
@@ -394,11 +393,6 @@ impl Codegen {
             ctx.loop_backedges.insert(*loop_start, backedge);
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
-
-        /*monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LBP_SELF)];
-        );
-        self.guard_class(self_value.class(), self.vm_entry);*/
 
         if position.is_none() {
             // generate prologue and class guard of *self* for a method
@@ -434,7 +428,7 @@ impl Codegen {
         #[cfg(feature = "emit-tir")]
         eprintln!("<== finished compile.");
 
-        (entry, ctx.sourcemap)
+        ctx.sourcemap
     }
 }
 
@@ -1298,7 +1292,7 @@ impl Codegen {
             );
         } else {
             monoasm!( &mut self.jit,
-                movq rax, (exec_jit_recompile);
+                movq rax, (exec_jit_recompile_method);
                 call rax;
             );
         }

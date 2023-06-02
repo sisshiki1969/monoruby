@@ -24,7 +24,6 @@ impl Codegen {
     /// - r15 <- reg
     /// - rdi <- pos
     /// - rsi <- ofs
-    /// - rdx <- passed args
     ///
     pub(super) fn vm_init(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -86,41 +85,4 @@ impl Codegen {
         l1:
         };
     }
-
-    /*
-    /// Expand arg0 if the number of args is 1 and arg0 is Array and pos_num > 1.
-    ///
-    /// in
-    /// rdi: pos_num
-    /// rdx: number of args passed from caller
-    /// out
-    /// rdx: number of args
-    /// destroy
-    /// rax
-    fn expand_arg0(&mut self) {
-        let l1 = self.jit.label();
-        monoasm! { &mut self.jit,
-            // if passed_arg == 1 && arg0 isArray && pos_num >= 2 then expand arg0.
-            cmpl rdx, 1;
-            jne  l1;
-            cmpl rdi, 2;
-            jlt  l1;
-            movq rax, [r14 - (LBP_ARG0)];
-            testq rax, 0b111;
-            jnz  l1;
-            cmpl [rax + 4], (ARRAY_CLASS.0);
-            jne  l1;
-            pushq rdi;
-            pushq rsi;
-            movzxw rdx, [r13 - 8];
-            movq rdi, rax;
-            lea  rsi, [r14 - (LBP_ARG0)];
-            movq rax, (block_expand_array);
-            call rax;
-            movq rdx, rax;
-            popq rsi;
-            popq rdi;
-        l1:
-        }
-    }*/
 }

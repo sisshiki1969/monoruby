@@ -1485,48 +1485,44 @@ extern "C" fn exec_jit_compile_patch(
     self_value: Value,
     entry: DestLabel,
 ) {
-    let code_entry = exec_jit_compile(globals, func_id, self_value);
+    let patch_point = globals.codegen.jit.label();
+    let entry_label = globals.codegen.jit.label();
     let codegen = &mut globals.codegen;
     let old = codegen.jit.get_page();
     codegen.jit.select_page(1);
-    let stub = codegen.jit.label();
+    let guard = codegen.jit.label();
     let vm_entry = codegen.vm_entry;
-    codegen.jit.bind_label(stub);
     monoasm!( &mut codegen.jit,
+    guard:
         movq rdi, [r14 - (LBP_SELF)];
     );
     codegen.guard_class(self_value.class(), vm_entry);
     monoasm! { &mut codegen.jit,
-        movq rax, (code_entry.as_ptr());
-        jmp rax;
+    patch_point:
+        jmp entry_label;
     }
-    codegen.jit.finalize();
     codegen.jit.select_page(old);
-    let stub = codegen.jit.get_label_address(stub);
-    let patch_point = globals.codegen.jit.get_label_address(entry);
-    let offset = stub - patch_point - 5;
+
+    assert!(globals[func_id]
+        .add_jit_code(self_value.class(), patch_point)
+        .is_none());
+    globals.exec_jit_compile_method(func_id, self_value, entry_label);
+
+    let codegen = &mut globals.codegen;
+    let guard = codegen.jit.get_label_address(guard);
+    let patch_point = codegen.jit.get_label_address(entry);
+    let offset = guard - patch_point - 5;
     unsafe { *(patch_point.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
 }
 
-///
-/// Compile the Ruby method.
-///
-fn exec_jit_compile(globals: &mut Globals, func_id: FuncId, self_value: Value) -> monoasm::CodePtr {
-    globals[func_id].data.meta.set_jit();
-    let label = globals.jit_compile_ruby(func_id, self_value, None);
-    globals.codegen.jit.get_label_address(label)
-}
-
-extern "C" fn exec_jit_recompile(
-    globals: &mut Globals,
-    func_id: FuncId,
-    self_value: Value,
-) -> monoasm::CodePtr {
-    let codeptr = exec_jit_compile(globals, func_id, self_value);
-    let target = globals[func_id].data.codeptr.unwrap();
-    let offset = codeptr - target - 5;
-    unsafe { *(target.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
-    codeptr
+extern "C" fn exec_jit_recompile_method(globals: &mut Globals, func_id: FuncId, self_value: Value) {
+    let entry_label = globals.codegen.jit.label();
+    globals.exec_jit_compile_method(func_id, self_value, entry_label);
+    let codeptr = globals.codegen.jit.get_label_address(entry_label);
+    let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
+    let patch_point = globals.codegen.jit.get_label_address(patch_point);
+    let offset = codeptr - patch_point - 5;
+    unsafe { *(patch_point.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
 }
 
 ///
@@ -1538,8 +1534,9 @@ extern "C" fn exec_jit_partial_compile(
     self_value: Value,
     pc: BcPc,
 ) {
-    let label = globals.jit_compile_ruby(func_id, self_value, Some(pc));
-    let codeptr = globals.codegen.jit.get_label_address(label);
+    let entry_label = globals.codegen.jit.label();
+    globals.exec_jit_compile(func_id, self_value, Some(pc), entry_label);
+    let codeptr = globals.codegen.jit.get_label_address(entry_label);
     pc.write2(codeptr.as_ptr() as u64);
 }
 

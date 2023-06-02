@@ -866,12 +866,13 @@ fn test_f64_to_val() {
 }
 
 impl Globals {
-    pub(super) fn jit_compile_ruby(
+    pub(super) fn exec_jit_compile(
         &mut self,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
-    ) -> DestLabel {
+        entry_label: DestLabel,
+    ) {
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
             let func = self[func_id].as_ruby_func();
@@ -889,13 +890,24 @@ impl Globals {
                 func.bytecode().as_ptr(),
             );
         }
-        let (label, _sourcemap) =
+        let _sourcemap =
             self.codegen
-                .compile(&mut self.store, func_id, self_value, position);
+                .compile(&self.store, func_id, self_value, position, entry_label);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);
+    }
 
-        label
+    ///
+    /// Compile the Ruby method.
+    ///
+    pub(super) fn exec_jit_compile_method(
+        &mut self,
+        func_id: FuncId,
+        self_value: Value,
+        entry_label: DestLabel,
+    ) {
+        self[func_id].data.meta.set_jit();
+        self.exec_jit_compile(func_id, self_value, None, entry_label)
     }
 }
