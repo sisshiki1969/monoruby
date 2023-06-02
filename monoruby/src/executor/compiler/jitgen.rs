@@ -1271,12 +1271,12 @@ impl Codegen {
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, ctx);
         monoasm!( &mut self.jit,
+            xorq rdi, rdi;
             cmpl [rip + counter], 0;
             jlt deopt;
             jeq recompile;
-        dec:
+            dec:
             subl [rip + counter], 1;
-            xorq rdi, rdi;
             jmp deopt;
         );
         self.jit.select_page(1);
@@ -1299,6 +1299,7 @@ impl Codegen {
             );
         }
         monoasm!( &mut self.jit,
+            xorq rdi, rdi;
             jmp dec;
         );
         self.jit.select_page(0);
