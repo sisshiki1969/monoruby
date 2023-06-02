@@ -33,19 +33,14 @@ impl Codegen {
         next:
             subl [rip + counter], 1;
             jne vm_entry;
-            movq rdi, rdx;
-            movl rsi, [rsp - (8 + LBP_META_FUNCID)];
-            movq rdx, [rsp - (8 + LBP_SELF)];
-            subq rsp, 1024;
-            // save arg len.
-            pushq rdi;
             movq rdi, r12;
+            movl rsi, [r14 - (LBP_META_FUNCID)];
+            movq rdx, [r14 - (LBP_SELF)];
             movq rcx, (entry.to_usize());
+            subq rsp, 1032;
             movq rax, (exec_jit_compile_patch);
             call rax;
-            // restore arg len to rdx.
-            popq rdx;
-            addq rsp, 1024;
+            addq rsp, 1032;
             jmp entry;
         );
         codeptr

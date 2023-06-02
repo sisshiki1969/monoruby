@@ -849,7 +849,7 @@ dependencies = [
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#2215e811fe30d152eb6575529598fad1270558bf"
+source = "git+https://github.com/sisshiki1969/monoasm.git#9dc93f8696275f02b7164e1ee7b2d6d3087676fb"
 dependencies = [
  "libc",
  "monoasm_macro",
@@ -861,7 +861,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git#2215e811fe30d152eb6575529598fad1270558bf"
+source = "git+https://github.com/sisshiki1969/monoasm.git#9dc93f8696275f02b7164e1ee7b2d6d3087676fb"
 dependencies = [
  "proc-macro2",
  "quote",

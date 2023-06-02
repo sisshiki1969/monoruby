@@ -1508,21 +1508,17 @@ extern "C" fn exec_jit_compile_patch(
         .is_none());
     globals.exec_jit_compile_method(func_id, self_value, entry_label);
 
-    let codegen = &mut globals.codegen;
-    let guard = codegen.jit.get_label_address(guard);
-    let patch_point = codegen.jit.get_label_address(entry);
-    let offset = guard - patch_point - 5;
-    unsafe { *(patch_point.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
+    globals.codegen.jit.apply_jmp_patch(entry, guard);
 }
 
 extern "C" fn exec_jit_recompile_method(globals: &mut Globals, func_id: FuncId, self_value: Value) {
     let entry_label = globals.codegen.jit.label();
     globals.exec_jit_compile_method(func_id, self_value, entry_label);
-    let codeptr = globals.codegen.jit.get_label_address(entry_label);
     let patch_point = globals[func_id].get_jit_code(self_value.class()).unwrap();
-    let patch_point = globals.codegen.jit.get_label_address(patch_point);
-    let offset = codeptr - patch_point - 5;
-    unsafe { *(patch_point.as_ptr().add(1) as *mut [u8; 4]) = (offset as i32).to_ne_bytes() };
+    globals
+        .codegen
+        .jit
+        .apply_jmp_patch(patch_point, entry_label);
 }
 
 ///
