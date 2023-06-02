@@ -1,6 +1,5 @@
 use super::*;
 use monoasm::*;
-use monoasm_macro::*;
 use ruruby_parse::Node;
 
 mod builtins;
@@ -1487,21 +1486,10 @@ extern "C" fn exec_jit_compile_patch(
 ) {
     let patch_point = globals.codegen.jit.label();
     let entry_label = globals.codegen.jit.label();
-    let codegen = &mut globals.codegen;
-    let old = codegen.jit.get_page();
-    codegen.jit.select_page(1);
-    let guard = codegen.jit.label();
-    let vm_entry = codegen.vm_entry;
-    monoasm!( &mut codegen.jit,
-    guard:
-        movq rdi, [r14 - (LBP_SELF)];
-    );
-    codegen.guard_class(self_value.class(), vm_entry);
-    monoasm! { &mut codegen.jit,
-    patch_point:
-        jmp entry_label;
-    }
-    codegen.jit.select_page(old);
+    let guard = globals.codegen.jit.label();
+    globals
+        .codegen
+        .class_guard_stub(self_value.class(), patch_point, entry_label, guard);
 
     assert!(globals[func_id]
         .add_jit_code(self_value.class(), patch_point)

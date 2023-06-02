@@ -139,7 +139,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
         monoasm!( &mut self.jit,
-            movq rdi, [rsp - (8 + LBP_SELF)];  // self: Value
+            movq rdi, [r14 - (LBP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cache];
@@ -175,9 +175,9 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
-            movq rdx, [rsp - (8 + LBP_SELF)];  // self: Value
+            movq rdx, [r14 - (LBP_SELF)];  // self: Value
             movq rcx, (ivar_name.get()); // name: IdentId
-            movq r8, [rsp - (8 + LBP_ARG0)];  //val: Value
+            movq r8, [r14 - (LBP_ARG0)];  //val: Value
             lea  r9, [rip + cache];
             movq rax, (set_instance_var_with_cache);
             subq rsp, 8;
@@ -188,21 +188,3 @@ impl Codegen {
         label
     }
 }
-
-/*#[allow(improper_ctypes_definitions)]
-pub extern "C" fn wrapper(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-    f: BuiltinFn,
-) -> Option<Value> {
-    match f(vm, globals, lfp, arg, len) {
-        Ok(val) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
-}*/

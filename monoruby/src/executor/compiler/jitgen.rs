@@ -224,7 +224,6 @@ struct BBContext {
     slot_state: SlotState,
     self_value: Value,
     local_num: usize,
-    recompile_flag: bool,
 }
 
 impl std::ops::Deref for BBContext {
@@ -246,7 +245,6 @@ impl BBContext {
             slot_state: SlotState::new(cc),
             self_value: cc.self_value,
             local_num: cc.local_num,
-            recompile_flag: false,
         }
     }
 
@@ -394,17 +392,26 @@ impl Codegen {
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
 
-        if position.is_none() {
-            // generate prologue and class guard of *self* for a method
+        let bbctx = BBContext::new(&ctx);
+
+        if let Some(pc) = position {
+            // generate class guard of *self* for a method
+            let side_exit = self.gen_side_deopt(pc + 1, &bbctx);
+            monoasm!( &mut self.jit,
+                movq rdi, [r14 - (LBP_SELF)];
+            );
+            self.guard_class(self_value.class(), side_exit);
+        } else {
+            // for method JIT, class of *self* is already checked in an entry stub.
             let pc = func.get_top_pc();
             self.prologue(pc);
-        };
+        }
 
         ctx.branch_map.insert(
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bbctx: BBContext::new(&ctx),
+                bbctx,
                 entry: self.jit.label(),
                 cont: true,
             }],
@@ -1259,11 +1266,6 @@ impl Codegen {
     }
 
     fn recompile_and_deopt(&mut self, ctx: &mut BBContext, position: Option<BcPc>, pc: BcPc) {
-        if ctx.recompile_flag {
-            return;
-        } else {
-            ctx.recompile_flag = true;
-        }
         let recompile = self.jit.label();
         let dec = self.jit.label();
         let counter = self.jit.const_i32(5);
