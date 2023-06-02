@@ -1,4 +1,3 @@
-use monoasm::*;
 use monoasm_macro::monoasm;
 use paste::paste;
 
@@ -98,7 +97,7 @@ pub struct Codegen {
     alloc_flag: DestLabel,
     const_version: DestLabel,
     entry_panic: DestLabel,
-    vm_entry: DestLabel,
+    pub(super) vm_entry: DestLabel,
     vm_fetch: DestLabel,
     ///
     /// Raise error.
@@ -241,24 +240,26 @@ impl Codegen {
             pushq r15;
             pushq rbp;
             subq rsp, 8;
-
+        }
+        self.set_lfp();
+        monoasm! { &mut self.jit,
             movq rbx, rdi;  // rdi: &mut Interp
             movq r12, rsi;  // rsi: &mut Globals
             movq r13, rdx;
             // set meta func_id
             movq rax, [r13 + (FUNCDATA_OFFSET_META)];  // r13: *const FuncData
-            movq [rsp - (16 + LBP_META)], rax;
+            movq [r14 - (LBP_META)], rax;
             // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
-            movq [rsp - (16 + LBP_OUTER)], 0;
-            movq [rsp - (16 + BP_PREV_CFP)], 0;
-            lea  rax, [rsp - (16 + BP_PREV_CFP)];
+            movq [r14 - (LBP_BLOCK)], 0;
+            movq [r14 - (LBP_OUTER)], 0;
+            movq [r14 - (BP_PREV_CFP)], 0;
+            lea  rax, [r14 - (BP_PREV_CFP)];
             movq [rbx], rax;
         };
         let l1 = self.jit.label();
         let l2 = self.jit.label();
         monoasm! { &mut self.jit,
-            lea  rax, [rsp - (16 + LBP_ARG0)];
+            lea  rax, [r14 - (LBP_ARG0)];
             movzxw rdi, [r13 + (FUNCDATA_OFFSET_REGNUM)];
         l1:
             subq rdi, 1;
@@ -268,7 +269,6 @@ impl Codegen {
             jmp  l1;
         l2:
         };
-        self.set_lfp();
         monoasm! { &mut self.jit,
             movq [rbx + 8], r14;
             //
@@ -291,7 +291,7 @@ impl Codegen {
             //
             // set self
             movq rax, (main_object.get());
-            movq [rsp - (16 + LBP_SELF)], rax;
+            movq [r14 - (LBP_SELF)], rax;
             movq rax, [r13 + (FUNCDATA_OFFSET_CODEPTR)];
             // set pc
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
@@ -398,7 +398,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             // set lfp
             lea  r14, [rsp - 16];
-            movq [rsp - (16 + BP_LFP)], r14;
+            movq [r14 - (BP_LFP)], r14;
         );
     }
 
@@ -508,6 +508,29 @@ impl Codegen {
             leave;
             ret;
         );
+    }
+
+    pub(super) fn class_guard_stub(
+        &mut self,
+        self_class: ClassId,
+        patch_point: DestLabel,
+        entry: DestLabel,
+        guard: DestLabel,
+    ) {
+        let old = self.jit.get_page();
+        self.jit.select_page(1);
+
+        let vm_entry = self.vm_entry;
+        monoasm!( &mut self.jit,
+        guard:
+            movq rdi, [r14 - (LBP_SELF)];
+        );
+        self.guard_class(self_class, vm_entry);
+        monoasm! { &mut self.jit,
+        patch_point:
+            jmp entry;
+        }
+        self.jit.select_page(old);
     }
 
     ///
@@ -867,12 +890,13 @@ fn test_f64_to_val() {
 }
 
 impl Globals {
-    pub(super) fn jit_compile_ruby(
+    pub(super) fn exec_jit_compile(
         &mut self,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
-    ) -> DestLabel {
+        entry_label: DestLabel,
+    ) {
         #[cfg(any(feature = "emit-asm", feature = "log-jit", feature = "emit-tir"))]
         {
             let func = self[func_id].as_ruby_func();
@@ -890,13 +914,24 @@ impl Globals {
                 func.bytecode().as_ptr(),
             );
         }
-        let (label, _sourcemap) =
+        let _sourcemap =
             self.codegen
-                .compile(&mut self.store, func_id, self_value, position);
+                .compile(&self.store, func_id, self_value, position, entry_label);
 
         #[cfg(any(feature = "emit-asm"))]
         self.dump_disas(_sourcemap, func_id);
+    }
 
-        label
+    ///
+    /// Compile the Ruby method.
+    ///
+    pub(super) fn exec_jit_compile_method(
+        &mut self,
+        func_id: FuncId,
+        self_value: Value,
+        entry_label: DestLabel,
+    ) {
+        self[func_id].data.meta.set_jit();
+        self.exec_jit_compile(func_id, self_value, None, entry_label)
     }
 }

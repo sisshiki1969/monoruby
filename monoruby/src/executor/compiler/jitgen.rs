@@ -224,7 +224,6 @@ struct BBContext {
     slot_state: SlotState,
     self_value: Value,
     local_num: usize,
-    recompile_flag: bool,
 }
 
 impl std::ops::Deref for BBContext {
@@ -246,7 +245,6 @@ impl BBContext {
             slot_state: SlotState::new(cc),
             self_value: cc.self_value,
             local_num: cc.local_num,
-            recompile_flag: false,
         }
     }
 
@@ -373,18 +371,16 @@ extern "C" fn log_deoptimize(
 impl Codegen {
     pub(super) fn compile(
         &mut self,
-        store: &mut Store,
+        store: &Store,
         func_id: FuncId,
         self_value: Value,
         position: Option<BcPc>,
-    ) -> (DestLabel, Vec<(BcIndex, usize)>) {
+        entry_label: DestLabel,
+    ) -> Vec<(BcIndex, usize)> {
         #[cfg(any(feature = "emit-asm", feature = "log-jit"))]
         let now = std::time::Instant::now();
 
-        //self.jit.align16();
-        let entry = self.jit.label();
-        self.jit.bind_label(entry);
-        store[func_id].add_jit_code(self_value.class(), entry);
+        self.jit.bind_label(entry_label);
 
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
@@ -396,25 +392,26 @@ impl Codegen {
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));
         }
 
-        let pc = if let Some(pc) = position {
-            pc
+        let bbctx = BBContext::new(&ctx);
+
+        if let Some(pc) = position {
+            // generate class guard of *self* for a method
+            let side_exit = self.gen_side_deopt(pc + 1, &bbctx);
+            monoasm!( &mut self.jit,
+                movq rdi, [r14 - (LBP_SELF)];
+            );
+            self.guard_class(self_value.class(), side_exit);
         } else {
-            // generate prologue and class guard of *self* for a method
+            // for method JIT, class of *self* is already checked in an entry stub.
             let pc = func.get_top_pc();
             self.prologue(pc);
-            pc
-        };
-        let side_exit = self.gen_side_deopt_without_writeback(pc + 1);
-        monoasm!( &mut self.jit,
-            movq rdi, [r14 - (LBP_SELF)];
-        );
-        self.guard_class(self_value.class(), side_exit);
+        }
 
         ctx.branch_map.insert(
             start_pos,
             vec![BranchEntry {
                 src_idx: BcIndex(0),
-                bbctx: BBContext::new(&ctx),
+                bbctx,
                 entry: self.jit.label(),
                 cont: true,
             }],
@@ -438,7 +435,7 @@ impl Codegen {
         #[cfg(feature = "emit-tir")]
         eprintln!("<== finished compile.");
 
-        (entry, ctx.sourcemap)
+        ctx.sourcemap
     }
 }
 
@@ -1269,22 +1266,17 @@ impl Codegen {
     }
 
     fn recompile_and_deopt(&mut self, ctx: &mut BBContext, position: Option<BcPc>, pc: BcPc) {
-        if ctx.recompile_flag {
-            return;
-        } else {
-            ctx.recompile_flag = true;
-        }
         let recompile = self.jit.label();
         let dec = self.jit.label();
         let counter = self.jit.const_i32(5);
         let deopt = self.gen_side_deopt(pc, ctx);
         monoasm!( &mut self.jit,
+            xorq rdi, rdi;
             cmpl [rip + counter], 0;
             jlt deopt;
             jeq recompile;
-        dec:
+            dec:
             subl [rip + counter], 1;
-            xorq rdi, rdi;
             jmp deopt;
         );
         self.jit.select_page(1);
@@ -1302,11 +1294,12 @@ impl Codegen {
             );
         } else {
             monoasm!( &mut self.jit,
-                movq rax, (exec_jit_recompile);
+                movq rax, (exec_jit_recompile_method);
                 call rax;
             );
         }
         monoasm!( &mut self.jit,
+            xorq rdi, rdi;
             jmp dec;
         );
         self.jit.select_page(0);
@@ -1402,11 +1395,11 @@ impl Codegen {
     /// ### in
     /// - rdi: deopt-reason:Value
     ///
-    fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
+    /*fn gen_side_deopt_without_writeback(&mut self, pc: BcPc) -> DestLabel {
         let entry = self.jit.label();
         self.gen_side_deopt_with_label(pc, None, entry);
         entry
-    }
+    }*/
 
     fn gen_side_deopt_with_label(&mut self, pc: BcPc, ctx: Option<&BBContext>, entry: DestLabel) {
         assert_eq!(0, self.jit.get_page());

@@ -501,6 +501,7 @@ impl Globals {
         }
         self.dumped_bc = self.store.func_len();
     }
+
     #[cfg(any(feature = "emit-asm"))]
     pub(crate) fn dump_disas(&mut self, sourcemap: Vec<(BcIndex, usize)>, func_id: FuncId) {
         let (start, code_end, end) = self.codegen.jit.code_block.last().unwrap();

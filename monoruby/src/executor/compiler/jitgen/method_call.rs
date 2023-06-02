@@ -701,18 +701,17 @@ impl Codegen {
             _ => {}
         }
         monoasm!( &mut self.jit,
-            movq rdx, rdi;
             // set meta.
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
             // set pc.
             movq r13, (func_data.pc().get_u64());
         );
-        /*match store[callee_func_id].get_jit_code(recv_classid) {
+        match store[callee_func_id].get_jit_code(recv_classid) {
             Some(dest) => self.call_label(dest),
             None => self.call_codeptr(func_data.codeptr.unwrap()),
-        };*/
-        self.call_codeptr(func_data.codeptr.unwrap());
+        };
+        //self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {

@@ -421,8 +421,12 @@ impl FuncInfo {
         }
     }
 
-    pub(crate) fn add_jit_code(&mut self, self_class: ClassId, entry: DestLabel) {
-        self.jit_entry.insert(self_class, entry);
+    pub(crate) fn add_jit_code(
+        &mut self,
+        self_class: ClassId,
+        entry: DestLabel,
+    ) -> Option<DestLabel> {
+        self.jit_entry.insert(self_class, entry)
     }
 
     pub(crate) fn get_jit_code(&self, self_class: ClassId) -> Option<DestLabel> {
