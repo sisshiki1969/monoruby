@@ -21,6 +21,22 @@ impl Codegen {
     ///
     /// Set jit compilation stub code for an entry point of each Ruby methods.
     ///
+    /// ```text
+    ///
+    ///       wrapper                               class guard stub
+    ///    +-------------------------------+     +------------------------------------------+
+    ///    |                               |     |                                          |        JIT code for self_class
+    /// ---+-> entry:                      |  /--+-> guard:                                 |     +---------------------------+
+    ///    |     jmp [next]; --------------+-/   |     movq rdi, [r14 - (LBP_SELF)];        |     |                           |
+    ///    |   next:                       |     |     <class_guard(self_class, vm_entry)>  |  /--+-> jit_code_body:          |
+    ///    |     subl [rip + counter], 1;  |     |   jit_entry:                             |  |  |     <jit_code>            |
+    ///    |     jne vm_entry;             |     |     jmp [jit_code_body]; ----------------+--/  |                           |
+    ///    |     <exec_compile_and_patch>  |     |                                          |     |                           |
+    ///    |     jmp entry;                |     +------------------------------------------+     
+    ///    |                               |
+    ///    +-------------------------------+
+    ///
+    /// ```
     fn gen_jit_stub(&mut self) -> CodePtr {
         let vm_entry = self.vm_entry;
         let codeptr = self.jit.get_current_address();
