@@ -139,18 +139,6 @@ impl Codegen {
     ///
     /// Generate attr_reader.
     ///
-    /// - stack layout at the point of just after being called.
-    /// ~~~text
-    ///       +-------------+
-    ///  0x00 | return addr | <- rsp
-    ///       +-------------+
-    /// -0x08 |             |
-    ///       +-------------+
-    /// -0x10 |    meta     |
-    ///       +-------------+
-    /// -0x18 |  %0 (self)  |
-    ///       +-------------+
-    /// ~~~
     fn gen_attr_reader(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
@@ -171,20 +159,6 @@ impl Codegen {
     ///
     /// Generate attr_writer.
     ///
-    /// - stack layout at the point of just after being called.
-    /// ~~~text
-    ///       +-------------+
-    ///  0x00 | return addr | <- rsp
-    ///       +-------------+
-    /// -0x08 |             |
-    ///       +-------------+
-    /// -0x10 |    meta     |
-    ///       +-------------+
-    /// -0x18 |  %0 (self)  |
-    ///       +-------------+
-    /// -0x20 |   %1(val)   |
-    ///       +-------------+
-    /// ~~~
     fn gen_attr_writer(&mut self, ivar_name: IdentId) -> CodePtr {
         let label = self.jit.get_current_address();
         let cache = self.jit.const_i64(-1);
