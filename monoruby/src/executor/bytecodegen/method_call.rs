@@ -14,6 +14,9 @@ impl BytecodeGen {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {
                     RecvKind::SelfValue
+                } else if self.is_refer_block_arg(&receiver) {
+                    self.push_expr(receiver)?;
+                    RecvKind::Temp
                 } else if let Some(local) = self.is_refer_local(&receiver) {
                     RecvKind::Local(local.into())
                 } else {

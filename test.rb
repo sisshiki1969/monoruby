@@ -3,7 +3,7 @@ def f(&p)
 end
 
 def g(&p)
-  yield
+  p.call
 end
 
 f { puts 100 }

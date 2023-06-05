@@ -74,6 +74,10 @@ impl BlockHandler {
         })
     }
 
+    pub fn try_proc(&self) -> bool {
+        self.0.is_proc().is_some()
+    }
+
     pub(crate) fn as_proc(&self) -> &BlockData {
         self.0.as_proc()
     }

@@ -35,19 +35,23 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize
 }
 
 impl Executor {
-    fn generate_proc(
+    pub(in crate::executor) fn generate_proc(
         &mut self,
         globals: &mut Globals,
         block_handler: BlockHandler,
     ) -> Result<Value> {
-        if let Some(_bh) = block_handler.try_proxy() {
+        if block_handler.try_proxy().is_some() {
             let lfp = self.cfp().prev().unwrap().lfp();
             unsafe {
                 self.move_frame_to_heap(lfp);
             }
+            let block_data = self.get_block_data(globals, block_handler);
+            Ok(Value::new_proc(block_data))
+        } else if block_handler.try_proc() {
+            Ok(block_handler.0)
+        } else {
+            unimplemented!()
         }
-        let block_data = self.get_block_data(globals, block_handler);
-        Ok(Value::new_proc(block_data))
     }
 
     /// ## return

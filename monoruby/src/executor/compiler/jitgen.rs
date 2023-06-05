@@ -692,7 +692,35 @@ impl Codegen {
                 }
                 TraceIr::BlockArg(dst, outer) => {
                     ctx.dealloc_xmm(dst);
-                    unimplemented!();
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    if outer == 0 {
+                        monoasm! { &mut self.jit,
+                            movq rax, r14;
+                        };
+                    } else {
+                        monoasm!( &mut self.jit,
+                            movq rax, [r14 - (LBP_OUTER)];
+                        );
+                        for _ in 0..outer - 1 {
+                            monoasm!( &mut self.jit,
+                                movq rax, [rax];
+                            );
+                        }
+                        monoasm!( &mut self.jit,
+                            lea rax, [rax + (LBP_OUTER)];
+                        );
+                    }
+                    monoasm! { &mut self.jit,
+                    movq rdx, [rax - (LBP_BLOCK)];
+                    movq rdi, rbx;
+                    movq rsi, r12;
+                    movq rax, (runtime::block_arg);
+                    call rax;
+                    };
+                    self.xmm_restore(&xmm_using);
+                    self.jit_handle_error(&ctx, pc);
+                    self.store_rax(dst);
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);

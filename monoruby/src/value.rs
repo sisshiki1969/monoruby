@@ -592,9 +592,24 @@ impl Value {
     }
 
     pub(crate) fn is_range(&self) -> Option<&RangeInner> {
-        match self.rvalue().kind() {
-            ObjKind::RANGE => Some(self.rvalue().as_range()),
-            _ => None,
+        if let Some(rvalue) = self.try_rvalue() {
+            match rvalue.kind() {
+                ObjKind::RANGE => Some(self.rvalue().as_range()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_proc(&self) -> Option<&BlockData> {
+        if let Some(rvalue) = self.try_rvalue() {
+            match rvalue.kind() {
+                ObjKind::PROC => Some(self.rvalue().as_proc()),
+                _ => None,
+            }
+        } else {
+            None
         }
     }
 

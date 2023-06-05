@@ -245,7 +245,7 @@ impl Codegen {
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
-        //self.dispatch[23] = self.vm_block_arg();
+        self.dispatch[23] = self.vm_block_arg();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[28] = self.vm_load_svar();
@@ -1069,6 +1069,41 @@ impl Codegen {
             jeq exit;
             addq rax, 0b10;
         exit:
+        };
+        self.vm_store_r15();
+        self.fetch_and_dispatch();
+        label
+    }
+
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|dst| outer ||               |
+    // +---+---+---+---++---+---+---+---+
+    //
+    fn vm_block_arg(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let loop_ = self.jit.label();
+        let loop_exit = self.jit.label();
+        let raise = self.entry_raise;
+        self.fetch2();
+        self.vm_get_addr_r15();
+        monoasm! { &mut self.jit,
+            lea  rax, [r14 - (LBP_OUTER)];
+            testq rdi, rdi;
+            jz   loop_exit;
+        loop_:
+            movq rax, [rax];
+            subl rdi, 1;
+            jnz  loop_;
+        loop_exit:
+            lea  rax, [rax + (LBP_OUTER)];
+            movq rdx, [rax - (LBP_BLOCK)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::block_arg);
+            call rax;
+            testq rax, rax;
+            jz raise;
         };
         self.vm_store_r15();
         self.fetch_and_dispatch();

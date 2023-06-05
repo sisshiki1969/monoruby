@@ -2062,6 +2062,24 @@ mod test {
         end
     "##,
         );
+        run_test_with_prelude(
+            r##"
+        $x = []
+        f { 100 }
+        p = Proc.new { 200 }
+        f(&p)
+        $x
+    "##,
+            r##"
+        def f(&p)
+            g(&p)
+        end
+                
+        def g(&p)
+            $x << p.call
+        end
+    "##,
+        );
     }
 
     #[test]

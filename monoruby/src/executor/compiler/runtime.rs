@@ -68,6 +68,20 @@ pub(super) extern "C" fn get_yield_data(vm: &Executor, globals: &mut Globals) ->
         .unwrap_or_default()
 }
 
+pub(super) extern "C" fn block_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    block_handler: BlockHandler,
+) -> Option<Value> {
+    match vm.generate_proc(globals, block_handler) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     if len == 0 {
         Value::new_empty_array()

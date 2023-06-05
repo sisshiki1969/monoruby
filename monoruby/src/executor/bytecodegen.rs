@@ -533,6 +533,18 @@ impl BytecodeGen {
             None
         }
     }
+
+    fn is_refer_block_arg(&mut self, node: &Node) -> bool {
+        if let NodeKind::LocalVar(outer, name) = &node.kind {
+            let lvar = IdentId::get_id(name);
+            if *outer == 0 {
+                return self.block_param == Some(lvar);
+            } else {
+                return self.outer_block_param_name(*outer) == Some(lvar);
+            }
+        }
+        false
+    }
 }
 
 //
