@@ -663,7 +663,7 @@ impl Codegen {
                 }
                 TraceIr::BlockArgProxy(dst, outer) => {
                     ctx.dealloc_xmm(dst);
-                    let panic = self.entry_panic;
+                    let exit = self.jit.label();
                     if outer == 0 {
                         monoasm! { &mut self.jit,
                             movq rax, r14;
@@ -684,10 +684,15 @@ impl Codegen {
                     monoasm! { &mut self.jit,
                         movq rax, [rax - (LBP_BLOCK)];
                         testq rax, 0b1;
-                        jeq panic;
+                        jeq  exit;
                         addq rax, 0b10;
+                    exit:
                     };
                     self.store_rax(dst);
+                }
+                TraceIr::BlockArg(dst, outer) => {
+                    ctx.dealloc_xmm(dst);
+                    unimplemented!();
                 }
                 TraceIr::LoadIvar(ret, id, cached_class, cached_ivarid) => {
                     ctx.dealloc_xmm(ret);

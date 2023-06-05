@@ -200,6 +200,10 @@ impl BytecodeGen {
                 let op2 = self.get_index(base);
                 Bc::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, *func_id)
             }
+            BcIr::BlockArg(dst, outer) => {
+                let op1 = self.get_index(dst);
+                Bc::from(enc_wl(23, op1.0, *outer as u32))
+            }
             BcIr::LoadGvar { ret, name } => {
                 let op1 = self.get_index(ret);
                 Bc::from(enc_wl(25, op1.0, name.get()))

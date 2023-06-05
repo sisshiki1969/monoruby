@@ -245,6 +245,7 @@ impl Codegen {
         self.dispatch[20] = self.vm_check_local(branch);
         self.dispatch[21] = self.vm_block_arg_proxy();
         self.dispatch[22] = self.vm_singleton_class_def();
+        //self.dispatch[23] = self.vm_block_arg();
         self.dispatch[25] = self.vm_load_gvar();
         self.dispatch[26] = self.vm_store_gvar();
         self.dispatch[28] = self.vm_load_svar();
@@ -1047,9 +1048,10 @@ impl Codegen {
     //
     fn vm_block_arg_proxy(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let panic = self.entry_panic;
+        //let panic = self.entry_panic;
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        let exit = self.jit.label();
         self.fetch2();
         self.vm_get_addr_r15();
         monoasm! { &mut self.jit,
@@ -1064,8 +1066,9 @@ impl Codegen {
             lea  rax, [rax + (LBP_OUTER)];
             movq rax, [rax - (LBP_BLOCK)];
             testq rax, 0b1;
-            jeq panic;
+            jeq exit;
             addq rax, 0b10;
+        exit:
         };
         self.vm_store_r15();
         self.fetch_and_dispatch();

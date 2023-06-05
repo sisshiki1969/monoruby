@@ -2012,10 +2012,13 @@ mod test {
 
     #[test]
     fn test_nested_blockargproxy() {
-        run_test(
+        run_test_with_prelude(
             r#"
         $x = 0
-        
+        g { 42 }
+        $x
+        "#,
+            r#"
         def e
           10.times do
             $x += yield
@@ -2035,10 +2038,29 @@ mod test {
             end
           end
         end
-
-        g { 42 }
-        $x
         "#,
+        );
+    }
+
+    #[test]
+    fn test_block_arg() {
+        run_test_with_prelude(
+            r##"
+        $x = []
+        f { 100 }
+        p = Proc.new { 200 }
+        f(&p)
+        $x
+    "##,
+            r##"
+        def f(&p)
+            g(&p)
+        end
+                
+        def g(&p)
+            $x << yield
+        end
+    "##,
         );
     }
 

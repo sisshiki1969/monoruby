@@ -769,6 +769,9 @@ impl BcPc {
                 format!("const[{id}] = {:?}", reg)
             }
             TraceIr::BlockArgProxy(dst, outer) => {
+                format!("{:?} = block_proxy({outer})", dst)
+            }
+            TraceIr::BlockArg(dst, outer) => {
                 format!("{:?} = block_arg({outer})", dst)
             }
             TraceIr::LoadDynVar(ret, src) => {
@@ -974,7 +977,7 @@ impl BcPc {
                 } = info;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
-                    "{} = {:?}.{name}({}{}){}",
+                    "{} = {:?}.{name}({}{} &{:?}){}",
                     ret.ret_str(),
                     recv,
                     if len == 0 {
@@ -987,6 +990,7 @@ impl BcPc {
                     } else {
                         format!(" kw:{:?};{}", args + len + 1, kw_len)
                     },
+                    args,
                     if has_splat { "*" } else { "" }
                 );
                 format!("{:36} [{}]", op1, class.get_name(globals))

@@ -269,6 +269,7 @@ impl JitContext {
                     info.def_as(dst, is_float);
                 }
                 TraceIr::BlockArgProxy(dst, _)
+                | TraceIr::BlockArg(dst, _)
                 | TraceIr::LoadDynVar(dst, ..)
                 | TraceIr::LoadIvar(dst, ..)
                 | TraceIr::LoadGvar { dst, .. }

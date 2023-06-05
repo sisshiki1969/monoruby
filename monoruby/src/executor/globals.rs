@@ -575,7 +575,7 @@ impl Globals {
                         Some((func_id, idx)) => {
                             format!("BlockArgProxy {{ {:?}, {} }}", func_id, idx)
                         }
-                        _ => unimplemented!(),
+                        _ => self.inspect(block.0),
                     }
                 }
                 None => "None".to_string(),

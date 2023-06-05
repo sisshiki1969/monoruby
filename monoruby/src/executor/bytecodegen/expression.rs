@@ -319,15 +319,26 @@ impl BytecodeGen {
                 }
             }
             NodeKind::LocalVar(0, ident) => {
-                let local = self.refer_local(&ident);
-                self.handle_mode(use_mode, local.into());
-                return Ok(());
+                let lvar = IdentId::get_id(&ident);
+                if self.block_param == Some(lvar) {
+                    let ret = self.push().into();
+                    self.emit(BcIr::BlockArg(ret, 0), loc);
+                } else {
+                    let local = self.refer_local(&ident);
+                    self.handle_mode(use_mode, local.into());
+                    return Ok(());
+                }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
-                let name = IdentId::get_id_from_string(ident);
-                let src = self.refer_dynamic_local(outer, name).into();
-                self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                let lvar = IdentId::get_id_from_string(ident);
+                if Some(lvar) == self.outer_block_param_name(outer) {
+                    let proc_temp = self.push().into();
+                    self.emit(BcIr::BlockArg(proc_temp, outer), loc);
+                } else {
+                    let src = self.refer_dynamic_local(outer, lvar).into();
+                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                }
             }
 
             NodeKind::MethodCall {

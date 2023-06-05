@@ -1,11 +1,12 @@
-def f(x,*r,a:1,b:2,&p)
-  puts "#{[x, a, b, g(&p)]}"
+def f(&p)
+  g(&p)
 end
 
-def g
-  yield 3
+def g(&p)
+  yield
 end
 
-for i in 0..10
-  f(2,b:3,a:4) {|x| x + 14}
-end
+f { puts 100 }
+
+p = Proc.new { puts 200 }
+f(&p)
