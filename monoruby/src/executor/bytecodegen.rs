@@ -479,32 +479,22 @@ impl BytecodeGen {
         }
     }
 
-    fn refer_local(&mut self, ident: &str) -> BcLocal {
+    fn refer_local(&mut self, ident: &str) -> Option<BcLocal> {
         let name = IdentId::get_id(ident);
         match self.locals.get(&name) {
-            Some(local) => BcLocal(*local),
+            Some(r) => Some(BcLocal(*r)),
             None => {
-                self.locals
-                    .iter()
-                    .for_each(|(k, v)| eprintln!("{}:{:?}", v, k));
-                eprintln!("{}", self.sourceinfo.path.to_string_lossy().as_ref());
-                panic!("undefined local var `{}`", ident);
+                assert_eq!(Some(name), self.block_param);
+                None
             }
         }
     }
 
-    fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> BcLocal {
-        BcLocal(
-            *self.outer_locals[outer - 1]
-                .0
-                .get(&name)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Bytecodegen: dynamic local was not found. {outer} {name} {:?} {:?}",
-                        self.outer_locals, self.locals
-                    )
-                }),
-        )
+    fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
+        self.outer_locals[outer - 1]
+            .0
+            .get(&name)
+            .map(|r| BcLocal(*r))
     }
 
     /// Add a variable identifier without checking duplicates.
@@ -528,7 +518,7 @@ impl BytecodeGen {
 
     fn is_refer_local(&mut self, node: &Node) -> Option<BcLocal> {
         if let NodeKind::LocalVar(0, name) = &node.kind {
-            Some(self.refer_local(name))
+            self.refer_local(name)
         } else {
             None
         }
@@ -797,7 +787,7 @@ impl BytecodeGen {
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
                 let name = IdentId::get_id(ident);
-                let dst = self.refer_dynamic_local(outer, name).into();
+                let dst = self.refer_dynamic_local(outer, name).unwrap().into();
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {

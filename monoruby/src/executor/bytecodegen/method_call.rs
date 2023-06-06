@@ -121,7 +121,7 @@ impl BytecodeGen {
             let r = if outer == 0 {
                 self.assign_local(name)
             } else {
-                self.refer_dynamic_local(outer, name)
+                self.refer_dynamic_local(outer, name).unwrap()
             };
             optional_params.push((outer + 1, r, name));
         }
@@ -267,12 +267,12 @@ impl BytecodeGen {
         {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
-                let local = self.refer_local(ident).into();
+                let local = self.refer_local(ident).unwrap().into();
                 return Ok((local, 1, vec![]));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
-                    let local = self.refer_local(ident).into();
+                    let local = self.refer_local(ident).unwrap().into();
                     return Ok((local, 1, vec![0]));
                 }
             }
@@ -289,23 +289,22 @@ impl BytecodeGen {
                     self.handle_block(vec![], block)?;
                 }
                 NodeKind::LocalVar(0, proc_local) => {
-                    if self.block_param.is_some() {
+                    if let Some(local) = self.refer_local(&proc_local) {
+                        self.emit_temp_mov(local.into());
+                    } else {
                         let proc_temp = self.push().into();
                         self.emit(BcIr::BlockArgProxy(proc_temp, 0), loc);
-                    } else {
-                        let local = self.refer_local(&proc_local).into();
-                        self.emit_temp_mov(local);
                     }
                 }
                 NodeKind::LocalVar(outer, proc_local) => {
                     let proc_local = IdentId::get_id_from_string(proc_local);
-                    if Some(proc_local) == self.outer_block_param_name(outer) {
-                        let proc_temp = self.push().into();
-                        self.emit(BcIr::BlockArgProxy(proc_temp, outer), loc);
-                    } else {
-                        let src = self.refer_dynamic_local(outer, proc_local).into();
-                        let ret = self.push().into();
+                    let ret = self.push().into();
+                    if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
+                        let src = src.into();
                         self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
+                    } else {
+                        assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
+                        self.emit(BcIr::BlockArgProxy(ret, outer), loc);
                     }
                 }
                 _ => {
