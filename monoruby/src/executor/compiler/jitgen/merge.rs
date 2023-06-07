@@ -33,28 +33,34 @@ impl Codegen {
         &mut self,
         func: &ISeqInfo,
         cc: &mut JitContext,
+        bb_pos: BcIndex,
     ) -> Option<BBContext> {
-        let bb_pos = cc.cur_pos;
+        //let bb_pos = cc.cur_pos;
         let is_loop = func.get_pc(bb_pos).is_loop();
         let res = if is_loop {
             #[cfg(feature = "emit-tir")]
             eprintln!("\n===gen_merge bb(loop): {bb_pos}");
-            self.gen_merging_branches_loop(func, cc)
+            self.gen_merging_branches_loop(func, cc, bb_pos)
         } else {
             #[cfg(feature = "emit-tir")]
             eprintln!("\n===gen_merge bb: {bb_pos}");
-            self.gen_merging_branches_non_loop(func, cc)?
+            self.gen_merging_branches_non_loop(func, cc, bb_pos)?
         };
         #[cfg(feature = "emit-tir")]
         eprintln!("===merge_end");
         Some(res)
     }
 
-    fn gen_merging_branches_loop(&mut self, func: &ISeqInfo, cc: &mut JitContext) -> BBContext {
-        let bb_pos = cc.cur_pos;
+    fn gen_merging_branches_loop(
+        &mut self,
+        func: &ISeqInfo,
+        cc: &mut JitContext,
+        bb_pos: BcIndex,
+    ) -> BBContext {
+        //let bb_pos = cc.cur_pos;
         if let Some(entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
-            let bb_pos = cc.cur_pos;
+            //let bb_pos = cc.cur_pos;
 
             let (use_set, unused) = cc.analyse(func, bb_pos);
 
@@ -106,8 +112,9 @@ impl Codegen {
         &mut self,
         func: &ISeqInfo,
         cc: &mut JitContext,
+        bb_pos: BcIndex,
     ) -> Option<BBContext> {
-        let bb_pos = cc.cur_pos;
+        //let bb_pos = cc.cur_pos;
         if let Some(mut entries) = cc.branch_map.remove(&bb_pos) {
             let pc = func.get_pc(bb_pos);
 
