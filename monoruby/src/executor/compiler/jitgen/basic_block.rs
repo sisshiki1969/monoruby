@@ -146,23 +146,18 @@ impl BasicBlockInfo {
     ///
     /// Get position of start instructions (BcIndex) of basic blocks.
     ///
-    pub(super) fn get_bb_pos(&self, start_pos: BcIndex) -> Vec<BcIndex> {
-        self.bb_head
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                if *v {
-                    let idx = BcIndex::from(idx);
-                    if idx >= start_pos {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub(super) fn get_bb_pos<'a>(
+        &'a self,
+        start_pos: BcIndex,
+    ) -> impl Iterator<Item = BcIndex> + 'a {
+        self.bb_head.iter().enumerate().filter_map(move |(idx, v)| {
+            let idx = BcIndex::from(idx);
+            if *v && idx >= start_pos {
+                Some(idx)
+            } else {
+                None
+            }
+        })
     }
 
     pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
