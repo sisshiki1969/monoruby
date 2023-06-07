@@ -1304,6 +1304,28 @@ impl std::ops::Add<i32> for BcIndex {
     }
 }
 
+impl std::iter::Step for BcIndex {
+    fn steps_between(start: &Self, end: &Self) -> Option<usize> {
+        if start > end {
+            None
+        } else {
+            Some((end.0 - start.0) as usize)
+        }
+    }
+
+    fn forward_checked(start: Self, count: usize) -> Option<Self> {
+        Some(start + count)
+    }
+
+    fn backward_checked(start: Self, count: usize) -> Option<Self> {
+        if (start.0 as usize) < count {
+            None
+        } else {
+            Some(BcIndex((start.0 as usize - count) as _))
+        }
+    }
+}
+
 impl BcIndex {
     pub(crate) fn from(i: usize) -> Self {
         Self(i as u32)

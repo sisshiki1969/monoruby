@@ -49,6 +49,13 @@ impl std::ops::IndexMut<BasicBlockId> for BasicBlockInfo {
     }
 }
 
+impl std::ops::Index<std::ops::RangeInclusive<BasicBlockId>> for BasicBlockInfo {
+    type Output = [BasciBlockInfoEntry];
+    fn index(&self, index: std::ops::RangeInclusive<BasicBlockId>) -> &Self::Output {
+        &self.info[index.start().0..=index.end().0]
+    }
+}
+
 impl std::ops::Index<BcIndex> for BasicBlockInfo {
     type Output = BasciBlockInfoEntry;
     fn index(&self, index: BcIndex) -> &Self::Output {
@@ -141,23 +148,6 @@ impl BasicBlockInfo {
 
     pub(crate) fn is_bb_head(&self, i: BcIndex) -> bool {
         self.bb_head[i.0 as usize]
-    }
-
-    ///
-    /// Get position of start instructions (BcIndex) of basic blocks.
-    ///
-    pub(super) fn get_bb_pos<'a>(
-        &'a self,
-        start_pos: BcIndex,
-    ) -> impl Iterator<Item = BcIndex> + 'a {
-        self.bb_head.iter().enumerate().filter_map(move |(idx, v)| {
-            let idx = BcIndex::from(idx);
-            if *v && idx >= start_pos {
-                Some(idx)
-            } else {
-                None
-            }
-        })
     }
 
     pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {

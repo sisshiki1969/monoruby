@@ -6,6 +6,7 @@
 #![feature(iter_next_chunk)]
 #![feature(result_flattening)]
 #![feature(let_chains)]
+#![feature(step_trait)]
 mod alloc;
 mod executor;
 mod id_table;

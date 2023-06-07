@@ -406,10 +406,17 @@ impl Codegen {
             }],
         );
 
-        for i in func.bb_info.get_bb_pos(start_pos) {
-            if self.compile_bb(store, func, &mut ctx, position, i) {
-                break;
-            };
+        let bb_begin = func.bb_info.get_bb_id(start_pos);
+        let bb_end = match func.bb_info.get_loop(bb_begin) {
+            Some((a, b)) => {
+                assert_eq!(a, bb_begin);
+                b
+            }
+            None => BasicBlockId(func.bb_info.len() - 1),
+        };
+
+        for BasciBlockInfoEntry { begin, end, .. } in &func.bb_info[bb_begin..=bb_end] {
+            self.compile_bb(store, func, &mut ctx, position, *begin, *end);
         }
 
         self.gen_backedge_branches(&mut ctx, func);
@@ -521,21 +528,20 @@ impl Codegen {
         func: &ISeqInfo,
         cc: &mut JitContext,
         position: Option<BcPc>,
-        bb_pos: BcIndex,
-    ) -> bool {
-        self.jit.bind_label(cc.labels[&bb_pos]);
-        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_pos) {
+        bb_begin: BcIndex,
+        bb_end: BcIndex,
+    ) {
+        self.jit.bind_label(cc.labels[&bb_begin]);
+        let mut ctx = if let Some(ctx) = cc.target_ctx.remove(&bb_begin) {
             ctx
         } else {
-            if let Some(ctx) = self.gen_merging_branches(func, cc, bb_pos) {
+            if let Some(ctx) = self.gen_merging_branches(func, cc, bb_begin) {
                 ctx
             } else {
-                return false;
+                return;
             }
         };
-        let bb_end = func.bytecode_len();
-        for bb_pos in bb_pos.to_usize()..bb_end {
-            let bb_pos = BcIndex(bb_pos as u32);
+        for bb_pos in bb_begin..=bb_end {
             let pc = func.get_pc(bb_pos);
             #[cfg(feature = "emit-asm")]
             cc.sourcemap
@@ -646,7 +652,7 @@ impl Codegen {
                         }
                     } else {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     }
                 }
                 TraceIr::StoreConst(src, id) => {
@@ -801,7 +807,7 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     if pc.classid1().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     } else {
                         let xmm_using = ctx.get_xmm_using();
                         self.xmm_save(&xmm_using);
@@ -837,7 +843,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
-                            return false;
+                            return;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
@@ -859,7 +865,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
-                            return false;
+                            return;
                         } else {
                             let xmm_using = ctx.get_xmm_using();
                             self.xmm_save(&xmm_using);
@@ -906,7 +912,7 @@ impl Codegen {
                     ctx.dealloc_xmm(ret);
                     if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     } else {
                         self.load_binary_args_with_mode(&mode);
                         self.gen_generic_binop(&ctx, pc, kind, ret);
@@ -949,7 +955,7 @@ impl Codegen {
                         ctx.dealloc_xmm(ret);
                         if pc.classid1().0 == 0 || pc.classid2().0 == 0 {
                             self.recompile_and_deopt(&mut ctx, position, pc);
-                            return false;
+                            return;
                         } else {
                             self.load_binary_args_with_mode(&mode);
                             self.generic_cmp(kind, &ctx);
@@ -1033,7 +1039,7 @@ impl Codegen {
                     //self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     } else {
                         self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, has_splat);
                     }
@@ -1055,7 +1061,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     } else {
                         info.args = args + 1;
                         self.gen_call(
@@ -1083,7 +1089,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     if info.func_data.is_none() {
                         self.recompile_and_deopt(&mut ctx, position, pc);
-                        return false;
+                        return;
                     } else {
                         self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, false);
                     }
@@ -1206,7 +1212,7 @@ impl Codegen {
                     self.gen_write_back_locals(&mut ctx);
                     self.fetch_to_rax(&mut ctx, lhs);
                     self.epilogue();
-                    return false;
+                    return;
                 }
                 TraceIr::MethodRet(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
@@ -1215,14 +1221,14 @@ impl Codegen {
                         movq r13, ((pc + 1).get_u64());
                     };
                     self.method_return();
-                    return false;
+                    return;
                 }
                 TraceIr::Break(lhs) => {
                     self.gen_write_back_locals(&mut ctx);
                     self.fetch_to_rax(&mut ctx, lhs);
                     self.block_break();
                     self.epilogue();
-                    return false;
+                    return;
                 }
                 TraceIr::EnsureEnd => {
                     self.gen_write_back_locals(&mut ctx);
@@ -1243,7 +1249,7 @@ impl Codegen {
                     monoasm!( &mut self.jit,
                         jmp branch_dest;
                     );
-                    return false;
+                    return;
                 }
                 TraceIr::CondBr(cond_, disp, false, kind) => {
                     self.fetch_slot(&mut ctx, cond_);
@@ -1272,21 +1278,15 @@ impl Codegen {
                     );
                 }
             }
-
-            let next_idx = bb_pos + 1;
-            if func.bb_info.is_bb_head(next_idx) {
-                let branch_dest = self.jit.label();
-                cc.new_continue(bb_pos, next_idx, ctx, branch_dest);
-                let target_ctx = if let Some(ctx) = self.gen_merging_branches(func, cc, next_idx) {
-                    ctx
-                } else {
-                    return false;
-                };
+        }
+        let next_idx = bb_end + 1;
+        if func.bb_info.is_bb_head(next_idx) {
+            let branch_dest = self.jit.label();
+            cc.new_continue(bb_end, next_idx, ctx, branch_dest);
+            if let Some(target_ctx) = self.gen_merging_branches(func, cc, next_idx) {
                 assert!(cc.target_ctx.insert(next_idx, target_ctx).is_none());
-                return false;
             }
         }
-        true
     }
 
     fn recompile_and_deopt(&mut self, ctx: &mut BBContext, position: Option<BcPc>, pc: BcPc) {
