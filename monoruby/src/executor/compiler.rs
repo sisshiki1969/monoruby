@@ -96,6 +96,7 @@ pub struct Codegen {
     pub(super) class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
+    #[allow(dead_code)]
     entry_panic: DestLabel,
     pub(super) vm_entry: DestLabel,
     vm_fetch: DestLabel,

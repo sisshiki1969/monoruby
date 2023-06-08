@@ -25,7 +25,7 @@ pub enum InlineMethod {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MethodTableEntry {
+pub(super) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
@@ -44,35 +44,35 @@ pub struct Globals {
     /// code generator.
     pub codegen: Codegen,
     /// function and class info.
-    pub(crate) store: Store,
+    pub(super) store: Store,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
     global_method_cache: HashMap<(IdentId, ClassId), (u32, Option<MethodTableEntry>)>,
     /// regex cache.
-    pub regexp_cache: HashMap<String, Rc<Regex>>,
+    pub(crate) regexp_cache: HashMap<String, Rc<Regex>>,
     /// warning level.
     pub(super) warning: u8,
     /// suppress jit compilation.
-    pub(super) no_jit: bool,
+    no_jit: bool,
     /// stdout.
     stdout: BufWriter<Stdout>,
     /// library directries.
     pub lib_directories: Vec<String>,
     /// standard PRNG
-    pub random: Prng,
+    random: Prng,
     /// loaded libraries (canonical path).
     loaded_canonicalized_files: IndexSet<PathBuf>,
     #[cfg(feature = "log-jit")]
     /// stats for deoptimization
-    pub(crate) deopt_stats: HashMap<(FuncId, usize), usize>,
+    pub(super) deopt_stats: HashMap<(FuncId, usize), usize>,
     #[cfg(feature = "log-jit")]
     /// stats for method cache miss
-    pub(crate) method_cache_stats: HashMap<(ClassId, IdentId), usize>,
+    method_cache_stats: HashMap<(ClassId, IdentId), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
     #[cfg(feature = "emit-bc")]
-    pub(crate) startup_flag: bool,
+    pub(super) startup_flag: bool,
 }
 
 impl std::ops::Index<FuncId> for Globals {
@@ -484,6 +484,24 @@ impl Globals {
             if range.exclude_end() { "..." } else { ".." },
             self.inspect(range.end),
         )
+    }
+}
+
+// Random generator
+impl Globals {
+    pub(super) fn random_seed(&self) -> &[u8; 4] {
+        &self.random.seed
+    }
+
+    pub(super) fn random_init(&mut self, seed: Option<i64>) {
+        self.random.init_with_seed(seed)
+    }
+
+    pub(super) fn random_gen<T>(&mut self) -> T
+    where
+        rand::distributions::Standard: rand::prelude::Distribution<T>,
+    {
+        self.random.gen()
     }
 }
 

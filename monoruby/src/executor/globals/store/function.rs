@@ -23,7 +23,7 @@ impl FuncId {
     }
 }
 
-pub(crate) struct Funcs {
+pub(super) struct Funcs {
     info: Vec<FuncInfo>,
     compile_info: Vec<CompileInfo>,
 }

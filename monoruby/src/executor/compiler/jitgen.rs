@@ -375,7 +375,7 @@ impl Codegen {
         let start_pos = func.get_pc_index(position);
 
         let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
-        for (loop_start, loop_end) in &func.bb_info.loops {
+        for (loop_start, loop_end) in func.bb_info.loops() {
             let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
             ctx.loop_backedges.insert(*loop_start, backedge);
             ctx.loop_exit.insert(*loop_start, (*loop_end, exit));

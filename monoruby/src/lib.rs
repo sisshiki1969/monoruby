@@ -10,7 +10,6 @@
 mod alloc;
 mod executor;
 mod id_table;
-mod inline;
 #[cfg(test)]
 mod tests;
 mod value;

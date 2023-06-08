@@ -24,7 +24,7 @@ fn srand(
     len: usize,
 ) -> Result<Value> {
     Executor::check_number_of_arguments(len, 0..=1)?;
-    let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, &globals.random.seed);
+    let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
     let new_seed = if len == 0 {
         None
     } else {
@@ -33,7 +33,7 @@ fn srand(
             _ => unimplemented!(),
         }
     };
-    globals.random.init_with_seed(new_seed);
+    globals.random_init(new_seed);
     Ok(Value::new_bigint(old_seed))
 }
 
@@ -51,6 +51,6 @@ fn rand(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let f = globals.random.gen();
+    let f = globals.random_gen();
     Ok(Value::new_float(f))
 }

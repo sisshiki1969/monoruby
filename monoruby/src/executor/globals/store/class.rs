@@ -439,7 +439,7 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub fn find_method_entry_for_class(
+    pub(in crate::executor) fn find_method_entry_for_class(
         &mut self,
         class: ClassId,
         func_name: IdentId,
@@ -478,7 +478,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(crate) fn check_super(
+    pub(in crate::executor) fn check_super(
         &mut self,
         self_val: Value,
         name: IdentId,
@@ -492,7 +492,7 @@ impl Globals {
     ///
     /// Check whether a method *name* of class *class_id* exists.
     ///
-    pub(crate) fn check_method_for_class(
+    pub(in crate::executor) fn check_method_for_class(
         &mut self,
         class_id: ClassId,
         name: IdentId,

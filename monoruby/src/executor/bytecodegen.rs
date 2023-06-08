@@ -76,7 +76,7 @@ impl std::ops::Add<usize> for BcTemp {
 /// ID of local variable.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) struct BcLocal(pub u16);
+pub(super) struct BcLocal(pub u16);
 
 impl std::fmt::Debug for BcLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

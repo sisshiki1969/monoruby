@@ -33,7 +33,7 @@ pub(crate) struct BasicBlockInfo {
     ///
     /// Loop information. An array of (start:*BasicBlockId*, end:*BasicBlockId*).
     ///
-    pub loops: Vec<(BasicBlockId, BasicBlockId)>,
+    loops: Vec<(BasicBlockId, BasicBlockId)>,
 }
 
 impl std::ops::Index<BasicBlockId> for BasicBlockInfo {
@@ -134,7 +134,7 @@ impl BasicBlockInfo {
         bb_info
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.info.len()
     }
 
@@ -150,7 +150,7 @@ impl BasicBlockInfo {
         self.bb_head[i.0 as usize]
     }
 
-    pub(crate) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
+    pub(super) fn get_bb_id(&self, i: BcIndex) -> BasicBlockId {
         self.bb_map[i.0 as usize]
     }
 
@@ -159,6 +159,10 @@ impl BasicBlockInfo {
             .iter()
             .find(|(begin, end)| (*begin..=*end).contains(&bb_id))
             .cloned()
+    }
+
+    pub(super) fn loops(&self) -> &[(BasicBlockId, BasicBlockId)] {
+        &self.loops
     }
 }
 

@@ -33,7 +33,10 @@ impl Prng {
         self.random = sfmt::SFMT::from_seed(new_seed);
     }
 
-    pub fn gen(&mut self) -> f64 {
+    pub fn gen<T>(&mut self) -> T
+    where
+        rand::distributions::Standard: rand::prelude::Distribution<T>,
+    {
         self.random.gen()
     }
 }

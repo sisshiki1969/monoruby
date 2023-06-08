@@ -12,7 +12,7 @@ pub use function::*;
 pub(crate) use iseq::ISeqInfo;
 
 #[derive(Default)]
-pub(crate) struct Store {
+pub(in crate::executor) struct Store {
     /// function info.
     functions: function::Funcs,
     /// inline function info.
@@ -144,7 +144,7 @@ impl Store {
         )
     }
 
-    pub(crate) fn add_method(
+    pub(in crate::executor) fn add_method(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -153,7 +153,7 @@ impl Store {
         self.functions.add_method(name, info, sourceinfo)
     }
 
-    pub(crate) fn add_classdef(
+    pub(in crate::executor) fn add_classdef(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -162,7 +162,7 @@ impl Store {
         self.functions.add_classdef(name, info, sourceinfo)
     }
 
-    pub(crate) fn add_block(
+    pub(in crate::executor) fn add_block(
         &mut self,
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
@@ -173,10 +173,6 @@ impl Store {
         self.functions
             .add_block(mother, outer, optional_params, info, sourceinfo)
     }
-
-    /*pub(crate) fn get_inline(&self, func_id: FuncId) -> Option<&InlineMethod> {
-        self.inline.get(&func_id)
-    }*/
 
     pub(super) fn add_builtin_func(
         &mut self,
@@ -194,10 +190,6 @@ impl Store {
     pub(super) fn add_attr_writer(&mut self, name: IdentId, ivar_name: IdentId) -> FuncId {
         self.functions.add_attr_writer(name, ivar_name)
     }
-
-    /*pub(super) fn add_inline(&mut self, func_id: FuncId, inline_id: InlineMethod) {
-        self.inline.insert(func_id, inline_id);
-    }*/
 
     pub(crate) fn callsite_offset(&self) -> usize {
         self.callsite_info.len()
@@ -249,7 +241,7 @@ impl Store {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConstSiteInfo {
+pub(in crate::executor) struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
     /// Qualifier.
