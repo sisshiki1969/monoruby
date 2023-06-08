@@ -1,6 +1,5 @@
+use super::*;
 use monoruby_attr::monoruby_builtin;
-
-use crate::*;
 
 //
 // Class class
@@ -8,7 +7,14 @@ use crate::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
-    globals.define_builtin_func(CLASS_CLASS, "new", new, -1);
+    globals.define_builtin_func(
+        CLASS_CLASS,
+        "new",
+        new,
+        -1,
+        /*inline_class_new,
+        analysis_class_new,*/
+    );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
 }
@@ -82,6 +88,44 @@ fn allocate(
     let obj = Value::new_object(class_id);
     Ok(obj)
 }
+
+/*fn inline_class_new(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    method_info: &MethodInfo,
+    ret: SlotId,
+    _pc: BcPc,
+    _deopt: DestLabel,
+) {
+    let MethodInfo { recv, .. } = method_info;
+    gen.load_rdi(*recv);
+    ctx.dealloc_xmm(ret);
+    let using = ctx.get_xmm_using();
+    gen.xmm_save(&using);
+    monoasm!( &mut gen.jit,
+        movq rax, (allocate_instance);
+        call rax;
+    );
+    gen.xmm_restore(&using);
+    //gen.jit_handle_error(ctx, pc);
+    gen.store_rax(ret);
+}
+
+fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+    let MethodInfo {
+        recv, args, len, ..
+    } = method_info;
+    info.use_non_float(*recv);
+    for r in args.0..args.0 + len {
+        info.use_non_float(SlotId(r));
+    }
+    info.def_as(ret, false);
+}
+
+extern "C" fn allocate_instance(class_val: Value) -> Value {
+    let class_id = class_val.as_class_id();
+    Value::new_object(class_id)
+}*/
 
 #[cfg(test)]
 mod test {

@@ -224,7 +224,8 @@ impl Store {
         kw_args: HashMap<IdentId, usize>,
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
-    ) {
+    ) -> CallSiteId {
+        let id = self.callsite_info.len();
         self.callsite_info.push(CallSiteInfo {
             name,
             pos_num,
@@ -232,7 +233,8 @@ impl Store {
             kw_args,
             splat_pos,
             hash_splat_pos,
-        })
+        });
+        CallSiteId(id as u32)
     }
 
     pub(crate) fn add_constsite(

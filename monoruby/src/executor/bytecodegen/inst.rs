@@ -781,12 +781,12 @@ impl TraceIr {
 
                     if let Some(func_data) = info.func_data {
                         if !has_splat {
-                            if let Some(inline) =
+                            if let Some(inline_id) =
                                 inline::InlineTable::get_inline(func_data.meta.func_id())
                             {
                                 return Self::InlineCall {
                                     ret: SlotId::new(op1),
-                                    inline_id: inline,
+                                    inline_id,
                                     info,
                                     class,
                                     version,

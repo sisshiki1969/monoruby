@@ -1,12 +1,9 @@
-def f(&p)
-  g(&p)
+class C
+  def initialize
+    @a=42
+  end
 end
 
-def g(&p)
-  p.call
+for i in 0..10
+  puts C.new.inspect
 end
-
-f { puts 100 }
-
-p = Proc.new { puts 200 }
-f(&p)

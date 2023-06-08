@@ -21,6 +21,10 @@ impl Codegen {
             {
                 monoasm!( &mut self.jit,
                     movq rax, [rdi + (16 + (cached_ivarid.get() as i32) * 8)];
+                    // We must check whether the ivar slot is None.
+                    testq rax, rax;
+                    jne  exit;
+                    movq rax, (NIL_VALUE);
                 );
             } else {
                 monoasm!( &mut self.jit,

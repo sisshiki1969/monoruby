@@ -7,7 +7,7 @@ use std::io::Write;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
+    //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
     globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
     globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);

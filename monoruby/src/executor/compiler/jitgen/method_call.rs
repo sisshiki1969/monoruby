@@ -274,6 +274,9 @@ impl Codegen {
                     cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [rdi + rsi * 8 + 16];
+                    testq rax,rax;
+                    jnz  exit;
+                    movq rax, (NIL_VALUE);
                 exit:
                 );
                 self.jit.select_page(1);

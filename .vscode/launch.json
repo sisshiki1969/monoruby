@@ -19,7 +19,7 @@
           "kind": "bin"
         }
       },
-      "args": ["benchmark/quick_sort.rb"],
+      "args": ["benchmark/app_aobench.rb"],
       "cwd": "${workspaceFolder}"
     },
     {
