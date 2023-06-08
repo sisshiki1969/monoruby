@@ -138,10 +138,10 @@ impl BasicBlockInfo {
         self.info.len()
     }
 
-    pub(super) fn init_bb_scan(&self, func: &ISeqInfo) -> Vec<(ExitType, SlotInfo)> {
+    pub(super) fn init_bb_scan(&self, func: &ISeqInfo, store: &Store) -> Vec<(ExitType, SlotInfo)> {
         let mut bb_scan = vec![];
         for entry in &self.info {
-            bb_scan.push(JitContext::scan_bb(func, entry));
+            bb_scan.push(JitContext::scan_bb(func, store, entry));
         }
         bb_scan
     }

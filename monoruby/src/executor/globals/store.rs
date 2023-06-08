@@ -1,6 +1,8 @@
 use monoasm::DestLabel;
 use ruruby_parse::LvarCollector;
 
+use crate::executor::inline::InlineMethodId;
+
 use super::*;
 use std::pin::Pin;
 
@@ -23,6 +25,8 @@ pub(in crate::executor) struct Store {
     constsite_info: Vec<ConstSiteInfo>,
     /// class table.
     classes: Vec<ClassInfo>,
+    /// inline method info.
+    inline_method: Vec<(InlineGen, InlineAnalysis)>,
 }
 
 impl std::ops::Index<FuncId> for Store {
@@ -93,10 +97,10 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
-            //inline: HashMap::default(),
             constsite_info: vec![],
             callsite_info: vec![],
             classes: vec![ClassInfo::new(); 20],
+            inline_method: vec![],
         }
     }
 
@@ -115,6 +119,23 @@ impl Store {
 
     pub(super) fn def_builtin_class(&mut self, class: ClassId) {
         self[class] = ClassInfo::new();
+    }
+}
+
+impl Store {
+    pub(crate) fn add_inline_info(
+        &mut self,
+        inline_gen: InlineGen,
+        inline_analysis: InlineAnalysis,
+    ) -> InlineMethodId {
+        let id = self.inline_method.len();
+        self.inline_method.push((inline_gen, inline_analysis));
+        InlineMethodId::new(id)
+    }
+
+    pub(crate) fn get_inline_info(&self, id: InlineMethodId) -> (InlineGen, InlineAnalysis) {
+        let id: usize = id.into();
+        self.inline_method[id]
     }
 }
 

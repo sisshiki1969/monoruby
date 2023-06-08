@@ -15,14 +15,10 @@ pub use error::*;
 use prng::*;
 pub use store::*;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum InlineMethod {
-    IntegerTof,
-    MathSqrt,
-    MathCos,
-    MathSin,
-    ObjectNil,
-}
+pub(in crate::executor) type InlineGen =
+    fn(&mut Codegen, &mut jitgen::BBContext, &MethodInfo, SlotId, BcPc, DestLabel);
+pub(in crate::executor) type InlineAnalysis =
+    fn(&mut jitgen::analysis::SlotInfo, &MethodInfo, SlotId);
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct MethodTableEntry {

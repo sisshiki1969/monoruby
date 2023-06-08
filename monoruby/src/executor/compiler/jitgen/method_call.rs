@@ -1,137 +1,11 @@
 use super::*;
 
 impl Codegen {
-    extern "C" fn cos(f: f64) -> f64 {
-        f.cos()
-    }
-
-    extern "C" fn sin(f: f64) -> f64 {
-        f.sin()
-    }
-
-    fn integer_tof(
-        gen: &mut Codegen,
-        ctx: &mut BBContext,
-        method_info: &MethodInfo,
-        ret: SlotId,
-        pc: BcPc,
-        deopt: DestLabel,
-    ) {
-        let MethodInfo { recv, .. } = method_info;
-        gen.load_rdi(*recv);
-        if !recv.is_zero() {
-            gen.guard_class(pc.class_version().0, deopt);
-        }
-        let fret = ctx.xmm_write(ret);
-        monoasm!( &mut gen.jit,
-            sarq  rdi, 1;
-            cvtsi2sdq xmm(fret.enc()), rdi;
-        );
-    }
-
-    fn math_sqrt(
-        gen: &mut Codegen,
-        ctx: &mut BBContext,
-        method_info: &MethodInfo,
-        ret: SlotId,
-        pc: BcPc,
-        deopt: DestLabel,
-    ) {
-        let MethodInfo { recv, args, .. } = method_info;
-        gen.load_rdi(*recv);
-        if !recv.is_zero() {
-            gen.guard_class(pc.class_version().0, deopt);
-        }
-        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
-        let fret = ctx.xmm_write(ret);
-        monoasm!( &mut gen.jit,
-            sqrtsd xmm(fret.enc()), xmm(fsrc.enc());
-        );
-    }
-
-    fn math_cos(
-        gen: &mut Codegen,
-        ctx: &mut BBContext,
-        method_info: &MethodInfo,
-        ret: SlotId,
-        pc: BcPc,
-        deopt: DestLabel,
-    ) {
-        let MethodInfo { recv, args, .. } = method_info;
-        gen.load_rdi(*recv);
-        if !recv.is_zero() {
-            gen.guard_class(pc.class_version().0, deopt);
-        }
-        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
-        let fret = ctx.xmm_write(ret);
-        let xmm_using = ctx.get_xmm_using();
-        gen.xmm_save(&xmm_using);
-        monoasm!( &mut gen.jit,
-            movq xmm0, xmm(fsrc.enc());
-            movq rax, (Self::cos);
-            call rax;
-        );
-        gen.xmm_restore(&xmm_using);
-        monoasm!( &mut gen.jit,
-            movq xmm(fret.enc()), xmm0;
-        );
-    }
-
-    fn math_sin(
-        gen: &mut Codegen,
-        ctx: &mut BBContext,
-        method_info: &MethodInfo,
-        ret: SlotId,
-        pc: BcPc,
-        deopt: DestLabel,
-    ) {
-        let MethodInfo { recv, args, .. } = method_info;
-        gen.load_rdi(*recv);
-        if !recv.is_zero() {
-            gen.guard_class(pc.class_version().0, deopt);
-        }
-        let fsrc = gen.fetch_float_assume_float(ctx, *args, pc);
-        let fret = ctx.xmm_write(ret);
-        let xmm_using = ctx.get_xmm_using();
-        gen.xmm_save(&xmm_using);
-        monoasm!( &mut gen.jit,
-            movq xmm0, xmm(fsrc.enc());
-            movq rax, (Self::sin);
-            call rax;
-        );
-        gen.xmm_restore(&xmm_using);
-        monoasm!( &mut gen.jit,
-            movq xmm(fret.enc()), xmm0;
-        );
-    }
-
-    fn object_nil(
-        gen: &mut Codegen,
-        ctx: &mut BBContext,
-        method_info: &MethodInfo,
-        ret: SlotId,
-        _pc: BcPc,
-        _deopt: DestLabel,
-    ) {
-        let MethodInfo { recv, .. } = method_info;
-        gen.load_rdi(*recv);
-        ctx.dealloc_xmm(ret);
-        let l1 = gen.jit.label();
-        monoasm!( &mut gen.jit,
-            movq rax, (FALSE_VALUE);
-            cmpq rdi, (NIL_VALUE);
-            jne  l1;
-            movq rax, (TRUE_VALUE);
-        l1:
-        );
-        gen.store_rax(ret);
-    }
-
     pub(super) fn gen_inlinable(
         &mut self,
         ctx: &mut BBContext,
         method_info: &MethodInfo,
-        inline_id: &InlineMethod,
+        inline_gen: InlineGen,
         ret: SlotId,
         pc: BcPc,
     ) {
@@ -140,23 +14,7 @@ impl Codegen {
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         self.guard_version(version, deopt);
-        match inline_id {
-            InlineMethod::IntegerTof => {
-                Self::integer_tof(self, ctx, method_info, ret, pc, deopt);
-            }
-            InlineMethod::MathSqrt => {
-                Self::math_sqrt(self, ctx, method_info, ret, pc, deopt);
-            }
-            InlineMethod::MathCos => {
-                Self::math_cos(self, ctx, method_info, ret, pc, deopt);
-            }
-            InlineMethod::MathSin => {
-                Self::math_sin(self, ctx, method_info, ret, pc, deopt);
-            }
-            InlineMethod::ObjectNil => {
-                Self::object_nil(self, ctx, method_info, ret, pc, deopt);
-            }
-        }
+        inline_gen(self, ctx, method_info, ret, pc, deopt);
     }
 
     pub(super) fn gen_call(

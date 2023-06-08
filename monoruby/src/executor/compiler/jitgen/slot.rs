@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, PartialEq)]
-pub(super) struct SlotState {
+pub(in crate::executor) struct SlotState {
     slots: Vec<LinkMode>,
     /// Information for xmm registers.
     xmm: [Vec<SlotId>; 14],
@@ -112,7 +112,7 @@ impl SlotState {
     ///
     /// Deallocate an xmm register corresponding to the stack slot *reg*.
     ///
-    pub(super) fn dealloc_xmm(&mut self, reg: SlotId) {
+    pub(crate) fn dealloc_xmm(&mut self, reg: SlotId) {
         match self[reg] {
             LinkMode::Both(freg) | LinkMode::Xmm(freg) => {
                 assert!(self.xmm[freg.0 as usize].contains(&reg));
@@ -162,6 +162,10 @@ impl SlotState {
                 freg
             }
         }
+    }
+
+    pub(crate) fn xmm_write_enc(&mut self, reg: SlotId) -> u64 {
+        self.xmm_write(reg).enc()
     }
 
     pub(super) fn merge(&mut self, other: &BBContext) {
@@ -262,7 +266,7 @@ impl SlotState {
         WriteBack::new(xmm, constants)
     }
 
-    pub(super) fn get_xmm_using(&self) -> Vec<Xmm> {
+    pub(crate) fn get_xmm_using(&self) -> Vec<Xmm> {
         self.xmm
             .iter()
             .enumerate()

@@ -614,7 +614,7 @@ pub(in crate::executor) enum TraceIr {
     },
     InlineCall {
         ret: SlotId,
-        method: InlineMethod,
+        inline_id: crate::executor::inline::InlineMethodId,
         info: MethodInfo,
         #[allow(dead_code)]
         class: ClassId,
@@ -781,12 +781,12 @@ impl TraceIr {
 
                     if let Some(func_data) = info.func_data {
                         if !has_splat {
-                            if let Some(inline_id) =
+                            if let Some(inline) =
                                 inline::InlineTable::get_inline(func_data.meta.func_id())
                             {
                                 return Self::InlineCall {
                                     ret: SlotId::new(op1),
-                                    method: inline_id,
+                                    inline_id: inline,
                                     info,
                                     class,
                                     version,

@@ -1028,7 +1028,7 @@ impl BcPc {
             }
             TraceIr::InlineCall {
                 ret,
-                method,
+                inline_id,
                 info,
                 class,
                 ..
@@ -1037,13 +1037,13 @@ impl BcPc {
                     recv, args, len, ..
                 } = info;
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.inline {:?}()", ret.ret_str(), recv, method,)
+                    format!("{} = {:?}.inline {:?}()", ret.ret_str(), recv, inline_id,)
                 } else {
                     format!(
                         "{} = {:?}.inline {:?}({:?}; {})",
                         ret.ret_str(),
                         recv,
-                        method,
+                        inline_id,
                         args,
                         len,
                     )

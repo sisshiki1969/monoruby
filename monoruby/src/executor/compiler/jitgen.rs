@@ -8,7 +8,7 @@ use super::*;
 use analysis::{ExitType, SlotInfo};
 use slot::SlotState;
 
-mod analysis;
+pub mod analysis;
 mod basic_block;
 mod binary_op;
 mod compile;
@@ -111,7 +111,13 @@ impl JitContext {
     ///
     /// Create new JitContext.
     ///
-    fn new(func: &ISeqInfo, codegen: &mut Codegen, is_loop: bool, self_value: Value) -> Self {
+    fn new(
+        func: &ISeqInfo,
+        store: &Store,
+        codegen: &mut Codegen,
+        is_loop: bool,
+        self_value: Value,
+    ) -> Self {
         let mut labels = HashMap::default();
         for i in 0..func.bytecode_len() {
             let idx = BcIndex::from(i);
@@ -119,7 +125,7 @@ impl JitContext {
                 labels.insert(idx, codegen.jit.label());
             }
         }
-        let bb_scan = func.bb_info.init_bb_scan(func);
+        let bb_scan = func.bb_info.init_bb_scan(func, store);
 
         #[cfg(feature = "emit-asm")]
         let start_codepos = codegen.jit.get_current();
@@ -208,7 +214,7 @@ impl WriteBack {
 /// Context of the current Basic block.
 ///
 #[derive(Debug, Clone, PartialEq)]
-struct BBContext {
+pub(in crate::executor) struct BBContext {
     /// Information for stack slots.
     slot_state: SlotState,
     self_value: Value,
@@ -279,7 +285,7 @@ impl InlineCached {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
-struct Xmm(u16);
+pub(in crate::executor) struct Xmm(u16);
 
 impl Xmm {
     fn new(id: u16) -> Self {
@@ -295,7 +301,7 @@ impl Xmm {
 /// Mode of linkage between stack slot and xmm registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum LinkMode {
+pub(in crate::executor) enum LinkMode {
     ///
     /// Linked to an xmm register and we can read and write.
     ///
@@ -374,7 +380,7 @@ impl Codegen {
         let func = store[func_id].as_ruby_func();
         let start_pos = func.get_pc_index(position);
 
-        let mut ctx = JitContext::new(func, self, position.is_some(), self_value);
+        let mut ctx = JitContext::new(func, store, self, position.is_some(), self_value);
         for (loop_start, loop_end) in func.bb_info.loops() {
             let (backedge, exit) = ctx.analyse_loop(func, *loop_start, *loop_end);
             ctx.loop_backedges.insert(*loop_start, backedge);
@@ -442,7 +448,7 @@ macro_rules! load_store {
             /// store $reg to *reg*
             ///
             #[allow(dead_code)]
-            fn [<store_ $reg>](&mut self, reg: SlotId) {
+            pub(in crate::executor) fn [<store_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
                     movq [r14 - (conv(reg))], $reg;
                 );
@@ -452,7 +458,7 @@ macro_rules! load_store {
             /// load *reg* to $reg
             ///
             #[allow(dead_code)]
-            fn [<load_ $reg>](&mut self, reg: SlotId) {
+            pub(in crate::executor) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
                     movq $reg, [r14 - (conv(reg))];
                 );
@@ -1095,10 +1101,14 @@ impl Codegen {
                     }
                 }
                 TraceIr::InlineCall {
-                    ret, method, info, ..
+                    ret,
+                    inline_id,
+                    info,
+                    ..
                 } => {
                     self.fetch_slot(&mut ctx, info.recv);
-                    self.gen_inlinable(&mut ctx, &info, &method, ret, pc);
+                    let gen = store.get_inline_info(inline_id).0;
+                    self.gen_inlinable(&mut ctx, &info, gen, ret, pc);
                 }
                 TraceIr::Yield {
                     ret,
@@ -1482,7 +1492,7 @@ impl Codegen {
         }
     }
 
-    fn xmm_save(&mut self, xmm_using: &[Xmm]) {
+    pub(in crate::executor) fn xmm_save(&mut self, xmm_using: &[Xmm]) {
         let len = xmm_using.len();
         if len == 0 {
             return;
@@ -1498,7 +1508,7 @@ impl Codegen {
         }
     }
 
-    fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
+    pub(in crate::executor) fn xmm_restore(&mut self, xmm_using: &[Xmm]) {
         let len = xmm_using.len();
         if len == 0 {
             return;

@@ -54,15 +54,17 @@ impl Globals {
         func_id
     }
 
-    pub(crate) fn define_builtin_func_inlinable(
+    pub(in crate::executor) fn define_builtin_func_inlinable(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         arity: i32,
-        inline_id: InlineMethod,
+        inline_gen: InlineGen,
+        inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let func_id = self.define_builtin_func(class_id, name, address, arity);
+        let inline_id = self.store.add_inline_info(inline_gen, inline_analysis);
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }
@@ -89,15 +91,17 @@ impl Globals {
         self.define_builtin_func(class_id, name, address, arity)
     }
 
-    pub(crate) fn define_builtin_module_func_inlinable(
+    pub(in crate::executor) fn define_builtin_module_func_inlinable(
         &mut self,
         class_id: ClassId,
         name: &str,
         address: BuiltinFn,
         arity: i32,
-        inline_id: InlineMethod,
+        inline_gen: InlineGen,
+        inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let func_id = self.define_builtin_module_func(class_id, name, address, arity);
+        let inline_id = self.store.add_inline_info(inline_gen, inline_analysis);
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }

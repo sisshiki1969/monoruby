@@ -149,6 +149,15 @@ impl Codegen {
             }
         }
     }
+
+    pub(in crate::executor) fn fetch_float_assume_float_enc(
+        &mut self,
+        ctx: &mut BBContext,
+        reg: SlotId,
+        pc: BcPc,
+    ) -> u64 {
+        self.fetch_float_assume_float(ctx, reg, pc).enc()
+    }
 }
 
 impl Codegen {

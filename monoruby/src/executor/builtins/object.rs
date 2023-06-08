@@ -1,8 +1,6 @@
-use std::io::Write;
-
+use super::*;
 use num::Zero;
-
-use crate::*;
+use std::io::Write;
 
 //
 // Object class
@@ -17,7 +15,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
-    globals.define_builtin_func_inlinable(OBJECT_CLASS, "nil?", nil, 0, InlineMethod::ObjectNil);
+    globals.define_builtin_func_inlinable(
+        OBJECT_CLASS,
+        "nil?",
+        nil,
+        0,
+        object_nil,
+        analysis_object_nil,
+    );
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(
@@ -660,6 +665,33 @@ fn abort(
         }
     }
     std::process::exit(1);
+}
+
+fn object_nil(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    method_info: &MethodInfo,
+    ret: SlotId,
+    _pc: BcPc,
+    _deopt: DestLabel,
+) {
+    let MethodInfo { recv, .. } = method_info;
+    gen.load_rdi(*recv);
+    ctx.dealloc_xmm(ret);
+    let l1 = gen.jit.label();
+    monoasm!( &mut gen.jit,
+        movq rax, (FALSE_VALUE);
+        cmpq rdi, (NIL_VALUE);
+        jne  l1;
+        movq rax, (TRUE_VALUE);
+    l1:
+    );
+    gen.store_rax(ret);
+}
+
+fn analysis_object_nil(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+    info.use_non_float(method_info.recv);
+    info.def_as(ret, false);
 }
 
 #[cfg(test)]

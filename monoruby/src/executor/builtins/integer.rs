@@ -1,6 +1,5 @@
+use super::*;
 use num::ToPrimitive;
-
-use crate::*;
 
 //
 // Integer class
@@ -10,7 +9,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func(INTEGER_CLASS, "step", step, -1);
-    globals.define_builtin_func_inlinable(INTEGER_CLASS, "to_f", to_f, 0, InlineMethod::IntegerTof);
+    globals.define_builtin_func_inlinable(
+        INTEGER_CLASS,
+        "to_f",
+        to_f,
+        0,
+        integer_tof,
+        analysis_integer_tof,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
@@ -192,6 +198,31 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
             Err(err)
         }
     }
+}
+
+fn integer_tof(
+    gen: &mut Codegen,
+    ctx: &mut BBContext,
+    method_info: &MethodInfo,
+    ret: SlotId,
+    pc: BcPc,
+    deopt: DestLabel,
+) {
+    let MethodInfo { recv, .. } = method_info;
+    gen.load_rdi(*recv);
+    if !recv.is_zero() {
+        gen.guard_class(pc.class_version().0, deopt);
+    }
+    let fret = ctx.xmm_write_enc(ret);
+    monoasm!( &mut gen.jit,
+        sarq  rdi, 1;
+        cvtsi2sdq xmm(fret), rdi;
+    );
+}
+
+fn analysis_integer_tof(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+    info.use_non_float(method_info.recv);
+    info.def_as(ret, true);
 }
 
 #[cfg(test)]

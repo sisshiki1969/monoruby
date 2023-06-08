@@ -181,7 +181,11 @@ impl JitContext {
     ///
     /// Scan a single basic block.
     ///
-    pub(super) fn scan_bb(func: &ISeqInfo, entry: &BasciBlockInfoEntry) -> (ExitType, SlotInfo) {
+    pub(super) fn scan_bb(
+        func: &ISeqInfo,
+        store: &Store,
+        entry: &BasciBlockInfoEntry,
+    ) -> (ExitType, SlotInfo) {
         let mut info = SlotInfo::new(func.total_reg_num());
         let BasciBlockInfoEntry { begin, end, .. } = entry;
         for pc in func.bytecode()[begin.to_usize()..=end.to_usize()].iter() {
@@ -417,36 +421,11 @@ impl JitContext {
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
                     ret,
-                    method,
+                    inline_id,
                     info: method_info,
                     ..
                 } => {
-                    let MethodInfo { recv, args, .. } = method_info;
-                    match method {
-                        InlineMethod::IntegerTof => {
-                            info.use_non_float(recv);
-                            info.def_as(ret, true);
-                        }
-                        InlineMethod::MathSqrt => {
-                            info.use_non_float(recv);
-                            info.use_as(args, true, FLOAT_CLASS);
-                            info.def_as(ret, true);
-                        }
-                        InlineMethod::MathCos => {
-                            info.use_non_float(recv);
-                            info.use_as(args, true, FLOAT_CLASS);
-                            info.def_as(ret, true);
-                        }
-                        InlineMethod::MathSin => {
-                            info.use_non_float(recv);
-                            info.use_as(args, true, FLOAT_CLASS);
-                            info.def_as(ret, true);
-                        }
-                        InlineMethod::ObjectNil => {
-                            info.use_non_float(recv);
-                            info.def_as(ret, false);
-                        }
-                    }
+                    store.get_inline_info(inline_id).1(&mut info, &method_info, ret);
                 }
                 TraceIr::Ret(ret) | TraceIr::MethodRet(ret) | TraceIr::Break(ret) => {
                     info.def_as(ret, false);
@@ -470,7 +449,7 @@ impl JitContext {
 }
 
 #[derive(Clone)]
-pub(super) struct SlotInfo {
+pub(in crate::executor) struct SlotInfo {
     info: Vec<State>,
 }
 
@@ -550,7 +529,7 @@ impl SlotInfo {
         }
     }
 
-    fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
+    pub(crate) fn use_as(&mut self, slot: SlotId, use_as_float: bool, class: ClassId) {
         self[slot].ty = if use_as_float {
             if class == FLOAT_CLASS {
                 match self[slot].ty {
@@ -573,7 +552,7 @@ impl SlotInfo {
         self.use_(slot);
     }
 
-    fn use_non_float(&mut self, slot: SlotId) {
+    pub(crate) fn use_non_float(&mut self, slot: SlotId) {
         self.use_as(slot, false, NIL_CLASS)
     }
 
@@ -587,7 +566,7 @@ impl SlotInfo {
         }
     }
 
-    fn def_as(&mut self, slot: SlotId, is_float: bool) {
+    pub(crate) fn def_as(&mut self, slot: SlotId, is_float: bool) {
         if slot.is_zero() {
             return;
         }
@@ -652,7 +631,7 @@ impl std::ops::IndexMut<usize> for SlotInfo {
 /// The state of slots.
 ///
 #[derive(Clone)]
-pub(super) struct State {
+pub(crate) struct State {
     /// Type information for a backedge branch.
     ty: Ty,
     /// Whether the slot is used or not.

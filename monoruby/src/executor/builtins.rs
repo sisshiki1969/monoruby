@@ -19,6 +19,10 @@ mod regexp;
 mod string;
 mod time;
 
+pub(self) use crate::executor::jitgen::analysis::SlotInfo;
+pub(self) use crate::executor::jitgen::BBContext;
+pub(self) use monoasm::DestLabel;
+pub(self) use monoasm_macro::monoasm;
 pub use time::TimeInner;
 
 //
