@@ -29,6 +29,15 @@ pub(super) extern "C" fn find_method(
     Some(func_data.as_ptr())
 }
 
+pub(in crate::executor) extern "C" fn check_initializer(
+    globals: &mut Globals,
+    receiver: Value,
+) -> Option<FuncDataPtr> {
+    let func_id = globals.check_method(receiver, IdentId::INITIALIZE)?;
+    let data = globals.compile_on_demand(func_id);
+    Some(data.as_ptr())
+}
+
 pub(super) extern "C" fn get_classdef_data<'a>(
     vm: &mut Executor,
     globals: &'a mut Globals,
@@ -719,7 +728,7 @@ pub(super) extern "C" fn panic(_: &mut Executor, _: &mut Globals) {
 }
 
 pub(super) extern "C" fn illegal_classid(v: Value) {
-    panic!("illegal Value for ge_class(): {:016x}", v.get());
+    panic!("illegal Value for get_class(): {:016x}", v.get());
 }
 
 pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {

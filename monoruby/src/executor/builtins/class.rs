@@ -7,13 +7,13 @@ use monoruby_attr::monoruby_builtin;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
-    globals.define_builtin_func(
+    globals.define_builtin_func_inlinable(
         CLASS_CLASS,
         "new",
         new,
         -1,
-        /*inline_class_new,
-        analysis_class_new,*/
+        inline_class_new,
+        analysis_class_new,
     );
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
@@ -89,26 +89,74 @@ fn allocate(
     Ok(obj)
 }
 
-/*fn inline_class_new(
+fn inline_class_new(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
     ret: SlotId,
-    _pc: BcPc,
+    pc: BcPc,
     _deopt: DestLabel,
 ) {
-    let MethodInfo { recv, .. } = method_info;
-    gen.load_rdi(*recv);
+    let MethodInfo {
+        recv, args, len, ..
+    } = method_info;
     ctx.dealloc_xmm(ret);
+    gen.fetch_range(ctx, *args, *len);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
+    gen.load_rdi(*recv);
+    let cached_version = gen.jit.const_i32(-1);
+    let cached_funcdata = gen.jit.const_i64(-1);
+    let class_version = gen.class_version;
+    let slow_path = gen.jit.label();
+    let checked = gen.jit.label();
+    let exit = gen.jit.label();
     monoasm!( &mut gen.jit,
         movq rax, (allocate_instance);
         call rax;
+        movq r15, rax; // r15 <- new instance
+        movl rax, [rip + class_version];
+        cmpl rax, [rip + cached_version];
+        jne  slow_path;
+    checked:
+        movq rax, [rip + cached_funcdata];
+        testq rax, rax;
+        je  exit;
+    );
+    monoasm!( &mut gen.jit,
+        movq rdi, rbx;
+        movq rsi, r12;
+        movq rdx, rax;
+        movq rcx, r15;
+        lea r8, [r14 - (conv(*args))];
+        movl r9, (*len);
+        movq rax, (gen.method_invoker2);
+        call rax;
+    exit:
     );
     gen.xmm_restore(&using);
     //gen.jit_handle_error(ctx, pc);
-    gen.store_rax(ret);
+    if !ret.is_zero() {
+        gen.store_r15(ret);
+    }
+
+    gen.jit.select_page(1);
+    monoasm!( &mut gen.jit,
+    slow_path:
+        movq rdi, r12;
+        movq rsi, r15;
+        movq rax, (runtime::check_initializer);
+        call rax;
+        movq [rip + cached_funcdata], rax;
+        movl rax, [rip + class_version];
+        movl [rip + cached_version], rax;
+        jmp  checked;
+    );
+    gen.jit.select_page(0);
+}
+
+fn conv(reg: SlotId) -> i64 {
+    reg.0 as i64 * 8 + LBP_SELF
 }
 
 fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
@@ -125,7 +173,7 @@ fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId
 extern "C" fn allocate_instance(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
     Value::new_object(class_id)
-}*/
+}
 
 #[cfg(test)]
 mod test {

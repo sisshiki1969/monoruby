@@ -472,6 +472,7 @@ impl Codegen {
     load_store!(rdi);
     load_store!(rsi);
     load_store!(rcx);
+    load_store!(r15);
 
     ///
     /// move xmm(*src*) to xmm(*dst*).
@@ -1341,7 +1342,7 @@ impl Codegen {
 }
 
 impl Codegen {
-    fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
+    pub(in crate::executor) fn jit_handle_error(&mut self, ctx: &BBContext, pc: BcPc) {
         let raise = self.entry_raise;
         let wb = ctx.get_write_back();
         if self.jit.get_page() == 0 {

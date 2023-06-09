@@ -92,7 +92,7 @@ macro_rules! cmp_opt_main {
 pub struct Codegen {
     pub jit: JitMemory,
     pub main_object: Value,
-    class_version: DestLabel,
+    pub(super) class_version: DestLabel,
     pub(super) class_version_addr: *mut u32,
     alloc_flag: DestLabel,
     const_version: DestLabel,
@@ -693,6 +693,7 @@ impl Codegen {
     fn get_class(jit: &mut JitMemory) {
         let l1 = jit.label();
         let exit = jit.label();
+        let err = jit.label();
         monoasm!(jit,
                 movl  rax, (INTEGER_CLASS.0);
                 testq rdi, 0b001;
@@ -702,6 +703,8 @@ impl Codegen {
                 jnz   exit;
                 testq rdi, 0b111;
                 jnz   l1;
+                testq rdi, rdi;
+                jz    err;
                 movl  rax, [rdi + 4];
                 jmp   exit;
             l1:
@@ -717,6 +720,7 @@ impl Codegen {
                 movl  rax, (FALSE_CLASS.0);
                 cmpq  rdi, (FALSE_VALUE);
                 je    exit;
+            err:
                 movq  rax, (runtime::illegal_classid);  // rdi: Value
                 call  rax;
                 // no return

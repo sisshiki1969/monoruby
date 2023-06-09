@@ -33,7 +33,7 @@ impl Codegen {
     ///
     /// Fetch from *args* to *args* + *len* - 1 and store in corresponding stack slots.
     ///
-    pub(super) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
+    pub(in crate::executor) fn fetch_range(&mut self, ctx: &mut BBContext, args: SlotId, len: u16) {
         for reg in args.0..args.0 + len {
             self.fetch_slot(ctx, SlotId::new(reg))
         }
