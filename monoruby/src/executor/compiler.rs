@@ -123,6 +123,19 @@ pub struct Codegen {
     /// - caller saved registers except rdi
     ///
     f64_to_val: DestLabel,
+    ///
+    /// Copy f64 of flonum to *xmm*.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - xmm0
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    flonum_to_f64: DestLabel,
     div_by_zero: DestLabel,
     no_block: DestLabel,
     ///
@@ -182,6 +195,9 @@ impl Codegen {
         let f64_to_val = jit.label();
         jit.bind_label(f64_to_val);
         Self::f64_to_val(&mut jit);
+        let flonum_to_f64 = jit.label();
+        jit.bind_label(flonum_to_f64);
+        Self::flonum_to_f64(&mut jit);
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
@@ -208,6 +224,7 @@ impl Codegen {
             vm_fetch: entry_panic,
             entry_raise: entry_panic,
             f64_to_val,
+            flonum_to_f64,
             div_by_zero: entry_panic,
             no_block,
             wrong_argument,
@@ -762,6 +779,38 @@ impl Codegen {
             call rax;
             xorq rax, rax;
             leave;
+            ret;
+        }
+    }
+
+    ///
+    /// Copy f64 of flonum to *xmm*.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### out
+    /// - xmm0
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    pub(super) fn flonum_to_f64(jit: &mut JitMemory) {
+        let exit = jit.label();
+        monoasm! {jit,
+            xorps xmm0, xmm0;
+            movq rax, (FLOAT_ZERO);
+            cmpq rdi, rax;
+            // in the case of 0.0
+            je exit;
+            movq rax, rdi;
+            sarq rax, 63;
+            addq rax, 2;
+            andq rdi, (-4);
+            orq rdi, rax;
+            rolq rdi, 61;
+            movq xmm0, rdi;
+        exit:
             ret;
         }
     }
