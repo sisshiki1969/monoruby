@@ -1036,14 +1036,14 @@ impl BcPc {
                 let MethodInfo {
                     recv, args, len, ..
                 } = info;
+                let name = &globals.store.get_inline_info(inline_id).2;
                 let op1 = if len == 0 {
-                    format!("{} = {:?}.inline {:?}()", ret.ret_str(), recv, inline_id,)
+                    format!("{} = {:?}.inline {name}()", ret.ret_str(), recv,)
                 } else {
                     format!(
-                        "{} = {:?}.inline {:?}({:?}; {})",
+                        "{} = {:?}.inline {name}({:?}; {})",
                         ret.ret_str(),
                         recv,
-                        inline_id,
                         args,
                         len,
                     )

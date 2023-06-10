@@ -64,7 +64,11 @@ impl Globals {
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let func_id = self.define_builtin_func(class_id, name, address, arity);
-        let inline_id = self.store.add_inline_info(inline_gen, inline_analysis);
+        let inline_id = self.store.add_inline_info(
+            inline_gen,
+            inline_analysis,
+            format!("{}#{name}", class_id.get_name(self)),
+        );
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }
@@ -101,7 +105,11 @@ impl Globals {
         inline_analysis: InlineAnalysis,
     ) -> FuncId {
         let func_id = self.define_builtin_module_func(class_id, name, address, arity);
-        let inline_id = self.store.add_inline_info(inline_gen, inline_analysis);
+        let inline_id = self.store.add_inline_info(
+            inline_gen,
+            inline_analysis,
+            format!("{}#{name}", class_id.get_name(self)),
+        );
         inline::InlineTable::add_inline(func_id, inline_id);
         func_id
     }

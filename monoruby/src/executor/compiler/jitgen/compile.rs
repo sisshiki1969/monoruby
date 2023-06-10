@@ -104,29 +104,47 @@ impl Codegen {
         let xmm_using = ctx.get_xmm_using();
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             let exit = self.jit.label();
-            let heap = self.jit.label();
             let generic = self.jit.label();
+            let heap = self.jit.label();
             let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
-                movq rsi, [r14 - (conv(idx))]; // idx: Value
-            };
+            }
             self.guard_class(ARRAY_CLASS, deopt);
+            if let LinkMode::Const(c) = ctx[idx] && c.is_fixnum() && c.as_fixnum() >=0 {
+                let c = c.as_fixnum();
+                monoasm! { &mut self.jit,
+                    movq rsi, (c);
+                    //no lower range check
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    jne generic;
+                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq rax, (ARRAY_INLINE_CAPA);
+                    jgt  heap;
+                    // upper range check
+                    cmpq rax, (c);
+                    jle  generic;
+                }
+            } else {
+                monoasm! { &mut self.jit,
+                    movq rsi, [r14 - (conv(idx))]; // idx: Value
+                    testq rsi, 0b01;
+                    jeq deopt;
+                    sarq rsi, 1;
+                    // lower range check
+                    cmpq rsi, 0;
+                    jlt generic;
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    jne generic;
+                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq rax, (ARRAY_INLINE_CAPA);
+                    jgt  heap;
+                    // upper range check
+                    cmpq rax, rsi;
+                    jle  generic;
+                }
+            }
             monoasm! { &mut self.jit,
-                testq rsi, 0b01;
-                jeq deopt;
-                sarq rsi, 1;
-                // lower range check
-                cmpq rsi, 0;
-                jlt generic;
-                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
-                jne generic;
-                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                cmpq rax, (ARRAY_INLINE_CAPA);
-                jgt  heap;
-                // upper range check
-                cmpq rsi, rax;
-                jge  generic;
                 movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
                 jmp exit;
             heap:
@@ -136,20 +154,21 @@ impl Codegen {
                 jge generic;
                 movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
                 movq rax, [rdi + rsi * 8];
-            };
+            exit:
+            }
+
             self.jit.select_page(1);
             self.jit.bind_label(generic);
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
                 movq rax, (runtime::get_array_integer_index);
                 call rax;
-            };
+            }
             self.xmm_restore(&xmm_using);
             monoasm! { &mut self.jit,
                 jmp  exit;
             };
             self.jit.select_page(0);
-            self.jit.bind_label(exit);
         } else {
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
@@ -160,7 +179,7 @@ impl Codegen {
                 movq r8, (pc.get_u64() + 8);
                 movq rax, (runtime::get_index);
                 call rax;
-            };
+            }
             self.xmm_restore(&xmm_using);
         }
         self.jit_handle_error(ctx, pc);
@@ -183,24 +202,42 @@ impl Codegen {
             let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(base))]; // base: Value
-                movq rsi, [r14 - (conv(idx))]; // idx: Value
             };
             self.guard_class(ARRAY_CLASS, deopt);
+            if let LinkMode::Const(c) = ctx[idx] && c.is_fixnum() && c.as_fixnum() >=0 {
+                let c = c.as_fixnum();
+                monoasm! { &mut self.jit,
+                    movq rsi, (c); // idx: Value
+                    // no lower range check
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    jne generic;
+                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq rax, (ARRAY_INLINE_CAPA);
+                    jgt  heap;
+                    // upper range check
+                    cmpq rax, (c);
+                    jle  generic;
+                };
+            } else {
+                monoasm! { &mut self.jit,
+                    movq rsi, [r14 - (conv(idx))]; // idx: Value
+                    testq rsi, 0b01;
+                    jeq deopt;
+                    sarq rsi, 1;
+                    // lower range check
+                    cmpq rsi, 0;
+                    jlt generic;
+                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    jne generic;
+                    movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                    cmpq rax, (ARRAY_INLINE_CAPA);
+                    jgt  heap;
+                    // upper range check
+                    cmpq rax, rsi;
+                    jle  generic;
+                };
+            }
             monoasm! { &mut self.jit,
-                testq rsi, 0b01;
-                jeq deopt;
-                sarq rsi, 1;
-                // lower range check
-                cmpq rsi, 0;
-                jlt generic;
-                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
-                jne generic;
-                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-                cmpq rax, (ARRAY_INLINE_CAPA);
-                jgt  heap;
-                // upper range check
-                cmpq rsi, rax;
-                jge  generic;
                 movq rax, [r14 - (conv(src))];
                 movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
                 jmp exit;
@@ -212,7 +249,9 @@ impl Codegen {
                 movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
                 movq rax, [r14 - (conv(src))];
                 movq [rdi + rsi * 8], rax;
+            exit:
             };
+
             self.jit.select_page(1);
             self.jit.bind_label(generic);
             self.xmm_save(&xmm_using);
@@ -228,7 +267,6 @@ impl Codegen {
                 jmp  exit;
             };
             self.jit.select_page(0);
-            self.jit.bind_label(exit);
         } else {
             self.xmm_save(&xmm_using);
             monoasm! { &mut self.jit,
