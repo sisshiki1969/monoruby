@@ -151,58 +151,14 @@ impl Codegen {
             jnz flonum;
         }
         self.guard_rvalue(FLOAT_CLASS, side_exit);
-        self.heap_to_f64(xmm);
-        monoasm! {&mut self.jit,
-            jmp  exit;
-        };
-        self.jit.bind_label(flonum);
-        self.flonum_to_f64(xmm);
-        self.jit.bind_label(exit);
-    }
-
-    ///
-    /// Copy f64 of flonum to *xmm*.
-    ///
-    /// ### in
-    /// - rdi: Value
-    ///
-    /// ### out
-    /// - xmm(*xmm*)
-    ///
-    /// ### destroy
-    /// - rax, rdi
-    ///
-    fn flonum_to_f64(&mut self, xmm: u64) {
-        let exit = self.jit.label();
-        monoasm! {&mut self.jit,
-            xorps xmm(xmm), xmm(xmm);
-            movq rax, (FLOAT_ZERO);
-            cmpq rdi, rax;
-            // in the case of 0.0
-            je exit;
-            movq rax, rdi;
-            sarq rax, 63;
-            addq rax, 2;
-            andq rdi, (-4);
-            orq rdi, rax;
-            rolq rdi, 61;
-            movq xmm(xmm), rdi;
-        exit:
-        }
-    }
-
-    ///
-    /// Copy f64 of a heap-allocated Float to *xmm*.
-    ///
-    /// ### in
-    /// - rdi: Value
-    ///
-    /// ### out
-    /// - xmm(*xmm*)
-    ///
-    fn heap_to_f64(&mut self, xmm: u64) {
+        let flonum_to_f64 = self.flonum_to_f64;
         monoasm! {&mut self.jit,
             movq xmm(xmm), [rdi + 16];
+            jmp  exit;
+        flonum:
+            call flonum_to_f64;
+            movq xmm(xmm), xmm0;
+        exit:
         }
     }
 
