@@ -34,6 +34,7 @@ impl BytecodeGen {
             NodeKind::String(s) => self.emit_string(dst, s),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
             NodeKind::Hash(nodes, false) => self.gen_hash(dst, nodes, loc)?,
+            NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
             NodeKind::Array(_, true)
             | NodeKind::Hash(_, true)
             | NodeKind::Range { is_const: true, .. } => {
@@ -252,7 +253,7 @@ impl BytecodeGen {
             | NodeKind::Array(..)
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }
-            | NodeKind::RegExp(_, _, true)
+            | NodeKind::RegExp(_, _, _)
             | NodeKind::UnOp(..)
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
@@ -769,6 +770,19 @@ impl BytecodeGen {
         }
         self.temp = old_reg;
         self.emit_hash(ret, args.into(), len, loc);
+        Ok(())
+    }
+
+    fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, op: String, loc: Loc) -> Result<()> {
+        let len = nodes.len() + 1;
+        let arg = self.next_reg();
+        self.emit_literal(arg.into(), Value::new_string(format!("(?{op})")));
+        self.push();
+        for expr in nodes {
+            self.push_expr(expr)?;
+        }
+        self.temp -= len as u16;
+        self.emit(BcIr::ConcatRegexp(Some(ret), arg, len), loc);
         Ok(())
     }
 

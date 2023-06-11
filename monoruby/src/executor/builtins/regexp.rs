@@ -6,11 +6,12 @@ use crate::*;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(REGEXP_CLASS, "new", regexp_new, 1);
+    globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
+    globals.define_builtin_func(REGEXP_CLASS, "===", teq, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "compile", regexp_new, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "escape", regexp_escape, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "quote", regexp_escape, 1);
     globals.define_builtin_class_func(REGEXP_CLASS, "last_match", regexp_last_match, -1);
-    globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
 }
 
 // Class methods
@@ -26,8 +27,9 @@ fn regexp_new(
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
     let regexp = RegexpInner::from_string(globals, string)?;
@@ -46,8 +48,9 @@ fn regexp_escape(
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
     let val = Value::new_string(regex::escape(&string));
@@ -76,6 +79,23 @@ fn regexp_last_match(
     }
 }
 
+/// ### Regexp#===
+/// - self === string -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d=3d.html]
+#[monoruby_builtin]
+fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
+    let self_ = lfp.self_val();
+    let regex = self_.is_regex().unwrap();
+    let given = match arg[0].expect_symbol_or_string(globals) {
+        Ok(s) => s.to_string(),
+        Err(_) => return Ok(Value::bool(false)),
+    };
+    let res = Value::bool(RegexpInner::find_one(vm, regex, &given)?.is_some());
+    Ok(res)
+}
+
 /// ### Regexp#=~
 /// - self =~ string -> Integer | nil
 ///
@@ -86,11 +106,15 @@ fn regexp_match(
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
+    if arg[0].is_nil() {
+        return Ok(Value::nil());
+    }
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
-    let given = arg[0].expect_string(globals)?;
+    let given = arg[0].expect_symbol_or_string(globals)?.to_string();
     let res = match RegexpInner::find_one(vm, regex, &given)? {
         Some(mat) => Value::new_integer(mat.start() as i64),
         None => Value::nil(),
@@ -136,43 +160,80 @@ mod test {
           [$', $&, $1, $2, $3]
             "#,
         );
+        run_test(
+            r#"
+          /(.)(.)/ =~ :abcde
+          [$', $&, $1, $2, $3]
+            "#,
+        );
+        run_test(
+            r#"
+          /(.)(.)/ =~ nil
+          [$', $&, $1, $2, $3]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp1() {
+        run_test(r#""abcdefg".gsub(/def/, "!!")"#);
+        run_test(r#""2.5".gsub(".", ",")"#);
+        run_test(r#""xbbgz-xbbbvzbbc".gsub(/(b+.z)(..)/) { $2 + $1.upcase }"#);
+    }
+
+    #[test]
+    fn regexp_teq() {
+        run_test(
+            r#"
+            res = /(aa).*(bb)/ === "andaadefbbje"
+            [res, $&, $1, $2]
+        "#,
+        );
+        run_test(
+            r#"
+            res = /(aa).*(bb)/ === :andaadefbbje
+            [res, $&, $1, $2]
+        "#,
+        );
+        run_test(
+            r#"
+            a = "HELLO"
+            case a
+            when /\A[a-z]*\z/
+                "Lower case"
+            when /\A[A-Z]*\z/
+                "Upper case"
+            else
+                "Mixed case"
+            end
+        "#,
+        );
     }
 
     #[test]
     fn regexp2() {
-        //run_test(r#""aaazzz" =~ /\172+/"#);
+        run_test(r#""aaazzz" =~ /\172+/"#);
         run_test(r#"/foo/ =~ "foo""#);
         run_test(r#"/foo/ =~ "afoo""#);
         run_test(r#"/foo/ =~ "bar""#);
+        run_test(
+            r#"
+            i = 123
+            /ab#{i}cd/ =~ "ab123cd"
+        "#,
+        );
     }
 
-    /*
-        #[test]
-        fn regexp1() {
-            let program = r#"
-          assert "abc!!g", "abcdefg".gsub(/def/, "!!")
-          assert "2.5".gsub(".", ","), "2,5"
-          assert true, /(aa).*(bb)/ === "andaadefbbje"
-          assert "aadefbb", $&
-          assert "aa", $1
-          assert "bb", $2
-          assert 4, "The cat sat in the hat" =~ /[csh](..) [csh]\1 in/
-          assert "x-xBBGZbbBBBVZc", "xbbgz-xbbbvzbbc".gsub(/(b+.z)(..)/) { $2 + $1.upcase }
-      "#;
-            assert_script(program);
-        }
+    #[test]
+    fn regexp3() {
+        run_test(
+            r#"
+        a = /Ruby\Z/
+        ["Ruby" =~ /Ruby\Z/, "Rubys" =~ /Ruby\Z/]
+        "#,
+        );
+    }
 
-
-        #[test]
-        fn regexp3() {
-            let program = r#"
-          a = /Ruby\Z/
-          assert 0, "Ruby" =~ /Ruby\Z/
-          assert nil, "Rubys" =~ /Ruby\Z/
-          "#;
-            assert_script(program);
-        }
-    */
     #[test]
     fn regexp_error1() {
         run_test_error(r#"/+/"#);

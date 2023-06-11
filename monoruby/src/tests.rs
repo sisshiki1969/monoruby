@@ -7,10 +7,10 @@ use tempfile::NamedTempFile;
 pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"
-      res = ({0})
+      __res = ({0})
       for __i in 0..7 do
-          res2 = ({0})
-          __assert(res, res2)
+          __res2 = ({0})
+          __assert(__res, __res2)
       end
       ({0})
   "##,
@@ -41,10 +41,10 @@ pub fn run_tests(code: &[String]) {
     let code = format!("[{}]", code.join(", "));
     let wrapped = format!(
         r##"
-      res = ({0})
+      __res = ({0})
       for __i in 0..7 do
-          res2 = ({0})
-          __assert(res, res2)
+          __res2 = ({0})
+          __assert(__res, __res2)
       end
       ({0})
   "##,

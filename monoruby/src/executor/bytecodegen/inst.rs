@@ -134,6 +134,7 @@ pub(super) enum BcIr {
         func_id: FuncId,
     },
     ConcatStr(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
+    ConcatRegexp(Option<BcReg>, BcTemp, usize), // (ret, args, args_len)
     ExpandArray(BcReg, BcReg, u16),          // (src, dst, len)
     AliasMethod {
         new: BcReg,
@@ -659,6 +660,7 @@ pub(in crate::executor) enum TraceIr {
     },
     /// concatenate strings(ret, args, args_len)
     ConcatStr(SlotId, SlotId, u16),
+    ConcatRegexp(SlotId, SlotId, u16),
     ExpandArray(SlotId, SlotId, u16),
     AliasMethod {
         new: SlotId,
@@ -861,6 +863,7 @@ impl TraceIr {
                 81 => Self::MethodRet(SlotId::new(op1)),
                 82 => Self::Break(SlotId::new(op1)),
                 85 => Self::EnsureEnd,
+                86 => Self::ConcatRegexp(SlotId::new(op1), SlotId::new(op2), op3),
                 126 => Self::Pos {
                     ret: SlotId::new(op1),
                     src: SlotId::new(op2),

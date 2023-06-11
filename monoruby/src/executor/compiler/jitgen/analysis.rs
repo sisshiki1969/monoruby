@@ -371,6 +371,12 @@ impl JitContext {
                     }
                     info.def_as(dst, false);
                 }
+                TraceIr::ConcatRegexp(dst, arg, len) => {
+                    for r in arg.0..arg.0 + len {
+                        info.use_as(SlotId(r), false, STRING_CLASS);
+                    }
+                    info.def_as(dst, false);
+                }
                 TraceIr::ExpandArray(src, dst, len) => {
                     for r in dst.0..dst.0 + len {
                         info.def_as(SlotId(r), false);

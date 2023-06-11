@@ -1010,6 +1010,25 @@ impl Codegen {
                         self.store_rax(ret);
                     }
                 }
+                TraceIr::ConcatRegexp(ret, arg, len) => {
+                    self.fetch_range(&mut ctx, arg, len);
+                    ctx.dealloc_xmm(ret);
+                    let xmm_using = ctx.get_xmm_using();
+                    self.xmm_save(&xmm_using);
+                    monoasm!( &mut self.jit,
+                        movq rdi, rbx;
+                        movq rsi, r12;
+                        lea rdx, [r14 - (conv(arg))];
+                        movq rcx, (len);
+                        movq rax, (runtime::concatenate_regexp);
+                        call rax;
+                    );
+                    self.xmm_restore(&xmm_using);
+                    self.jit_handle_error(&ctx, pc);
+                    if ret.0 != 0 {
+                        self.store_rax(ret);
+                    }
+                }
                 TraceIr::ExpandArray(src, dst, len) => {
                     self.fetch_slot(&mut ctx, src);
                     for reg in dst.0..dst.0 + len {

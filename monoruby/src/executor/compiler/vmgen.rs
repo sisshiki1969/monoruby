@@ -264,6 +264,7 @@ impl Codegen {
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
         self.dispatch[85] = ensure_end;
+        self.dispatch[86] = self.vm_concat_regexp();
         self.dispatch[126] = self.vm_pos();
         self.dispatch[127] = self.vm_bitnot();
         self.dispatch[128] = self.vm_not();
@@ -856,6 +857,25 @@ impl Codegen {
             movq rax, (runtime::concatenate_string);
             call rax;
         };
+        self.vm_store_r15_if_nonzero(exit);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_concat_regexp(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let exit = self.jit.label();
+        self.fetch3();
+        self.vm_get_addr_rdi();
+        monoasm! { &mut self.jit,
+            movq rcx, rsi;
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::concatenate_regexp);
+            call rax;
+        };
+        self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);
         self.fetch_and_dispatch();
         label

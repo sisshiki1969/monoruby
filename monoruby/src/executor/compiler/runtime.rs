@@ -148,6 +148,27 @@ pub(super) extern "C" fn concatenate_string(
     Value::new_string(res)
 }
 
+pub(super) extern "C" fn concatenate_regexp(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: *mut Value,
+    len: usize,
+) -> Option<Value> {
+    let mut res = String::new();
+    for i in 0..len {
+        let v = unsafe { *arg.sub(i) };
+        res += &globals.tos(v);
+    }
+    let inner = match RegexpInner::from_string(globals, res) {
+        Ok(inner) => inner,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    Some(Value::new_regexp(inner))
+}
+
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
     match src.is_array() {
         Some(ary) => {

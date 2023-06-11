@@ -1100,6 +1100,9 @@ impl BcPc {
             TraceIr::ConcatStr(ret, args, len) => {
                 format!("{} = concat({:?}; {})", ret.ret_str(), args, len)
             }
+            TraceIr::ConcatRegexp(ret, args, len) => {
+                format!("{} = concat_regexp({:?}; {})", ret.ret_str(), args, len)
+            }
             TraceIr::ExpandArray(src, dst, len) => {
                 format!("{:?}; {} = expand({:?})", dst, len, src)
             }

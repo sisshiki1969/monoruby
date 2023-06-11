@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "===", eq, 1);
     globals.define_builtin_func(STRING_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
+    globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_func(STRING_CLASS, "[]", index, -1);
     globals.define_builtin_func(STRING_CLASS, "start_with?", start_with, 1);
     globals.define_builtin_func(STRING_CLASS, "end_with?", end_with, 1);
@@ -399,6 +400,30 @@ fn rem(
     }
 
     let res = Value::new_string(format_str);
+    Ok(res)
+}
+
+///
+/// ### String#=~
+///
+/// - self =~ other -> Integer | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3d=7e.html]
+#[monoruby_builtin]
+fn match_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let given = self_val.as_str();
+    let regex = &arg[0].expect_regexp_or_string(globals)?;
+    let res = match RegexpInner::find_one(vm, regex, &given)? {
+        Some(mat) => Value::new_integer(mat.start() as i64),
+        None => Value::nil(),
+    };
     Ok(res)
 }
 

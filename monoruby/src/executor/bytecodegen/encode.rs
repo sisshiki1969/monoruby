@@ -289,6 +289,11 @@ impl BytecodeGen {
                 Bc::from(enc_w(82, op1.0))
             }
             BcIr::EnsureEnd => Bc::from(enc_w(85, 0)),
+            BcIr::ConcatRegexp(ret, arg, len) => {
+                let op1 = ret.map_or(SlotId::self_(), |ret| self.get_index(&ret));
+                let op2 = self.get_index(&BcReg::from(*arg));
+                Bc::from(enc_www(86, op1.0, op2.0, *len as u16))
+            }
             BcIr::Pos { ret, src } => {
                 let op1 = self.get_index(ret);
                 let op2 = self.get_index(src);

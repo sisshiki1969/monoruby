@@ -8,7 +8,7 @@ ruby benchmark/tarai.rb
 target/release/monoruby benchmark/app_aobench.rb 2> benchmark/aobench.disas > /dev/null
 target/release/monoruby benchmark/so_mandelbrot.rb 2> benchmark/mandel.disas > /dev/null
 target/release/monoruby benchmark/binarytrees.rb 2> benchmark/binarytrees.disas
-target/release/monoruby benchmark/so_nbody.rb 2> benchmark/nbody.disas
+target/release/monoruby benchmark/so_nbody.rb 2> benchmark/so_nbody.disas
 ruby benchmark/so_nbody.rb
 
 cargo build --release --features emit-bc
