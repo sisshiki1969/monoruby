@@ -105,6 +105,7 @@ impl Codegen {
         if pc.classid1() == ARRAY_CLASS && pc.classid2() == INTEGER_CLASS {
             let exit = self.jit.label();
             let generic = self.jit.label();
+            let out_range = self.jit.label();
             let heap = self.jit.label();
             let deopt = self.gen_side_deopt(pc, ctx);
             monoasm! { &mut self.jit,
@@ -121,18 +122,22 @@ impl Codegen {
                     jgt  heap;
                     // upper range check
                     cmpq rax, (i);
-                    jle  generic;
+                    jle  out_range;
                     movq rax, [rdi + (i as i32 * 8 + (RVALUE_OFFSET_INLINE))];
-                    jmp exit;
+                exit:
+                }
+                self.jit.select_page(1);
+                monoasm! { &mut self.jit,
                 heap:
                     movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
                     // upper range check
                     cmpq rax, (i);
-                    jle generic;
+                    jle out_range;
                     movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
                     movq rax, [rdi + (i as i32 * 8)];
-                exit:
-                }
+                    jmp  exit;
+                };
+                self.jit.select_page(0);
             } else {
                 monoasm! { &mut self.jit,
                     movq rsi, [r14 - (conv(idx))]; // idx: Value
@@ -149,18 +154,22 @@ impl Codegen {
                     jgt  heap;
                     // upper range check
                     cmpq rax, rsi;
-                    jle  generic;
+                    jle  out_range;
                     movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-                    jmp exit;
+                exit:
+                }
+                self.jit.select_page(1);
+                monoasm! { &mut self.jit,
                 heap:
                     movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
                     // upper range check
                     cmpq rax, rsi;
-                    jle generic;
+                    jle out_range;
                     movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
                     movq rax, [rdi + rsi * 8];
-                exit:
-                }
+                    jmp  exit;
+                };
+                self.jit.select_page(0);
             }
 
             self.jit.select_page(1);
@@ -172,6 +181,9 @@ impl Codegen {
             }
             self.xmm_restore(&xmm_using);
             monoasm! { &mut self.jit,
+                jmp  exit;
+            out_range:
+                movl rax, (NIL_VALUE);
                 jmp  exit;
             };
             self.jit.select_page(0);
