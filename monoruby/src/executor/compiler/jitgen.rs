@@ -268,6 +268,20 @@ impl BBContext {
         eprintln!("  merged_entries: {:?}", &merge_ctx.slot_state);
         merge_ctx
     }
+
+    fn try_positive_i16_literal(&self, slot: SlotId) -> Option<i16> {
+        if let LinkMode::Const(v) = self[slot] {
+            let i = v.try_fixnum()?;
+            let i = i16::try_from(i).ok()?;
+            if i >= 0 {
+                Some(i)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -111,10 +111,8 @@ impl Codegen {
                 movq rdi, [r14 - (conv(base))]; // base: Value
             }
             self.guard_class(ARRAY_CLASS, deopt);
-            if let LinkMode::Const(c) = ctx[idx] && c.is_fixnum() && c.as_fixnum() >=0 {
-                let c = c.as_fixnum();
+            if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
-                    movq rsi, (c);
                     //no lower range check
                     cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
                     jne generic;
@@ -122,8 +120,18 @@ impl Codegen {
                     cmpq rax, (ARRAY_INLINE_CAPA);
                     jgt  heap;
                     // upper range check
-                    cmpq rax, (c);
+                    cmpq rax, (i);
                     jle  generic;
+                    movq rax, [rdi + (i as i32 * 8 + (RVALUE_OFFSET_INLINE))];
+                    jmp exit;
+                heap:
+                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                    // upper range check
+                    cmpq rax, (i);
+                    jle generic;
+                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                    movq rax, [rdi + (i as i32 * 8)];
+                exit:
                 }
             } else {
                 monoasm! { &mut self.jit,
@@ -142,19 +150,17 @@ impl Codegen {
                     // upper range check
                     cmpq rax, rsi;
                     jle  generic;
+                    movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
+                    jmp exit;
+                heap:
+                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                    // upper range check
+                    cmpq rax, rsi;
+                    jle generic;
+                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                    movq rax, [rdi + rsi * 8];
+                exit:
                 }
-            }
-            monoasm! { &mut self.jit,
-                movq rax, [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)];
-                jmp exit;
-            heap:
-                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                // upper range check
-                cmpq rsi, rax;
-                jge generic;
-                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                movq rax, [rdi + rsi * 8];
-            exit:
             }
 
             self.jit.select_page(1);
@@ -204,10 +210,8 @@ impl Codegen {
                 movq rdi, [r14 - (conv(base))]; // base: Value
             };
             self.guard_class(ARRAY_CLASS, deopt);
-            if let LinkMode::Const(c) = ctx[idx] && c.is_fixnum() && c.as_fixnum() >=0 {
-                let c = c.as_fixnum();
+            if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
-                    movq rsi, (c); // idx: Value
                     // no lower range check
                     cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
                     jne generic;
@@ -215,8 +219,20 @@ impl Codegen {
                     cmpq rax, (ARRAY_INLINE_CAPA);
                     jgt  heap;
                     // upper range check
-                    cmpq rax, (c);
+                    cmpq rax, (i);
                     jle  generic;
+                    movq rax, [r14 - (conv(src))];
+                    movq [rdi + (i as i32 * 8 + RVALUE_OFFSET_INLINE)], rax;
+                    jmp exit;
+                heap:
+                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                    // upper range check
+                    cmpq rax, (i);
+                    jle generic;
+                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                    movq rax, [r14 - (conv(src))];
+                    movq [rdi + (i as i32 * 8)], rax;
+                exit:
                 };
             } else {
                 monoasm! { &mut self.jit,
@@ -235,22 +251,20 @@ impl Codegen {
                     // upper range check
                     cmpq rax, rsi;
                     jle  generic;
+                    movq rax, [r14 - (conv(src))];
+                    movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
+                    jmp exit;
+                heap:
+                    movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                    // upper range check
+                    cmpq rax, rsi;
+                    jle generic;
+                    movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                    movq rax, [r14 - (conv(src))];
+                    movq [rdi + rsi * 8], rax;
+                exit:
                 };
             }
-            monoasm! { &mut self.jit,
-                movq rax, [r14 - (conv(src))];
-                movq [rdi + rsi * 8 + (RVALUE_OFFSET_INLINE)], rax;
-                jmp exit;
-            heap:
-                movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-                // upper range check
-                cmpq rsi, rax;
-                jge generic;
-                movq rdi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-                movq rax, [r14 - (conv(src))];
-                movq [rdi + rsi * 8], rax;
-            exit:
-            };
 
             self.jit.select_page(1);
             self.jit.bind_label(generic);
