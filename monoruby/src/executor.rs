@@ -407,7 +407,17 @@ impl Executor {
         }
     }
 
-    pub fn invoke_block_iter1(
+    pub(crate) fn invoke_block_once(
+        &mut self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+        args: &[Value],
+    ) -> Result<Value> {
+        let data = self.get_block_data(globals, block_handler);
+        self.invoke_block(globals, data, args)
+    }
+
+    pub(crate) fn invoke_block_iter1(
         &mut self,
         globals: &mut Globals,
         block_handler: BlockHandler,

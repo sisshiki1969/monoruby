@@ -17,6 +17,7 @@ mod random;
 mod range;
 mod regexp;
 mod string;
+mod struct_class;
 mod time;
 
 pub(self) use crate::executor::jitgen::analysis::SlotInfo;
@@ -151,6 +152,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     exception::init(globals);
     time::init(globals);
     io::init(globals);
+    struct_class::init(globals);
     file::init(globals, file_class);
     math::init(globals, math_class);
     process::init(globals, process_class);

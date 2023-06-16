@@ -188,12 +188,7 @@ fn inject(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    let bh = match lfp.block() {
-        Some(bh) => bh,
-        None => {
-            return Err(MonorubyErr::no_block_given());
-        }
-    };
+    let bh = lfp.expect_block()?;
     Executor::check_number_of_arguments(len, 0..=1)?;
     let self_ = lfp.self_val();
     let mut iter = self_.as_array().iter();
@@ -257,13 +252,13 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     let aref = self_.as_array();
     match lfp.block() {
         None => {
-            for v in &**aref {
+            for v in aref.iter() {
                 sum = add_values(vm, globals, sum, *v).ok_or_else(|| vm.take_exception())?;
             }
         }
         Some(b) => {
             let data = vm.get_block_data(globals, b);
-            for v in &**aref {
+            for v in aref.iter() {
                 let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
                 sum = add_values(vm, globals, sum, rhs).ok_or_else(|| vm.take_exception())?;
             }
@@ -288,15 +283,8 @@ fn each(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
-    let block_handler = if let Some(block) = lfp.block() {
-        block
-    } else {
-        return Err(MonorubyErr::no_block_given());
-    };
-    let data = vm.get_block_data(globals, block_handler);
-    for i in ary.as_array().iter() {
-        vm.invoke_block(globals, data.clone(), &[*i])?;
-    }
+    let block_handler = lfp.expect_block()?;
+    vm.invoke_block_iter1(globals, block_handler, ary.as_array().iter().cloned())?;
     Ok(lfp.self_val())
 }
 
@@ -315,11 +303,7 @@ fn map(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
-    let block_handler = if let Some(block) = lfp.block() {
-        block
-    } else {
-        return Err(MonorubyErr::no_block_given());
-    };
+    let block_handler = lfp.expect_block()?;
     let data = vm.get_block_data(globals, block_handler);
     let t = vm.temp_len();
     for i in ary.as_array().iter() {
@@ -348,11 +332,7 @@ fn detect(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
-    let bh = if let Some(block) = lfp.block() {
-        block
-    } else {
-        return Err(MonorubyErr::no_block_given());
-    };
+    let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh);
     for elem in ary.as_array().iter() {
         if vm.invoke_block(globals, data.clone(), &[*elem])?.as_bool() {

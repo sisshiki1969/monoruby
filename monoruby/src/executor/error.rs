@@ -301,6 +301,13 @@ impl MonorubyErr {
         )
     }
 
+    pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::Name,
+            format!("identifier {name} needs to be constant"),
+        )
+    }
+
     pub(crate) fn typeerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type, msg)
     }

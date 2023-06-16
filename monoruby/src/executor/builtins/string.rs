@@ -714,10 +714,7 @@ fn split(
                 vm.invoke_block_iter1(globals, b, iter)?;
                 Ok(lfp.self_val())
             }
-            None => {
-                //let v = iter.collect();
-                Ok(Value::new_array_from_iter(iter))
-            }
+            None => Ok(Value::new_array_from_iter(iter)),
         }
     } else {
         Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))

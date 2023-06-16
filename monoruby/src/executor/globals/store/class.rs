@@ -22,6 +22,7 @@ pub const REGEXP_CLASS: ClassId = ClassId::new(15);
 pub const MODULE_CLASS: ClassId = ClassId::new(16);
 pub const IO_CLASS: ClassId = ClassId::new(17);
 pub const EXCEPTION_CLASS: ClassId = ClassId::new(18);
+pub const STRUCT_CLASS: ClassId = ClassId::new(19);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -67,6 +68,7 @@ impl std::fmt::Debug for ClassId {
             16 => write!(f, "MODULE"),
             17 => write!(f, "IO"),
             18 => write!(f, "EXCEPTION"),
+            19 => write!(f, "STRUCT"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -146,6 +148,10 @@ impl ClassInfo {
 
     pub(crate) fn get_ivarid(&self, name: IdentId) -> Option<IvarId> {
         self.ivar_names.get(&name).cloned()
+    }
+
+    pub(crate) fn set_name(&mut self, name: &str) {
+        self.name = Some(IdentId::get_id(name));
     }
 }
 

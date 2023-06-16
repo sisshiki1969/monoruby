@@ -120,8 +120,7 @@ impl RegexpInner {
 
             let mut res = given.to_string();
             let matched = Value::new_string_from_str(matched_str);
-            let data = vm.get_block_data(globals, block_handler);
-            let result = vm.invoke_block(globals, data, &[matched])?;
+            let result = vm.invoke_block_once(globals, block_handler, &[matched])?;
             let s = globals.tos(result);
             res.replace_range(start..end, &s);
             Ok((res, true))
@@ -236,8 +235,7 @@ impl RegexpInner {
                 vm.save_captures(&captures, given);
                 if let Some(block_handler) = block {
                     let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
-                    let data = vm.get_block_data(globals, block_handler);
-                    vm.invoke_block(globals, data, &[matched])
+                    vm.invoke_block_once(globals, block_handler, &[matched])
                 } else {
                     let mut ary = ArrayInner::new();
                     for i in 0..captures.len() {

@@ -33,12 +33,9 @@ fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
         Some(i) => i,
         None => unimplemented!(),
     };
-    if let Some(b) = lfp.block() {
-        let iter = (0..count).map(|i| Value::new_integer(i));
-        vm.invoke_block_iter1(globals, b, iter)?;
-    } else {
-        unimplemented!("needs block.")
-    };
+    let b = lfp.expect_block()?;
+    let iter = (0..count).map(|i| Value::new_integer(i));
+    vm.invoke_block_iter1(globals, b, iter)?;
 
     Ok(lfp.self_val())
 }

@@ -189,11 +189,7 @@ fn each(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
-    let block_handler = if let Some(block) = lfp.block() {
-        block
-    } else {
-        return Err(MonorubyErr::no_block_given());
-    };
+    let block_handler = lfp.expect_block()?;
     let data = vm.get_block_data(globals, block_handler);
     for (k, v) in ary.as_hash().iter() {
         vm.invoke_block(globals, data.clone(), &[k, v])?;
@@ -283,10 +279,7 @@ fn env_fetch(
         Executor::check_number_of_arguments(len, 1..=1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
-            None => {
-                let data = vm.get_block_data(globals, bh);
-                vm.invoke_block(globals, data, &[arg[0]])?
-            }
+            None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
         }
     } else if len == 1 {
         env_map.get(arg[0]).unwrap()

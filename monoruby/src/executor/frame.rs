@@ -218,6 +218,14 @@ impl LFP {
         unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const _) }
     }
 
+    pub fn expect_block(&self) -> Result<BlockHandler> {
+        if let Some(block) = self.block() {
+            Ok(block)
+        } else {
+            Err(MonorubyErr::no_block_given())
+        }
+    }
+
     ///
     /// Get a value of register slot *index*.
     ///

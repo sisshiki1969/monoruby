@@ -76,11 +76,7 @@ fn each(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = if let Some(block) = lfp.block() {
-        block
-    } else {
-        return Err(MonorubyErr::no_block_given());
-    };
+    let block_handler = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
