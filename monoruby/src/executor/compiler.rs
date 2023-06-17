@@ -162,6 +162,7 @@ pub struct Codegen {
     pub(super) method_invoker: MethodInvoker,
     pub(super) method_invoker2: MethodInvoker2,
     pub(super) block_invoker: BlockInvoker,
+    pub(super) block_invoker_with_self: BlockInvoker,
 }
 
 impl Codegen {
@@ -234,6 +235,7 @@ impl Codegen {
             method_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);
@@ -374,7 +376,7 @@ impl Codegen {
         );
     }
 
-    /// Set outer.
+    /// Set outer and self for block.
     ///
     /// ### in
     /// - rax: outer_lfp
@@ -383,13 +385,27 @@ impl Codegen {
     /// - rsi
     ///
     fn set_block_self_outer(&mut self) {
+        self.set_block_outer();
+        monoasm! { &mut self.jit,
+            // set self
+            movq  rsi, [rax - (LBP_SELF)];
+            movq [rsp - (16 + LBP_SELF)], rsi;
+        };
+    }
+
+    /// Set outer for block.
+    ///
+    /// ### in
+    /// - rax: outer_lfp
+    ///
+    /// ### destroy
+    /// - rsi
+    ///
+    fn set_block_outer(&mut self) {
         monoasm! { &mut self.jit,
             // set outer
             lea  rsi, [rax - (LBP_OUTER)];
             movq [rsp - (16 + LBP_OUTER)], rsi;
-            // set self
-            movq  rsi, [rax - (LBP_SELF)];
-            movq [rsp - (16 + LBP_SELF)], rsi;
         };
     }
 

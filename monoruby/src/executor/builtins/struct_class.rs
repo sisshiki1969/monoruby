@@ -31,9 +31,9 @@ fn struct_new(
         }
     };
     globals.define_builtin_func(class_id, "initialize", initialize, -1);
-    /*globals.define_builtin_func(class_id, "inspect", inspect, -1);
-    globals.define_builtin_class_func(class_id, "[]", struct_class_new, -1);
-    globals.define_builtin_class_func(class_id, "new", struct_class_new, -1);*/
+    /*globals.define_builtin_func(class_id, "inspect", inspect, -1);*/
+    globals.define_builtin_class_func(class_id, "[]", new, -1);
+    globals.define_builtin_class_func(class_id, "new", new, -1);
 
     for arg in &arg_vec {
         let name = arg.expect_symbol_or_string(globals)?;
@@ -43,9 +43,17 @@ fn struct_new(
     class.set_instance_var(globals, "/members", Value::new_array_from_vec(arg_vec))?;
 
     if let Some(block) = lfp.block() {
-        vm.invoke_block_once(globals, block, &[class])?;
+        vm.push_class_context(class_id);
+        let data = vm.get_block_data(globals, block);
+        vm.invoke_block_with_self(globals, data, class, &[class])?;
+        vm.pop_class_context();
     };
     Ok(class)
+}
+
+#[monoruby_builtin]
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    super::class::__new(vm, globals, lfp, arg, len)
 }
 
 #[monoruby_builtin]
@@ -124,18 +132,20 @@ fn inspect(
 mod tests {
     use crate::tests::*;
 
-    /*#[test]
+    #[test]
     fn struct_test() {
-        let code = r#"
+        let prelude = r#"
         Customer = Struct.new(:name, :address) do
             def greeting
-                "Hello #{name}!"
+                "Hello #{name} at #{address}!"
             end
         end
-        [Customer.new("Dave", "123 Main").greeting, Customer["Gave", "456 Sub"].greeting]
         "#;
-        run_test(code);
-    }*/
+        let code = r#"
+        [Customer.new("Dave", "New York").greeting, Customer["Gave", "Hawaii"].greeting]
+        "#;
+        run_test_with_prelude(code, prelude);
+    }
 
     #[test]
     fn struct_inspect() {

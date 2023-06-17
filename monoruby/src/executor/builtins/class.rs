@@ -50,7 +50,13 @@ fn class_new(
 ///
 /// !! We must call Object#initialize.
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+pub(super) fn new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
     let obj = __allocate(vm, globals, lfp, arg, 0)?;
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)

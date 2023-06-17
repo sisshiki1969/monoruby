@@ -363,7 +363,7 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
 
-        self.gen_invoker_prologue(false);
+        self.gen_method_invoker_prologue();
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
 
@@ -376,7 +376,19 @@ impl Codegen {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
-        self.gen_invoker_prologue(true);
+        self.gen_block_invoker_prologue(false);
+        self.gen_invoker_prep();
+        self.gen_invoker_epilogue();
+
+        self.block_invoker_with_self =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        // rdi: &mut Interp
+        // rsi: &mut Globals
+        // rdx: *const FuncData
+        // rcx: Value
+        // r8:  *args: *const Value
+        // r9:  len: usize
+        self.gen_block_invoker_prologue(true);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
 
@@ -389,16 +401,25 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
-        self.gen_invoker_prologue(false);
+        self.gen_method_invoker_prologue();
         self.gen_invoker_prep2();
         self.gen_invoker_epilogue();
     }
 
-    fn gen_invoker_prologue(&mut self, invoke_block: bool) {
+    fn gen_block_invoker_prologue(&mut self, specify_self: bool) {
+        self.gen_invoker_prologue(true, specify_self);
+    }
+
+    fn gen_method_invoker_prologue(&mut self) {
+        self.gen_invoker_prologue(false, true);
+    }
+
+    fn gen_invoker_prologue(&mut self, invoke_block: bool, specify_self: bool) {
         // rdi: &mut Interp
         // rsi: &mut Globals
         // rdx: (method)*const FuncData
         // rdx: (block) *const BlockData
+        // rcx: Value
         if invoke_block {
             monoasm! { &mut self.jit,
                 movq rax, [rdx];        // rax <- outer_lfp
@@ -421,7 +442,11 @@ impl Codegen {
             movq r13, rdx;
         };
         if invoke_block {
-            self.set_block_self_outer()
+            if specify_self {
+                self.set_block_outer()
+            } else {
+                self.set_block_self_outer()
+            }
         } else {
             monoasm! { &mut self.jit,
                 movq [rsp - (16 + LBP_SELF)], rcx;

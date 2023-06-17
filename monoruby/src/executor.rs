@@ -407,6 +407,26 @@ impl Executor {
         }
     }
 
+    pub(crate) fn invoke_block_with_self(
+        &mut self,
+        globals: &mut Globals,
+        data: BlockData,
+        self_val: Value,
+        args: &[Value],
+    ) -> Result<Value> {
+        match (globals.codegen.block_invoker_with_self)(
+            self,
+            globals,
+            &data as _,
+            self_val,
+            args.as_ptr(),
+            args.len(),
+        ) {
+            Some(val) => Ok(val),
+            None => Err(self.take_exception()),
+        }
+    }
+
     pub(crate) fn invoke_block_once(
         &mut self,
         globals: &mut Globals,
