@@ -10,6 +10,9 @@ impl Globals {
         if self.store[class_id].constants.insert(name, val).is_some() && self.warning >= 1 {
             eprintln!("warning: already initialized constant {name}")
         }
+        if let Some(id) = val.is_class() {
+            self.store[id].set_name_id(name)
+        }
     }
 
     ///

@@ -31,7 +31,7 @@ fn struct_new(
         }
     };
     globals.define_builtin_func(class_id, "initialize", initialize, -1);
-    /*globals.define_builtin_func(class_id, "inspect", inspect, -1);*/
+    globals.define_builtin_func(class_id, "inspect", inspect, 0);
     globals.define_builtin_class_func(class_id, "[]", new, -1);
     globals.define_builtin_class_func(class_id, "new", new, -1);
 
@@ -75,58 +75,48 @@ fn initialize(
     };
     for (i, val) in arg.iter(len).enumerate() {
         let id = members[i].as_symbol();
-        let var = format!("@{}", id);
-        globals.set_ivar(self_val, IdentId::get_id_from_string(var), val)?;
+        let ivar_name = IdentId::add_ivar_prefix(id);
+        globals.set_ivar(self_val, ivar_name, val)?;
     }
     Ok(Value::nil())
 }
-/*
-use std::borrow::Cow;
+
 #[monoruby_builtin]
 fn inspect(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
-    arg: Arg,
+    _arg: Arg,
     len: usize,
 ) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 0..=0)?;
     let mut inspect = format!("#<struct ");
-    match vm.globals.get_class(self_val).op_name() {
-        Some(name) => inspect += &name,
-        None => {}
+    let self_val = lfp.self_val();
+    let class_id = self_val.class();
+    let struct_class = class_id.get_obj(globals).as_val();
+    if let Some(name) = globals.store[class_id].get_name_id() {
+        inspect += &format!("{name}");
     };
-    let name = match vm
-        .globals
-        .get_class(self_val)
-        .get_var(IdentId::get_id("/members"))
-    {
-        Some(name) => name,
-        None => return Err(RubyError::internal("No /members.")),
-    };
-    //eprintln!("{:?}", name);
-    let members = match name.as_array() {
-        Some(aref) => aref,
-        None => {
-            return Err(RubyError::internal(format!(
-                "Illegal _members value. {:?}",
-                name
-            )))
-        }
-    };
+    let name = globals
+        .get_ivar(struct_class, IdentId::get_id("/members"))
+        .unwrap();
 
-    for x in &**members {
-        let id = x.as_symbol().unwrap().add_prefix("@");
-        let val = match self_val.get_var(id) {
-            Some(v) => Cow::from(vm.val_inspect(v)?),
-            None => Cow::from("nil"),
-        };
-        inspect = format!("{} {:?}={}", inspect, id, val);
+    if name.as_array().len() != 0 {
+        for x in name.as_array().iter() {
+            let name = x.as_symbol();
+            let ivar_name = IdentId::add_ivar_prefix(name);
+            let val = match globals.get_ivar(self_val, ivar_name) {
+                Some(v) => globals.inspect(v),
+                None => "nil".to_string(),
+            };
+            inspect += &format!(" {:?}={},", name, val);
+        }
+        inspect.pop();
     }
     inspect += ">";
 
-    Ok(Value::string(inspect))
+    Ok(Value::new_string(inspect))
 }
-*/
 
 #[cfg(test)]
 mod tests {
@@ -152,7 +142,7 @@ mod tests {
         let code = r###"
         S = Struct.new(:a,:b)
         s = S.new(100,200)
-        [s.a, s.b] # s.inspect 
+        [s.a, s.b, s.inspect] 
         "###;
         run_test(code);
     }

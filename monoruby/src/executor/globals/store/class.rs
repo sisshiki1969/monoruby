@@ -153,6 +153,14 @@ impl ClassInfo {
     pub(crate) fn set_name(&mut self, name: &str) {
         self.name = Some(IdentId::get_id(name));
     }
+
+    pub(crate) fn set_name_id(&mut self, name: IdentId) {
+        self.name = Some(name);
+    }
+
+    pub(crate) fn get_name_id(&self) -> Option<IdentId> {
+        self.name
+    }
 }
 
 impl Globals {
