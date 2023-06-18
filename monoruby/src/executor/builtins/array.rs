@@ -1,4 +1,4 @@
-use crate::{executor::op::add_values, *};
+use crate::*;
 
 //
 // Array class
@@ -20,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "map", map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
 }
 
 ///
@@ -188,20 +189,16 @@ fn inject(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    let bh = lfp.expect_block()?;
     Executor::check_number_of_arguments(len, 0..=1)?;
+    let block_handler = lfp.expect_block()?;
     let self_ = lfp.self_val();
-    let mut iter = self_.as_array().iter();
-    let mut res = if len == 0 {
-        iter.next().cloned().unwrap_or_default()
+    let mut iter = self_.as_array().iter().cloned();
+    let res = if len == 0 {
+        iter.next().unwrap_or_default()
     } else {
         arg[0]
     };
-    let data = vm.get_block_data(globals, bh);
-    for elem in iter {
-        res = vm.invoke_block(globals, data.clone(), &[res, *elem])?;
-    }
-    Ok(res)
+    vm.invoke_block_fold1(globals, block_handler, iter, res)
 }
 
 ///
@@ -249,18 +246,20 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     Executor::check_number_of_arguments(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
     let self_ = lfp.self_val();
-    let aref = self_.as_array();
+    let iter = self_.as_array().iter().cloned();
     match lfp.block() {
         None => {
-            for v in aref.iter() {
-                sum = add_values(vm, globals, sum, *v).ok_or_else(|| vm.take_exception())?;
+            for v in iter {
+                sum =
+                    executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
             }
         }
         Some(b) => {
             let data = vm.get_block_data(globals, b);
-            for v in aref.iter() {
-                let rhs = vm.invoke_block(globals, data.clone(), &[*v])?;
-                sum = add_values(vm, globals, sum, rhs).ok_or_else(|| vm.take_exception())?;
+            for v in iter {
+                let rhs = vm.invoke_block(globals, data.clone(), &[v])?;
+                sum = executor::op::add_values(vm, globals, sum, rhs)
+                    .ok_or_else(|| vm.take_error())?;
             }
         }
     }
@@ -303,16 +302,10 @@ fn map(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
+    let iter = ary.as_array().iter().cloned();
     let block_handler = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, block_handler);
-    let t = vm.temp_len();
-    for i in ary.as_array().iter() {
-        let v = vm.invoke_block(globals, data.clone(), &[*i])?;
-        vm.temp_push(v);
-    }
-    let v = vm.temp_tear(t);
-    let res = Value::new_array_from_vec(v);
-
+    let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
+    let res = Value::new_array_from_vec(vec);
     Ok(res)
 }
 
@@ -342,12 +335,37 @@ fn detect(
     Ok(Value::nil())
 }
 
+///
+/// #### Array#include?
+///
+/// - include?(val) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
+#[monoruby_builtin]
+fn include_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
+    let ary = lfp.self_val();
+    let rhs = arg[0];
+    for lhs in ary.as_array().iter().cloned() {
+        if vm.cmp_eq_values_bool(globals, lhs, rhs)? {
+            return Ok(Value::bool(true));
+        };
+    }
+    Ok(Value::bool(false))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
 
     #[test]
-    fn test_array_new() {
+    fn array_new() {
         run_test_with_prelude(
             r##"
         a = A.new
@@ -363,7 +381,7 @@ mod test {
     }
 
     #[test]
-    fn test_array_size() {
+    fn size() {
         run_test2(r##"[].size"##);
         run_test2(r##"[].length"##);
         run_test2(r##"[1,2,3].size"##);
@@ -383,7 +401,7 @@ mod test {
     }
 
     #[test]
-    fn test_array_add() {
+    fn add() {
         run_test(r##"[1,2,3] + [4]"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; a"##);
         run_test(r##"a = [1,2,3]; b = [4]; a + b; b"##);
@@ -391,13 +409,13 @@ mod test {
     }
 
     #[test]
-    fn test_array_shl() {
+    fn shl() {
         run_test(r##"a = [1,2,3]; a << 10; a"##);
         run_test(r##"a = [1,2,3]; a.<<(10); a"##);
     }
 
     #[test]
-    fn test_array_index() {
+    fn index() {
         run_test(
             r##"
         a = [1,2,3];
@@ -527,5 +545,17 @@ mod test {
     fn detect() {
         run_test(r#"[1, 2, 3, 4, 5].find {|i| i % 3 == 0 }"#);
         run_test(r#"[2, 2, 2, 2, 2].find {|i| i % 3 == 0 }"#);
+    }
+
+    #[test]
+    fn include() {
+        run_test_with_prelude(
+            r#"
+            [a.include?("b"), a.include?("z")]
+        "#,
+            r#"
+            a = ["a","b","c"]
+        "#,
+        );
     }
 }

@@ -830,7 +830,7 @@ pub(super) extern "C" fn handle_error(
                     return ErrorReturn::goto(ensure);
                 } else {
                     if lfp == target_lfp {
-                        vm.take_exception();
+                        vm.take_error();
                         return ErrorReturn::return_normal(val);
                     } else {
                         return ErrorReturn::return_err();

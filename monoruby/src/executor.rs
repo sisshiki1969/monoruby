@@ -241,7 +241,7 @@ impl Executor {
         globals.dump_bc();
 
         let res = (globals.codegen.entry_point)(self, globals, main_data);
-        res.ok_or_else(|| self.take_exception())
+        res.ok_or_else(|| self.take_error())
     }
 
     pub(super) fn get_block_data(
@@ -382,6 +382,31 @@ impl Executor {
     }
 
     ///
+    /// Invoke method for *receiver* and *method*.
+    ///
+    fn invoke_method_inner(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: &[Value],
+    ) -> Result<Value> {
+        let func_id = globals.find_method(receiver, method, false)?;
+        let data = globals.compile_on_demand(func_id) as *const _;
+        match (globals.codegen.method_invoker)(
+            self,
+            globals,
+            data,
+            receiver,
+            args.as_ptr(),
+            args.len(),
+        ) {
+            Some(res) => Ok(res),
+            None => Err(self.take_error()),
+        }
+    }
+
+    ///
     /// Invoke block for *block_handler*.
     ///
     /// To get BlockData, use Executor.get_block_data().
@@ -403,7 +428,7 @@ impl Executor {
             args.len(),
         ) {
             Some(val) => Ok(val),
-            None => Err(self.take_exception()),
+            None => Err(self.take_error()),
         }
     }
 
@@ -423,7 +448,7 @@ impl Executor {
             args.len(),
         ) {
             Some(val) => Ok(val),
-            None => Err(self.take_exception()),
+            None => Err(self.take_error()),
         }
     }
 
@@ -450,6 +475,36 @@ impl Executor {
         Ok(())
     }
 
+    pub(crate) fn invoke_block_map1(
+        &mut self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+        iter: impl Iterator<Item = Value>,
+    ) -> Result<Vec<Value>> {
+        let block_data = self.get_block_data(globals, block_handler);
+        let t = self.temp_len();
+        for v in iter {
+            let res = self.invoke_block(globals, block_data.clone(), &[v])?;
+            self.temp_push(res);
+        }
+        let vec = self.temp_tear(t);
+        Ok(vec)
+    }
+
+    pub(crate) fn invoke_block_fold1(
+        &mut self,
+        globals: &mut Globals,
+        block_handler: BlockHandler,
+        iter: impl Iterator<Item = Value>,
+        mut res: Value,
+    ) -> Result<Value> {
+        let data = self.get_block_data(globals, block_handler);
+        for elem in iter {
+            res = self.invoke_block(globals, data.clone(), &[res, elem])?;
+        }
+        Ok(res)
+    }
+
     ///
     /// Invoke proc.
     ///
@@ -467,7 +522,7 @@ impl Executor {
             args.as_ptr(),
             args.len(),
         )
-        .ok_or_else(|| self.take_exception())
+        .ok_or_else(|| self.take_error())
     }
 
     fn invoke_method2_if_exists(
@@ -498,7 +553,7 @@ impl Executor {
     ) -> Result<Value> {
         let data = globals.compile_on_demand(func_id) as *const _;
         (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
-            .ok_or_else(|| self.take_exception())
+            .ok_or_else(|| self.take_error())
     }
 
     fn define_class(

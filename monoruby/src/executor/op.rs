@@ -338,22 +338,41 @@ macro_rules! eq_values {
                 lhs: Value,
                 rhs: Value
             ) -> Option<Value> {
-                let b = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
-                    (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
-                    (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
-                    (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.$op(&BigInt::from(rhs)),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
-                    (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
-                    (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                    (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
-                    _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
+                match vm.[<cmp_ $op _values_bool>](globals, lhs, rhs) {
+                    Ok(b) => Some(Value::bool(b)),
+                    Err(err) => {
+                        vm.set_error(err);
+                        None
                     }
-                };
-                Some(Value::bool(b))
+                }
+            }
+
+            impl Executor {
+                #[allow(unused)]
+                pub(super) fn [<cmp_ $op _values_bool>](
+                    &mut self,
+                    globals: &mut Globals,
+                    lhs: Value,
+                    rhs: Value
+                ) -> Result<bool> {
+                    let b = match (lhs.unpack(), rhs.unpack()) {
+                        (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
+                        (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
+                        (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
+                        (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.$op(&BigInt::from(rhs)),
+                        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
+                        (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
+                        (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
+                        (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
+                        (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
+                        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
+                        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.$op(&rhs),
+                        _ => {
+                            self.invoke_method_inner(globals, $op_str, lhs, &[rhs])?.as_bool()
+                        }
+                    };
+                    Ok(b)
+                }
             }
         }
     };

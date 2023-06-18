@@ -454,12 +454,12 @@ impl Executor {
         self.exception.as_ref()
     }
 
-    pub(crate) fn take_exception(&mut self) -> MonorubyErr {
+    pub(crate) fn take_error(&mut self) -> MonorubyErr {
         std::mem::take(&mut self.exception).unwrap()
     }
 
     pub(crate) fn take_ex_obj(&mut self, globals: &Globals) -> Value {
-        let err = self.take_exception();
+        let err = self.take_error();
         self.exception_to_val(globals, err)
     }
 

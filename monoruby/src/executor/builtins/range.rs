@@ -10,6 +10,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "end", end, 0);
     globals.define_builtin_func(RANGE_CLASS, "exclude_end?", exclude_end, 0);
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
+    globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
 }
 
 /// ### Range.new
@@ -88,10 +90,45 @@ fn each(
 
         let iter = (start..end).map(|i| Value::fixnum(i));
         vm.invoke_block_iter1(globals, block_handler, iter)?;
+        Ok(self_)
     } else {
-        unimplemented!()
+        Err(MonorubyErr::runtimeerr("not supported".to_string()))
     }
-    Ok(self_)
+}
+
+///
+/// ### Enumerable#map
+///
+/// - [NOT SUPPORTED]collect -> Enumerator
+/// - [NOT SUPPORTED]map -> Enumerator
+/// - collect {|item| ... } -> [object]
+/// - map {|item| ... } -> [object]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
+#[monoruby_builtin]
+fn map(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let block_handler = lfp.expect_block()?;
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if range.start.is_fixnum() && range.end.is_fixnum() {
+        let start = range.start.as_fixnum();
+        let mut end = range.end.as_fixnum();
+        if !range.exclude_end() {
+            end += 1
+        }
+
+        let iter = (start..end).map(|i| Value::fixnum(i));
+        let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
+        Ok(Value::new_array_from_vec(vec))
+    } else {
+        Err(MonorubyErr::runtimeerr("not supported".to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -108,6 +145,10 @@ mod test {
         );
         run_test("(1..5).exclude_end?");
         run_test("(1...5).exclude_end?");
+    }
+
+    #[test]
+    fn each() {
         run_test(
             r#"
         a = 0
@@ -124,6 +165,24 @@ mod test {
             a += x
         end
         a
+        "#,
+        );
+    }
+
+    #[test]
+    fn map() {
+        run_test(
+            r#"
+        (1...5).map do |x|
+            x * 100
+        end
+        "#,
+        );
+        run_test(
+            r#"
+        (1..5).map do |x|
+            x + 100
+        end
         "#,
         );
     }
