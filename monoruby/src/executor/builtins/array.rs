@@ -21,6 +21,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
 }
 
 ///
@@ -360,6 +362,45 @@ fn include_(
     Ok(Value::bool(false))
 }
 
+///
+/// #### Array#reverse
+///
+/// - reverse -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
+#[monoruby_builtin]
+fn reverse(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 0..=0)?;
+    let ary: Vec<_> = lfp.self_val().as_array().iter().rev().cloned().collect();
+    Ok(Value::new_array_from_vec(ary))
+}
+
+///
+/// #### Array#reverse!
+///
+/// - reverse! -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
+#[monoruby_builtin]
+fn reverse_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 0..=0)?;
+    let mut self_val = lfp.self_val();
+    self_val.as_array_mut().reverse();
+    Ok(self_val)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -555,6 +596,23 @@ mod test {
         "#,
             r#"
             a = ["a","b","c"]
+        "#,
+        );
+    }
+
+    #[test]
+    fn reverse() {
+        run_test(
+            r#"
+            a = [1, 2, 3, 4, 5]
+            [a.reverse, a]
+        "#,
+        );
+        run_test(
+            r#"
+            a = [1, 2, 3, 4, 5]
+            a.reverse!
+            a
         "#,
         );
     }
