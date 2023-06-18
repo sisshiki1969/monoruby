@@ -20,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "to_i", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
+    globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
 }
 
 /// ### Integer#times
@@ -197,6 +198,49 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     }
 }
 
+///
+/// ### Integer#[]
+///
+/// self[nth] -> Integer
+/// NOT SUPPORTED: self[nth, len] -> Integer
+/// NOT SUPPORTED: self[range] -> Integer
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
+#[monoruby_builtin]
+fn index(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 1..=1)?;
+    let self_val = lfp.self_val();
+    match (self_val.unpack(), arg[0].unpack()) {
+        (RV::Integer(base), RV::Integer(index)) => {
+            let val = if index < 0 {
+                0
+            } else if index > 63 {
+                base.is_negative().into()
+            } else {
+                (base >> index) & 1
+            };
+            Ok(Value::new_integer(val))
+        }
+        (RV::Integer(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        (RV::BigInt(base), RV::Integer(index)) => {
+            if index < 0 {
+                Ok(Value::new_integer(0))
+            } else {
+                let i = (base >> index) & num::BigInt::from(1);
+                Ok(Value::new_bigint(i))
+            }
+        }
+        (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        _ => unimplemented!(),
+    }
+}
+
 fn integer_tof(
     gen: &mut Codegen,
     ctx: &mut BBContext,
@@ -284,5 +328,22 @@ mod test {
         run_test(
             "8364942539529902342420345356709767546464574458647864843346254643534645647575786.to_i",
         );
+    }
+
+    #[test]
+    fn index() {
+        run_test("999999999999999999999999999999999[-100]");
+        run_test("999999999999999999999999999999999[0]");
+        run_test("999999999999999999999999999999999[47]");
+        run_test("999999999999999999999999999999999[48]");
+        run_test("999999999999999999999999999999999[82]");
+        run_test("999999999999999999999999999999999[85]");
+        run_test("999999999999999999999999999999999[86]");
+        run_test("999999999999999999999999999999999[999999999999999999999999999999999]");
+        run_test("27[-2]");
+        run_test("27[0]");
+        run_test("27[2]");
+        run_test("27[200]");
+        run_test("27[2000000000000000000000000000000000000000000]");
     }
 }

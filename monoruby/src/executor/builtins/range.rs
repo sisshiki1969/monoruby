@@ -12,6 +12,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     globals.define_builtin_func(RANGE_CLASS, "collect", map, 0);
     globals.define_builtin_func(RANGE_CLASS, "map", map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "entries", toa, 0);
+    globals.define_builtin_func(RANGE_CLASS, "to_a", toa, 0);
 }
 
 /// ### Range.new
@@ -125,6 +127,37 @@ fn map(
 
         let iter = (start..end).map(|i| Value::fixnum(i));
         let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
+        Ok(Value::new_array_from_vec(vec))
+    } else {
+        Err(MonorubyErr::runtimeerr("not supported".to_string()))
+    }
+}
+
+///
+/// ### Range#entries
+///
+/// - to_a -> Array
+/// - entries -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/entries.html]
+#[monoruby_builtin]
+fn toa(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    if range.start.is_fixnum() && range.end.is_fixnum() {
+        let start = range.start.as_fixnum();
+        let mut end = range.end.as_fixnum();
+        if !range.exclude_end() {
+            end += 1
+        }
+
+        let vec = (start..end).map(|i| Value::fixnum(i)).collect();
         Ok(Value::new_array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported".to_string()))
