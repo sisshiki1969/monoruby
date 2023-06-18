@@ -54,6 +54,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
     globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
     globals.define_builtin_func(OBJECT_CLASS, "abort", abort, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "__dir__", dir_, 0);
     globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
     globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
@@ -665,6 +666,29 @@ fn abort(
         }
     }
     std::process::exit(1);
+}
+
+///
+/// Kernel.#__dir__
+///
+/// - __dir__ -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
+#[monoruby_builtin]
+fn dir_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 0..=0)?;
+    let fid = vm.cfp.unwrap().prev().unwrap().lfp().meta().func_id();
+    let path = &globals.store[fid].as_ruby_func().sourceinfo.path;
+    assert!(path.is_file());
+    Ok(Value::new_string(
+        path.parent().unwrap().to_string_lossy().to_string(),
+    ))
 }
 
 fn object_nil(

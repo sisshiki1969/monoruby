@@ -18,7 +18,7 @@ impl CFP {
     ///
     /// Get inner raw pointer.
     ///
-    fn get(&self) -> *const Option<CFP> {
+    fn as_ptr(&self) -> *const Option<CFP> {
         self.0.as_ptr()
     }
 
@@ -26,21 +26,21 @@ impl CFP {
     /// Get a previous control frame of *self*.
     ///
     pub fn prev(&self) -> Option<Self> {
-        unsafe { *self.get() }
+        unsafe { *self.as_ptr() }
     }
 
     ///
     /// Get a return address of *self*.
     ///
     pub unsafe fn return_addr(&self) -> *const usize {
-        *(self.get().add(2) as *const *const usize)
+        *(self.as_ptr().add(2) as *const *const usize)
     }
 
     ///
     /// Get base pointer address of *self*.
     ///
     pub unsafe fn bp(&self) -> *const usize {
-        self.get().add(BP_PREV_CFP as usize / 8) as _
+        self.as_ptr().add(BP_PREV_CFP as usize / 8) as _
     }
 
     ///
@@ -131,13 +131,13 @@ impl std::default::Default for LFP {
 
 impl std::cmp::PartialEq<CFP> for LFP {
     fn eq(&self, other: &CFP) -> bool {
-        self.0 == other.get() as _
+        self.0 == other.as_ptr() as _
     }
 }
 
 impl std::cmp::PartialOrd<CFP> for LFP {
     fn partial_cmp(&self, other: &CFP) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&(other.get() as *const u8))
+        self.0.partial_cmp(&(other.as_ptr() as *const u8))
     }
 }
 
