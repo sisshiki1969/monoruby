@@ -693,6 +693,11 @@ impl BytecodeGen {
             let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?.into();
             mrhs_len = mlhs_len;
             let rhs_reg = self.next_reg();
+            let old = self.temp;
+            for _ in 0..mlhs_len {
+                self.push();
+            }
+            self.temp = old;
             self.emit(
                 BcIr::ExpandArray(rhs, rhs_reg.into(), mlhs_len as u16),
                 Loc::default(),
