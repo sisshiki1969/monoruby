@@ -359,14 +359,19 @@ macro_rules! eq_values {
                         (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
                         (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
                         (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
+                        (RV::Integer(lhs), _) => false,
                         (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.$op(&BigInt::from(rhs)),
                         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
+                        (RV::BigInt(lhs), _) => false,
                         (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
                         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                         (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
+                        (RV::Float(lhs), _) => false,
                         (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
+                        (RV::Bool(lhs), _) => false,
                         (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.$op(&rhs),
+                        (RV::Symbol(lhs), _) => false,
                         _ => {
                             self.invoke_method_inner(globals, $op_str, lhs, &[rhs])?.as_bool()
                         }
