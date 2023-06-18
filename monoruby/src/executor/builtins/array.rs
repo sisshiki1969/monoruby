@@ -23,6 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
 }
 
 ///
@@ -401,6 +402,51 @@ fn reverse_(
     Ok(self_val)
 }
 
+///
+/// #### Array#reverse!
+///
+/// - reverse! -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
+#[monoruby_builtin]
+fn transpose(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    Executor::check_number_of_arguments(len, 0..=0)?;
+    let self_val = lfp.self_val();
+    let ary = self_val.as_array();
+    if ary.len() == 0 {
+        return Ok(Value::new_empty_array());
+    }
+    let len = ary[0]
+        .is_array()
+        .ok_or_else(|| {
+            MonorubyErr::argumenterr("Each element of receiver must be an array.".to_string())
+        })?
+        .len();
+    let mut trans = vec![];
+    for i in 0..len {
+        let mut temp = vec![];
+        for v in ary.iter().cloned() {
+            let a = v.is_array().ok_or_else(|| {
+                MonorubyErr::argumenterr("Each element of receiver must be an array.".to_string())
+            })?;
+            if a.len() != len {
+                return Err(MonorubyErr::indexerr("Element size differs.".to_string()));
+            }
+            temp.push(a[i]);
+        }
+        let ary = Value::new_array_from_vec(temp);
+        trans.push(ary);
+    }
+    let res = Value::new_array_from_vec(trans);
+    Ok(res)
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -615,5 +661,13 @@ mod test {
             a
         "#,
         );
+    }
+
+    #[test]
+    fn transpose() {
+        run_test(r#"[[1,2],[3,4],[5,6]].transpose"#);
+        run_test(r#"[].transpose"#);
+        run_test_error(r#"[1,2,3].transpose"#);
+        run_test_error(r#"[[1,2],[3,4,5],[6,7]].transpose"#);
     }
 }
