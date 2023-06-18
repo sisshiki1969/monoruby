@@ -260,7 +260,7 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
-    pub(crate) fn new_string(s: String) -> Self {
+    pub fn new_string(s: String) -> Self {
         RValue::new_string(s).pack()
     }
 
@@ -268,7 +268,7 @@ impl Value {
         RValue::new_string_from_inner(s).pack()
     }
 
-    pub(crate) fn new_string_from_str(b: &str) -> Self {
+    pub fn new_string_from_str(b: &str) -> Self {
         RValue::new_bytes_from_slice(b.as_bytes()).pack()
     }
 
@@ -288,11 +288,11 @@ impl Value {
         RValue::new_array(ArrayInner::new()).pack()
     }
 
-    pub(crate) fn new_array_from_vec(v: Vec<Value>) -> Self {
+    pub fn new_array_from_vec(v: Vec<Value>) -> Self {
         RValue::new_array(ArrayInner::from_vec(v)).pack()
     }
 
-    pub(crate) fn new_array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
+    pub fn new_array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
         RValue::new_array(ArrayInner::from_iter(iter)).pack()
     }
 

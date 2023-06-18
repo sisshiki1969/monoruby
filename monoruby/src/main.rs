@@ -29,6 +29,7 @@ struct CommandLineArgs {
     /// File name.
     #[arg(num_args = 0..)]
     file: Option<String>,
+    argv: Vec<String>,
 }
 
 fn main() {
@@ -72,20 +73,20 @@ fn main() {
     }
 
     let mut code = String::new();
-    let path = match args.file {
-        Some(file_name) => {
-            let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
-            let mut file = File::open(file_name).unwrap();
-            file.read_to_string(&mut code).unwrap();
-            path
+    let path = if let Some(file_name) = args.file {
+        let iter = args.argv.into_iter().map(|s| Value::new_string(s));
+        let argv = Value::new_array_from_iter(iter);
+        globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+        let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
+        let mut file = File::open(&file_name).unwrap();
+        file.read_to_string(&mut code).unwrap();
+        path
+    } else {
+        if finish_flag {
+            return;
         }
-        None => {
-            if finish_flag {
-                return;
-            }
-            std::io::stdin().read_to_string(&mut code).unwrap();
-            std::path::PathBuf::from("-")
-        }
+        std::io::stdin().read_to_string(&mut code).unwrap();
+        std::path::PathBuf::from("-")
     };
     if let Err(err) = globals.compile_and_run(&code, &path) {
         err.show_error_message_and_loc();

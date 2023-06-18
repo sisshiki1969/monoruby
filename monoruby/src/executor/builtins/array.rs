@@ -378,8 +378,9 @@ fn reverse(
     len: usize,
 ) -> Result<Value> {
     Executor::check_number_of_arguments(len, 0..=0)?;
-    let ary: Vec<_> = lfp.self_val().as_array().iter().rev().cloned().collect();
-    Ok(Value::new_array_from_vec(ary))
+    let self_val = lfp.self_val();
+    let iter = self_val.as_array().iter().rev().cloned();
+    Ok(Value::new_array_from_iter(iter))
 }
 
 ///

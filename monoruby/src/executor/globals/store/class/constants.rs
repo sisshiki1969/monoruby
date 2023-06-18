@@ -1,7 +1,7 @@
 use super::*;
 
 impl Globals {
-    pub(crate) fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
+    pub fn set_constant_by_str(&mut self, class_id: ClassId, name: &str, val: Value) {
         let name = IdentId::get_id(name);
         self.set_constant(class_id, name, val);
     }

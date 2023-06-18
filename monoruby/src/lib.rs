@@ -22,7 +22,7 @@ pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 pub type IndexSet<T> = indexmap::IndexSet<T>;
 pub use executor::bytecodegen::BytecodeGen;
 use id_table::*;
-use value::*;
+pub use value::*;
 
 pub use value::rvalue::RegexpInner;
 
