@@ -210,9 +210,9 @@ impl Globals {
         Value::new_array_from_iter(iter)
     }
 
-    pub(crate) fn current_source_path(&self, executor: &Executor) -> PathBuf {
+    pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
         let source_func_id = executor.cfp().get_source_pos();
-        self[source_func_id].as_ruby_func().sourceinfo.path.clone()
+        &self[source_func_id].as_ruby_func().sourceinfo.path
     }
 
     ///

@@ -100,7 +100,7 @@ fn inline_class_new(
     ctx: &mut BBContext,
     method_info: &MethodInfo,
     ret: SlotId,
-    pc: BcPc,
+    _pc: BcPc,
     _deopt: DestLabel,
 ) {
     let MethodInfo {

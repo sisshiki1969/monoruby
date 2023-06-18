@@ -8,6 +8,7 @@ use std::{fs::File, io::Write};
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
     globals.define_builtin_class_func(class_id, "write", write, 2);
     globals.define_builtin_class_func(class_id, "read", read, 1);
+    globals.define_builtin_class_func(class_id, "join", join, -1);
     globals.define_builtin_class_func(class_id, "expand_path", expand_path, -1);
     globals.define_builtin_class_func(class_id, "dirname", dirname, 1);
     globals.define_builtin_class_func(class_id, "exist?", exist, 1);
@@ -82,6 +83,54 @@ fn read(
         }
     };
     Ok(Value::new_string(contents))
+}
+
+///
+/// ### File.join
+/// - join(*item) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
+#[monoruby_builtin]
+fn join(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    fn flatten(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        path: &mut String,
+        val: Value,
+    ) -> Result<()> {
+        match val.is_array() {
+            Some(ainfo) => {
+                for v in ainfo.iter().cloned() {
+                    flatten(vm, globals, path, v)?;
+                }
+            }
+            None => {
+                if !path.is_empty() && !path.ends_with('/') {
+                    path.push('/');
+                }
+                let s = val.expect_string(globals)?;
+                path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
+                    &s[1..]
+                } else if path.is_empty() && s.is_empty() {
+                    "/"
+                } else {
+                    &s
+                });
+            }
+        }
+        Ok(())
+    }
+    let mut path = String::new();
+    for i in 0..len {
+        flatten(vm, globals, &mut path, arg[i])?;
+    }
+    Ok(Value::new_string(path))
 }
 
 ///
@@ -240,6 +289,19 @@ fn conv_pathbuf(dir: &std::path::PathBuf) -> String {
 #[cfg(test)]
 mod test {
     use super::tests::*;
+
+    #[test]
+    fn join() {
+        run_test(r##"File.join("a","b")"##);
+        run_test(r##"File.join("a/","b")"##);
+        run_test(r##"File.join("a/","/b")"##);
+        run_test(r##"File.join("a","/b")"##);
+        run_test(r##"File.join("a",["b",["c",["d"]]])"##);
+        run_test(r##"File.join("", "a",["b",["c",["d"]]])"##);
+        run_test(r##"File.join("","","","a")"##);
+        run_test(r##"File.join([])"##);
+        run_test(r##"File.join"##);
+    }
 
     #[test]
     fn expand_path() {

@@ -976,7 +976,7 @@ impl Globals {
                 None => func.name(),
             };
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] bytecode:{:?} {:?}",
+                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] bytecode:{:?} {}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -986,7 +986,7 @@ impl Globals {
                 func.id(),
                 self_value.class().get_name(self),
                 func.bytecode().as_ptr(),
-                func.sourceinfo.path
+                func.sourceinfo.file_name()
             );
         }
         let _sourcemap =

@@ -545,7 +545,7 @@ fn require_relative(
     arg: Arg,
     _: usize,
 ) -> Result<Value> {
-    let mut file_name = globals.current_source_path(vm);
+    let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
     let feature = std::path::PathBuf::from(arg[0].expect_string(globals)?);
     file_name.extend(&feature);
@@ -683,12 +683,8 @@ fn dir_(
     len: usize,
 ) -> Result<Value> {
     Executor::check_number_of_arguments(len, 0..=0)?;
-    let fid = vm.cfp.unwrap().prev().unwrap().lfp().meta().func_id();
-    let path = &globals.store[fid].as_ruby_func().sourceinfo.path;
-    assert!(path.is_file());
-    Ok(Value::new_string(
-        path.parent().unwrap().to_string_lossy().to_string(),
-    ))
+    let path = globals.current_source_path(vm).parent().unwrap();
+    Ok(Value::new_string(path.to_string_lossy().to_string()))
 }
 
 fn object_nil(
