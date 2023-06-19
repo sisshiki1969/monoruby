@@ -22,6 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "member?", include, 1);
     globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(HASH_CLASS, "merge", merge, -1);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -220,7 +221,9 @@ fn each_value(
     Ok(lfp.self_val())
 }
 
+///
 /// ### Hash#has_key?
+///
 /// - has_key?(key) -> bool
 /// - include?(key) -> bool
 /// - key?(key) -> bool
@@ -239,7 +242,9 @@ fn include(
     Ok(Value::bool(b))
 }
 
+///
 /// ### Hash#inspect
+///
 /// - to_s -> String
 /// - inspect -> String
 ///
@@ -254,6 +259,33 @@ fn inspect(
 ) -> Result<Value> {
     let s = globals.inspect(lfp.self_val());
     Ok(Value::new_string(s))
+}
+
+///
+/// ### Hash#merge
+///
+/// - merge(*others) -> Hash
+/// - [NOT SUPPORTED]merge(*others) {|key, self_val, other_val| ... } -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
+#[monoruby_builtin]
+fn merge(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let mut inner = self_val.as_hash().clone();
+    for arg in arg.iter(len) {
+        let other = arg.expect_hash(globals)?;
+        for (k, v) in other.iter() {
+            inner.insert(k, v);
+        }
+    }
+
+    Ok(Value::new_hash_from_inner(inner))
 }
 
 // ENV object
@@ -374,6 +406,20 @@ mod test {
         }
         a
         "##,
+        );
+    }
+
+    #[test]
+    fn merge() {
+        run_test_with_prelude(
+            r##"
+        [h1.merge, h1.merge(h2), h1.merge(h2, h3)]
+        "##,
+            r#"
+            h1 = { "a" => 100, "b" => 200 }
+            h2 = { "b" => 246, "c" => 300 }
+            h3 = { "b" => 357, "d" => 400 }
+            "#,
         );
     }
 

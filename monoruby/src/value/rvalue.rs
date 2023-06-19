@@ -508,6 +508,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_hash_from_inner(inner: HashInner) -> Self {
+        RValue {
+            flags: RVFlag::new(HASH_CLASS, ObjKind::HASH),
+            kind: ObjKind::hash_from_inner(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue {
             flags: RVFlag::new(class_id, ObjKind::HASH),
@@ -894,6 +902,12 @@ impl ObjKind {
     fn hash(map: IndexMap<HashKey, Value>) -> Self {
         Self {
             hash: ManuallyDrop::new(HashInner::new(map)),
+        }
+    }
+
+    fn hash_from_inner(inner: HashInner) -> Self {
+        Self {
+            hash: ManuallyDrop::new(inner),
         }
     }
 

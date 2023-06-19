@@ -304,6 +304,10 @@ impl Value {
         RValue::new_hash(map).pack()
     }
 
+    pub(crate) fn new_hash_from_inner(inner: HashInner) -> Self {
+        RValue::new_hash_from_inner(inner).pack()
+    }
+
     pub(crate) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue::new_hash_with_class(map, class_id).pack()
     }
@@ -692,6 +696,16 @@ impl Value {
                 globals,
                 *self,
                 INTEGER_CLASS,
+            ))
+        }
+    }
+
+    pub(crate) fn expect_hash(&self, globals: &mut Globals) -> Result<&HashInner> {
+        if let Some(h) = self.is_hash() {
+            Ok(h)
+        } else {
+            Err(MonorubyErr::no_implicit_conversion(
+                globals, *self, HASH_CLASS,
             ))
         }
     }
