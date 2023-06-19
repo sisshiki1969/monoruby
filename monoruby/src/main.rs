@@ -6,7 +6,7 @@ use std::io::Read;
 use monoruby::*;
 
 #[derive(clap::Parser, Debug)]
-#[command(author, about, long_about = None, trailing_var_arg = true)]
+#[command(author, about, long_about = None)]
 struct CommandLineArgs {
     /// one line of script. several -e's allowed. Omit [programfile]
     #[arg(short, num_args = 0..)]
@@ -29,6 +29,7 @@ struct CommandLineArgs {
     /// File name.
     #[arg(num_args = 0..)]
     file: Option<String>,
+    #[arg(last(true))]
     argv: Vec<String>,
 }
 
