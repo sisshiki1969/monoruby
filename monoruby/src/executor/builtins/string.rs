@@ -553,8 +553,9 @@ fn start_with(
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let string = lfp.self_val().expect_string(globals)?;
     let arg0 = arg[0];
     let arg = arg0.expect_string(globals)?;
@@ -573,8 +574,9 @@ fn end_with(
     globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let string = lfp.self_val().expect_string(globals)?;
     let arg0 = arg[0];
     let arg = arg0.expect_string(globals)?;

@@ -596,6 +596,7 @@ fn system(
     len: usize,
 ) -> Result<Value> {
     use std::process::Command;
+    MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let input = arg[0].as_string();
     let (program, mut args) = prepare_command_arg(input);
     if len > 1 {

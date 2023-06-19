@@ -61,8 +61,9 @@ fn read(
     globals: &mut Globals,
     _lfp: LFP,
     arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let filename = string_to_path(arg[0], globals)?;
     let mut file = match File::open(&filename) {
         Ok(file) => file,
