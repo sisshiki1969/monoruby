@@ -31,6 +31,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "lines", lines, -0);
     globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(STRING_CLASS, "to_i", to_i, -1);
+    globals.define_builtin_func(STRING_CLASS, "intern", to_sym, 0);
+    globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
 }
 
@@ -1053,6 +1055,27 @@ fn to_i(
 }
 
 ///
+/// ### String#intern
+///
+/// - intern -> Symbol
+/// - to_sym -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/intern.html]
+#[monoruby_builtin]
+fn to_sym(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let self_val = lfp.self_val();
+    let sym = Value::new_symbol(IdentId::get_id(self_val.as_str().as_ref()));
+    Ok(sym)
+}
+
+///
 /// ### String#upcase
 ///
 /// - upcase(*options) -> String
@@ -1309,13 +1332,19 @@ mod test {
     }
 
     #[test]
-    fn toi() {
+    fn to_i() {
         run_test(r"'42581'.to_i");
         run_test(r"'4a5f1'.to_i(16)");
         run_test(r"'4258159248352010254587519982001542568633842205196875555'.to_i");
         run_test(r"'42581592483edrcs0254587519982001ipgomrn568633842205196875555'.to_i(36)");
         run_test_error(r"'42581'.to_i(-10)");
         run_test_error(r"'42581'.to_i(100)");
+    }
+
+    #[test]
+    fn to_sym() {
+        run_test(r"'RubyAndRust'.to_sym");
+        run_test(r"'Jane12345'.intern");
     }
 
     #[test]

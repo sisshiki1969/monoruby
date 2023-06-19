@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
+    globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
     globals.define_builtin_func(HASH_CLASS, "has_key?", include, 1);
     globals.define_builtin_func(HASH_CLASS, "include?", include, 1);
@@ -222,6 +223,28 @@ fn each_value(
 }
 
 ///
+/// ### Hash#each_key
+///
+/// - each_key {|value| ... } -> self
+/// - [NOT SUPPORTED] each_key -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_key.html]
+#[monoruby_builtin]
+fn each_key(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let block_handler = lfp.expect_block()?;
+    let ary = lfp.self_val();
+    let iter = ary.as_hash().iter().map(|(k, _)| k);
+    vm.invoke_block_iter1(globals, block_handler, iter)?;
+    Ok(lfp.self_val())
+}
+
+///
 /// ### Hash#has_key?
 ///
 /// - has_key?(key) -> bool
@@ -404,6 +427,15 @@ mod test {
         a = []
         {:a=>1, :b=>2, :c=>3}.each_value {|v|
             a << v
+        }
+        a
+        "##,
+        );
+        run_test(
+            r##"
+        a = []
+        {:a=>1, :b=>2, :c=>3}.each_key {|k|
+            a << k
         }
         a
         "##,
