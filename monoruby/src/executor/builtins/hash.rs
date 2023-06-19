@@ -276,6 +276,7 @@ fn merge(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
+    lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let mut inner = self_val.as_hash().clone();
     for arg in arg.iter(len) {
@@ -331,7 +332,7 @@ fn env_fetch(
     let self_ = lfp.self_val();
     let env_map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
-        Executor::check_number_of_arguments(len, 1..=1)?;
+        MonorubyErr::check_number_of_arguments(len, 1)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
@@ -339,7 +340,7 @@ fn env_fetch(
     } else if len == 1 {
         env_map.get(arg[0]).unwrap()
     } else {
-        Executor::check_number_of_arguments(len, 1..=2)?;
+        MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
         match env_map.get(arg[0]) {
             Some(s) => s,
             None => arg[1],

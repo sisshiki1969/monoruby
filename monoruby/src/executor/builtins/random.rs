@@ -23,7 +23,7 @@ fn srand(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
     let new_seed = if len == 0 {
         None

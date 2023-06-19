@@ -127,7 +127,7 @@ fn index(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=2)?;
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     if len == 1 {
         let idx = arg[0];
         lfp.self_val().as_array().get_elem1(globals, idx)
@@ -150,6 +150,7 @@ fn index_assign(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 2..=3)?;
     if len == 2 {
         let i = arg[0];
         let val = arg[1];
@@ -173,7 +174,7 @@ fn index_assign(
             .as_array_mut()
             .set_index2(i as usize, l as usize, val);
     } else {
-        Err(MonorubyErr::wrong_number_of_arg_range(len, 2..=3))
+        unreachable!()
     }
 }
 
@@ -192,7 +193,7 @@ fn inject(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let block_handler = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let mut iter = self_.as_array().iter().cloned();
@@ -213,7 +214,7 @@ fn inject(
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/join.html]
 #[monoruby_builtin]
 fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let sep = if len == 0 {
         "".to_string()
     } else {
@@ -246,7 +247,7 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sum.html]
 #[monoruby_builtin]
 fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
     let self_ = lfp.self_val();
     let iter = self_.as_array().iter().cloned();
@@ -325,8 +326,9 @@ fn detect(
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh);
@@ -352,7 +354,7 @@ fn include_(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=1)?;
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let ary = lfp.self_val();
     let rhs = arg[0];
     for lhs in ary.as_array().iter().cloned() {
@@ -377,7 +379,7 @@ fn reverse(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=0)?;
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
     let iter = self_val.as_array().iter().rev().cloned();
     Ok(Value::new_array_from_iter(iter))
@@ -397,7 +399,7 @@ fn reverse_(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=0)?;
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut self_val = lfp.self_val();
     self_val.as_array_mut().reverse();
     Ok(self_val)
@@ -417,7 +419,7 @@ fn transpose(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=0)?;
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
     let ary = self_val.as_array();
     if ary.len() == 0 {

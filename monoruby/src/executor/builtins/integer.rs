@@ -93,7 +93,7 @@ fn step(
     args: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=2)?;
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let block = match lfp.block() {
         None => {
             /*let id = IdentId::get_ident_id("step");
@@ -188,7 +188,7 @@ fn to_i(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=1)?;
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
         Some(val) => Ok(val),
         None => {
@@ -214,7 +214,7 @@ fn index(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=1)?;
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let self_val = lfp.self_val();
     match (self_val.unpack(), arg[0].unpack()) {
         (RV::Integer(base), RV::Integer(index)) => {

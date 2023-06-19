@@ -233,7 +233,7 @@ fn include(
     len: usize,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    Executor::check_min_number_of_arguments(len, 1)?;
+    MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let class = self_.as_class();
     for v in arg.rev(len) {
         v.expect_module(globals)?;
@@ -333,7 +333,7 @@ fn method_defined(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=1)?;
+    MonorubyErr::check_number_of_arguments(len, 1)?;
     let class_id = lfp.self_val().as_class_id();
     let func_name = arg[0].expect_symbol_or_string(globals)?;
     Ok(Value::bool(globals.method_defined(class_id, func_name)))

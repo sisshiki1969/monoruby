@@ -766,7 +766,7 @@ pub(super) extern "C" fn err_wrong_number_of_arguments_range(
     min: usize,
     max: usize,
 ) -> Option<Value> {
-    if let Err(err) = Executor::check_number_of_arguments(given, min..=max) {
+    if let Err(err) = MonorubyErr::check_number_of_arguments_range(given, min..=max) {
         vm.set_error(err);
         return None;
     };

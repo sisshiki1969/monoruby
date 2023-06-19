@@ -14,7 +14,7 @@ fn struct_new(
     len: usize,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    Executor::check_min_number_of_arguments(len, 1)?;
+    MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let mut arg_vec = arg.to_vec(len);
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
@@ -89,7 +89,7 @@ fn inspect(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=0)?;
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();

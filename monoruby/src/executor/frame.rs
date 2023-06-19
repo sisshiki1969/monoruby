@@ -226,6 +226,14 @@ impl LFP {
         }
     }
 
+    pub fn expect_no_block(&self) -> Result<()> {
+        if self.block().is_none() {
+            Ok(())
+        } else {
+            Err(MonorubyErr::runtimeerr("not supported.".to_string()))
+        }
+    }
+
     ///
     /// Get a value of register slot *index*.
     ///

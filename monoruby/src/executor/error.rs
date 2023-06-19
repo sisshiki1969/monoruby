@@ -258,11 +258,25 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn wrong_arguments(expected: usize, given: usize) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::Arguments,
-            format!("wrong number of arguments (given {given}, expected {expected})"),
-        )
+    fn wrong_number_of_arg(expected: usize, given: usize) -> MonorubyErr {
+        Self::argumenterr(format!(
+            "wrong number of arguments (given {given}, expected {expected})"
+        ))
+    }
+
+    fn wrong_number_of_arg_range(
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) -> MonorubyErr {
+        Self::argumenterr(format!(
+            "wrong number of arguments (given {given}, expeted {range:?})"
+        ))
+    }
+
+    fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
+        Self::argumenterr(format!(
+            "wrong number of arguments (given {given}, expeted {min}+)"
+        ))
     }
 
     pub(crate) fn bad_range(start: Value, end: Value) -> MonorubyErr {
@@ -380,19 +394,35 @@ impl MonorubyErr {
         MonorubyErr::argumenterr("tried to create Proc object without a block".to_string())
     }
 
-    pub(crate) fn wrong_number_of_arg_range(
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> MonorubyErr {
-        Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expeted {range:?})"
-        ))
+    pub(crate) fn check_number_of_arguments(given: usize, expect: usize) -> Result<()> {
+        if given == expect {
+            Ok(())
+        } else {
+            Err(MonorubyErr::wrong_number_of_arg(expect, given))
+        }
     }
 
-    pub(crate) fn wrong_number_of_arg_min(given: usize, min: usize) -> MonorubyErr {
-        Self::argumenterr(format!(
-            "wrong number of arguments (given {given}, expeted {min}+)"
-        ))
+    pub(crate) fn check_number_of_arguments_range(
+        given: usize,
+        range: std::ops::RangeInclusive<usize>,
+    ) -> Result<()> {
+        if range.contains(&given) {
+            Ok(())
+        } else {
+            let err = if range.start() == range.end() {
+                MonorubyErr::wrong_number_of_arg(*range.start(), given)
+            } else {
+                MonorubyErr::wrong_number_of_arg_range(given, range)
+            };
+            Err(err)
+        }
+    }
+
+    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
+        if given >= min {
+            return Ok(());
+        }
+        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
     }
 
     pub(crate) fn indexerr(msg: String) -> MonorubyErr {
@@ -471,35 +501,12 @@ impl Executor {
         self.set_error(MonorubyErr::no_block_given());
     }
 
-    pub(crate) fn check_number_of_arguments(
-        given: usize,
-        range: std::ops::RangeInclusive<usize>,
-    ) -> Result<()> {
-        if range.contains(&given) {
-            Ok(())
-        } else {
-            let err = if range.start() == range.end() {
-                MonorubyErr::wrong_arguments(*range.start(), given)
-            } else {
-                MonorubyErr::wrong_number_of_arg_range(given, range)
-            };
-            Err(err)
-        }
-    }
-
     pub(crate) fn err_wrong_number_of_arg_range(
         &mut self,
         given: usize,
         range: std::ops::RangeInclusive<usize>,
     ) {
         self.set_error(MonorubyErr::wrong_number_of_arg_range(given, range))
-    }
-
-    pub(crate) fn check_min_number_of_arguments(given: usize, min: usize) -> Result<()> {
-        if given >= min {
-            return Ok(());
-        }
-        Err(MonorubyErr::wrong_number_of_arg_min(given, min))
     }
 
     ///

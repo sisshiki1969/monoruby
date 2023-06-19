@@ -147,7 +147,7 @@ fn expand_path(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 1..=2)?;
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {

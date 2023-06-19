@@ -359,7 +359,7 @@ fn rand(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let i = match len {
         0 => 0i64,
         1 => arg[0].coerce_to_fixnum(globals)?,
@@ -652,7 +652,7 @@ fn abort(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     if len == 1 {
         match arg[0].is_string() {
             Some(s) => eprintln!("{}", s),
@@ -682,7 +682,7 @@ fn dir_(
     _arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=0)?;
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let path = globals.current_source_path(vm).parent().unwrap();
     Ok(Value::new_string(path.to_string_lossy().to_string()))
 }

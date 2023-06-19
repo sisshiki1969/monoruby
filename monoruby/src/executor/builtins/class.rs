@@ -28,11 +28,12 @@ pub(super) fn init(globals: &mut Globals) {
 fn class_new(
     _vm: &mut Executor,
     globals: &mut Globals,
-    _lfp: LFP,
+    lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 0..=1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    lfp.expect_no_block()?;
     let superclass = if len == 0 {
         None
     } else {

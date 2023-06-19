@@ -28,7 +28,7 @@ fn range_new(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    Executor::check_number_of_arguments(len, 2..=3)?;
+    MonorubyErr::check_number_of_arguments_range(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
 }
 
