@@ -254,6 +254,7 @@ impl BytecodeGen {
             keyword_initializers,
             destruct_info,
             optional_info,
+            loc,
         } = store.get_compile_info();
         let info = store[func_id].as_ruby_func();
         let mother = info
@@ -302,7 +303,7 @@ impl BytecodeGen {
         gen.gen_expr(ast, UseMode::Ret)?;
         gen.replace_init(info);
         //assert_eq!(0, ir.temp);
-        gen.into_bytecode(store, func_id)?;
+        gen.into_bytecode(store, func_id, loc)?;
         store.set_func_data(func_id);
         Ok(())
     }

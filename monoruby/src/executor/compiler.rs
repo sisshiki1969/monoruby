@@ -971,9 +971,9 @@ impl Globals {
         {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
-            let name = ansi_term::Colour::Cyan.paint(self.store.func_description(func_id));
+            let name = self.store.func_description(func_id);
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}",
+                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}:{}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -982,7 +982,8 @@ impl Globals {
                 name,
                 func.id(),
                 self_value.class().get_name(self),
-                func.sourceinfo.file_name()
+                func.sourceinfo.file_name(),
+                func.sourceinfo.get_line(&func.loc),
             );
         }
         let _sourcemap =

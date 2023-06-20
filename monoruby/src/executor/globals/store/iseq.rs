@@ -23,6 +23,10 @@ pub(crate) struct ISeqInfo {
     ///
     pub(super) bytecode: Option<Pin<Box<[Bc]>>>,
     ///
+    /// Location of the function in a source code.
+    ///
+    pub loc: Loc,
+    ///
     /// Source map.
     ///
     pub sourcemap: Vec<Loc>,
@@ -91,6 +95,7 @@ impl ISeqInfo {
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
         is_block: bool,
     ) -> Self {
@@ -99,6 +104,7 @@ impl ISeqInfo {
             mother,
             name,
             bytecode: None,
+            loc,
             sourcemap: vec![],
             exception_map: vec![],
             args: args.clone(),
@@ -139,18 +145,20 @@ impl ISeqInfo {
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, Some(mother), outer.1, None, args, sourceinfo, true)
+        Self::new(id, Some(mother), outer.1, None, args, loc, sourceinfo, true)
     }
 
     pub(in crate::executor) fn new_method(
         id: Option<FuncId>,
         name: Option<IdentId>,
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, id, vec![], name, args, sourceinfo, false)
+        Self::new(id, id, vec![], name, args, loc, sourceinfo, false)
     }
 
     pub(crate) fn id(&self) -> FuncId {

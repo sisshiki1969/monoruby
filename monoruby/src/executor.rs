@@ -1,6 +1,6 @@
 use super::*;
 use monoasm::*;
-use ruruby_parse::Node;
+use ruruby_parse::{Loc, Node};
 
 mod builtins;
 pub mod bytecodegen;
@@ -1697,6 +1697,7 @@ struct CompileInfo {
     optional_info: Vec<OptionalInfo>,
     /// *for* statement parameters info.
     for_param_info: Vec<ForParamInfo>,
+    loc: Loc,
 }
 
 impl CompileInfo {
@@ -1706,6 +1707,7 @@ impl CompileInfo {
         expand_info: Vec<DestructureInfo>,
         optional_info: Vec<OptionalInfo>,
         for_param_info: Vec<ForParamInfo>,
+        loc: Loc,
     ) -> Self {
         Self {
             ast,
@@ -1713,6 +1715,7 @@ impl CompileInfo {
             destruct_info: expand_info,
             optional_info,
             for_param_info,
+            loc,
         }
     }
 }

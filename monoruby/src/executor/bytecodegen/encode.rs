@@ -3,7 +3,12 @@ use crate::jitgen::BasicBlockInfo;
 use super::*;
 
 impl BytecodeGen {
-    pub(super) fn into_bytecode(mut self, store: &mut Store, func_id: FuncId) -> Result<()> {
+    pub(super) fn into_bytecode(
+        mut self,
+        store: &mut Store,
+        func_id: FuncId,
+        loc: Loc,
+    ) -> Result<()> {
         let mut ops = vec![];
         let mut locs = vec![];
         for (idx, (inst, loc)) in self.ir.iter().enumerate() {
@@ -45,10 +50,10 @@ impl BytecodeGen {
             let sourceinfo = self.sourceinfo.clone();
             match f {
                 Functions::Method { name, info } => {
-                    store.add_method(name, info, sourceinfo)?;
+                    store.add_method(name, info, loc, sourceinfo)?;
                 }
                 Functions::ClassDef { name, info } => {
-                    store.add_classdef(name, info, sourceinfo)?;
+                    store.add_classdef(name, info, loc, sourceinfo)?;
                 }
                 Functions::Block {
                     mother,
@@ -56,7 +61,7 @@ impl BytecodeGen {
                     optional_params,
                     info,
                 } => {
-                    store.add_block(mother, outer, optional_params, info, sourceinfo)?;
+                    store.add_block(mother, outer, optional_params, info, loc, sourceinfo)?;
                 }
             }
         }
@@ -64,6 +69,7 @@ impl BytecodeGen {
         info.temp_num = self.temp_num;
         info.non_temp_num = self.non_temp_num;
         info.literals = std::mem::take(&mut self.literals);
+        info.loc = loc;
         info.set_bytecode(ops);
         for ExceptionEntry {
             range,

@@ -74,10 +74,11 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let args = self.handle_args(info, vec![], &sourceinfo)?;
-        Ok(self.add_method_iseq(name, args, sourceinfo))
+        Ok(self.add_method_iseq(name, args, loc, sourceinfo))
     }
 
     pub(super) fn add_block(
@@ -86,11 +87,12 @@ impl Funcs {
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         for_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let args = self.handle_args(info, for_params, &sourceinfo)?;
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_block_iseq(Some(func_id), mother, outer, args, sourceinfo);
+        let info = FuncInfo::new_block_iseq(Some(func_id), mother, outer, args, loc, sourceinfo);
         self.info.push(info);
         Ok(func_id)
     }
@@ -99,11 +101,12 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         let _ = self.handle_args(info, vec![], &sourceinfo)?;
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_classdef_iseq(name, Some(func_id), sourceinfo);
+        let info = FuncInfo::new_classdef_iseq(name, Some(func_id), loc, sourceinfo);
         self.info.push(info);
         Ok(func_id)
     }
@@ -138,10 +141,11 @@ impl Funcs {
         &mut self,
         name: Option<IdentId>,
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, Some(func_id), args, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, Some(func_id), args, loc, sourceinfo);
         self.info.push(info);
         func_id
     }
@@ -157,7 +161,10 @@ impl Funcs {
         sourceinfo: &SourceInfoRef,
     ) -> Result<ParamsInfo> {
         let BlockInfo {
-            params, box body, ..
+            params,
+            box body,
+            loc,
+            ..
         } = info;
         let mut args_names = vec![];
         let mut keyword_names = vec![];
@@ -240,6 +247,7 @@ impl Funcs {
             expand_info,
             optional_info,
             for_param_info,
+            loc,
         ));
         Ok(ParamsInfo {
             args_names,
@@ -300,10 +308,11 @@ impl FuncInfo {
         name: impl Into<Option<IdentId>>,
         func_id: Option<FuncId>,
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
         let name = name.into();
-        let info = ISeqInfo::new_method(func_id, name, args, sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, args, loc, sourceinfo);
         Self {
             name,
             data: FuncData {
@@ -321,9 +330,10 @@ impl FuncInfo {
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ParamsInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_block(func_id, mother, outer, args, sourceinfo);
+        let info = ISeqInfo::new_block(func_id, mother, outer, args, loc, sourceinfo);
         Self {
             name: None,
             data: FuncData {
@@ -339,9 +349,10 @@ impl FuncInfo {
     fn new_classdef_iseq(
         name: Option<IdentId>,
         func_id: Option<FuncId>,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), sourceinfo);
+        let info = ISeqInfo::new_method(func_id, name, ParamsInfo::default(), loc, sourceinfo);
         Self {
             name,
             data: FuncData {
@@ -439,12 +450,14 @@ impl FuncInfo {
     pub(crate) fn dump_bc(&self, globals: &Globals) {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
+        let loc = info.loc;
+        let line = info.sourceinfo.get_line(&loc);
+        let file_name = info.sourceinfo.file_name();
         eprintln!(
-            "{} meta:{:?} {:?}",
+            "{} {file_name}:{line}",
             globals.store.func_description(info.id()),
-            self.data.meta,
-            self.kind
         );
+        eprintln!("meta:{:?} {:?}", self.data.meta, self.kind);
         eprintln!("{:?}", info.get_exception_map());
         for (i, pc) in info.bytecode().iter().enumerate() {
             let pc = BcPc::from(pc);

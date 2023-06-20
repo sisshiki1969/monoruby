@@ -164,7 +164,9 @@ impl Store {
                 params: vec![],
                 body: Box::new(ast),
                 lvar: LvarCollector::new(),
+                loc: Loc::default(),
             },
+            Loc::default(),
             sourceinfo,
         )
     }
@@ -173,18 +175,20 @@ impl Store {
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_method(name, info, sourceinfo)
+        self.functions.add_method(name, info, loc, sourceinfo)
     }
 
     pub(in crate::executor) fn add_classdef(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        self.functions.add_classdef(name, info, sourceinfo)
+        self.functions.add_classdef(name, info, loc, sourceinfo)
     }
 
     pub(in crate::executor) fn add_block(
@@ -193,10 +197,11 @@ impl Store {
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
+        loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
         self.functions
-            .add_block(mother, outer, optional_params, info, sourceinfo)
+            .add_block(mother, outer, optional_params, info, loc, sourceinfo)
     }
 
     pub(super) fn add_builtin_func(
