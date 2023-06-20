@@ -971,12 +971,9 @@ impl Globals {
         {
             let func = self[func_id].as_ruby_func();
             let start_pos = func.get_pc_index(position);
-            let name = match func.mother {
-                Some(mother) => self[mother].as_ruby_func().name(),
-                None => func.name(),
-            };
+            let name = ansi_term::Colour::Cyan.paint(self.store.func_description(func_id));
             eprintln!(
-                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] bytecode:{:?} {}",
+                "==> start {} compile: {} {:?} self_class:{} start:[{start_pos}] {}",
                 if position.is_some() {
                     "partial"
                 } else {
@@ -985,7 +982,6 @@ impl Globals {
                 name,
                 func.id(),
                 self_value.class().get_name(self),
-                func.bytecode().as_ptr(),
                 func.sourceinfo.file_name()
             );
         }

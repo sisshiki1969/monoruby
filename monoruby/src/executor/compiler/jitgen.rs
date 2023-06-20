@@ -344,7 +344,7 @@ extern "C" fn log_deoptimize(
     pc: BcPc,
     v: Option<Value>,
 ) {
-    let name = globals[func_id].as_ruby_func().name();
+    let name = globals.store.func_description(func_id);
     let bc_begin = globals[func_id].as_ruby_func().get_top_pc();
     let index = pc - bc_begin;
     let fmt = pc.format(globals, index).unwrap_or_default();

@@ -265,6 +265,27 @@ impl Store {
         self[func_id].data.set_pc(pc);
         self[func_id].data.set_reg_num(regs as i64);
     }
+
+    pub(crate) fn func_description(&self, func_id: FuncId) -> String {
+        let info = &self[func_id];
+        if let Some(func) = info.is_ruby_func() {
+            match func.mother {
+                Some(mother) => {
+                    if mother != func_id {
+                        format!("<block in {}>", self[mother].as_ruby_func().name())
+                    } else {
+                        format!("<{}>", func.name())
+                    }
+                }
+                None => format!("<{}>", func.name()),
+            }
+        } else {
+            match info.name() {
+                Some(name) => format!("{}", name),
+                None => "<unnamed>".to_string(),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -627,7 +627,16 @@ pub(super) extern "C" fn define_method(
         visibility,
     } = vm.get_class_context();
     let current_func = vm.method_func_id();
-    if !globals[func].is_ruby_func() {
+    if globals[func].is_ruby_func().is_some() {
+        globals[func].as_ruby_func_mut().lexical_context =
+            globals[current_func].as_ruby_func().lexical_context.clone();
+        globals.add_method(class_id, name, func, visibility);
+        if module_function {
+            globals.add_singleton_method(class_id, name, func, visibility);
+        }
+        globals.class_version_inc();
+        Some(Value::nil())
+    } else {
         let err = MonorubyErr::internalerr(format!(
             "define func: {:?} {:016x}",
             name,
@@ -635,16 +644,8 @@ pub(super) extern "C" fn define_method(
         ));
         _dump_stacktrace(vm, globals);
         vm.set_error(err);
-        return None;
+        None
     }
-    globals[func].as_ruby_func_mut().lexical_context =
-        globals[current_func].as_ruby_func().lexical_context.clone();
-    globals.add_method(class_id, name, func, visibility);
-    if module_function {
-        globals.add_singleton_method(class_id, name, func, visibility);
-    }
-    globals.class_version_inc();
-    Some(Value::nil())
 }
 
 pub(super) extern "C" fn singleton_define_method(

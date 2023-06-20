@@ -316,14 +316,6 @@ impl ISeqInfo {
     }
 
     ///
-    /// Get bytecode address.
-    ///
-    #[cfg(feature = "emit-bc")]
-    pub(in crate::executor) fn bytecode_top(&self) -> *const Bc {
-        self.bytecode().as_ptr()
-    }
-
-    ///
     /// Get basic block information.
     ///
     /// This returns a Vec which represents whether it is a start of a basic block for each bytecode.

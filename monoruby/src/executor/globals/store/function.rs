@@ -414,10 +414,10 @@ impl FuncInfo {
         }
     }
 
-    pub(crate) fn is_ruby_func(&mut self) -> bool {
-        match &mut self.kind {
-            FuncKind::ISeq(_) => true,
-            _ => false,
+    pub(crate) fn is_ruby_func(&self) -> Option<&ISeqInfo> {
+        match &self.kind {
+            FuncKind::ISeq(info) => Some(info),
+            _ => None,
         }
     }
 
@@ -440,13 +440,8 @@ impl FuncInfo {
         let info = self.as_ruby_func();
         eprintln!("------------------------------------");
         eprintln!(
-            "{:?} name:{} bc:{:?} meta:{:?} {:?}",
-            info.id(),
-            match self.name {
-                Some(name) => name.to_string(),
-                None => "<ANONYMOUS>".to_string(),
-            },
-            BcPcBase::new(info),
+            "{} meta:{:?} {:?}",
+            globals.store.func_description(info.id()),
             self.data.meta,
             self.kind
         );

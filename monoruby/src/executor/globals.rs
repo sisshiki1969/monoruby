@@ -578,11 +578,8 @@ impl Globals {
         let func_id = meta.func_id();
         let block = lfp.block();
         eprintln!(
-            "    name:[{}] block:{} outer:{} {:?}",
-            match self[func_id].name() {
-                Some(name) => name.to_string(),
-                None => "<unnamed>".to_string(),
-            },
+            "    {} block:{} outer:{} {:?}",
+            self.store.func_description(func_id),
             match block {
                 Some(block) => {
                     match block.try_proxy() {
@@ -622,7 +619,7 @@ impl Globals {
         let mut v: Vec<_> = self.deopt_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         for ((func_id, index), count) in v {
-            let name = self[*func_id].as_ruby_func().name();
+            let name = self.store.func_description(*func_id);
             eprintln!(
                 "{:20}  {:5} [{:05}]  {:10}",
                 name,

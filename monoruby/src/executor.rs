@@ -671,11 +671,6 @@ impl std::ops::Add<BcIndex> for BcPcBase {
 }
 
 impl BcPcBase {
-    #[cfg(feature = "emit-bc")]
-    pub(super) fn new(func: &ISeqInfo) -> Self {
-        BcPcBase(std::ptr::NonNull::new(func.bytecode_top() as _).unwrap())
-    }
-
     fn as_ptr(&self) -> *mut Bc {
         self.0.as_ptr()
     }
