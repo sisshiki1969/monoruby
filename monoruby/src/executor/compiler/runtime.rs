@@ -834,16 +834,16 @@ pub(super) extern "C" fn handle_error(
             if let MonorubyErrKind::MethodReturn(val, target_lfp) =
                 vm.exception().unwrap().kind().clone()
             {
-                if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
-                    return ErrorReturn::goto(ensure);
+                return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    ErrorReturn::goto(ensure)
                 } else {
                     if lfp == target_lfp {
                         vm.take_error();
-                        return ErrorReturn::return_normal(val);
+                        ErrorReturn::return_normal(val)
                     } else {
-                        return ErrorReturn::return_err();
+                        ErrorReturn::return_err()
                     }
-                }
+                };
             }
             let bc_base = func_info.data.pc();
             let sourceinfo = info.sourceinfo.clone();

@@ -387,7 +387,11 @@ impl MonorubyErr {
     }
 
     pub(crate) fn negative_argument() -> MonorubyErr {
-        MonorubyErr::argumenterr("negative_argument".to_string())
+        MonorubyErr::argumenterr("negativeargument".to_string())
+    }
+
+    pub(crate) fn negative_array_size() -> MonorubyErr {
+        MonorubyErr::argumenterr("negative array size".to_string())
     }
 
     pub(crate) fn create_proc_no_block() -> MonorubyErr {

@@ -8,7 +8,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(ARRAY_CLASS, "new", new, -1);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "shift", shift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
@@ -57,10 +59,30 @@ fn size(
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let len = lfp.self_val().as_array().len();
     Ok(Value::new_integer(len as i64))
+}
+
+///
+/// ### Array#empty?
+///
+/// - empty? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/empty=3f.html]
+#[monoruby_builtin]
+fn empty(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let b = lfp.self_val().as_array().is_empty();
+    Ok(Value::bool(b))
 }
 
 ///
@@ -90,6 +112,41 @@ fn add(
     };
     lhs.extend_from_slice(rhs);
     Ok(Value::new_array(lhs))
+}
+
+///
+/// ### Array#shift
+/// - shift -> object | nil
+/// - shift(n) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shift.html]
+#[monoruby_builtin]
+fn shift(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let mut self_val = lfp.self_val();
+    let ary = self_val.as_array_mut();
+    if len == 0 {
+        if ary.len() == 0 {
+            return Ok(Value::nil());
+        }
+        let res = ary[0];
+        ary.drain(0..1);
+        Ok(res)
+    } else {
+        let i = arg[0].coerce_to_fixnum(globals)?;
+        if i < 0 {
+            return Err(MonorubyErr::negative_array_size());
+        }
+        let num = std::cmp::min(i as usize, ary.len());
+        let iter = ary.drain(0..num);
+        Ok(Value::new_array_from_iter(iter))
+    }
 }
 
 ///
@@ -472,9 +529,9 @@ mod test {
 
     #[test]
     fn size() {
-        run_test2(r##"[].size"##);
-        run_test2(r##"[].length"##);
-        run_test2(r##"[1,2,3].size"##);
+        run_test(r##"[].size"##);
+        run_test(r##"[].length"##);
+        run_test(r##"[1,2,3].size"##);
         run_test_with_prelude(
             r##"
         a = A.new
@@ -491,11 +548,40 @@ mod test {
     }
 
     #[test]
+    fn empty() {
+        run_test(r##"[].empty?"##);
+        run_test(r##"[1,2,3].empty?"##);
+    }
+
+    #[test]
+    fn shift() {
+        run_test(
+            r##"
+            a = [1,2,3,4]
+            [a.shift, a]
+        "##,
+        );
+        run_test(
+            r##"
+            a = [1,2,3,4]
+            [a.shift(3), a]
+        "##,
+        );
+        run_test(
+            r##"
+            a = [1,2,3,4]
+            [a.shift(10), a]
+        "##,
+        );
+        run_test(r##"[].shift"##);
+        run_test(r##"[].shift(2)"##);
+        run_test_error(r##"[1,2,3].shift(:e)"##);
+        run_test_error(r##"[1,2,3].shift(-2)"##);
+    }
+
+    #[test]
     fn add() {
         run_test(r##"[1,2,3] + [4]"##);
-        run_test(r##"a = [1,2,3]; b = [4]; a + b; a"##);
-        run_test(r##"a = [1,2,3]; b = [4]; a + b; b"##);
-        run_test(r##"a = [1,2,3]; b = [4]; a.+(b); b"##);
     }
 
     #[test]

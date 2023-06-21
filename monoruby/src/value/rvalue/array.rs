@@ -1,5 +1,6 @@
 use crate::*;
 use smallvec::smallvec;
+use smallvec::Drain;
 use smallvec::SmallVec;
 
 pub const ARRAY_INLINE_CAPA: usize = 5;
@@ -62,9 +63,12 @@ impl ArrayInner {
         self.0.extend_from_slice(slice);
     }
 
-    /*pub fn drain(&mut self, range: std::ops::Range<usize>) -> Vec<Value> {
-        self.0.drain(range).collect()
-    }*/
+    pub fn drain(
+        &mut self,
+        range: std::ops::Range<usize>,
+    ) -> Drain<'_, [Value; ARRAY_INLINE_CAPA]> {
+        self.0.drain(range)
+    }
 }
 
 impl ArrayInner {
