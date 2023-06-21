@@ -180,6 +180,18 @@ impl Codegen {
         };
         self.epilogue();
 
+        //BcOp::Raise
+        let raise_err = self.jit.get_current_address();
+        let raise = self.entry_raise;
+        self.fetch_val_r15();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r15;
+            movq rax, (runtime::raise_err);
+            call rax;
+            jmp raise;
+        };
+
         //BcOp::EnsureEnd
         let ensure_end = self.jit.get_current_address();
         let raise = self.entry_raise;
@@ -263,6 +275,7 @@ impl Codegen {
         self.dispatch[80] = ret;
         self.dispatch[81] = method_ret;
         self.dispatch[82] = block_break;
+        self.dispatch[83] = raise_err;
         self.dispatch[85] = ensure_end;
         self.dispatch[86] = self.vm_concat_regexp();
         self.dispatch[126] = self.vm_pos();

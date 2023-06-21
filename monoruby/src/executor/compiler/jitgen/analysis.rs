@@ -433,8 +433,11 @@ impl JitContext {
                 } => {
                     store.get_inline_info(inline_id).1(&mut info, &method_info, ret);
                 }
-                TraceIr::Ret(ret) | TraceIr::MethodRet(ret) | TraceIr::Break(ret) => {
-                    info.def_as(ret, false);
+                TraceIr::Ret(src)
+                | TraceIr::MethodRet(src)
+                | TraceIr::Break(src)
+                | TraceIr::Raise(src) => {
+                    info.use_non_float(src);
                     return (ExitType::Return, info);
                 }
                 TraceIr::Br(_) => {

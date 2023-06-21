@@ -1274,6 +1274,18 @@ impl Codegen {
                     self.epilogue();
                     return;
                 }
+                TraceIr::Raise(src) => {
+                    let raise = self.entry_raise;
+                    self.fetch_to_rax(&mut ctx, src);
+                    monoasm! { &mut self.jit,
+                        movq rdi, rbx;
+                        movq rsi, rax;
+                        movq rax, (runtime::raise_err);
+                        call rax;
+                        jmp  raise;
+                    };
+                    return;
+                }
                 TraceIr::EnsureEnd => {
                     self.gen_write_back_locals(&mut ctx);
                     let raise = self.entry_raise;

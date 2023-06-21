@@ -783,6 +783,13 @@ pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
     vm.exception().is_some().into()
 }
 
+pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
+    match err_val.is_exception() {
+        Some(err) => vm.set_error(err.err.clone()),
+        None => unimplemented!(),
+    }
+}
+
 #[repr(C)]
 pub(super) struct ErrorReturn {
     dest: Option<BcPc>,

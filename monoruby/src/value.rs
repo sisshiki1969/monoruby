@@ -526,6 +526,14 @@ impl Value {
         }
     }
 
+    pub(crate) fn is_exception(&self) -> Option<&ExceptionInner> {
+        let rv = self.try_rvalue()?;
+        match rv.kind() {
+            ObjKind::EXCEPTION => Some(rv.as_exception()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_hash(&self) -> &HashInner {
         assert_eq!(ObjKind::HASH, self.rvalue().kind());
         self.rvalue().as_hash()
