@@ -63,6 +63,10 @@ impl ArrayInner {
         self.0.extend_from_slice(slice);
     }
 
+    pub fn insert_many(&mut self, index: usize, iterable: impl IntoIterator<Item = Value>) {
+        self.0.insert_many(index, iterable)
+    }
+
     pub fn drain(
         &mut self,
         range: std::ops::Range<usize>,

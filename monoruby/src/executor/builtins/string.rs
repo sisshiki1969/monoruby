@@ -34,6 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "intern", to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "to_sym", to_sym, 0);
     globals.define_builtin_func(STRING_CLASS, "upcase", upcase, 0);
+    globals.define_builtin_func(STRING_CLASS, "tr", tr, 2);
 }
 
 ///
@@ -1078,7 +1079,7 @@ fn to_sym(
 ///
 /// ### String#upcase
 ///
-/// - upcase(*options) -> String
+/// - upcase([NOT SUPPORTED]*options) -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
@@ -1087,11 +1088,30 @@ fn upcase(
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
-    _len: usize,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
     let s = self_val.as_str().as_ref().to_uppercase();
     Ok(Value::new_string_from_vec(s.into_bytes()))
+}
+
+///
+/// ### String#tr
+///
+/// - tr(pattern, replace) -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/tr.html]
+#[monoruby_builtin]
+fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 2)?;
+    let rec = lfp.self_val().expect_string(globals)?;
+    let from = arg[0].expect_string(globals)?;
+    let to = arg[1].expect_string(globals)?;
+    assert_eq!(1, from.chars().count());
+    assert_eq!(1, to.chars().count());
+    let res = rec.replace(&from, &to);
+    Ok(Value::new_string(res))
 }
 
 #[cfg(test)]

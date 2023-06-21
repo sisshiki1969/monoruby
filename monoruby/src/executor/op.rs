@@ -356,6 +356,10 @@ macro_rules! eq_values {
                     rhs: Value
                 ) -> Result<bool> {
                     let b = match (lhs.unpack(), rhs.unpack()) {
+                        (RV::Nil, RV::Nil) => true,
+                        (RV::Nil, _) => false,
+                        (RV::Bool(lhs), RV::Bool(rhs)) => lhs == rhs,
+                        (RV::Bool(_), _) => false,
                         (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
                         (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
                         (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),

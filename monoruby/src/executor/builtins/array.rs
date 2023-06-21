@@ -11,6 +11,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "shift", shift, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "unshift", unshift, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "prepend", unshift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
@@ -150,6 +152,27 @@ fn shift(
 }
 
 ///
+/// ### Array#unshift
+/// - unshift(*obj) -> self
+/// - prepend(*obj) -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/prepend.html]
+#[monoruby_builtin]
+fn unshift(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let ary = self_val.as_array_mut();
+    let iter = arg.iter(len);
+    ary.insert_many(0, iter);
+    Ok(self_val)
+}
+
+///
 /// ### Array#<<
 ///
 /// - self << obj -> self
@@ -163,9 +186,9 @@ fn shl(
     arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    self_.as_array_mut().push(arg[0]);
-    Ok(self_)
+    let mut self_val = lfp.self_val();
+    self_val.as_array_mut().push(arg[0]);
+    Ok(self_val)
 }
 
 ///
@@ -577,6 +600,23 @@ mod test {
         run_test(r##"[].shift(2)"##);
         run_test_error(r##"[1,2,3].shift(:e)"##);
         run_test_error(r##"[1,2,3].shift(-2)"##);
+    }
+
+    #[test]
+    fn unshift() {
+        run_test(
+            r##"
+            res = []
+            arr = [1,2,3]
+            arr.unshift 0
+            res << arr
+            arr.unshift [0]
+            res << arr
+            arr.unshift 1,2
+            res << arr
+            res
+        "##,
+        );
     }
 
     #[test]
