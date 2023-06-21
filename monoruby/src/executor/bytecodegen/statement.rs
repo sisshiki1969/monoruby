@@ -317,14 +317,12 @@ impl BytecodeGen {
                 self.temp = old;
             }
             // no rescue branch was matched.
-            // TODO:we must raise.
-            if rescue_use.is_ret() {
-                self.emit_nil(err_reg);
-                self.emit_ret(Some(err_reg));
-            } else {
-                self.emit_br(ensure_label);
+            if let Some(box ensure) = &ensure {
+                self.gen_expr(ensure.clone(), UseMode::NotUse)?;
             }
+            self.emit(BcIr::Raise(err_reg), Loc::default());
             self.pop();
+
             self.exception_table.push(ExceptionEntry {
                 range,
                 rescue: Some(rescue_pos),
@@ -343,16 +341,30 @@ impl BytecodeGen {
                     self.sourceinfo.clone(),
                 ));
             }
-            self.exception_table.push(ExceptionEntry {
-                range,
-                rescue: None,
-                ensure: if ensure.is_some() {
-                    Some(ensure_label)
-                } else {
-                    None
-                },
-                err_reg: None,
-            });
+            // no rescue branch.
+            if let Some(box ensure) = &ensure {
+                self.emit_br(else_label);
+                let err_reg = self.push().into();
+                let rescue_pos = self.new_label();
+                self.apply_label(rescue_pos);
+                self.gen_expr(ensure.clone(), UseMode::NotUse)?;
+                self.emit(BcIr::Raise(err_reg), Loc::default());
+                self.pop();
+
+                self.exception_table.push(ExceptionEntry {
+                    range,
+                    rescue: Some(rescue_pos),
+                    ensure: Some(ensure_label),
+                    err_reg: Some(err_reg),
+                });
+            } else {
+                self.exception_table.push(ExceptionEntry {
+                    range,
+                    rescue: None,
+                    ensure: None,
+                    err_reg: None,
+                });
+            }
         }
         self.apply_label(else_label);
         if let Some(box else_) = else_ {

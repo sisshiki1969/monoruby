@@ -845,6 +845,10 @@ pub(super) extern "C" fn handle_error(
                     }
                 }
             }
+            let bc_base = func_info.data.pc();
+            let sourceinfo = info.sourceinfo.clone();
+            let loc = info.sourcemap[pc - bc_base];
+            vm.push_error_location(loc, sourceinfo);
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err_val = vm.take_ex_obj(globals);
                 globals.set_gvar(IdentId::get_id("$!"), err_val);
@@ -852,11 +856,6 @@ pub(super) extern "C" fn handle_error(
                     unsafe { lfp.set_register(err_reg.0 as usize, err_val) };
                 }
                 return ErrorReturn::goto(rescue);
-            } else {
-                let bc_base = func_info.data.pc();
-                let sourceinfo = info.sourceinfo.clone();
-                let loc = info.sourcemap[pc - bc_base];
-                vm.push_error_location(loc, sourceinfo);
             }
         }
         FuncKind::Builtin { .. } => {}
