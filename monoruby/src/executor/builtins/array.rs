@@ -22,6 +22,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
     globals.define_builtin_func(ARRAY_CLASS, "map", map, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "collect_concat", flat_map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "detect", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "find", detect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
@@ -378,18 +380,44 @@ fn each(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
 #[monoruby_builtin]
-fn map(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let iter = ary.as_array().iter().cloned();
     let block_handler = lfp.expect_block()?;
     let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
     let res = Value::new_array_from_vec(vec);
+    Ok(res)
+}
+
+/// ### Enumerable#collect_concat
+///
+/// - flat_map {| obj | block } -> Array
+/// - collect_concat {| obj | block } -> Array
+/// - [NOT SUPPORTED] flat_map -> Enumerator
+/// - [NOT SUPPORTED] collect_concat -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
+#[monoruby_builtin]
+fn flat_map(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let ary = lfp.self_val();
+    let iter = ary.as_array().iter().cloned();
+    let block_handler = lfp.expect_block()?;
+    let mut v = vec![];
+    for elem in vm.invoke_block_map1(globals, block_handler, iter)? {
+        match elem.is_array() {
+            Some(ary) => v.extend(ary.iter()),
+            None => v.push(elem),
+        }
+    }
+    let res = Value::new_array_from_vec(v);
     Ok(res)
 }
 

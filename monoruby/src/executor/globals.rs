@@ -614,14 +614,14 @@ impl Globals {
     pub(crate) fn show_stats(&self) {
         eprintln!();
         eprintln!("deoptimization stats");
-        eprintln!("{:20} FuncId [{:05}]  {:10}", "func name", "index", "count");
-        eprintln!("-----------------------------------------------");
+        eprintln!("{:30} FuncId [{:05}]  {:10}", "func name", "index", "count");
+        eprintln!("---------------------------------------------------------");
         let mut v: Vec<_> = self.deopt_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         for ((func_id, index), count) in v {
             let name = self.store.func_description(*func_id);
             eprintln!(
-                "{:20}  {:5} [{:05}]  {:10}",
+                "{:30}  {:5} [{:05}]  {:10}",
                 name,
                 func_id.get(),
                 index,
@@ -630,13 +630,13 @@ impl Globals {
         }
         eprintln!();
         eprintln!("method cache stats");
-        eprintln!("{:20} {:15} {:10}", "func name", "class", "count");
-        eprintln!("-----------------------------------------------");
+        eprintln!("{:30} {:30} {:10}", "func name", "class", "count");
+        eprintln!("--------------------------------------------------------------");
         let mut v: Vec<_> = self.method_cache_stats.iter().collect();
         v.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         for ((class_id, name), count) in v {
             eprintln!(
-                "{:20} {:15} {:10}",
+                "{:30} {:30} {:10}",
                 name.to_string(),
                 class_id.get_name(self),
                 count
