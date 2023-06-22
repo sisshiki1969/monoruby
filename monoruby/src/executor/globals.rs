@@ -503,7 +503,7 @@ impl Globals {
 
 impl Globals {
     #[cfg(feature = "emit-bc")]
-    pub(crate) fn dump_bc(&mut self) {
+    pub fn dump_bc(&mut self) {
         let dumped_bc = self.dumped_bc;
         if self.startup_flag {
             self.store.functions()[dumped_bc..]

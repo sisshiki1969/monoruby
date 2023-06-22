@@ -356,26 +356,24 @@ macro_rules! eq_values {
                     rhs: Value
                 ) -> Result<bool> {
                     let b = match (lhs.unpack(), rhs.unpack()) {
-                        (RV::Nil, RV::Nil) => true,
-                        (RV::Nil, _) => false,
-                        (RV::Bool(lhs), RV::Bool(rhs)) => lhs == rhs,
-                        (RV::Bool(_), _) => false,
+                        (RV::Nil, RV::Nil) => true.$op(&true),
+                        (RV::Nil, _) => false.$op(&true),
                         (RV::Integer(lhs), RV::Integer(rhs)) => lhs.$op(&rhs),
                         (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
                         (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
-                        (RV::Integer(lhs), _) => false,
+                        (RV::Integer(lhs), _) => false.$op(&true),
                         (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.$op(&BigInt::from(rhs)),
                         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                         (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().$op(&rhs),
-                        (RV::BigInt(lhs), _) => false,
+                        (RV::BigInt(lhs), _) => false.$op(&true),
                         (RV::Float(lhs), RV::Integer(rhs)) => lhs.$op(&(rhs as f64)),
                         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                         (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
-                        (RV::Float(lhs), _) => false,
+                        (RV::Float(lhs), _) => false.$op(&true),
                         (RV::Bool(lhs), RV::Bool(rhs)) => lhs.$op(&rhs),
-                        (RV::Bool(lhs), _) => false,
+                        (RV::Bool(lhs), _) => false.$op(&true),
                         (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.$op(&rhs),
-                        (RV::Symbol(lhs), _) => false,
+                        (RV::Symbol(lhs), _) => false.$op(&true),
                         _ => {
                             self.invoke_method_inner(globals, $op_str, lhs, &[rhs])?.as_bool()
                         }
@@ -393,6 +391,57 @@ macro_rules! eq_values {
 
 eq_values!((eq, IdentId::_EQ), (ne, IdentId::_NEQ));
 
+#[test]
+fn cmp_values() {
+    let mut globals = Globals::new(0, false);
+    let mut vm = Executor::default();
+    let pairs = [
+        (Value::nil(), Value::nil(), true),
+        (Value::nil(), Value::new_integer(100), false),
+        (Value::nil(), Value::new_float(100.0), false),
+        (Value::bool(true), Value::bool(true), true),
+        (Value::bool(true), Value::bool(false), false),
+        (Value::bool(true), Value::nil(), false),
+        (Value::new_integer(100), Value::new_integer(100), true),
+        (Value::new_integer(100), Value::new_integer(200), false),
+        (Value::new_integer(100), Value::new_float(100.0), true),
+        (Value::new_integer(100), Value::new_float(200.0), false),
+        (Value::new_integer(100), Value::nil(), false),
+        (Value::new_integer(100), Value::bool(true), false),
+        (Value::new_integer(100), Value::bool(false), false),
+        (
+            Value::new_integer(100),
+            Value::new_symbol(IdentId::TO_S),
+            false,
+        ),
+        (
+            Value::new_integer(100),
+            Value::new_string_from_str("100"),
+            false,
+        ),
+        (
+            Value::new_symbol(IdentId::TO_S),
+            Value::new_symbol(IdentId::TO_S),
+            true,
+        ),
+        (
+            Value::new_symbol(IdentId::TO_S),
+            Value::new_symbol(IdentId::NAME),
+            false,
+        ),
+    ];
+    for (lhs, rhs, ans) in pairs {
+        assert_eq!(
+            ans,
+            Executor::cmp_eq_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+        );
+        assert_eq!(
+            ans,
+            !Executor::cmp_ne_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+        );
+    }
+}
+
 pub(super) extern "C" fn cmp_teq_values(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -400,6 +449,12 @@ pub(super) extern "C" fn cmp_teq_values(
     rhs: Value,
 ) -> Option<Value> {
     let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Nil, RV::Nil) => true,
+        (RV::Nil, _) => false,
+        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs == rhs,
+        (RV::Symbol(_), _) => false,
+        (RV::Bool(lhs), RV::Bool(rhs)) => lhs == rhs,
+        (RV::Bool(_), _) => false,
         (RV::Integer(lhs), RV::Integer(rhs)) => lhs.eq(&rhs),
         (RV::Integer(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
         (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
@@ -409,7 +464,6 @@ pub(super) extern "C" fn cmp_teq_values(
         (RV::Float(lhs), RV::Integer(rhs)) => lhs.eq(&(rhs as f64)),
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
         _ => {
             return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs]);
         }

@@ -76,7 +76,7 @@ impl BasicBlockInfo {
         let incoming = info.get_incoming();
 
         // generate bb_head.
-        let bb_head = incoming
+        let bb_head: bitvec::vec::BitVec<_> = incoming
             .iter()
             .enumerate()
             .map(|(i, v)| {
@@ -87,11 +87,11 @@ impl BasicBlockInfo {
             })
             .collect();
 
-        // generate bb_bap.
+        // generate bb_map.
         let mut bb_id = BasicBlockId(1);
         let mut bb_map = vec![];
-        for i in &incoming {
-            if !i.is_empty() {
+        for b in bb_head.iter() {
+            if *b {
                 bb_id += 1;
             }
             bb_map.push(bb_id);
