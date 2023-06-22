@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func_inlinable(
         OBJECT_CLASS,
         "nil?",
@@ -23,7 +24,6 @@ pub(super) fn init(globals: &mut Globals) {
         object_nil,
         analysis_object_nil,
     );
-    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(
         OBJECT_CLASS,
@@ -82,11 +82,12 @@ fn object_new(
 }
 
 ///
-/// ### Kernel.#puts
+/// ### Object#is_a?
 ///
-/// - puts(*arg) -> nil
+/// - is_a?(mod) -> bool
+/// - kind_of?(mod) -> bool
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/is_a=3f.html]
 #[monoruby_builtin]
 fn is_a(
     _vm: &mut Executor,

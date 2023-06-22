@@ -24,6 +24,23 @@ impl Globals {
         self.store[class_id].constants.get(&name).cloned()
     }
 
+    pub fn search_constant_superclass(
+        &self,
+        mut class_id: ClassId,
+        name: IdentId,
+    ) -> Option<Value> {
+        loop {
+            match self.get_constant(class_id, name) {
+                Some(v) => return Some(v),
+                None => match class_id.get_obj(self).superclass_id() {
+                    Some(superclass) => class_id = superclass,
+                    None => break,
+                },
+            };
+        }
+        None
+    }
+
     pub(crate) fn get_qualified_constant(&mut self, name: &[&str]) -> Result<Value> {
         let mut class = OBJECT_CLASS;
         for name in name {
@@ -40,8 +57,28 @@ impl Globals {
     ///
     /// Get constant names in the class of *class_id*.
     ///
-    pub(crate) fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
+    pub fn get_constant_names(&self, class_id: ClassId) -> Vec<IdentId> {
         self.store[class_id].constants.keys().cloned().collect()
+    }
+
+    ///
+    /// Get constant names in the class of *class_id* and its superclasses and included Modules except Object class and its superclasses.
+    ///
+    pub fn get_constant_names_inherit(&self, mut class_id: ClassId) -> Vec<IdentId> {
+        let mut names = vec![];
+        loop {
+            names.extend(self.store[class_id].constants.keys().cloned());
+            match class_id.get_obj(self).superclass_id() {
+                Some(superclass) => {
+                    if superclass == OBJECT_CLASS {
+                        break;
+                    }
+                    class_id = superclass;
+                }
+                None => break,
+            }
+        }
+        names
     }
 
     ///
@@ -72,47 +109,33 @@ impl Globals {
         }
         self.get_constant_checked(parent, name)
     }
-}
 
-impl Globals {
     ///
     /// Get constant with *name* and parent class *class_id*.
     ///
     /// If not found, set uninitialized constant error and return None.
     ///
-    fn get_constant_checked(&mut self, class_id: ClassId, name: IdentId) -> Result<Value> {
+    fn get_constant_checked(&self, class_id: ClassId, name: IdentId) -> Result<Value> {
         match self.get_constant(class_id, name) {
             Some(v) => Ok(v),
             None => Err(MonorubyErr::uninitialized_constant(name)),
         }
     }
 
-    fn search_constant_checked(&mut self, name: IdentId, current_func: FuncId) -> Result<Value> {
+    fn search_constant_checked(&self, name: IdentId, current_func: FuncId) -> Result<Value> {
         if let Some(v) = self.search_lexical_stack(name, current_func) {
             return Ok(v);
         }
-        match self.search_superclass(name, current_func) {
-            Some(v) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
-        }
-    }
-
-    fn search_superclass(&self, name: IdentId, current_func: FuncId) -> Option<Value> {
-        let mut class_id = self[current_func]
+        let class_id = self[current_func]
             .as_ruby_func()
             .lexical_context
             .last()
             .map_or(OBJECT_CLASS, |m| m.superclass_id().unwrap_or(OBJECT_CLASS));
-        loop {
-            match self.get_constant(class_id, name) {
-                Some(v) => return Some(v),
-                None => match class_id.get_obj(self).superclass_id() {
-                    Some(superclass) => class_id = superclass,
-                    None => break,
-                },
-            };
+
+        match self.search_constant_superclass(class_id, name) {
+            Some(v) => Ok(v),
+            None => Err(MonorubyErr::uninitialized_constant(name)),
         }
-        None
     }
 
     fn search_lexical_stack(&self, name: IdentId, current_func: FuncId) -> Option<Value> {

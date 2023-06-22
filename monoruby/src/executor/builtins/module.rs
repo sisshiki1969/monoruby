@@ -8,7 +8,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
     globals.define_builtin_func(MODULE_CLASS, "to_s", tos, 0);
-    globals.define_builtin_func(MODULE_CLASS, "constants", constants, 0);
+    globals.define_builtin_func(MODULE_CLASS, "constants", constants, -1);
+    globals.define_builtin_func(MODULE_CLASS, "const_get", const_get, -1);
     globals.define_builtin_func(MODULE_CLASS, "instance_methods", instance_methods, 0);
     globals.define_builtin_func(MODULE_CLASS, "attr_reader", attr_reader, -1);
     globals.define_builtin_func(MODULE_CLASS, "attr_writer", attr_writer, -1);
@@ -84,15 +85,44 @@ fn constants(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
-    _arg: Arg,
-    _len: usize,
+    arg: Arg,
+    len: usize,
 ) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let class_id = lfp.self_val().as_class_id();
-    let iter = globals
-        .get_constant_names(class_id)
-        .into_iter()
-        .map(Value::new_symbol);
+    let v = if len == 0 || arg[0].as_bool() {
+        globals.get_constant_names_inherit(class_id)
+    } else {
+        globals.get_constant_names(class_id)
+    };
+    let iter = v.into_iter().map(Value::new_symbol);
     Ok(Value::new_array_from_iter(iter))
+}
+
+/// ### Module#const_get
+/// - const_get(name, inherit = true) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
+#[monoruby_builtin]
+fn const_get(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
+    let name = arg[0].expect_symbol_or_string(globals)?;
+    let class_id = lfp.self_val().as_class_id();
+    let v = if len == 1 || arg[1].as_bool() {
+        globals.search_constant_superclass(class_id, name)
+    } else {
+        globals.get_constant(class_id, name)
+    };
+    match v {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::uninitialized_constant(name)),
+    }
 }
 
 /// ### Module#instance_methods
@@ -528,6 +558,54 @@ mod test {
             class C
               include
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn constants() {
+        run_test_with_prelude(
+            r#"
+            [C.constants, C.constants(false)]
+            "#,
+            r#"
+            class S
+              S1 = 100
+            end
+            class C < S
+              C1 = 1
+              C2 = 2
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn const_get() {
+        run_test_with_prelude(
+            r#"
+            C.const_get(:S1)
+            "#,
+            r#"
+            class S
+              S1 = 100
+            end
+            class C < S
+              C1 = 1
+              C2 = 2
+            end
+        "#,
+        );
+        run_test_error(
+            r#"
+            class S
+              S1 = 100
+            end
+            class C < S
+              C1 = 1
+              C2 = 2
+            end
+            C.const_get(:S1, false)
             "#,
         );
     }
