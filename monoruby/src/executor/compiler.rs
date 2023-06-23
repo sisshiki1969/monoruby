@@ -866,7 +866,7 @@ impl Codegen {
             orq rax, 2;
             ret;
         heap_alloc:
-        // we must save rdi for log_optimize.
+        // we must save rdi for log_deoptimize.
             subq rsp, 120;
             movq [rsp + 112], rdi;
             movq [rsp + 104], xmm15;

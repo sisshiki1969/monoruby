@@ -209,36 +209,14 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 #[monoruby_builtin]
 fn index(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: LFP,
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let self_val = lfp.self_val();
-    match (self_val.unpack(), arg[0].unpack()) {
-        (RV::Integer(base), RV::Integer(index)) => {
-            let val = if index < 0 {
-                0
-            } else if index > 63 {
-                base.is_negative().into()
-            } else {
-                (base >> index) & 1
-            };
-            Ok(Value::new_integer(val))
-        }
-        (RV::Integer(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
-        (RV::BigInt(base), RV::Integer(index)) => {
-            if index < 0 {
-                Ok(Value::new_integer(0))
-            } else {
-                let i = (base >> index) & num::BigInt::from(1);
-                Ok(Value::new_bigint(i))
-            }
-        }
-        (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
-        _ => unimplemented!(),
-    }
+    op::integer_index1(globals, self_val, arg[0])
 }
 
 fn integer_tof(

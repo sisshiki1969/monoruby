@@ -374,6 +374,8 @@ macro_rules! eq_values {
                         (RV::Bool(lhs), _) => false.$op(&true),
                         (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.$op(&rhs),
                         (RV::Symbol(lhs), _) => false.$op(&true),
+                        (RV::String(lhs), RV::String(rhs)) => lhs.$op(rhs),
+                        (RV::String(lhs), _) => false.$op(&true),
                         _ => {
                             self.invoke_method_inner(globals, $op_str, lhs, &[rhs])?.as_bool()
                         }
@@ -519,6 +521,43 @@ pub(super) extern "C" fn bitnot_value(
         }
     };
     Some(v)
+}
+
+pub(super) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Result<Value> {
+    // we must support Integer#[Range].
+    match (base.unpack(), index.unpack()) {
+        (RV::Integer(base), RV::Integer(index)) => {
+            let val = if index < 0 {
+                0
+            } else if index > 63 {
+                base.is_negative().into()
+            } else {
+                (base >> index) & 1
+            };
+            Ok(Value::new_integer(val))
+        }
+        (RV::Integer(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        (RV::Integer(_), _) => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            index,
+            INTEGER_CLASS,
+        )),
+        (RV::BigInt(base), RV::Integer(index)) => {
+            if index < 0 {
+                Ok(Value::new_integer(0))
+            } else {
+                let i = (base >> index) & num::BigInt::from(1);
+                Ok(Value::new_bigint(i))
+            }
+        }
+        (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            index,
+            INTEGER_CLASS,
+        )),
+        _ => unreachable!(),
+    }
 }
 
 pub extern "C" fn expand_splat(src: Value, dst: *mut Value) -> usize {

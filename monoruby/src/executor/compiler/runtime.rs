@@ -422,6 +422,16 @@ pub(super) extern "C" fn get_index(
                 }
             }
         }
+        HASH_CLASS => return Some(base.as_hash().get(index).unwrap_or_default()),
+        INTEGER_CLASS => {
+            return match op::integer_index1(globals, base, index) {
+                Ok(val) => Some(val),
+                Err(err) => {
+                    vm.set_error(err);
+                    None
+                }
+            }
+        }
         _ => {}
     }
     vm.invoke_method(globals, IdentId::_INDEX, base, &[index])

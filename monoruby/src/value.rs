@@ -377,30 +377,7 @@ pub struct F2 {
     f2: f64,
 }
 
-/*#[repr(C)]
-pub struct ValTofResult {
-    result: f64,
-    code: u64,
-}*/
-
 impl Value {
-    /*pub extern "C" fn val_tof(v: Value) -> ValTofResult {
-        ValTofResult {
-            result: match v.unpack() {
-                RV::Integer(n) => n.to_f64().unwrap(),
-                RV::BigInt(n) => n.to_f64().unwrap(),
-                RV::Float(n) => n,
-                _ => {
-                    return ValTofResult {
-                        result: 0.0,
-                        code: 0,
-                    }
-                }
-            },
-            code: 1,
-        }
-    }*/
-
     pub(crate) fn is_packed_value(&self) -> bool {
         self.0.get() & 0b0111 != 0
     }
