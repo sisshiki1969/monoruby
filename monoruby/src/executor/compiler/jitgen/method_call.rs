@@ -653,9 +653,13 @@ impl Codegen {
 impl Codegen {
     fn guard_version(&mut self, cached_version: u32, side_exit: DestLabel) {
         let global_class_version = self.class_version;
+        let cont = self.jit.label();
         monoasm!( &mut self.jit,
             cmpl [rip + global_class_version], (cached_version);
-            jne side_exit;
+            je   cont;
+            movq rdi, (Value::new_symbol(IdentId::get_id("__version_guard")).get());
+            jmp  side_exit;
+        cont:
         );
     }
 
