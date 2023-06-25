@@ -350,7 +350,7 @@ fn handle_keyword(
         for (id, param_name) in info.args.keyword_names.iter().enumerate() {
             unsafe {
                 let ptr = callee_reg.sub(callee_kw_pos + id);
-                let sym = Value::new_symbol(*param_name);
+                let sym = Value::symbol(*param_name);
                 if let Some(v) = h.as_hash().get(sym) {
                     if (*ptr).is_some() {
                         eprintln!(
@@ -382,7 +382,7 @@ pub(super) extern "C" fn jit_handle_hash_splat(
             unsafe {
                 let h = lfp.register(hash.0 as usize);
                 // We must check whether h is a hash.
-                if let Some(v) = h.as_hash().get(Value::new_symbol(*param_name)) {
+                if let Some(v) = h.as_hash().get(Value::symbol(*param_name)) {
                     *callee_reg.sub(callee_kw_pos + id) = Some(v);
                 }
             }

@@ -291,18 +291,12 @@ mod test {
     #[test]
     fn hash0() {
         let mut map = HashInner::new(IndexMap::default());
-        map.insert(Value::new_integer(5), Value::new_float(12.0));
-        map.insert(Value::new_integer(5), Value::new_float(5.7));
-        map.insert(Value::new_integer(7), Value::new_float(42.5));
-        assert_eq!(Some(Value::new_float(5.7)), map.get(Value::new_integer(5)));
-        assert_eq!(
-            vec![Value::new_integer(5), Value::new_integer(7)],
-            map.keys()
-        );
-        assert_eq!(
-            vec![Value::new_float(5.7), Value::new_float(42.5)],
-            map.values()
-        );
+        map.insert(Value::integer(5), Value::float(12.0));
+        map.insert(Value::integer(5), Value::float(5.7));
+        map.insert(Value::integer(7), Value::float(42.5));
+        assert_eq!(Some(Value::float(5.7)), map.get(Value::integer(5)));
+        assert_eq!(vec![Value::integer(5), Value::integer(7)], map.keys());
+        assert_eq!(vec![Value::float(5.7), Value::float(42.5)], map.values());
         assert_eq!(2, map.len())
     }
 }

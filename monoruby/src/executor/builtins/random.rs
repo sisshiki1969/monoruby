@@ -34,7 +34,7 @@ fn srand(
         }
     };
     globals.random_init(new_seed);
-    Ok(Value::new_bigint(old_seed))
+    Ok(Value::bigint(old_seed))
 }
 
 // ### Random.rand
@@ -52,5 +52,5 @@ fn rand(
     _len: usize,
 ) -> Result<Value> {
     let f = globals.random_gen();
-    Ok(Value::new_float(f))
+    Ok(Value::float(f))
 }

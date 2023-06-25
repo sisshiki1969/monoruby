@@ -188,15 +188,15 @@ mod test {
         let side_exit = gen.entry_panic;
 
         for (class, value) in [
-            (INTEGER_CLASS, Value::new_integer(-2558)),
-            (INTEGER_CLASS, Value::new_integer(i32::MAX as i64)),
-            (INTEGER_CLASS, Value::new_integer(i32::MIN as i64)),
-            (FLOAT_CLASS, Value::new_float(1.44e-17)),
-            (FLOAT_CLASS, Value::new_float(0.0)),
-            (FLOAT_CLASS, Value::new_float(f64::MAX)),
-            (FLOAT_CLASS, Value::new_float(f64::MIN)),
+            (INTEGER_CLASS, Value::integer(-2558)),
+            (INTEGER_CLASS, Value::integer(i32::MAX as i64)),
+            (INTEGER_CLASS, Value::integer(i32::MIN as i64)),
+            (FLOAT_CLASS, Value::float(1.44e-17)),
+            (FLOAT_CLASS, Value::float(0.0)),
+            (FLOAT_CLASS, Value::float(f64::MAX)),
+            (FLOAT_CLASS, Value::float(f64::MIN)),
             (NIL_CLASS, Value::nil()),
-            (SYMBOL_CLASS, Value::new_symbol(IdentId::get_id("Ruby"))),
+            (SYMBOL_CLASS, Value::symbol(IdentId::get_id("Ruby"))),
             (TRUE_CLASS, Value::bool(true)),
             (FALSE_CLASS, Value::bool(false)),
         ] {
@@ -236,7 +236,7 @@ mod test {
             -1.0 / 0.0,
         ] {
             let func: fn(Value) -> f64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
-            let actual = func(Value::new_float(expected));
+            let actual = func(Value::float(expected));
             if expected.is_nan() {
                 assert!(actual.is_nan())
             } else {
@@ -270,7 +270,7 @@ mod test {
             -1.0 / 0.0,
         ] {
             let func: fn(Value) -> f64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
-            let actual = func(Value::new_float(expected));
+            let actual = func(Value::float(expected));
             if expected.is_nan() {
                 assert!(actual.is_nan())
             } else {
@@ -285,7 +285,7 @@ mod test {
             (-4444444444.0, -4444444444),
         ] {
             let func: fn(Value) -> f64 = unsafe { std::mem::transmute(entry_point.as_ptr()) };
-            let actual = func(Value::new_integer(i));
+            let actual = func(Value::integer(i));
             assert_eq!(expected, actual);
         }
     }

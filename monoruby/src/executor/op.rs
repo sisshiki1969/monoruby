@@ -19,19 +19,19 @@ macro_rules! binop_values {
             ) -> Option<Value> {
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Integer(lhs), RV::Integer(rhs)) => match lhs.[<checked_ $op>](rhs){
-                        Some(res) => Value::new_integer(res),
-                        None => Value::new_bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
+                        Some(res) => Value::integer(res),
+                        None => Value::bigint(BigInt::from(lhs).$op(BigInt::from(rhs))),
                     }
-                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.$op(&(rhs as f64))),
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.$op(&(rhs as f64))),
 
-                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
-                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.$op(rhs.to_f64().unwrap())),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
+                    (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.$op(rhs.to_f64().unwrap())),
 
-                    (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).$op(&rhs)),
-                    (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float(lhs.to_f64().unwrap().$op(&rhs)),
-                    (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.$op(&rhs)),
+                    (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).$op(&rhs)),
+                    (RV::BigInt(lhs), RV::Float(rhs)) => Value::float(lhs.to_f64().unwrap().$op(&rhs)),
+                    (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.$op(&rhs)),
                     (RV::Integer(_), _) | (RV::BigInt(_), _) | (RV::Float(_), _) => {
                         let err = MonorubyErr::no_implicit_conversion(&globals, rhs, INTEGER_CLASS);
                         vm.set_error(err);
@@ -58,16 +58,16 @@ pub(super) extern "C" fn pow_ii(lhs: i64, rhs: i64) -> Value {
         }
         let rhs = rhs as u32;
         match lhs.checked_pow(rhs) {
-            Some(res) => Value::new_integer(res),
-            None => Value::new_bigint(BigInt::from(lhs).pow(rhs)),
+            Some(res) => Value::integer(res),
+            None => Value::bigint(BigInt::from(lhs).pow(rhs)),
         }
     } else {
-        Value::new_float(f64::INFINITY)
+        Value::float(f64::INFINITY)
     }
 }
 
 fn pow_ff(lhs: f64, rhs: f64) -> Value {
-    Value::new_float(lhs.powf(rhs))
+    Value::float(lhs.powf(rhs))
 }
 
 pub(super) extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
@@ -85,25 +85,25 @@ pub(super) extern "C" fn pow_values(
         (RV::Integer(lhs), RV::Integer(rhs)) => pow_ii(lhs, rhs),
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if let Ok(rhs) = rhs.try_into() {
-                Value::new_bigint(BigInt::from(lhs).pow(rhs))
+                Value::bigint(BigInt::from(lhs).pow(rhs))
             } else {
-                Value::new_float(f64::INFINITY)
+                Value::float(f64::INFINITY)
             }
         }
         (RV::Integer(lhs), RV::Float(rhs)) => pow_ff(lhs as f64, rhs),
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if let Ok(rhs) = i32::try_from(rhs) {
                 let rhs = rhs as u32;
-                Value::new_bigint(lhs.pow(rhs))
+                Value::bigint(lhs.pow(rhs))
             } else {
-                Value::new_float(f64::INFINITY)
+                Value::float(f64::INFINITY)
             }
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if let Ok(rhs) = rhs.try_into() {
-                Value::new_bigint(lhs.pow(rhs))
+                Value::bigint(lhs.pow(rhs))
             } else {
-                Value::new_float(f64::INFINITY)
+                Value::float(f64::INFINITY)
             }
         }
         (RV::BigInt(lhs), RV::Float(rhs)) => pow_ff(lhs.to_f64().unwrap(), rhs),
@@ -142,34 +142,34 @@ pub(super) extern "C" fn div_values(
                 vm.err_divide_by_zero();
                 return None;
             }
-            Value::new_integer(lhs.div_floor(rhs))
+            Value::integer(lhs.div_floor(rhs))
         }
         (RV::Integer(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
                 vm.err_divide_by_zero();
                 return None;
             }
-            Value::new_bigint(BigInt::from(lhs).div_floor(rhs))
+            Value::bigint(BigInt::from(lhs).div_floor(rhs))
         }
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::new_float((lhs as f64).div(&rhs)),
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::float((lhs as f64).div(&rhs)),
         (RV::BigInt(lhs), RV::Integer(rhs)) => {
             if rhs.is_zero() {
                 vm.err_divide_by_zero();
                 return None;
             }
-            Value::new_bigint(lhs.div_floor(&BigInt::from(rhs)))
+            Value::bigint(lhs.div_floor(&BigInt::from(rhs)))
         }
         (RV::BigInt(lhs), RV::BigInt(rhs)) => {
             if rhs.is_zero() {
                 vm.err_divide_by_zero();
                 return None;
             }
-            Value::new_bigint(lhs.div_floor(rhs))
+            Value::bigint(lhs.div_floor(rhs))
         }
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::new_float((lhs.to_f64().unwrap()).div(&rhs)),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::new_float(lhs.div(&(rhs as f64))),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::new_float(lhs.div(&rhs.to_f64().unwrap())),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::new_float(lhs.div(&rhs)),
+        (RV::BigInt(lhs), RV::Float(rhs)) => Value::float((lhs.to_f64().unwrap()).div(&rhs)),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::float(lhs.div(&(rhs as f64))),
+        (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
         _ => {
             return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
         }
@@ -187,10 +187,10 @@ macro_rules! int_binop_values {
                 rhs: Value
             ) -> Option<Value> {
                 let v = match (lhs.unpack(), rhs.unpack()) {
-                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::new_integer(lhs.$op(&rhs)),
-                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::new_bigint(BigInt::from(lhs).$op(rhs)),
-                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::new_bigint(lhs.$op(BigInt::from(rhs))),
-                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::new_bigint(lhs.$op(rhs)),
+                    (RV::Integer(lhs), RV::Integer(rhs)) => Value::integer(lhs.$op(&rhs)),
+                    (RV::Integer(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
+                    (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
+                    (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     _ => {
                         return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
                     }
@@ -268,7 +268,7 @@ pub(super) extern "C" fn shl_values(
 }
 
 fn int_shr(lhs: i64, rhs: u32) -> Value {
-    Value::new_integer(
+    Value::integer(
         lhs.checked_shr(rhs)
             .unwrap_or(if lhs >= 0 { 0 } else { -1 }),
     )
@@ -276,17 +276,17 @@ fn int_shr(lhs: i64, rhs: u32) -> Value {
 
 fn int_shl(lhs: i64, rhs: u32) -> Value {
     match lhs.checked_shl(rhs) {
-        Some(res) => Value::new_integer(res),
+        Some(res) => Value::integer(res),
         None => bigint_shl(&BigInt::from(lhs), rhs),
     }
 }
 
 fn bigint_shr(lhs: &BigInt, rhs: u32) -> Value {
-    Value::new_bigint(lhs.shr(rhs))
+    Value::bigint(lhs.shr(rhs))
 }
 
 fn bigint_shl(lhs: &BigInt, rhs: u32) -> Value {
-    Value::new_bigint(lhs.shl(rhs))
+    Value::bigint(lhs.shl(rhs))
 }
 
 macro_rules! cmp_values {
@@ -399,36 +399,32 @@ fn cmp_values() {
     let mut vm = Executor::default();
     let pairs = [
         (Value::nil(), Value::nil(), true),
-        (Value::nil(), Value::new_integer(100), false),
-        (Value::nil(), Value::new_float(100.0), false),
+        (Value::nil(), Value::integer(100), false),
+        (Value::nil(), Value::float(100.0), false),
         (Value::bool(true), Value::bool(true), true),
         (Value::bool(true), Value::bool(false), false),
         (Value::bool(true), Value::nil(), false),
-        (Value::new_integer(100), Value::new_integer(100), true),
-        (Value::new_integer(100), Value::new_integer(200), false),
-        (Value::new_integer(100), Value::new_float(100.0), true),
-        (Value::new_integer(100), Value::new_float(200.0), false),
-        (Value::new_integer(100), Value::nil(), false),
-        (Value::new_integer(100), Value::bool(true), false),
-        (Value::new_integer(100), Value::bool(false), false),
+        (Value::integer(100), Value::integer(100), true),
+        (Value::integer(100), Value::integer(200), false),
+        (Value::integer(100), Value::float(100.0), true),
+        (Value::integer(100), Value::float(200.0), false),
+        (Value::integer(100), Value::nil(), false),
+        (Value::integer(100), Value::bool(true), false),
+        (Value::integer(100), Value::bool(false), false),
+        (Value::integer(100), Value::symbol(IdentId::TO_S), false),
         (
-            Value::new_integer(100),
-            Value::new_symbol(IdentId::TO_S),
-            false,
-        ),
-        (
-            Value::new_integer(100),
+            Value::integer(100),
             Value::new_string_from_str("100"),
             false,
         ),
         (
-            Value::new_symbol(IdentId::TO_S),
-            Value::new_symbol(IdentId::TO_S),
+            Value::symbol(IdentId::TO_S),
+            Value::symbol(IdentId::TO_S),
             true,
         ),
         (
-            Value::new_symbol(IdentId::TO_S),
-            Value::new_symbol(IdentId::NAME),
+            Value::symbol(IdentId::TO_S),
+            Value::symbol(IdentId::NAME),
             false,
         ),
     ];
@@ -473,6 +469,36 @@ pub(super) extern "C" fn cmp_teq_values(
     Some(Value::bool(b))
 }
 
+pub(super) extern "C" fn cmp_cmp_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    use std::cmp::Ordering;
+    let res = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Nil, RV::Nil) => Value::from_ord(Ordering::Equal),
+        (RV::Nil, _) => Value::nil(),
+        //(RV::Symbol(lhs), RV::Symbol(rhs)) => lhs == rhs,
+        //(RV::Symbol(_), _) => Value::nil(),
+        (RV::Bool(lhs), RV::Bool(rhs)) if lhs == rhs => Value::from_ord(Ordering::Equal),
+        (RV::Bool(_), _) => Value::nil(),
+        (RV::Integer(lhs), RV::Integer(rhs)) => Value::cmp(&lhs, &rhs),
+        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::cmp(&BigInt::from(lhs), rhs),
+        (RV::Integer(lhs), RV::Float(rhs)) => Value::partial_cmp(&(lhs as f64), &rhs),
+        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::cmp(lhs, &BigInt::from(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::cmp(lhs, &rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => Value::partial_cmp(&lhs.to_f64().unwrap(), &rhs),
+        (RV::Float(lhs), RV::Integer(rhs)) => Value::partial_cmp(&lhs, &(rhs as f64)),
+        (RV::Float(lhs), RV::BigInt(rhs)) => Value::partial_cmp(&lhs, &(rhs.to_f64().unwrap())),
+        (RV::Float(lhs), RV::Float(rhs)) => Value::partial_cmp(&lhs, &rhs),
+        _ => {
+            return vm.invoke_method(globals, IdentId::_CMP, lhs, &[rhs]);
+        }
+    };
+    Some(res)
+}
+
 pub(super) extern "C" fn neg_value(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -480,11 +506,11 @@ pub(super) extern "C" fn neg_value(
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Integer(lhs) => match lhs.checked_neg() {
-            Some(lhs) => Value::new_integer(lhs),
-            None => Value::new_bigint(-BigInt::from(lhs)),
+            Some(lhs) => Value::integer(lhs),
+            None => Value::bigint(-BigInt::from(lhs)),
         },
-        RV::Float(lhs) => Value::new_float(-lhs),
-        RV::BigInt(lhs) => Value::new_bigint(-lhs),
+        RV::Float(lhs) => Value::float(-lhs),
+        RV::BigInt(lhs) => Value::bigint(-lhs),
         _ => {
             return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[]);
         }
@@ -498,9 +524,9 @@ pub(super) extern "C" fn pos_value(
     lhs: Value,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
-        RV::Integer(lhs) => Value::new_integer(lhs),
-        RV::Float(lhs) => Value::new_float(lhs),
-        RV::BigInt(lhs) => Value::new_bigint(lhs.clone()),
+        RV::Integer(lhs) => Value::integer(lhs),
+        RV::Float(lhs) => Value::float(lhs),
+        RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         _ => {
             return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[]);
         }
@@ -514,8 +540,8 @@ pub(super) extern "C" fn bitnot_value(
     lhs: Value,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
-        RV::Integer(lhs) => Value::new_integer(!lhs),
-        RV::BigInt(lhs) => Value::new_bigint(!lhs),
+        RV::Integer(lhs) => Value::integer(!lhs),
+        RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
             return vm.invoke_method(globals, IdentId::get_id("~"), lhs, &[]);
         }
@@ -534,9 +560,9 @@ pub(super) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Re
             } else {
                 (base >> index) & 1
             };
-            Ok(Value::new_integer(val))
+            Ok(Value::integer(val))
         }
-        (RV::Integer(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        (RV::Integer(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::Integer(_), _) => Err(MonorubyErr::no_implicit_conversion(
             globals,
             index,
@@ -544,13 +570,13 @@ pub(super) fn integer_index1(globals: &Globals, base: Value, index: Value) -> Re
         )),
         (RV::BigInt(base), RV::Integer(index)) => {
             if index < 0 {
-                Ok(Value::new_integer(0))
+                Ok(Value::integer(0))
             } else {
                 let i = (base >> index) & num::BigInt::from(1);
-                Ok(Value::new_bigint(i))
+                Ok(Value::bigint(i))
             }
         }
-        (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::new_integer(0)),
+        (RV::BigInt(_), RV::BigInt(_)) => Ok(Value::integer(0)),
         (RV::BigInt(_), _) => Err(MonorubyErr::no_implicit_conversion(
             globals,
             index,

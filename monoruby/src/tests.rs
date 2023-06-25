@@ -363,7 +363,7 @@ mod test {
     }
 
     #[test]
-    fn test_numbers1() {
+    fn binop_numeric() {
         let lhs_integer = [
             "0",
             "5375",
@@ -397,7 +397,7 @@ mod test {
     }
 
     #[test]
-    fn test_numbers3() {
+    fn cmp_numeric() {
         let lhs = [
             "0",
             "5375",
@@ -415,11 +415,15 @@ mod test {
             "169.5333",
             "690426.0",
         ];
-        run_binop_tests(&lhs, &["==", "!=", "<", "<=", ">", ">=", "==="], &rhs);
+        run_binop_tests(
+            &lhs,
+            &["==", "!=", "<", "<=", ">", ">=", "===", "<=>"],
+            &rhs,
+        );
     }
 
     #[test]
-    fn test_numbers_unop() {
+    fn unop_numeric() {
         let rhs = [
             "0",
             "5375",

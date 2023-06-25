@@ -45,7 +45,7 @@ fn toi(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     match lfp.self_val().unpack() {
-        RV::Float(f) => Ok(Value::new_integer(f.trunc() as i64)),
+        RV::Float(f) => Ok(Value::integer(f.trunc() as i64)),
         _ => unreachable!(),
     }
 }
@@ -66,7 +66,7 @@ fn floor(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     match lfp.self_val().unpack() {
-        RV::Float(f) => Ok(Value::new_integer(f.floor() as i64)),
+        RV::Float(f) => Ok(Value::integer(f.floor() as i64)),
         _ => unreachable!(),
     }
 }

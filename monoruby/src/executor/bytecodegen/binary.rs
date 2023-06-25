@@ -55,9 +55,15 @@ impl BytecodeGen {
         if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
             let loc = cond.loc;
             let cond = self.next_reg().into();
-            self.gen_cmp(None, kind, lhs, rhs, true, loc)?;
-            self.pop();
-            self.emit_condbr(cond, else_pos, jmp_if_true, true);
+            if kind == CmpKind::Cmp {
+                self.gen_cmp(None, kind, lhs, rhs, false, loc)?;
+                self.pop();
+                self.emit_condbr(cond, else_pos, jmp_if_true, false);
+            } else {
+                self.gen_cmp(None, kind, lhs, rhs, true, loc)?;
+                self.pop();
+                self.emit_condbr(cond, else_pos, jmp_if_true, true);
+            }
         } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;

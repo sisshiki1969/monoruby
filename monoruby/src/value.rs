@@ -178,6 +178,20 @@ impl Value {
     }
 }
 
+impl Value {
+    pub(crate) fn cmp<T: std::cmp::Ord>(lhs: &T, rhs: &T) -> Self {
+        Value::int32(lhs.cmp(rhs) as i32)
+    }
+
+    pub(crate) fn partial_cmp<T: std::cmp::PartialOrd>(lhs: &T, rhs: &T) -> Self {
+        if let Some(cmp) = lhs.partial_cmp(rhs) {
+            Value::int32(cmp as i32)
+        } else {
+            Value::nil()
+        }
+    }
+}
+
 //
 // constructors
 //
@@ -186,12 +200,16 @@ impl Value {
         Value(unsafe { std::num::NonZeroU64::new_unchecked(NIL_VALUE) })
     }
 
-    pub(crate) fn bool(b: bool) -> Self {
+    pub fn bool(b: bool) -> Self {
         if b {
             Value::from(TRUE_VALUE)
         } else {
             Value::from(FALSE_VALUE)
         }
+    }
+
+    pub(crate) fn from_ord(ord: std::cmp::Ordering) -> Self {
+        Value::int32(ord as i32)
     }
 
     pub(crate) fn fixnum(num: i64) -> Self {
@@ -207,7 +225,7 @@ impl Value {
         Value::fixnum(num as i64)
     }
 
-    pub(crate) fn new_integer(num: i64) -> Self {
+    pub fn integer(num: i64) -> Self {
         if Self::is_i63(num) {
             Value::fixnum(num)
         } else {
@@ -215,7 +233,7 @@ impl Value {
         }
     }
 
-    pub extern "C" fn new_float(num: f64) -> Self {
+    pub fn float(num: f64) -> Self {
         if num == 0.0 {
             return Value::from(FLOAT_ZERO);
         }
@@ -228,9 +246,9 @@ impl Value {
         }
     }
 
-    pub(crate) fn new_bigint(bigint: BigInt) -> Self {
+    pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
-            Value::new_integer(i)
+            Value::integer(i)
         } else {
             RValue::new_bigint(bigint).pack()
         }
@@ -328,7 +346,7 @@ impl Value {
         RValue::new_io_stderr().pack()
     }
 
-    pub(crate) fn new_symbol(id: IdentId) -> Self {
+    pub fn symbol(id: IdentId) -> Self {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
@@ -748,12 +766,12 @@ impl Value {
                 assert_eq!(1, stmts.len());
                 Self::from_ast(&stmts[0], globals)
             }
-            NodeKind::Integer(num) => Value::new_integer(*num),
-            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
-            NodeKind::Float(num) => Value::new_float(*num),
+            NodeKind::Integer(num) => Value::integer(*num),
+            NodeKind::Bignum(num) => Value::bigint(num.clone()),
+            NodeKind::Float(num) => Value::float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_id(sym)),
+            NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast(node, globals));
@@ -796,12 +814,12 @@ impl Value {
 
     pub(crate) fn from_ast2(node: &Node) -> Value {
         match &node.kind {
-            NodeKind::Integer(num) => Value::new_integer(*num),
-            NodeKind::Bignum(num) => Value::new_bigint(num.clone()),
-            NodeKind::Float(num) => Value::new_float(*num),
+            NodeKind::Integer(num) => Value::integer(*num),
+            NodeKind::Bignum(num) => Value::bigint(num.clone()),
+            NodeKind::Float(num) => Value::float(*num),
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::new_symbol(IdentId::get_id(sym)),
+            NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
             NodeKind::String(s) => Value::new_string_from_str(s),
             NodeKind::Array(v, true) => {
                 let iter = v.iter().map(Self::from_ast2);

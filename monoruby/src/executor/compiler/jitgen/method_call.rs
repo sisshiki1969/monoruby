@@ -657,7 +657,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             cmpl [rip + global_class_version], (cached_version);
             je   cont;
-            movq rdi, (Value::new_symbol(IdentId::get_id("__version_guard")).get());
+            movq rdi, (Value::symbol(IdentId::get_id("__version_guard")).get());
             jmp  side_exit;
         cont:
         );

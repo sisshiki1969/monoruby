@@ -6,7 +6,7 @@ use num::ToPrimitive;
 //
 
 pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.set_constant_by_str(class_id, "PI", Value::new_float(3.141592653589793));
+    globals.set_constant_by_str(class_id, "PI", Value::float(3.141592653589793));
     globals.define_builtin_module_func_inlinable(
         class_id,
         "sqrt",
@@ -40,7 +40,7 @@ fn sqrt(
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
         }
     };
-    Ok(Value::new_float(f.sqrt()))
+    Ok(Value::float(f.sqrt()))
 }
 
 /// ### Math.#sin
@@ -64,7 +64,7 @@ fn sin(
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
         }
     };
-    Ok(Value::new_float(f.sin()))
+    Ok(Value::float(f.sin()))
 }
 
 /// ### Math.#cos
@@ -88,7 +88,7 @@ fn cos(
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
         }
     };
-    Ok(Value::new_float(f.cos()))
+    Ok(Value::float(f.cos()))
 }
 
 fn math_sqrt(

@@ -361,7 +361,7 @@ impl BytecodeGen {
         let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
         let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
         let dst = self.push().into();
-        self.emit_literal(dst, Value::new_integer(block_handler));
+        self.emit_literal(dst, Value::integer(block_handler));
         Ok(())
     }
 }

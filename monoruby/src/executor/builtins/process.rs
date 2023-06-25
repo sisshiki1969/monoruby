@@ -39,24 +39,24 @@ fn times(
     val.set_instance_var(
         globals,
         "@utime",
-        Value::new_float(self_rusage.ru_utime.get_f64()),
+        Value::float(self_rusage.ru_utime.get_f64()),
     )?;
     val.set_instance_var(
         globals,
         "@stime",
-        Value::new_float(self_rusage.ru_stime.get_f64()),
+        Value::float(self_rusage.ru_stime.get_f64()),
     )?;
     let mut child_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Children, &mut child_rusage);
     val.set_instance_var(
         globals,
         "@cutime",
-        Value::new_float(child_rusage.ru_utime.get_f64()),
+        Value::float(child_rusage.ru_utime.get_f64()),
     )?;
     val.set_instance_var(
         globals,
         "@cstime",
-        Value::new_float(child_rusage.ru_stime.get_f64()),
+        Value::float(child_rusage.ru_stime.get_f64()),
     )?;
     Ok(val)
 }
@@ -75,7 +75,7 @@ fn pid(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    Ok(Value::new_integer(std::process::id() as i64))
+    Ok(Value::integer(std::process::id() as i64))
 }
 
 ///
@@ -95,7 +95,7 @@ fn clock_gettime(
     let mut tp = TimeSpec::default();
     let clk_id = arg[0].coerce_to_fixnum(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
-    Ok(Value::new_float(tp.to_f64()))
+    Ok(Value::float(tp.to_f64()))
 }
 
 #[cfg(test)]

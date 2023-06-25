@@ -424,7 +424,7 @@ fn match_(
     let given = self_val.as_str();
     let regex = &arg[0].expect_regexp_or_string(globals)?;
     let res = match RegexpInner::find_one(vm, regex, &given)? {
-        Some(mat) => Value::new_integer(mat.start() as i64),
+        Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
     };
     Ok(res)
@@ -898,7 +898,7 @@ fn length(
     _len: usize,
 ) -> Result<Value> {
     let length = lfp.self_val().as_str().chars().count();
-    Ok(Value::new_integer(length as i64))
+    Ok(Value::integer(length as i64))
 }
 
 fn gen_pad(padding: &str, len: usize) -> String {
@@ -1046,9 +1046,9 @@ fn to_i(
         }
     };
     let num = if let Ok(num) = i64::from_str_radix(&s, radix) {
-        Value::new_integer(num)
+        Value::integer(num)
     } else if let Ok(b) = BigInt::from_str_radix(&s, radix) {
-        Value::new_bigint(b)
+        Value::bigint(b)
     } else {
         Value::int32(0)
     };
@@ -1072,7 +1072,7 @@ fn to_sym(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
-    let sym = Value::new_symbol(IdentId::get_id(self_val.as_str().as_ref()));
+    let sym = Value::symbol(IdentId::get_id(self_val.as_str().as_ref()));
     Ok(sym)
 }
 

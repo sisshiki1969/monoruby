@@ -67,7 +67,7 @@ fn size(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let len = lfp.self_val().as_array().len();
-    Ok(Value::new_integer(len as i64))
+    Ok(Value::integer(len as i64))
 }
 
 ///

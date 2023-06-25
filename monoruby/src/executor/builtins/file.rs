@@ -47,7 +47,7 @@ fn write(
         Ok(_) => {}
         Err(err) => return Err(MonorubyErr::runtimeerr(err.to_string())),
     };
-    Ok(Value::new_integer(bytes.len() as i64))
+    Ok(Value::integer(bytes.len() as i64))
 }
 
 ///

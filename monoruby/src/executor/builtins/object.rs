@@ -367,11 +367,11 @@ fn rand(
         _ => unreachable!(),
     };
     if !i.is_zero() {
-        Ok(Value::new_integer(
+        Ok(Value::integer(
             (rand::random::<f64>() * (i.abs() as f64)) as i64,
         ))
     } else {
-        Ok(Value::new_float(rand::random()))
+        Ok(Value::float(rand::random()))
     }
 }
 
@@ -470,13 +470,13 @@ fn kernel_integer(
 ) -> Result<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {
-        RV::Integer(num) => return Ok(Value::new_integer(num)),
-        RV::BigInt(num) => return Ok(Value::new_bigint(num.clone())),
-        RV::Float(num) => return Ok(Value::new_integer(num.trunc() as i64)),
+        RV::Integer(num) => return Ok(Value::integer(num)),
+        RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
+        RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
         RV::String(b) => {
             if let Ok(s) = String::from_utf8(b.to_vec()) {
                 match s.parse::<i64>() {
-                    Ok(num) => return Ok(Value::new_integer(num)),
+                    Ok(num) => return Ok(Value::integer(num)),
                     Err(_) => {
                         let s = globals.tos(arg0);
                         return Err(MonorubyErr::argumenterr(format!(

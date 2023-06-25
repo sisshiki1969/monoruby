@@ -123,7 +123,7 @@ fn sub(
         }
     };
     let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1000.0 / 1000.0 / 1000.0;
-    Ok(Value::new_float(res))
+    Ok(Value::float(res))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

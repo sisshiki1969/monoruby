@@ -95,7 +95,7 @@ fn constants(
     } else {
         globals.get_constant_names(class_id)
     };
-    let iter = v.into_iter().map(Value::new_symbol);
+    let iter = v.into_iter().map(Value::symbol);
     Ok(Value::new_array_from_iter(iter))
 }
 
@@ -145,7 +145,7 @@ fn instance_methods(
     let iter = globals
         .get_method_names(class_id)
         .into_iter()
-        .map(Value::new_symbol);
+        .map(Value::symbol);
     Ok(Value::new_array_from_iter(iter))
 }
 
@@ -167,7 +167,7 @@ fn attr_reader(
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        ary.push(Value::new_symbol(method_name));
+        ary.push(Value::symbol(method_name));
     }
     Ok(Value::new_array(ary))
 }
@@ -190,7 +190,7 @@ fn attr_writer(
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        ary.push(Value::new_symbol(method_name));
+        ary.push(Value::symbol(method_name));
     }
     Ok(Value::new_array(ary))
 }
@@ -213,9 +213,9 @@ fn attr_accessor(
     for v in arg.iter(len) {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
-        ary.push(Value::new_symbol(method_name));
+        ary.push(Value::symbol(method_name));
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
-        ary.push(Value::new_symbol(method_name));
+        ary.push(Value::symbol(method_name));
     }
     Ok(Value::new_array(ary))
 }
@@ -385,7 +385,7 @@ fn alias_method(
     let new_name = arg[0].expect_symbol_or_string(globals)?;
     let old_name = arg[1].expect_symbol_or_string(globals)?;
     globals.alias_method_for_class(class_id, new_name, old_name)?;
-    Ok(Value::new_symbol(new_name))
+    Ok(Value::symbol(new_name))
 }
 
 #[cfg(test)]

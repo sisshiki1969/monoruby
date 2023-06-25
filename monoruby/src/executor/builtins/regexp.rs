@@ -116,7 +116,7 @@ fn regexp_match(
     let regex = self_.is_regex().unwrap();
     let given = arg[0].expect_symbol_or_string(globals)?.to_string();
     let res = match RegexpInner::find_one(vm, regex, &given)? {
-        Some(mat) => Value::new_integer(mat.start() as i64),
+        Some(mat) => Value::integer(mat.start() as i64),
         None => Value::nil(),
     };
     Ok(res)

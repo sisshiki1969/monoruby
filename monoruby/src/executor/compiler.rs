@@ -35,7 +35,7 @@ type MethodInvoker2 =
 macro_rules! cmp_main {
     ($op:ident) => {
         paste! {
-            fn [<integer_cmp_ $op>](&mut self) {
+            fn [<icmp_ $op>](&mut self) {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                     cmpq rdi, rsi;
@@ -175,6 +175,26 @@ impl Codegen {
         (ae, b, ge, lt),
         (be, a, le, gt)
     );
+
+    fn icmp_teq(&mut self) {
+        self.icmp_eq()
+    }
+
+    fn icmp_cmp(&mut self) {
+        let less_than = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+            cmpq rdi, rsi;
+            jeq  exit;
+            jlt  less_than;
+            movq rax, (Value::from_ord(std::cmp::Ordering::Greater).get());
+            jmp  exit;
+        less_than:
+            movq rax, (Value::from_ord(std::cmp::Ordering::Less).get());
+        exit:
+        };
+    }
 
     pub(super) fn new(no_jit: bool, main_object: Value) -> Self {
         let mut jit = JitMemory::new();
@@ -851,7 +871,7 @@ impl Codegen {
             ucomisd xmm0, xmm1;
             jne normal;
             jp normal;
-            movq rax, (Value::new_float(0.0).get());
+            movq rax, (FLOAT_ZERO);
             ret;
         normal:
             movq rax, xmm0;
@@ -883,7 +903,7 @@ impl Codegen {
             movq [rsp + 16], xmm4;
             movq [rsp + 8], xmm3;
             movq [rsp + 0], xmm2;
-            movq rax, (Value::new_float);
+            movq rax, (Value::float);
             call rax;
             movq xmm2, [rsp + 0];
             movq xmm3, [rsp + 8];
@@ -911,18 +931,18 @@ fn guard_class() {
     let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
 
     for (class, value) in [
-        (INTEGER_CLASS, Value::new_integer(-2558)),
-        (INTEGER_CLASS, Value::new_integer(i32::MAX as i64)),
-        (INTEGER_CLASS, Value::new_integer(i32::MIN as i64)),
-        (FLOAT_CLASS, Value::new_float(1.44e-17)),
-        (FLOAT_CLASS, Value::new_float(0.0)),
-        (FLOAT_CLASS, Value::new_float(f64::NAN)),
-        (FLOAT_CLASS, Value::new_float(f64::INFINITY)),
-        (FLOAT_CLASS, Value::new_float(f64::NEG_INFINITY)),
-        (FLOAT_CLASS, Value::new_float(f64::MAX)),
-        (FLOAT_CLASS, Value::new_float(f64::MIN)),
+        (INTEGER_CLASS, Value::integer(-2558)),
+        (INTEGER_CLASS, Value::integer(i32::MAX as i64)),
+        (INTEGER_CLASS, Value::integer(i32::MIN as i64)),
+        (FLOAT_CLASS, Value::float(1.44e-17)),
+        (FLOAT_CLASS, Value::float(0.0)),
+        (FLOAT_CLASS, Value::float(f64::NAN)),
+        (FLOAT_CLASS, Value::float(f64::INFINITY)),
+        (FLOAT_CLASS, Value::float(f64::NEG_INFINITY)),
+        (FLOAT_CLASS, Value::float(f64::MAX)),
+        (FLOAT_CLASS, Value::float(f64::MIN)),
         (NIL_CLASS, Value::nil()),
-        (SYMBOL_CLASS, Value::new_symbol(IdentId::get_id("Ruby"))),
+        (SYMBOL_CLASS, Value::symbol(IdentId::get_id("Ruby"))),
         (TRUE_CLASS, Value::bool(true)),
         (FALSE_CLASS, Value::bool(false)),
         (ARRAY_CLASS, Value::new_array_from_vec(vec![])),
@@ -954,7 +974,7 @@ fn test_f64_to_val() {
         if f.is_nan() {
             assert!(func(f).try_float().unwrap().is_nan())
         } else {
-            assert_eq!(Value::new_float(f).try_float(), func(f).try_float());
+            assert_eq!(Value::float(f).try_float(), func(f).try_float());
         }
     }
 }

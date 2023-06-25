@@ -86,7 +86,7 @@ fn size(
     _len: usize,
 ) -> Result<Value> {
     let len = lfp.self_val().as_hash().len();
-    Ok(Value::new_integer(len as i64))
+    Ok(Value::integer(len as i64))
 }
 
 /// ### Hash#[]=

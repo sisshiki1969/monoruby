@@ -35,7 +35,7 @@ fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
         None => unimplemented!(),
     };
     let b = lfp.expect_block()?;
-    let iter = (0..count).map(|i| Value::new_integer(i));
+    let iter = (0..count).map(|i| Value::integer(i));
     vm.invoke_block_iter1(globals, b, iter)?;
 
     Ok(lfp.self_val())
@@ -53,7 +53,7 @@ impl Iterator for PosStep {
         if self.cur > self.limit {
             None
         } else {
-            let v = Value::new_integer(self.cur);
+            let v = Value::integer(self.cur);
             self.cur += self.step;
             Some(v)
         }
@@ -72,7 +72,7 @@ impl Iterator for NegStep {
         if self.limit > self.cur {
             None
         } else {
-            let v = Value::new_integer(self.cur);
+            let v = Value::integer(self.cur);
             self.cur += self.step;
             Some(v)
         }
@@ -159,7 +159,7 @@ fn to_f(
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => unimplemented!(),
     };
-    Ok(Value::new_float(f))
+    Ok(Value::float(f))
 }
 
 ///

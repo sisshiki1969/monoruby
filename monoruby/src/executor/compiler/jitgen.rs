@@ -1,5 +1,6 @@
 use monoasm_macro::monoasm;
 use paste::paste;
+use ruruby_parse::CmpKind;
 
 pub(crate) use self::basic_block::BasicBlockInfo;
 pub(self) use self::basic_block::{BasciBlockInfoEntry, BasicBlockId};
@@ -586,7 +587,7 @@ impl Codegen {
                     ctx.link_const(ret, Value::int32(i));
                 }
                 TraceIr::Symbol(ret, id) => {
-                    ctx.link_const(ret, Value::new_symbol(id));
+                    ctx.link_const(ret, Value::symbol(id));
                 }
                 TraceIr::Nil(ret) => {
                     ctx.link_const(ret, Value::nil());
@@ -940,7 +941,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::Cmp(kind, ret, mode, false) => {
-                    if mode.is_float_op(&pc) {
+                    if mode.is_float_op(&pc) && kind != CmpKind::Cmp {
                         match mode {
                             OpMode::RR(lhs, rhs) => {
                                 let (flhs, frhs) = self.fetch_float_binary(&mut ctx, lhs, rhs, pc);

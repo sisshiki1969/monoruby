@@ -465,21 +465,21 @@ impl Codegen {
             CmpKind::Le => self.call_binop(cmp_le_values),
             CmpKind::Lt => self.call_binop(cmp_lt_values),
             CmpKind::TEq => self.call_binop(cmp_teq_values),
-            _ => unimplemented!(),
+            CmpKind::Cmp => self.call_binop(cmp_cmp_values),
         }
         self.xmm_restore(&xmm_using);
     }
 
     pub(super) fn integer_cmp(&mut self, kind: CmpKind) {
         match kind {
-            CmpKind::Eq => self.integer_cmp_eq(),
-            CmpKind::Ne => self.integer_cmp_ne(),
-            CmpKind::Ge => self.integer_cmp_ge(),
-            CmpKind::Gt => self.integer_cmp_gt(),
-            CmpKind::Le => self.integer_cmp_le(),
-            CmpKind::Lt => self.integer_cmp_lt(),
-            CmpKind::TEq => self.integer_cmp_eq(),
-            _ => unimplemented!(),
+            CmpKind::Eq => self.icmp_eq(),
+            CmpKind::Ne => self.icmp_ne(),
+            CmpKind::Ge => self.icmp_ge(),
+            CmpKind::Gt => self.icmp_gt(),
+            CmpKind::Le => self.icmp_le(),
+            CmpKind::Lt => self.icmp_lt(),
+            CmpKind::TEq => self.icmp_eq(),
+            CmpKind::Cmp => self.icmp_cmp(),
         }
     }
 
@@ -517,7 +517,7 @@ impl Codegen {
             CmpKind::Le => self.condbr_int_le(branch_dest, brkind),
             CmpKind::Lt => self.condbr_int_lt(branch_dest, brkind),
             CmpKind::TEq => self.condbr_int_eq(branch_dest, brkind),
-            _ => unimplemented!(),
+            _ => unreachable!(),
         }
     }
 
@@ -530,7 +530,7 @@ impl Codegen {
             CmpKind::Le => self.condbr_float_le(branch_dest, brkind),
             CmpKind::Lt => self.condbr_float_lt(branch_dest, brkind),
             CmpKind::TEq => self.condbr_float_eq(branch_dest, brkind),
-            _ => unimplemented!(),
+            _ => unreachable!(),
         }
     }
 }

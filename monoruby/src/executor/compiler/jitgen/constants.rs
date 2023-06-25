@@ -58,7 +58,7 @@ impl Codegen {
             cmpq rax, [rip + cached_const_version];
             jne  deopt;
             movq xmm(fdst.enc()), [rip + cached_float];
-            movq rax, (Value::new_float(f).get());
+            movq rax, (Value::float(f).get());
         );
         self.store_rax(dst);
     }

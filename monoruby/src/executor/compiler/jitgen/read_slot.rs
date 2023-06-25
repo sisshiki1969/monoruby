@@ -139,7 +139,7 @@ impl Codegen {
                     let freg = ctx.link_new_both(reg);
                     let f = self.jit.const_f64(i as f64);
                     monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::new_integer(i).get());
+                        movq [r14 - (conv(reg))], (Value::integer(i).get());
                         movq xmm(freg.enc()), [rip + f];
                     }
                     freg
@@ -209,7 +209,7 @@ impl Codegen {
                     let freg = ctx.link_new_both(reg);
                     let f = self.jit.const_f64(i as f64);
                     monoasm! {&mut self.jit,
-                        movq [r14 - (conv(reg))], (Value::new_integer(i).get());
+                        movq [r14 - (conv(reg))], (Value::integer(i).get());
                         movq xmm(freg.enc()), [rip + f];
                     }
                     freg
@@ -297,8 +297,8 @@ mod test {
 
         let int_to_f64: fn(Value) -> f64 =
             unsafe { std::mem::transmute(int_to_f64_entry.as_ptr()) };
-        assert_eq!(143.0, int_to_f64(Value::new_integer(143)));
-        assert_eq!(14354813558.0, int_to_f64(Value::new_integer(14354813558)));
-        assert_eq!(-143.0, int_to_f64(Value::new_integer(-143)));
+        assert_eq!(143.0, int_to_f64(Value::integer(143)));
+        assert_eq!(14354813558.0, int_to_f64(Value::integer(14354813558)));
+        assert_eq!(-143.0, int_to_f64(Value::integer(-143)));
     }
 }

@@ -98,7 +98,7 @@ impl CFP {
                     i += 1;
                     cfp = cfp.prev().unwrap();
                 }
-                BlockHandler::new(Value::new_integer(i))
+                BlockHandler::new(Value::integer(i))
             }
             None => bh,
         })

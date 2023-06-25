@@ -634,16 +634,16 @@ impl BytecodeGen {
         if let Ok(i) = i32::try_from(i) {
             self.emit(BcIr::Integer(dst, i), Loc::default());
         } else {
-            self.emit_literal(dst, Value::new_integer(i));
+            self.emit_literal(dst, Value::integer(i));
         }
     }
 
     fn emit_bigint(&mut self, dst: BcReg, bigint: BigInt) {
-        self.emit_literal(dst, Value::new_bigint(bigint));
+        self.emit_literal(dst, Value::bigint(bigint));
     }
 
     fn emit_float(&mut self, dst: BcReg, f: f64) {
-        self.emit_literal(dst, Value::new_float(f));
+        self.emit_literal(dst, Value::float(f));
     }
 
     fn emit_symbol(&mut self, dst: BcReg, sym: IdentId) {
