@@ -24,6 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "to_s", inspect, 0);
     globals.define_builtin_func(HASH_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(HASH_CLASS, "merge", merge, -1);
+    globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
@@ -312,6 +313,27 @@ fn merge(
     Ok(Value::new_hash_from_inner(inner))
 }
 
+///
+/// ### Hash#compare_by_identity
+///
+/// - compare_by_identity -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/compare_by_identity.html]
+#[monoruby_builtin]
+fn compare_by_identity(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let mut self_val = lfp.self_val();
+    self_val.as_hash_mut().compare_by_identity();
+    Ok(lfp.self_val())
+}
+
 // ENV object
 
 /// ###ENV.[]
@@ -452,6 +474,19 @@ mod test {
             h1 = { "a" => 100, "b" => 200 }
             h2 = { "b" => 246, "c" => 300 }
             h3 = { "b" => 357, "d" => 400 }
+            "#,
+        );
+    }
+
+    #[test]
+    fn compare_by_identity() {
+        run_test_with_prelude(
+            r##"
+            [h1["a"], h1[75], h1[:c]]
+        "##,
+            r#"
+            h1 = { "a" => 100, 75 => 200, :c => "c" }
+            h1.compare_by_identity
             "#,
         );
     }

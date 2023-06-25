@@ -903,7 +903,7 @@ impl Codegen {
             movq [rsp + 16], xmm4;
             movq [rsp + 8], xmm3;
             movq [rsp + 0], xmm2;
-            movq rax, (Value::float);
+            movq rax, (Value::float_heap);
             call rax;
             movq xmm2, [rsp + 0];
             movq xmm3, [rsp + 8];

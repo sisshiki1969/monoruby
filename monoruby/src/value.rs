@@ -246,6 +246,10 @@ impl Value {
         }
     }
 
+    pub extern "C" fn float_heap(num: f64) -> Value {
+        RValue::new_float(num).pack()
+    }
+
     pub fn bigint(bigint: BigInt) -> Self {
         if let Ok(i) = i64::try_from(&bigint) {
             Value::integer(i)

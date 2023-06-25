@@ -282,6 +282,19 @@ impl HashInner {
             HashInner::IdentMap(map) => map.values().cloned().collect(),
         }
     }
+
+    pub(crate) fn compare_by_identity(&mut self) {
+        match self {
+            HashInner::Map(box map) => {
+                let mut new_map = indexmap::IndexMap::default();
+                for (k, v) in map.iter() {
+                    new_map.insert(IdentKey(k.0), *v);
+                }
+                *self = HashInner::IdentMap(Box::new(new_map));
+            }
+            HashInner::IdentMap(_) => {}
+        }
+    }
 }
 
 #[cfg(test)]
