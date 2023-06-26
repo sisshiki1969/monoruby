@@ -10,6 +10,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);
     globals.define_builtin_func(ARRAY_CLASS, "shift", shift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "unshift", unshift, -1);
     globals.define_builtin_func(ARRAY_CLASS, "prepend", unshift, -1);
@@ -119,6 +120,43 @@ fn add(
     };
     lhs.extend_from_slice(rhs);
     Ok(Value::new_array(lhs))
+}
+
+///
+/// ### Array#*
+///
+/// - self * times -> Array
+/// - [NOT SUPPORTED]self * sep -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
+#[monoruby_builtin]
+fn mul(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let lhs = self_val.as_array();
+    let rhs = match arg[0].try_fixnum() {
+        Some(v) => {
+            if v < 0 {
+                return Err(MonorubyErr::negative_argument());
+            } else {
+                v as usize
+            }
+        }
+        None => {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg[0],
+                INTEGER_CLASS,
+            ));
+        }
+    };
+    let vec = lhs.repeat(rhs);
+    Ok(Value::new_array_from_vec(vec))
 }
 
 ///
@@ -728,6 +766,25 @@ mod test {
     #[test]
     fn add() {
         run_test(r##"[1,2,3] + [4]"##);
+        run_test(
+            r##"
+        a = [1,2,3]
+        res = a + [4,5,6,7,8]
+        [a, res]
+        "##,
+        );
+    }
+
+    #[test]
+    fn mul() {
+        run_test(r##"[1,2,3] * 4"##);
+        run_test(
+            r##"
+        a = [1,2,3]
+        res = a * 4
+        [a, res]
+        "##,
+        );
     }
 
     #[test]
