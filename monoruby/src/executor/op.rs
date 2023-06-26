@@ -1,5 +1,7 @@
 use super::*;
 
+mod sort;
+
 use num::{BigInt, Integer, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub};
@@ -475,28 +477,72 @@ pub(super) extern "C" fn cmp_cmp_values(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
-    use std::cmp::Ordering;
-    let res = match (lhs.unpack(), rhs.unpack()) {
-        (RV::Nil, RV::Nil) => Value::from_ord(Ordering::Equal),
-        (RV::Nil, _) => Value::nil(),
-        //(RV::Symbol(lhs), RV::Symbol(rhs)) => lhs == rhs,
-        //(RV::Symbol(_), _) => Value::nil(),
-        (RV::Bool(lhs), RV::Bool(rhs)) if lhs == rhs => Value::from_ord(Ordering::Equal),
-        (RV::Bool(_), _) => Value::nil(),
-        (RV::Integer(lhs), RV::Integer(rhs)) => Value::cmp(&lhs, &rhs),
-        (RV::Integer(lhs), RV::BigInt(rhs)) => Value::cmp(&BigInt::from(lhs), rhs),
-        (RV::Integer(lhs), RV::Float(rhs)) => Value::partial_cmp(&(lhs as f64), &rhs),
-        (RV::BigInt(lhs), RV::Integer(rhs)) => Value::cmp(lhs, &BigInt::from(rhs)),
-        (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::cmp(lhs, &rhs),
-        (RV::BigInt(lhs), RV::Float(rhs)) => Value::partial_cmp(&lhs.to_f64().unwrap(), &rhs),
-        (RV::Float(lhs), RV::Integer(rhs)) => Value::partial_cmp(&lhs, &(rhs as f64)),
-        (RV::Float(lhs), RV::BigInt(rhs)) => Value::partial_cmp(&lhs, &(rhs.to_f64().unwrap())),
-        (RV::Float(lhs), RV::Float(rhs)) => Value::partial_cmp(&lhs, &rhs),
-        _ => {
-            return vm.invoke_method(globals, IdentId::_CMP, lhs, &[rhs]);
+    match vm.cmp_cmp_values_inner(globals, lhs, rhs) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
         }
-    };
-    Some(res)
+    }
+}
+
+impl Executor {
+    pub(super) fn cmp_cmp_values_inner(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        let ord = self.compare_values(globals, lhs, rhs)?;
+        Ok(Value::from_ord(ord))
+    }
+
+    pub(super) fn compare_values(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        let res = match (lhs.unpack(), rhs.unpack()) {
+            (RV::Nil, RV::Nil) => Some(Ordering::Equal),
+            (RV::Nil, _) => None,
+            (RV::Symbol(lhs), RV::Symbol(rhs)) => Some(lhs.compare(&rhs)),
+            (RV::Symbol(_), _) => None,
+            (RV::Bool(lhs), RV::Bool(rhs)) if lhs == rhs => Some(Ordering::Equal),
+            (RV::Bool(_), _) => None,
+            (RV::Integer(lhs), RV::Integer(rhs)) => Some(lhs.cmp(&rhs)),
+            (RV::Integer(lhs), RV::BigInt(rhs)) => Some(BigInt::from(lhs).cmp(rhs)),
+            (RV::Integer(lhs), RV::Float(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (RV::BigInt(lhs), RV::Integer(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(&rhs)),
+            (RV::BigInt(lhs), RV::Float(rhs)) => lhs.to_f64().unwrap().partial_cmp(&rhs),
+            (RV::Float(lhs), RV::Integer(rhs)) => lhs.partial_cmp(&(rhs as f64)),
+            (RV::Float(lhs), RV::BigInt(rhs)) => lhs.partial_cmp(&(rhs.to_f64().unwrap())),
+            (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
+            _ => {
+                if let Some(i) = self
+                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs])?
+                    .try_fixnum()
+                {
+                    match i {
+                        -1 => Some(std::cmp::Ordering::Less),
+                        0 => Some(std::cmp::Ordering::Equal),
+                        1 => Some(std::cmp::Ordering::Greater),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+        .ok_or_else(|| {
+            let lhs = lhs.get_real_class_name(globals);
+            let rhs = globals.tos(rhs);
+            MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
+        })?;
+        Ok(res)
+    }
 }
 
 pub(super) extern "C" fn neg_value(

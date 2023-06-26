@@ -116,22 +116,32 @@ impl IdentId {
     ///
     /// Get *IdentId* from &str.
     ///
-    pub(crate) fn get_id(name: &str) -> IdentId {
+    pub fn get_id(name: &str) -> IdentId {
         ID.write().unwrap().get_id(name)
     }
 
     ///
     /// Get *IdentId* from String.
     ///
-    pub(crate) fn get_id_from_string(name: String) -> IdentId {
+    pub fn get_id_from_string(name: String) -> IdentId {
         ID.write().unwrap().get_id_from_string(name)
     }
 
     ///
     /// Get name as String from *self*.
     ///
-    fn get_name(&self) -> String {
+    pub fn get_name(&self) -> String {
         ID.read().unwrap().get_name(*self).to_string()
+    }
+
+    ///
+    /// Compare *self* to *other*.
+    ///
+    pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        let id = ID.read().unwrap();
+        let lhs = id.get_name(*self);
+        let rhs = id.get_name(*other);
+        lhs.cmp(rhs)
     }
 
     ///

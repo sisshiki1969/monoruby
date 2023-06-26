@@ -178,20 +178,6 @@ impl Value {
     }
 }
 
-impl Value {
-    pub(crate) fn cmp<T: std::cmp::Ord>(lhs: &T, rhs: &T) -> Self {
-        Value::int32(lhs.cmp(rhs) as i32)
-    }
-
-    pub(crate) fn partial_cmp<T: std::cmp::PartialOrd>(lhs: &T, rhs: &T) -> Self {
-        if let Some(cmp) = lhs.partial_cmp(rhs) {
-            Value::int32(cmp as i32)
-        } else {
-            Value::nil()
-        }
-    }
-}
-
 //
 // constructors
 //

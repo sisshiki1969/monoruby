@@ -20,6 +20,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
     globals.define_builtin_func(ARRAY_CLASS, "sum", sum, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "each", each, 0);
     globals.define_builtin_func(ARRAY_CLASS, "map", map, 0);
     globals.define_builtin_func(ARRAY_CLASS, "flat_map", flat_map, 0);
@@ -350,6 +353,81 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
         }
     }
     Ok(sum)
+}
+
+///
+/// ### Array#min
+///
+/// - min -> object | nil
+/// - [NOT SUPPORTED] min(n) -> Array
+/// - [NOT SUPPORTED] min {|a, b| ... } -> object | nil
+/// - [NOT SUPPORTED] min(n) {|a, b| ... } -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
+#[monoruby_builtin]
+fn min(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let self_val = lfp.self_val();
+    let ary = self_val.as_array();
+    if ary.len() == 0 {
+        return Ok(Value::nil());
+    }
+    let mut min = ary[0];
+    for v in &ary[1..] {
+        if vm.cmp_cmp_values_inner(globals, min, *v)?
+            == Value::from_ord(std::cmp::Ordering::Greater)
+        {
+            min = *v;
+        }
+    }
+    Ok(min)
+}
+
+///
+/// ### Array#max
+///
+/// - max -> object | nil
+/// - [NOT SUPPORTED] max(n) -> Array
+/// - [NOT SUPPORTED] max {|a, b| ... } -> object | nil
+/// - [NOT SUPPORTED] max(n) {|a, b| ... } -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
+#[monoruby_builtin]
+fn max(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let self_val = lfp.self_val();
+    let ary = self_val.as_array();
+    if ary.len() == 0 {
+        return Ok(Value::nil());
+    }
+    let mut max = ary[0];
+    for v in &ary[1..] {
+        if vm.cmp_cmp_values_inner(globals, max, *v)? == Value::from_ord(std::cmp::Ordering::Less) {
+            max = *v;
+        }
+    }
+    Ok(max)
+}
+
+///
+/// ### Array#sort!
+///
+/// - sort! -> self
+/// - [NOT SUPPORTED] sort! {|a, b| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sort.html]
+#[monoruby_builtin]
+fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let mut self_val = lfp.self_val();
+    let ary = self_val.as_array_mut();
+    //let mut vec = ary.to_vec();
+    vm.sort_by(globals, ary, Executor::compare_values)?;
+    //self_val.as_array_mut().clone_from_slice(&vec);
+    Ok(self_val)
 }
 
 ///
@@ -758,6 +836,49 @@ mod test {
             r##"[[].sum, [].sum(0.0), [1, 2, 3].sum, [3, 5.5].sum, [2.5, 3.0].sum(0.0) {|e| e * e }, ["a", "b", "c"].sum("")]"##,
         );
         run_test_error("[Object.new].sum");
+    }
+
+    #[test]
+    fn min() {
+        run_test(
+            r##"
+            [[].min, [1,2,-42].min, [-42.4242, 100, 9999999999999999999999999999999].min]
+            "##,
+        );
+        run_test_error("[1,:hh].min");
+        run_test_error("[Float::NAN, Float::NAN].min");
+    }
+
+    #[test]
+    fn max() {
+        run_test(
+            r##"
+            [[].max, [1,2,-42].max, [-42.4242, 100, 9999999999999999999999999999999].max]
+            "##,
+        );
+        run_test_error("[1,:hh].max");
+        run_test_error("[Float::NAN, Float::NAN].max");
+    }
+
+    #[test]
+    fn sort() {
+        run_test(
+            r##"
+            res = []
+            a = []
+            a.sort!
+            res << a
+            a = [1,2,-42]
+            a.sort!
+            res << a
+            a = [999999999999999999999999999999, -42.4242, 100, 100.001, -555, 0.0, 100, 76543, 100.0]
+            a.sort!
+            res << a
+            res
+            "##,
+        );
+        run_test_error("[1,:hh].sort!");
+        run_test_error("[Float::NAN, Float::NAN].sort!");
     }
 
     #[test]

@@ -566,7 +566,7 @@ mod test {
     fn constants() {
         run_test_with_prelude(
             r#"
-            [C.constants, C.constants(false)]
+            [C.constants.sort!, C.constants(false).sort!]
             "#,
             r#"
             class S
