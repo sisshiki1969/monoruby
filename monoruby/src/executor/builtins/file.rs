@@ -42,7 +42,7 @@ fn write(
         Ok(file) => file,
         Err(err) => return Err(MonorubyErr::runtimeerr(format!("{}: {:?}", name, err))),
     };
-    let bytes = globals.tos(arg[1]).into_bytes();
+    let bytes = globals.to_s(arg[1]).into_bytes();
     match file.write_all(&bytes) {
         Ok(_) => {}
         Err(err) => return Err(MonorubyErr::runtimeerr(err.to_string())),

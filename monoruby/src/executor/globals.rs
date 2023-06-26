@@ -313,7 +313,7 @@ impl Globals {
 }
 
 impl Globals {
-    pub(crate) fn tos(&self, val: Value) -> String {
+    pub(crate) fn to_s(&self, val: Value) -> String {
         match val.unpack() {
             RV::None => "Undef".to_string(),
             RV::Nil => "".to_string(),
@@ -329,7 +329,7 @@ impl Globals {
             RV::Object(rvalue) => match rvalue.kind() {
                 ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
-                ObjKind::ARRAY => self.array_tos(rvalue.as_array()),
+                ObjKind::ARRAY => rvalue.as_array().to_s(self),
                 ObjKind::OBJECT => self.object_tos(val),
                 ObjKind::RANGE => self.range_tos(val),
                 ObjKind::PROC => Self::proc_tos(val),
@@ -337,14 +337,7 @@ impl Globals {
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
                 ObjKind::EXCEPTION => rvalue.as_exception().err.msg().to_string(),
-                ObjKind::METHOD => {
-                    let method = rvalue.as_method();
-                    format!(
-                        "#<Method: {}#{}()>",
-                        method.receiver.class().get_name(self),
-                        self.store[method.func_id].name().unwrap()
-                    )
-                }
+                ObjKind::METHOD => rvalue.as_method().to_s(self),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -354,7 +347,7 @@ impl Globals {
         if let RV::String(s) = val.unpack() {
             return s.to_vec();
         }
-        self.tos(val).into_bytes()
+        self.to_s(val).into_bytes()
     }
 
     pub fn inspect(&self, val: Value) -> String {
@@ -369,22 +362,12 @@ impl Globals {
                 }
             }
             RV::Object(rvalue) => match rvalue.kind() {
-                ObjKind::CLASS
-                | ObjKind::MODULE
-                | ObjKind::TIME
-                | ObjKind::ARRAY
-                | ObjKind::RANGE
-                | ObjKind::HASH
-                | ObjKind::PROC
-                | ObjKind::REGEXP
-                | ObjKind::IO
-                | ObjKind::METHOD => {}
                 ObjKind::OBJECT => return self.object_inspect(val),
                 ObjKind::EXCEPTION => return rvalue.as_exception().err.get_error_message(),
-                kind => unreachable!("{:016x} {kind}", val.get()),
+                _ => {}
             },
         }
-        self.tos(val)
+        self.to_s(val)
     }
 
     pub(crate) fn generate_range(
@@ -399,24 +382,13 @@ impl Globals {
         Ok(Value::new_range(start, end, exclude_end))
     }
 
-    fn array_tos(&self, v: &ArrayInner) -> String {
-        match v.len() {
-            0 => "[]".to_string(),
-            1 => format!("[{}]", self.inspect(v[0])),
-            _ => {
-                let mut s = format!("[{}", self.inspect(v[0]));
-                for val in v[1..].iter() {
-                    s += &format!(", {}", self.inspect(*val));
-                }
-                s += "]";
-                s
-            }
-        }
+    fn proc_tos(val: Value) -> String {
+        format!("#<Proc:0x{:016x}>", val.rvalue().id())
     }
 
     fn object_tos(&self, val: Value) -> String {
         if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.tos(name)
+            self.to_s(name)
         } else {
             format!(
                 "#<{}:0x{:016x}>",
@@ -426,13 +398,9 @@ impl Globals {
         }
     }
 
-    fn proc_tos(val: Value) -> String {
-        format!("#<Proc:0x{:016x}>", val.rvalue().id())
-    }
-
     fn object_inspect(&self, val: Value) -> String {
         if let Some(name) = self.get_ivar(val, IdentId::_NAME) {
-            self.tos(name)
+            self.to_s(name)
         } else {
             let mut s = String::new();
             for (id, v) in self.get_ivars(val).into_iter() {

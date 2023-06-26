@@ -161,7 +161,7 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
         }
         _ => {}
     }
-    let s = globals.tos(val);
+    let s = globals.to_s(val);
     Err(MonorubyErr::argumenterr(format!(
         "invalid value for Integer(): {}",
         s
@@ -173,7 +173,7 @@ fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
         RV::Integer(i) => Ok(i as f64),
         RV::Float(f) => Ok(f),
         _ => {
-            let s = globals.tos(val);
+            let s = globals.to_s(val);
             Err(MonorubyErr::argumenterr(format!(
                 "invalid value for Float(): {}",
                 s
@@ -310,7 +310,7 @@ fn rem(
                 let ch = coerce_to_char(val)?;
                 format!("{}", ch)
             }
-            's' => globals.tos(val),
+            's' => globals.to_s(val),
             'd' | 'i' => {
                 let val = coerce_to_integer(globals, val)?;
                 if zero_flag {

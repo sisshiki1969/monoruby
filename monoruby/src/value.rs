@@ -618,7 +618,7 @@ impl Value {
         match self.is_class_or_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.tos(*self);
+                let name = globals.to_s(*self);
                 Err(MonorubyErr::is_not_class_nor_module(name))
             }
         }
@@ -635,7 +635,7 @@ impl Value {
         match self.is_class() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.tos(*self);
+                let name = globals.to_s(*self);
                 Err(MonorubyErr::is_not_class(name))
             }
         }
@@ -645,7 +645,7 @@ impl Value {
         match self.is_module() {
             Some(class) => Ok(class),
             None => {
-                let name = globals.tos(*self);
+                let name = globals.to_s(*self);
                 Err(MonorubyErr::is_not_class(name))
             }
         }

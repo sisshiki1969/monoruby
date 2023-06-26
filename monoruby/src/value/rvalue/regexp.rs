@@ -121,7 +121,7 @@ impl RegexpInner {
             let mut res = given.to_string();
             let matched = Value::new_string_from_str(matched_str);
             let result = vm.invoke_block_once(globals, block_handler, &[matched])?;
-            let s = globals.tos(result);
+            let s = globals.to_s(result);
             res.replace_range(start..end, &s);
             Ok((res, true))
         }
@@ -194,7 +194,7 @@ impl RegexpInner {
                 };
                 let matched = Value::new_string_from_str(matched_str);
                 let result: Value = vm.invoke_block(globals, data.clone(), &[matched])?;
-                let replace = globals.tos(result);
+                let replace = globals.to_s(result);
                 range.push((start, end, replace));
             }
 

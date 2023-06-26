@@ -98,7 +98,7 @@ impl ClassId {
             Some(id) => id.to_string(),
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().get()),
-                Some(base) => format!("#<Class:{}>", globals.tos(base)),
+                Some(base) => format!("#<Class:{}>", globals.to_s(base)),
             },
         }
     }

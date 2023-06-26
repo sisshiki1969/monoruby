@@ -538,7 +538,7 @@ impl Executor {
         }
         .ok_or_else(|| {
             let lhs = lhs.get_real_class_name(globals);
-            let rhs = globals.tos(rhs);
+            let rhs = globals.to_s(rhs);
             MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
         })?;
         Ok(res)

@@ -5,6 +5,7 @@ use std::mem::ManuallyDrop;
 pub use self::array::*;
 pub use self::hash::*;
 pub use self::io::IoInner;
+pub use self::method::MethodInner;
 pub use self::module::*;
 pub use self::regexp::RegexpInner;
 pub use self::string::StringInner;
@@ -12,6 +13,7 @@ pub use self::string::StringInner;
 mod array;
 mod hash;
 mod io;
+mod method;
 mod module;
 mod regexp;
 mod string;
@@ -27,7 +29,7 @@ pub const RVALUE_OFFSET_HEAP_LEN: usize = 32;
 #[repr(C)]
 pub struct RValue {
     /// flags. 8 bytes
-    flags: RVFlag,
+    flags: RValueHeader,
     /// instance variable table. 8 bytes
     #[allow(clippy::box_collection)]
     var_table: Option<Box<Vec<Option<Value>>>>,
@@ -210,7 +212,7 @@ impl alloc::GCBox for RValue {
 
     fn new_invalid() -> Self {
         RValue {
-            flags: RVFlag { next: None },
+            flags: RValueHeader { next: None },
             kind: ObjKind::invalid(),
             var_table: None,
         }
@@ -391,7 +393,7 @@ impl RValue {
 impl RValue {
     pub(super) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
-            flags: RVFlag::new(INTEGER_CLASS, ObjKind::BIGNUM),
+            flags: RValueHeader::new(INTEGER_CLASS, ObjKind::BIGNUM),
             kind: ObjKind::bignum(bigint),
             var_table: None,
         }
@@ -399,7 +401,7 @@ impl RValue {
 
     pub(super) fn new_float(f: f64) -> Self {
         RValue {
-            flags: RVFlag::new(FLOAT_CLASS, ObjKind::FLOAT),
+            flags: RValueHeader::new(FLOAT_CLASS, ObjKind::FLOAT),
             kind: ObjKind::float(f),
             var_table: None,
         }
@@ -414,7 +416,7 @@ impl RValue {
         class_type: ModuleType,
     ) -> Self {
         RValue {
-            flags: RVFlag::new(CLASS_CLASS, ObjKind::CLASS),
+            flags: RValueHeader::new(CLASS_CLASS, ObjKind::CLASS),
             kind: ObjKind::class(id, superclass, class_type),
             var_table: None,
         }
@@ -425,7 +427,7 @@ impl RValue {
     ///
     pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            flags: RVFlag::new(MODULE_CLASS, ObjKind::MODULE),
+            flags: RValueHeader::new(MODULE_CLASS, ObjKind::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::RealClass),
             var_table: None,
         }
@@ -436,7 +438,7 @@ impl RValue {
     ///
     pub(super) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            flags: RVFlag::new(MODULE_CLASS, ObjKind::MODULE),
+            flags: RValueHeader::new(MODULE_CLASS, ObjKind::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::IClass),
             var_table: None,
         }
@@ -447,7 +449,7 @@ impl RValue {
     ///
     pub(super) fn new_object(class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(class_id, ObjKind::OBJECT),
+            flags: RValueHeader::new(class_id, ObjKind::OBJECT),
             kind: ObjKind::object(),
             var_table: None,
         }
@@ -463,7 +465,7 @@ impl RValue {
 
     pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
-            flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
+            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes_from_vec(v),
             var_table: None,
         }
@@ -471,7 +473,7 @@ impl RValue {
 
     pub(super) fn new_bytes_from_inner(s: StringInner) -> Self {
         RValue {
-            flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
+            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes(s),
             var_table: None,
         }
@@ -479,7 +481,7 @@ impl RValue {
 
     pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
-            flags: RVFlag::new(STRING_CLASS, ObjKind::BYTES),
+            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes_from_slice(slice),
             var_table: None,
         }
@@ -487,7 +489,7 @@ impl RValue {
 
     pub(super) fn new_array(ary: ArrayInner) -> Self {
         RValue {
-            flags: RVFlag::new(ARRAY_CLASS, ObjKind::ARRAY),
+            flags: RValueHeader::new(ARRAY_CLASS, ObjKind::ARRAY),
             kind: ObjKind::array(ary),
             var_table: None,
         }
@@ -495,7 +497,7 @@ impl RValue {
 
     pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(class_id, ObjKind::ARRAY),
+            flags: RValueHeader::new(class_id, ObjKind::ARRAY),
             kind: ObjKind::array(ArrayInner::from_vec(v)),
             var_table: None,
         }
@@ -503,7 +505,7 @@ impl RValue {
 
     pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue {
-            flags: RVFlag::new(HASH_CLASS, ObjKind::HASH),
+            flags: RValueHeader::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
@@ -511,7 +513,7 @@ impl RValue {
 
     pub(super) fn new_hash_from_inner(inner: HashInner) -> Self {
         RValue {
-            flags: RVFlag::new(HASH_CLASS, ObjKind::HASH),
+            flags: RValueHeader::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash_from_inner(inner),
             var_table: None,
         }
@@ -519,7 +521,7 @@ impl RValue {
 
     pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(class_id, ObjKind::HASH),
+            flags: RValueHeader::new(class_id, ObjKind::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
@@ -527,7 +529,7 @@ impl RValue {
 
     pub(super) fn new_regexp(regexp: RegexpInner) -> Self {
         RValue {
-            flags: RVFlag::new(REGEXP_CLASS, ObjKind::REGEXP),
+            flags: RValueHeader::new(REGEXP_CLASS, ObjKind::REGEXP),
             kind: ObjKind::regexp(regexp),
             var_table: None,
         }
@@ -535,7 +537,7 @@ impl RValue {
 
     pub(super) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
         RValue {
-            flags: RVFlag::new(class_id, ObjKind::EXCEPTION),
+            flags: RValueHeader::new(class_id, ObjKind::EXCEPTION),
             kind: ObjKind::exception(err),
             var_table: None,
         }
@@ -543,7 +545,7 @@ impl RValue {
 
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
-            flags: RVFlag::new(IO_CLASS, ObjKind::IO),
+            flags: RValueHeader::new(IO_CLASS, ObjKind::IO),
             kind: ObjKind::io(io),
             var_table: None,
         }
@@ -563,7 +565,7 @@ impl RValue {
 
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
-            flags: RVFlag::new(TIME_CLASS, ObjKind::TIME),
+            flags: RValueHeader::new(TIME_CLASS, ObjKind::TIME),
             kind: ObjKind::time(time),
             var_table: None,
         }
@@ -571,7 +573,7 @@ impl RValue {
 
     pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
-            flags: RVFlag::new(RANGE_CLASS, ObjKind::RANGE),
+            flags: RValueHeader::new(RANGE_CLASS, ObjKind::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
             var_table: None,
         }
@@ -579,7 +581,7 @@ impl RValue {
 
     pub(super) fn new_proc(block_data: BlockData) -> Self {
         RValue {
-            flags: RVFlag::new(PROC_CLASS, ObjKind::PROC),
+            flags: RValueHeader::new(PROC_CLASS, ObjKind::PROC),
             kind: ObjKind::proc(block_data),
             var_table: None,
         }
@@ -587,7 +589,7 @@ impl RValue {
 
     pub(super) fn new_method(receiver: Value, func_id: FuncId) -> Self {
         RValue {
-            flags: RVFlag::new(METHOD_CLASS, ObjKind::METHOD),
+            flags: RValueHeader::new(METHOD_CLASS, ObjKind::METHOD),
             kind: ObjKind::method(receiver, func_id),
             var_table: None,
         }
@@ -743,23 +745,23 @@ impl RValue {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-union RVFlag {
-    flag: Flag,
+union RValueHeader {
+    flag: RValueMetadata,
     next: Option<std::ptr::NonNull<RValue>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-struct Flag {
+struct RValueMetadata {
     flag: u16,
     kind: u16,
     class: ClassId,
 }
 
-impl RVFlag {
+impl RValueHeader {
     fn new(class: ClassId, kind: u8) -> Self {
-        RVFlag {
-            flag: Flag {
+        RValueHeader {
+            flag: RValueMetadata {
                 flag: 1,
                 kind: kind as u16,
                 class,
@@ -768,7 +770,7 @@ impl RVFlag {
     }
 
     fn class(&self) -> ClassId {
-        let Flag { flag, class, .. } = unsafe { self.flag };
+        let RValueMetadata { flag, class, .. } = unsafe { self.flag };
         assert!((flag & 0b1) == 1);
         class
     }
@@ -845,13 +847,6 @@ impl RangeInner {
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Hash)]
-#[repr(C)]
-pub struct MethodInner {
-    pub receiver: Value,
-    pub func_id: FuncId,
 }
 
 impl ObjKind {
@@ -959,7 +954,7 @@ impl ObjKind {
 
     fn method(receiver: Value, func_id: FuncId) -> Self {
         Self {
-            method: ManuallyDrop::new(MethodInner { receiver, func_id }),
+            method: ManuallyDrop::new(MethodInner::new(receiver, func_id)),
         }
     }
 }

@@ -226,7 +226,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod,
             format!(
                 "undefined method `{name}' for {}:{}",
-                globals.tos(obj),
+                globals.to_s(obj),
                 obj.get_real_class_name(globals)
             ),
         )
@@ -252,7 +252,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod,
             format!(
                 "private method `{name}' called for {}:{}",
-                globals.tos(obj),
+                globals.to_s(obj),
                 obj.get_real_class_name(globals)
             ),
         )
@@ -304,7 +304,7 @@ impl MonorubyErr {
     pub(crate) fn char_out_of_range(globals: &Globals, val: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::Range,
-            format!("{} out of char range", globals.tos(val)),
+            format!("{} out of char range", globals.to_s(val)),
         )
     }
 
@@ -358,14 +358,20 @@ impl MonorubyErr {
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
     pub(crate) fn is_not_symbol_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a symbol nor a string", globals.tos(val)))
+        MonorubyErr::typeerr(format!(
+            "{} is not a symbol nor a string",
+            globals.to_s(val)
+        ))
     }
 
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
     pub(crate) fn is_not_regexp_nor_string(globals: &Globals, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a regexp nor a string", globals.tos(val)))
+        MonorubyErr::typeerr(format!(
+            "{} is not a regexp nor a string",
+            globals.to_s(val)
+        ))
     }
 
     ///
@@ -448,7 +454,7 @@ impl MonorubyErr {
         MonorubyErr::frozenerr(format!(
             "can't modify frozen {}: {}",
             val.get_real_class_name(globals),
-            globals.tos(val),
+            globals.to_s(val),
         ))
     }
 

@@ -210,7 +210,7 @@ fn block_given(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
-    let s = globals.tos(lfp.self_val());
+    let s = globals.to_s(lfp.self_val());
     Ok(Value::new_string(s))
 }
 
@@ -500,7 +500,7 @@ fn kernel_integer(
                 match s.parse::<i64>() {
                     Ok(num) => return Ok(Value::integer(num)),
                     Err(_) => {
-                        let s = globals.tos(arg0);
+                        let s = globals.to_s(arg0);
                         return Err(MonorubyErr::argumenterr(format!(
                             "invalid value for Integer(): {}",
                             s
