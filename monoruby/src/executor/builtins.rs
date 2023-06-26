@@ -112,6 +112,12 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .id()
     );
     assert_eq!(
+        METHOD_CLASS,
+        globals
+            .define_builtin_class_under_obj("Method", METHOD_CLASS)
+            .id()
+    );
+    assert_eq!(
         HASH_CLASS,
         globals
             .define_builtin_class_under_obj("Hash", HASH_CLASS)
@@ -123,6 +129,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .define_builtin_class_under_obj("Regexp", REGEXP_CLASS)
             .id()
     );
+
     let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
     assert_eq!(IO_CLASS, io_class.id());
 

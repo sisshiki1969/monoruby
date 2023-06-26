@@ -64,6 +64,7 @@ impl std::fmt::Debug for RValue {
                     12 => format!("HASH({:?})", self.kind.hash),
                     13 => format!("REGEXP({:?})", self.kind.regexp),
                     14 => format!("IO({:?})", self.kind.io),
+                    15 => format!("METHOD({:?})", self.kind.method),
                     _ => unreachable!(),
                 }
             },
@@ -583,6 +584,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_method(receiver: Value, func_id: FuncId) -> Self {
+        RValue {
+            flags: RVFlag::new(METHOD_CLASS, ObjKind::METHOD),
+            kind: ObjKind::method(receiver, func_id),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -715,6 +724,10 @@ impl RValue {
     /*pub(crate) fn as_time_mut(&mut self) -> &mut TimeInfo {
         unsafe { &mut *self.kind.time }
     }*/
+
+    pub(crate) fn as_method(&self) -> &MethodInner {
+        unsafe { &self.kind.method }
+    }
 }
 
 impl RValue {
@@ -785,6 +798,7 @@ pub union ObjKind {
     hash: ManuallyDrop<HashInner>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
+    method: ManuallyDrop<MethodInner>,
 }
 
 #[allow(dead_code)]
@@ -804,6 +818,7 @@ impl ObjKind {
     pub const HASH: u8 = 12;
     pub const REGEXP: u8 = 13;
     pub const IO: u8 = 14;
+    pub const METHOD: u8 = 15;
 }
 
 #[derive(Debug, Clone)]
@@ -830,6 +845,13 @@ impl RangeInner {
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+#[repr(C)]
+pub struct MethodInner {
+    pub receiver: Value,
+    pub func_id: FuncId,
 }
 
 impl ObjKind {
@@ -932,6 +954,12 @@ impl ObjKind {
     fn proc(block_data: BlockData) -> Self {
         Self {
             proc: ManuallyDrop::new(block_data),
+        }
+    }
+
+    fn method(receiver: Value, func_id: FuncId) -> Self {
+        Self {
+            method: ManuallyDrop::new(MethodInner { receiver, func_id }),
         }
     }
 }

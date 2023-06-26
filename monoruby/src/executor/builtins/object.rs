@@ -48,6 +48,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "block_given?", block_given, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
     globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
     globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
@@ -373,6 +374,27 @@ fn rand(
     } else {
         Ok(Value::float(rand::random()))
     }
+}
+
+///
+/// ### Object#method
+///
+/// - method(name) -> Method
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/method.html]
+#[monoruby_builtin]
+fn method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    let receiver = lfp.self_val();
+    let method_name = arg[0].expect_symbol_or_string(globals)?;
+    let func_id = globals.find_method(receiver, method_name, false)?;
+    Ok(Value::new_method(receiver, func_id))
 }
 
 ///

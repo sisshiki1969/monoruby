@@ -344,16 +344,20 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
-    pub(crate) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
+    pub fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
         RValue::new_exception_with_class(err, class_id).pack()
     }
 
-    pub(crate) fn new_time(time: TimeInner) -> Self {
+    pub fn new_time(time: TimeInner) -> Self {
         RValue::new_time(time).pack()
     }
 
     pub(crate) fn new_proc(block: BlockData) -> Self {
         RValue::new_proc(block).pack()
+    }
+
+    pub fn new_method(receiver: Value, func_id: FuncId) -> Self {
+        RValue::new_method(receiver, func_id).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {

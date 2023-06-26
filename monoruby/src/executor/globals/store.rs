@@ -99,7 +99,7 @@ impl Store {
             functions: function::Funcs::default(),
             constsite_info: vec![],
             callsite_info: vec![],
-            classes: vec![ClassInfo::new(); 20],
+            classes: vec![ClassInfo::new(); 30],
             inline_method: vec![],
         }
     }

@@ -23,6 +23,7 @@ pub const MODULE_CLASS: ClassId = ClassId::new(16);
 pub const IO_CLASS: ClassId = ClassId::new(17);
 pub const EXCEPTION_CLASS: ClassId = ClassId::new(18);
 pub const STRUCT_CLASS: ClassId = ClassId::new(19);
+pub const METHOD_CLASS: ClassId = ClassId::new(20);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -69,6 +70,7 @@ impl std::fmt::Debug for ClassId {
             17 => write!(f, "IO"),
             18 => write!(f, "EXCEPTION"),
             19 => write!(f, "STRUCT"),
+            20 => write!(f, "METHOD"),
             n => write!(f, "ClassId({n})"),
         }
     }
