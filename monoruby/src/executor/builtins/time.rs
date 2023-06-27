@@ -48,7 +48,7 @@ fn inspect(
     _len: usize,
 ) -> Result<Value> {
     let time = lfp.self_val().as_time().to_string();
-    Ok(Value::new_string(time))
+    Ok(Value::string(time))
 }
 
 ///
@@ -69,7 +69,7 @@ fn to_s(
         TimeInner::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
-    Ok(Value::new_string(s))
+    Ok(Value::string(s))
 }
 
 ///
@@ -94,7 +94,7 @@ fn strftime(
             t.format(&fmt).to_string()
         }
     };
-    Ok(Value::new_string(s))
+    Ok(Value::string(s))
 }
 
 /// ### Time#-

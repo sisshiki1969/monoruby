@@ -226,7 +226,7 @@ impl Globals {
             Some(class) => class,
             None => OBJECT_CLASS.get_obj(self),
         };
-        let class_obj = Value::new_empty_class(class_id, Some(superclass));
+        let class_obj = Value::class_empty(class_id, Some(superclass));
         self.store[class_id].object = Some(class_obj.as_class());
         class_obj
     }
@@ -251,9 +251,9 @@ impl Globals {
         is_module: bool,
     ) -> Module {
         let class_obj = if is_module {
-            Value::new_empty_module(class_id, superclass)
+            Value::module_empty(class_id, superclass)
         } else {
-            Value::new_empty_class(class_id, superclass)
+            Value::class_empty(class_id, superclass)
         };
         self.store[class_id].object = Some(class_obj.as_class());
         self.store[class_id].name = Some(name_id);
@@ -268,7 +268,7 @@ impl Globals {
         original_class: ClassId,
     ) -> Module {
         let id = self.store.copy_class(original_class);
-        let class_obj = Value::new_empty_singleton_class(id, super_class.into(), base).as_class();
+        let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
         self.store[id].object = Some(class_obj);
         class_obj
     }

@@ -28,7 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     let mut env_map = IndexMap::default();
     std::env::vars().for_each(|(var, val)| {
-        env_map.insert(HashKey(Value::new_string(var)), Value::new_string(val));
+        env_map.insert(HashKey(Value::string(var)), Value::string(val));
     });
     #[cfg(windows)]
     if let None = env_map.get(&Value::string("HOME")) {
@@ -49,7 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
         );
     };
 
-    let env = Value::new_hash(env_map);
+    let env = Value::hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
     globals.define_builtin_singleton_func(env, "fetch", env_fetch, -1);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
@@ -69,7 +69,7 @@ fn new(
 ) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let map = IndexMap::default();
-    let obj = Value::new_hash_with_class(map, class);
+    let obj = Value::hash_with_class(map, class);
     Ok(obj)
 }
 
@@ -156,7 +156,7 @@ fn keys(
     _len: usize,
 ) -> Result<Value> {
     let keys = lfp.self_val().as_hash().keys();
-    Ok(Value::new_array_from_vec(keys))
+    Ok(Value::array_from_vec(keys))
 }
 
 ///
@@ -173,7 +173,7 @@ fn values(
     _len: usize,
 ) -> Result<Value> {
     let keys = lfp.self_val().as_hash().values();
-    Ok(Value::new_array_from_vec(keys))
+    Ok(Value::array_from_vec(keys))
 }
 
 ///
@@ -282,7 +282,7 @@ fn inspect(
     _len: usize,
 ) -> Result<Value> {
     let s = globals.inspect(lfp.self_val());
-    Ok(Value::new_string(s))
+    Ok(Value::string(s))
 }
 
 ///
@@ -310,7 +310,7 @@ fn merge(
         }
     }
 
-    Ok(Value::new_hash_from_inner(inner))
+    Ok(Value::hash_from_inner(inner))
 }
 
 ///

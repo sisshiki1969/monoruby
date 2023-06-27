@@ -928,7 +928,7 @@ impl Codegen {
 
 #[test]
 fn guard_class() {
-    let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+    let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
 
     for (class, value) in [
         (INTEGER_CLASS, Value::integer(-2558)),
@@ -945,9 +945,9 @@ fn guard_class() {
         (SYMBOL_CLASS, Value::symbol(IdentId::get_id("Ruby"))),
         (TRUE_CLASS, Value::bool(true)),
         (FALSE_CLASS, Value::bool(false)),
-        (ARRAY_CLASS, Value::new_array_from_vec(vec![])),
-        (HASH_CLASS, Value::new_hash(IndexMap::default())),
-        (STRING_CLASS, Value::new_string_from_str("Ruby")),
+        (ARRAY_CLASS, Value::array_from_vec(vec![])),
+        (HASH_CLASS, Value::hash(IndexMap::default())),
+        (STRING_CLASS, Value::string_from_str("Ruby")),
     ] {
         let func = gen.jit.get_label_addr(gen.get_class);
 
@@ -957,7 +957,7 @@ fn guard_class() {
 
 #[test]
 fn test_f64_to_val() {
-    let mut gen = Codegen::new(false, Value::new_object(OBJECT_CLASS));
+    let mut gen = Codegen::new(false, Value::object(OBJECT_CLASS));
 
     for f in [
         1.44e-17,

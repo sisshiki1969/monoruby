@@ -33,7 +33,7 @@ fn times(
     let tms_class = globals
         .get_qualified_constant(&["Process", "Tms"])?
         .as_class();
-    let mut val = Value::new_object(tms_class.id());
+    let mut val = Value::object(tms_class.id());
     let mut self_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Self_, &mut self_rusage);
     val.set_instance_var(

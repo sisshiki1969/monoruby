@@ -93,7 +93,7 @@ pub(super) extern "C" fn block_arg(
 
 pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
     if len == 0 {
-        Value::new_empty_array()
+        Value::array_empty()
     } else {
         let iter = unsafe {
             std::slice::from_raw_parts(src.sub(len - 1), len)
@@ -101,7 +101,7 @@ pub(super) extern "C" fn gen_array(src: *const Value, len: usize) -> Value {
                 .rev()
                 .cloned()
         };
-        Value::new_array_from_iter(iter)
+        Value::array_from_iter(iter)
     }
 }
 
@@ -116,7 +116,7 @@ pub(super) extern "C" fn gen_hash(src: *const Value, len: usize) -> Value {
             map.insert(HashKey(chunk[0]), chunk[1]);
         }
     }
-    Value::new_hash(map)
+    Value::hash(map)
 }
 
 pub(super) extern "C" fn gen_range(
@@ -145,7 +145,7 @@ pub(super) extern "C" fn concatenate_string(
         let v = unsafe { *arg.sub(i) };
         res += &globals.to_s(v);
     }
-    Value::new_string(res)
+    Value::string(res)
 }
 
 pub(super) extern "C" fn concatenate_regexp(
@@ -166,7 +166,7 @@ pub(super) extern "C" fn concatenate_regexp(
             return None;
         }
     };
-    Some(Value::new_regexp(inner))
+    Some(Value::regexp(inner))
 }
 
 pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize) {
@@ -292,7 +292,7 @@ fn handle_req_opt_rest(
                     .iter()
                     .rev()
                     .map(|v| v.unwrap());
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_array_from_iter(iter));
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_from_iter(iter));
             } else if !is_block_style {
                 return Some((arg_num, req_num..=reqopt_num));
             }
@@ -301,7 +301,7 @@ fn handle_req_opt_rest(
             let ptr = callee_reg.sub(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_empty_array());
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_empty());
             }
         } else {
             if !is_block_style {
@@ -314,7 +314,7 @@ fn handle_req_opt_rest(
             let ptr = callee_reg.sub(reqopt_num);
             fill(ptr, len, None);
             if is_rest {
-                *callee_reg.sub(1 + reqopt_num) = Some(Value::new_empty_array());
+                *callee_reg.sub(1 + reqopt_num) = Some(Value::array_empty());
             }
         }
     }

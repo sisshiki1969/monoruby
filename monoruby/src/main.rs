@@ -75,8 +75,8 @@ fn main() {
 
     let mut code = String::new();
     let path = if let Some(file_name) = args.file {
-        let iter = args.argv.into_iter().map(|s| Value::new_string(s));
-        let argv = Value::new_array_from_iter(iter);
+        let iter = args.argv.into_iter().map(|s| Value::string(s));
+        let argv = Value::array_from_iter(iter);
         globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
         let path = std::path::PathBuf::from(&file_name).canonicalize().unwrap();
         let mut file = File::open(&file_name).unwrap();

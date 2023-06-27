@@ -127,7 +127,7 @@ fn map(
 
         let iter = (start..end).map(|i| Value::fixnum(i));
         let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
-        Ok(Value::new_array_from_vec(vec))
+        Ok(Value::array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported".to_string()))
     }
@@ -158,7 +158,7 @@ fn toa(
         }
 
         let vec = (start..end).map(|i| Value::fixnum(i)).collect();
-        Ok(Value::new_array_from_vec(vec))
+        Ok(Value::array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported".to_string()))
     }

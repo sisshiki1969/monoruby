@@ -93,7 +93,7 @@ impl alloc::GC<RValue> for Globals {
 
 impl Globals {
     pub fn new(warning: u8, no_jit: bool) -> Self {
-        let main_object = Value::new_object(OBJECT_CLASS);
+        let main_object = Value::object(OBJECT_CLASS);
 
         let mut globals = Self {
             codegen: Codegen::new(no_jit, main_object),
@@ -122,11 +122,7 @@ impl Globals {
         globals.random.init_with_seed(None);
         builtins::init_builtins(&mut globals);
         globals
-            .set_ivar(
-                main_object,
-                IdentId::_NAME,
-                Value::new_string_from_str("main"),
-            )
+            .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
         // load library path
         let load_path = include_str!(concat!(env!("OUT_DIR"), "/libpath.rb"));
@@ -144,11 +140,11 @@ impl Globals {
         let pcg_name = env!("CARGO_PKG_NAME");
         let pcg_version = env!("CARGO_PKG_VERSION");
         let description = format!("{pcg_name} {pcg_version} [x86_64-linux]",);
-        let val = Value::new_string_from_str(&description);
+        let val = Value::string_from_str(&description);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_DESCRIPTION", val);
-        let val = Value::new_string_from_str(pcg_name);
+        let val = Value::string_from_str(pcg_name);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE", val);
-        let val = Value::new_string_from_str(pcg_version);
+        let val = Value::string_from_str(pcg_version);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_VERSION", val);
         globals.set_constant_by_str(OBJECT_CLASS, "RUBY_ENGINE_VERSION", val);
         globals
@@ -198,16 +194,16 @@ impl Globals {
         let iter = self
             .lib_directories
             .iter()
-            .map(|s| Value::new_string_from_str(s));
-        Value::new_array_from_iter(iter)
+            .map(|s| Value::string_from_str(s));
+        Value::array_from_iter(iter)
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {
         let iter = self
             .loaded_canonicalized_files
             .iter()
-            .map(|s| Value::new_string_from_str(s.to_string_lossy().as_ref()));
-        Value::new_array_from_iter(iter)
+            .map(|s| Value::string_from_str(s.to_string_lossy().as_ref()));
+        Value::array_from_iter(iter)
     }
 
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
@@ -379,7 +375,7 @@ impl Globals {
         if start.real_class(self).id() != end.real_class(self).id() {
             return Err(MonorubyErr::bad_range(start, end));
         }
-        Ok(Value::new_range(start, end, exclude_end))
+        Ok(Value::range(start, end, exclude_end))
     }
 
     fn proc_tos(val: Value) -> String {

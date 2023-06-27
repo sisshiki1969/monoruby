@@ -75,7 +75,7 @@ fn object_new(
     len: usize,
 ) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::new_object(class);
+    let obj = Value::object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
         vm.invoke_func2(globals, func_id, obj, arg, len)?;
     };
@@ -211,7 +211,7 @@ fn block_given(
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     let s = globals.to_s(lfp.self_val());
-    Ok(Value::new_string(s))
+    Ok(Value::string(s))
 }
 
 ///
@@ -233,7 +233,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg, len: usize)
         1 => arg[0],
         _ => {
             let ary = ArrayInner::from_iter(arg.iter(len));
-            Value::new_array(ary)
+            Value::array(ary)
         }
     })
 }
@@ -308,7 +308,7 @@ fn inspect(
     _len: usize,
 ) -> Result<Value> {
     let s = globals.inspect(lfp.self_val());
-    Ok(Value::new_string(s))
+    Ok(Value::string(s))
 }
 
 ///
@@ -655,7 +655,7 @@ fn command(
     match Command::new(program).args(&args).output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
-            Ok(Value::new_string_from_vec(output.stdout))
+            Ok(Value::string_from_vec(output.stdout))
         }
         Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
     }
@@ -708,7 +708,7 @@ fn dir_(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let path = globals.current_source_path(vm).parent().unwrap();
-    Ok(Value::new_string(path.to_string_lossy().to_string()))
+    Ok(Value::string(path.to_string_lossy().to_string()))
 }
 
 fn object_nil(

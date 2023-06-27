@@ -83,7 +83,7 @@ fn read(
             ));
         }
     };
-    Ok(Value::new_string(contents))
+    Ok(Value::string(contents))
 }
 
 ///
@@ -131,7 +131,7 @@ fn join(
     for i in 0..len {
         flatten(vm, globals, &mut path, arg[i])?;
     }
-    Ok(Value::new_string(path))
+    Ok(Value::string(path))
 }
 
 ///
@@ -200,7 +200,7 @@ fn expand_path(
     )
     .join(res_path);
 
-    Ok(Value::new_string(conv_pathbuf(&res_path)))
+    Ok(Value::string(conv_pathbuf(&res_path)))
 }
 
 ///
@@ -224,7 +224,7 @@ fn dirname(
     if dirname.is_empty() {
         dirname += "."
     };
-    Ok(Value::new_string(dirname))
+    Ok(Value::string(dirname))
 }
 
 ///

@@ -72,7 +72,7 @@ fn tos(
     _len: usize,
 ) -> Result<Value> {
     let class_name = lfp.self_val().as_class_id().get_name(globals);
-    let res = Value::new_string(class_name);
+    let res = Value::string(class_name);
     Ok(res)
 }
 
@@ -96,7 +96,7 @@ fn constants(
         globals.get_constant_names(class_id)
     };
     let iter = v.into_iter().map(Value::symbol);
-    Ok(Value::new_array_from_iter(iter))
+    Ok(Value::array_from_iter(iter))
 }
 
 /// ### Module#const_get
@@ -146,7 +146,7 @@ fn instance_methods(
         .get_method_names(class_id)
         .into_iter()
         .map(Value::symbol);
-    Ok(Value::new_array_from_iter(iter))
+    Ok(Value::array_from_iter(iter))
 }
 
 /// ### Module#attr_reader
@@ -169,7 +169,7 @@ fn attr_reader(
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::new_array(ary))
+    Ok(Value::array(ary))
 }
 
 /// ### Module#attr_writer
@@ -192,7 +192,7 @@ fn attr_writer(
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::new_array(ary))
+    Ok(Value::array(ary))
 }
 
 /// ### Module#attr_accessor
@@ -217,7 +217,7 @@ fn attr_accessor(
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
     }
-    Ok(Value::new_array(ary))
+    Ok(Value::array(ary))
 }
 
 /// ### Module#module_function
@@ -245,7 +245,7 @@ fn module_function(
                 .func_id();
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
-        let res = Value::new_array_from_iter(arg.iter(len));
+        let res = Value::array_from_iter(arg.iter(len));
         Ok(res)
     }
 }
@@ -347,7 +347,7 @@ fn change_visi(
         names.push(v.expect_symbol_or_string(globals)?);
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
-    let res = Value::new_array_from_iter(arg.iter(len));
+    let res = Value::array_from_iter(arg.iter(len));
     Ok(res)
 }
 
