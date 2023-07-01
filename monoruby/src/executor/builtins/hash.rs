@@ -12,6 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "[]", index, 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
+    globals.define_builtin_func(HASH_CLASS, "fetch", fetch, -1);
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
     globals.define_builtin_func(HASH_CLASS, "each", each, 0);
@@ -51,7 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     let env = Value::new_hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
-    globals.define_builtin_singleton_func(env, "fetch", env_fetch, -1);
+    globals.define_builtin_singleton_func(env, "fetch", fetch, -1);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
 }
 
@@ -360,14 +361,16 @@ fn env_index(
     Ok(val)
 }
 
-/// ### ENV.fetch
-/// - fetch(key) -> String
-/// - fetch(key, default) -> String
-/// - fetch(key) {|key| ... } -> String
+///
+/// ### Hash#fetch
+///
+/// - fetch(key) -> object
+/// - fetch(key, default) -> object
+/// - fetch(key) {|key| ... } -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
 #[monoruby_builtin]
-fn env_fetch(
+fn fetch(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
@@ -375,19 +378,27 @@ fn env_fetch(
     len: usize,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let env_map = self_.as_hash();
+    let map = self_.as_hash();
     let s = if let Some(bh) = lfp.block() {
         MonorubyErr::check_number_of_arguments(len, 1)?;
-        match env_map.get(arg[0]) {
-            Some(s) => s,
+        match map.get(arg[0]) {
+            Some(v) => v,
             None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
         }
     } else if len == 1 {
-        env_map.get(arg[0]).unwrap()
+        match map.get(arg[0]) {
+            Some(v) => v,
+            None => {
+                return Err(MonorubyErr::keyerr(format!(
+                    "key not found: {}",
+                    globals.to_s(arg[0])
+                )))
+            }
+        }
     } else {
         MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
-        match env_map.get(arg[0]) {
-            Some(s) => s,
+        match map.get(arg[0]) {
+            Some(v) => v,
             None => arg[1],
         }
     };
@@ -426,6 +437,22 @@ mod test {
         );
         run_test("{}");
         run_test(r#"{1=>:ass, 4.5=>"Ruby", [1,2,3]=>{:f=>6}}"#);
+    }
+
+    #[test]
+    fn fetch() {
+        run_test(
+            r##"
+        h = { one: nil }
+        [h.fetch(:one), h.fetch(:two, "error")]
+        "##,
+        );
+        run_test_error(
+            r##"
+        h = { one: nil }
+        h.fetch(:two)
+        "##,
+        );
     }
 
     #[test]

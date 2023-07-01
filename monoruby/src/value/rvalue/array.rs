@@ -35,9 +35,9 @@ impl ArrayInner {
         ArrayInner(SmallVec::from_iter(iter))
     }
 
-    /*pub fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.0.clear();
-    }*/
+    }
 
     pub fn push(&mut self, value: Value) {
         self.0.push(value);
@@ -53,6 +53,10 @@ impl ArrayInner {
 
     pub fn resize(&mut self, new_len: usize, value: Value) {
         self.0.resize(new_len, value)
+    }
+
+    pub fn fill(&mut self, value: Value) {
+        self.0.fill(value);
     }
 
     /*pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {

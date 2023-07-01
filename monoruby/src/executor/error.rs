@@ -30,6 +30,7 @@ pub enum MonorubyErrKind {
     Internal,
     Regex,
     Runtime,
+    Key,
 }
 
 impl MonorubyErr {
@@ -107,6 +108,7 @@ impl MonorubyErr {
             MonorubyErrKind::Internal => "InternalError",
             MonorubyErrKind::Regex => "RegexError",
             MonorubyErrKind::Runtime => "RuntimeError",
+            MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
     }
@@ -437,6 +439,10 @@ impl MonorubyErr {
 
     pub(crate) fn indexerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index, msg)
+    }
+
+    pub(crate) fn keyerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Key, msg)
     }
 
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {

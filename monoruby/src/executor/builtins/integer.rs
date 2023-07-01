@@ -23,20 +23,21 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
 }
 
+///
 /// ### Integer#times
+///
 /// - times {|n| ... } -> self
 /// - [TODO] times -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 #[monoruby_builtin]
 fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
-    let count = match lfp.self_val().try_fixnum() {
-        Some(i) => i,
-        None => unimplemented!(),
+    let bh = lfp.expect_block()?;
+    match lfp.self_val().unpack() {
+        RV::Integer(i) => vm.invoke_block_iter1(globals, bh, (0..i).map(Value::integer))?,
+        RV::BigInt(_) => unimplemented!(),
+        _ => unreachable!(),
     };
-    let b = lfp.expect_block()?;
-    let iter = (0..count).map(|i| Value::integer(i));
-    vm.invoke_block_iter1(globals, b, iter)?;
 
     Ok(lfp.self_val())
 }
@@ -79,10 +80,12 @@ impl Iterator for NegStep {
     }
 }
 
+///
 /// ### Integer#step
-/// - step(limit, step = 1) {|n| ... } -> self[permalink][rdoc][edit]
-/// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator
-/// [NOT SUPPORTED]- step(limit, step = 1) -> Enumerator::ArithmeticSequence
+///
+/// - step(limit, step = 1) {|n| ... } -> self
+/// - [NOT SUPPORTED] step(limit, step = 1) -> Enumerator
+/// - [NOT SUPPORTED] step(limit, step = 1) -> Enumerator::ArithmeticSequence
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
 #[monoruby_builtin]
@@ -95,12 +98,7 @@ fn step(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let block = match lfp.block() {
-        None => {
-            /*let id = IdentId::get_ident_id("step");
-            let val = vm.create_enumerator(id, self_val, args.into(vm))?;
-            return Ok(val);*/
-            unimplemented!()
-        }
+        None => return Err(MonorubyErr::runtimeerr("not implemented".to_string())),
         Some(block) => block,
     };
     let cur = lfp.self_val().as_fixnum();

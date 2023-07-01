@@ -17,6 +17,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "<<", shl, 1);
     globals.define_builtin_func(ARRAY_CLASS, "[]", index, -1);
     globals.define_builtin_func(ARRAY_CLASS, "[]=", index_assign, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
+    globals.define_builtin_func(ARRAY_CLASS, "fill", fill, 1);
     globals.define_builtin_func(ARRAY_CLASS, "inject", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "reduce", inject, -1);
     globals.define_builtin_func(ARRAY_CLASS, "join", join, -1);
@@ -299,6 +301,53 @@ fn index_assign(
     } else {
         unreachable!()
     }
+}
+
+///
+/// ### Array#clear
+///
+/// - clear -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
+#[monoruby_builtin]
+fn clear(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.expect_no_block()?;
+    let mut self_val = lfp.self_val();
+    self_val.as_array_mut().clear();
+    Ok(self_val)
+}
+
+///
+/// ### Array#fill
+///
+/// - fill(val) -> self
+/// - [NOT SUPPORTED] fill {|index| ... } -> self
+/// - [NOT SUPPORTED] fill(val, start, length = nil) -> self
+/// - [NOT SUPPORTED] fill(val, range) -> self
+/// - [NOT SUPPORTED] fill(start, length = nil) {|index| ... } -> self
+/// - [NOT SUPPORTED] fill(range) {|index| ... } -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/fill.html]
+#[monoruby_builtin]
+fn fill(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    lfp.expect_no_block()?;
+    let mut self_val = lfp.self_val();
+    self_val.as_array_mut().fill(arg[0]);
+    Ok(self_val)
 }
 
 ///
@@ -871,6 +920,26 @@ mod test {
         a = [ "a", "b", "c", "d", "e" ];
         [a[0, 1], a[-1, 1], a[0, 10], a[0, 0], a[0, -1], a[10, 1], a[5], a[5, 1], a[5..10]]
         "##,
+        );
+    }
+
+    #[test]
+    fn fill() {
+        run_test(
+            r##"
+            a = [2, 3, 4, 5]
+            a.fill(100)
+            a"##,
+        );
+    }
+
+    #[test]
+    fn clear() {
+        run_test(
+            r##"
+            a = [2, 3, 4, 5]
+            a.clear
+            a"##,
         );
     }
 
