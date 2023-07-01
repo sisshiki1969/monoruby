@@ -36,7 +36,7 @@ const LBP_ARG0: i64 = LBP_SELF + 8;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub(crate) struct BlockData {
+pub struct BlockData {
     outer_lfp: LFP,
     func_data: *const FuncData,
 }
@@ -610,8 +610,8 @@ impl Executor {
         //let id2 = IdentId::get_id("$'");
         match captures.get(0) {
             Some(m) => {
-                self.sp_last_match = Some(Value::new_string_from_str(&given[m.start()..m.end()]));
-                self.sp_post_match = Some(Value::new_string_from_str(&given[m.end()..]));
+                self.sp_last_match = Some(Value::string_from_str(&given[m.start()..m.end()]));
+                self.sp_post_match = Some(Value::string_from_str(&given[m.end()..]));
             }
             None => {
                 self.sp_last_match = None;
@@ -624,7 +624,7 @@ impl Executor {
             self.sp_matches.push(
                 captures
                     .get(i)
-                    .map(|m| Value::new_string_from_str(&given[m.start()..m.end()])),
+                    .map(|m| Value::string_from_str(&given[m.start()..m.end()])),
             );
         }
     }
@@ -645,7 +645,7 @@ impl Executor {
     }
 
     pub(crate) fn get_last_matchdata(&self) -> Value {
-        Value::new_array_from_iter(self.sp_matches.iter().map(|v| v.unwrap_or_default()))
+        Value::array_from_iter(self.sp_matches.iter().map(|v| v.unwrap_or_default()))
     }
 }
 

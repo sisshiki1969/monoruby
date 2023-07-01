@@ -651,7 +651,7 @@ impl BytecodeGen {
     }
 
     fn emit_string(&mut self, dst: BcReg, s: String) {
-        self.emit_literal(dst, Value::new_string(s));
+        self.emit_literal(dst, Value::string(s));
     }
 
     fn emit_array(&mut self, ret: BcReg, src: BcReg, len: usize, loc: Loc) {

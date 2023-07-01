@@ -195,10 +195,10 @@ impl Value {
     }
 
     pub(crate) fn from_ord(ord: std::cmp::Ordering) -> Self {
-        Value::int32(ord as i32)
+        Value::i32(ord as i32)
     }
 
-    pub(crate) fn fixnum(num: i64) -> Self {
+    pub fn fixnum(num: i64) -> Self {
         Value::from((num << 1) as u64 | 0b1)
     }
 
@@ -207,7 +207,7 @@ impl Value {
         top & 0b1 == 0
     }
 
-    pub(crate) fn int32(num: i32) -> Self {
+    pub fn i32(num: i32) -> Self {
         Value::fixnum(num as i64)
     }
 
@@ -244,11 +244,11 @@ impl Value {
         }
     }
 
-    pub(crate) fn new_empty_class(id: ClassId, superclass: Option<Module>) -> Self {
+    pub(crate) fn class_empty(id: ClassId, superclass: Option<Module>) -> Self {
         RValue::new_class(id, superclass, ModuleType::RealClass).pack()
     }
 
-    pub(crate) fn new_empty_singleton_class(
+    pub(crate) fn singleton_class_empty(
         id: ClassId,
         superclass: Option<Module>,
         attach_obj: Value,
@@ -256,71 +256,71 @@ impl Value {
         RValue::new_class(id, superclass, ModuleType::Singleton(attach_obj)).pack()
     }
 
-    pub(crate) fn new_empty_module(id: ClassId, superclass: Option<Module>) -> Self {
+    pub(crate) fn module_empty(id: ClassId, superclass: Option<Module>) -> Self {
         RValue::new_module(id, superclass).pack()
     }
 
-    pub(crate) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
+    pub(crate) fn iclass(id: ClassId, superclass: Option<Module>) -> Self {
         RValue::new_iclass(id, superclass).pack()
     }
 
-    pub(crate) fn new_object(class_id: ClassId) -> Self {
+    pub fn object(class_id: ClassId) -> Self {
         RValue::new_object(class_id).pack()
     }
 
-    pub fn new_string(s: String) -> Self {
+    pub fn string(s: String) -> Self {
         RValue::new_string(s).pack()
     }
 
-    pub(crate) fn new_string_from_inner(s: StringInner) -> Self {
+    pub fn string_from_inner(s: StringInner) -> Self {
         RValue::new_string_from_inner(s).pack()
     }
 
-    pub fn new_string_from_str(b: &str) -> Self {
+    pub fn string_from_str(b: &str) -> Self {
         RValue::new_bytes_from_slice(b.as_bytes()).pack()
     }
 
-    pub(crate) fn new_string_from_slice(b: &[u8]) -> Self {
+    pub fn string_from_slice(b: &[u8]) -> Self {
         RValue::new_bytes_from_slice(b).pack()
     }
 
-    pub(crate) fn new_string_from_vec(b: Vec<u8>) -> Self {
+    pub fn string_from_vec(b: Vec<u8>) -> Self {
         RValue::new_bytes(b).pack()
     }
 
-    pub(crate) fn new_array(ary: ArrayInner) -> Self {
+    pub fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
 
-    pub(crate) fn new_empty_array() -> Self {
+    pub fn array_empty() -> Self {
         RValue::new_array(ArrayInner::new()).pack()
     }
 
-    pub fn new_array_from_vec(v: Vec<Value>) -> Self {
+    pub fn array_from_vec(v: Vec<Value>) -> Self {
         RValue::new_array(ArrayInner::from_vec(v)).pack()
     }
 
-    pub fn new_array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
+    pub fn array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
         RValue::new_array(ArrayInner::from_iter(iter)).pack()
     }
 
-    pub(crate) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
+    pub fn array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue::new_array_with_class(v, class_id).pack()
     }
 
-    pub(crate) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
+    pub fn hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue::new_hash(map).pack()
     }
 
-    pub(crate) fn new_hash_from_inner(inner: HashInner) -> Self {
+    pub fn hash_from_inner(inner: HashInner) -> Self {
         RValue::new_hash_from_inner(inner).pack()
     }
 
-    pub(crate) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
+    pub fn hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue::new_hash_with_class(map, class_id).pack()
     }
 
-    pub(crate) fn new_regexp(regexp: RegexpInner) -> Self {
+    pub fn regexp(regexp: RegexpInner) -> Self {
         RValue::new_regexp(regexp).pack()
     }
 
@@ -340,7 +340,7 @@ impl Value {
         Value::from((id.get() as u64) << 32 | TAG_SYMBOL)
     }
 
-    pub(crate) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
+    pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
@@ -352,7 +352,7 @@ impl Value {
         RValue::new_time(time).pack()
     }
 
-    pub(crate) fn new_proc(block: BlockData) -> Self {
+    pub fn new_proc(block: BlockData) -> Self {
         RValue::new_proc(block).pack()
     }
 
@@ -766,10 +766,10 @@ impl Value {
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
-            NodeKind::String(s) => Value::new_string_from_str(s),
+            NodeKind::String(s) => Value::string_from_str(s),
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_ast(node, globals));
-                Value::new_array_from_iter(iter)
+                Value::array_from_iter(iter)
             }
             NodeKind::Const {
                 toplevel,
@@ -791,7 +791,7 @@ impl Value {
             } => {
                 let start = Self::from_ast(start, globals);
                 let end = Self::from_ast(end, globals);
-                Value::new_range(start, end, *exclude_end)
+                Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v, ..) => {
                 let mut map = IndexMap::default();
@@ -800,7 +800,7 @@ impl Value {
                     let v = Self::from_ast(v, globals);
                     map.insert(HashKey(k), v);
                 }
-                Value::new_hash(map)
+                Value::hash(map)
             }
             _ => unreachable!(),
         }
@@ -814,10 +814,10 @@ impl Value {
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
             NodeKind::Symbol(sym) => Value::symbol(IdentId::get_id(sym)),
-            NodeKind::String(s) => Value::new_string_from_str(s),
+            NodeKind::String(s) => Value::string_from_str(s),
             NodeKind::Array(v, true) => {
                 let iter = v.iter().map(Self::from_ast2);
-                Value::new_array_from_iter(iter)
+                Value::array_from_iter(iter)
             }
             NodeKind::Range {
                 box start,
@@ -827,14 +827,14 @@ impl Value {
             } => {
                 let start = Self::from_ast2(start);
                 let end = Self::from_ast2(end);
-                Value::new_range(start, end, *exclude_end)
+                Value::range(start, end, *exclude_end)
             }
             NodeKind::Hash(v, true) => {
                 let mut map = IndexMap::default();
                 for (k, v) in v.iter() {
                     map.insert(HashKey(Self::from_ast2(k)), Self::from_ast2(v));
                 }
-                Value::new_hash(map)
+                Value::hash(map)
             }
             _ => unreachable!(),
         }

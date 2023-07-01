@@ -92,7 +92,7 @@ fn allocate(
     _len: usize,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let obj = Value::new_object(class_id);
+    let obj = Value::object(class_id);
     Ok(obj)
 }
 
@@ -179,7 +179,7 @@ fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {
     let class_id = class_val.as_class_id();
-    Value::new_object(class_id)
+    Value::object(class_id)
 }
 
 #[cfg(test)]

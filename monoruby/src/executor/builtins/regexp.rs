@@ -33,7 +33,7 @@ fn regexp_new(
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
     let regexp = RegexpInner::from_string(globals, string)?;
-    let val = Value::new_regexp(regexp);
+    let val = Value::regexp(regexp);
     Ok(val)
 }
 
@@ -53,7 +53,7 @@ fn regexp_escape(
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
-    let val = Value::new_string(regex::escape(&string));
+    let val = Value::string(regex::escape(&string));
     Ok(val)
 }
 

@@ -28,7 +28,7 @@ impl Codegen {
                         self.load_guard_rdi_fixnum(lhs, deopt);
                         monoasm!( &mut self.jit,
                             // fastpath
-                            addq rdi, (Value::int32(rhs as i32).get() - 1);
+                            addq rdi, (Value::i32(rhs as i32).get() - 1);
                             jo deopt;
                         );
                         self.store_rdi(ret);
@@ -37,7 +37,7 @@ impl Codegen {
                         self.load_guard_rsi_fixnum(rhs, deopt);
                         monoasm!( &mut self.jit,
                             // fastpath
-                            addq rsi, (Value::int32(lhs as i32).get() - 1);
+                            addq rsi, (Value::i32(lhs as i32).get() - 1);
                             jo deopt;
                         );
                         self.store_rsi(ret);
@@ -60,7 +60,7 @@ impl Codegen {
                         self.load_guard_rdi_fixnum(lhs, deopt);
                         monoasm!( &mut self.jit,
                             // fastpath
-                            subq rdi, (Value::int32(rhs as i32).get() - 1);
+                            subq rdi, (Value::i32(rhs as i32).get() - 1);
                             jo deopt;
                         );
                         self.store_rdi(ret);
@@ -69,7 +69,7 @@ impl Codegen {
                         self.load_guard_rsi_fixnum(rhs, deopt);
                         monoasm!( &mut self.jit,
                             // fastpath
-                            movq rdi, (Value::int32(lhs as i32).get());
+                            movq rdi, (Value::i32(lhs as i32).get());
                             subq rdi, rsi;
                             jo deopt;
                             addq rdi, 1;
@@ -431,13 +431,13 @@ impl Codegen {
                             OpMode::RI(lhs, rhs) => {
                                 self.load_guard_rdi_fixnum(lhs, deopt);
                                 monoasm!( &mut self.jit,
-                                    cmpq rdi, (Value::int32(rhs as i32).get());
+                                    cmpq rdi, (Value::i32(rhs as i32).get());
                                 );
                             }
                             OpMode::IR(lhs, rhs) => {
                                 self.load_guard_rsi_fixnum(rhs, deopt);
                                 monoasm!( &mut self.jit,
-                                    movq rdi, (Value::int32(lhs as i32).get());
+                                    movq rdi, (Value::i32(lhs as i32).get());
                                     cmpq rdi, rsi;
                                 );
                             }
@@ -569,12 +569,12 @@ impl Codegen {
             OpMode::RI(lhs, rhs) => {
                 self.load_rdi(lhs);
                 monoasm!( &mut self.jit,
-                    movq rsi, (Value::int32(rhs as i32).get());
+                    movq rsi, (Value::i32(rhs as i32).get());
                 );
             }
             OpMode::IR(lhs, rhs) => {
                 monoasm!( &mut self.jit,
-                    movq rdi, (Value::int32(lhs as i32).get());
+                    movq rdi, (Value::i32(lhs as i32).get());
                 );
                 self.load_rsi(rhs);
             }
@@ -593,13 +593,13 @@ impl Codegen {
             OpMode::RI(lhs, rhs) => {
                 self.load_guard_rdi_fixnum(lhs, deopt);
                 monoasm!( &mut self.jit,
-                    movq rsi, (Value::int32(rhs as i32).get());
+                    movq rsi, (Value::i32(rhs as i32).get());
                 );
             }
             OpMode::IR(lhs, rhs) => {
                 self.load_guard_rsi_fixnum(rhs, deopt);
                 monoasm!( &mut self.jit,
-                    movq rdi, (Value::int32(lhs as i32).get());
+                    movq rdi, (Value::i32(lhs as i32).get());
                 );
             }
         }

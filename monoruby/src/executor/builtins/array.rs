@@ -51,7 +51,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::new_array_with_class(vec![], class);
+    let obj = Value::array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)
 }
@@ -121,7 +121,7 @@ fn add(
         }
     };
     lhs.extend_from_slice(rhs);
-    Ok(Value::new_array(lhs))
+    Ok(Value::array(lhs))
 }
 
 ///
@@ -158,7 +158,7 @@ fn mul(
         }
     };
     let vec = lhs.repeat(rhs);
-    Ok(Value::new_array_from_vec(vec))
+    Ok(Value::array_from_vec(vec))
 }
 
 ///
@@ -192,7 +192,7 @@ fn shift(
         }
         let num = std::cmp::min(i as usize, ary.len());
         let iter = ary.drain(0..num);
-        Ok(Value::new_array_from_iter(iter))
+        Ok(Value::array_from_iter(iter))
     }
 }
 
@@ -395,7 +395,7 @@ fn join(_: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     let self_ = lfp.self_val();
     let mut res = String::new();
     array_join(globals, &mut res, self_.as_array(), &sep);
-    Ok(Value::new_string(res))
+    Ok(Value::string(res))
 }
 
 fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str) {
@@ -420,7 +420,7 @@ fn array_join(globals: &Globals, res: &mut String, aref: &ArrayInner, sep: &str)
 #[monoruby_builtin]
 fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
-    let mut sum = if len == 0 { Value::int32(0) } else { arg[0] };
+    let mut sum = if len == 0 { Value::i32(0) } else { arg[0] };
     let self_ = lfp.self_val();
     let iter = self_.as_array().iter().cloned();
     match lfp.block() {
@@ -551,7 +551,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -
     let iter = ary.as_array().iter().cloned();
     let block_handler = lfp.expect_block()?;
     let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
-    let res = Value::new_array_from_vec(vec);
+    let res = Value::array_from_vec(vec);
     Ok(res)
 }
 
@@ -582,7 +582,7 @@ fn flat_map(
             None => v.push(elem),
         }
     }
-    let res = Value::new_array_from_vec(v);
+    let res = Value::array_from_vec(v);
     Ok(res)
 }
 
@@ -655,7 +655,7 @@ fn reverse(
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
     let iter = self_val.as_array().iter().rev().cloned();
-    Ok(Value::new_array_from_iter(iter))
+    Ok(Value::array_from_iter(iter))
 }
 
 ///
@@ -696,7 +696,7 @@ fn transpose(
     let self_val = lfp.self_val();
     let ary = self_val.as_array();
     if ary.len() == 0 {
-        return Ok(Value::new_empty_array());
+        return Ok(Value::array_empty());
     }
     let len = ary[0]
         .is_array()
@@ -716,10 +716,10 @@ fn transpose(
             }
             temp.push(a[i]);
         }
-        let ary = Value::new_array_from_vec(temp);
+        let ary = Value::array_from_vec(temp);
         trans.push(ary);
     }
-    let res = Value::new_array_from_vec(trans);
+    let res = Value::array_from_vec(trans);
     Ok(res)
 }
 

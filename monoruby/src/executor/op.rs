@@ -414,11 +414,7 @@ fn cmp_values() {
         (Value::integer(100), Value::bool(true), false),
         (Value::integer(100), Value::bool(false), false),
         (Value::integer(100), Value::symbol(IdentId::TO_S), false),
-        (
-            Value::integer(100),
-            Value::new_string_from_str("100"),
-            false,
-        ),
+        (Value::integer(100), Value::string_from_str("100"), false),
         (
             Value::symbol(IdentId::TO_S),
             Value::symbol(IdentId::TO_S),

@@ -56,7 +56,7 @@ impl Module {
     }
 
     pub fn make_iclass(&self, superclass: Option<Module>) -> Module {
-        Value::new_iclass(self.id(), superclass).as_class()
+        Value::iclass(self.id(), superclass).as_class()
     }
 }
 

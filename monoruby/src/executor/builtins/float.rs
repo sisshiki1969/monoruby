@@ -9,8 +9,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(FLOAT_CLASS, "INFINITY", Value::float(f64::INFINITY));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX", Value::float(f64::MAX));
     globals.set_constant_by_str(FLOAT_CLASS, "MIN", Value::float(f64::MIN));
-    globals.set_constant_by_str(FLOAT_CLASS, "MAX_10_EXP", Value::int32(f64::MAX_10_EXP));
-    globals.set_constant_by_str(FLOAT_CLASS, "MAX_EXP", Value::int32(f64::MAX_EXP));
+    globals.set_constant_by_str(FLOAT_CLASS, "MAX_10_EXP", Value::i32(f64::MAX_10_EXP));
+    globals.set_constant_by_str(FLOAT_CLASS, "MAX_EXP", Value::i32(f64::MAX_EXP));
     globals.set_constant_by_str(FLOAT_CLASS, "EPSILON", Value::float(f64::EPSILON));
     globals.define_builtin_func(FLOAT_CLASS, "to_i", toi, 0);
     globals.define_builtin_func(FLOAT_CLASS, "to_f", tof, 0);

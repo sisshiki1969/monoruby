@@ -40,7 +40,7 @@ fn struct_new(
         globals.define_attr_reader(class_id, name, Visibility::Public);
         globals.define_attr_writer(class_id, name, Visibility::Public);
     }
-    class.set_instance_var(globals, "/members", Value::new_array_from_vec(arg_vec))?;
+    class.set_instance_var(globals, "/members", Value::array_from_vec(arg_vec))?;
 
     if let Some(block) = lfp.block() {
         vm.push_class_context(class_id);
@@ -115,7 +115,7 @@ fn inspect(
     }
     inspect += ">";
 
-    Ok(Value::new_string(inspect))
+    Ok(Value::string(inspect))
 }
 
 #[cfg(test)]

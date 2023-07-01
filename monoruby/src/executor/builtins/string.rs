@@ -53,7 +53,7 @@ fn add(
 ) -> Result<Value> {
     let mut b = StringInner::from_slice(lfp.self_val().as_bytes());
     b.extend_from_slice(arg[0].as_bytes());
-    Ok(Value::new_string_from_inner(b))
+    Ok(Value::string_from_inner(b))
 }
 
 ///
@@ -76,7 +76,7 @@ fn mul(
         i => i as usize,
     };
 
-    let res = Value::new_string_from_vec(lhs.repeat(count));
+    let res = Value::string_from_vec(lhs.repeat(count));
     Ok(res)
 }
 
@@ -254,7 +254,7 @@ fn rem(
     let mut ch = match chars.next() {
         Some(ch) => ch,
         None => {
-            return Ok(Value::new_string(String::new()));
+            return Ok(Value::string(String::new()));
         }
     };
     loop {
@@ -402,7 +402,7 @@ fn rem(
         next_char!(ch, chars);
     }
 
-    let res = Value::new_string(format_str);
+    let res = Value::string(format_str);
     Ok(res)
 }
 
@@ -472,17 +472,17 @@ fn index(
         };
         if len == 2 {
             let len = match arg[1].coerce_to_fixnum(globals)? {
-                0 => return Ok(Value::new_string_from_str("")),
+                0 => return Ok(Value::string_from_str("")),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
             let ch: String = lhs.chars().skip(index).take(len).collect();
-            Ok(Value::new_string_from_vec(ch.into_bytes()))
+            Ok(Value::string_from_vec(ch.into_bytes()))
         } else {
             let len = 1usize;
             let ch: String = lhs.chars().skip(index).take(len).collect();
             if ch.len() != 0 {
-                Ok(Value::new_string_from_vec(ch.into_bytes()))
+                Ok(Value::string_from_vec(ch.into_bytes()))
             } else {
                 Ok(Value::nil())
             }
@@ -492,9 +492,7 @@ fn index(
         // TODO: exclude?
         let (start, end) = match (info.start.try_fixnum(), info.end.try_fixnum()) {
             (Some(start), Some(end)) => match (conv_index(start, len), conv_index(end, len)) {
-                (Some(start), Some(end)) if start > end => {
-                    return Ok(Value::new_string_from_str(""))
-                }
+                (Some(start), Some(end)) if start > end => return Ok(Value::string_from_str("")),
                 (Some(start), Some(end)) => (start, end),
                 _ => return Ok(Value::nil()),
             },
@@ -505,7 +503,7 @@ fn index(
             }
         };
         let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
-        Ok(Value::new_string(s))
+        Ok(Value::string(s))
     } else if let Some(info) = arg[0].is_regex() {
         let nth = if len == 1 {
             0
@@ -518,17 +516,15 @@ fn index(
                 vm.save_captures(&captures, &lhs);
                 let len = captures.len() as i64;
                 if nth == 0 {
-                    Ok(Value::new_string_from_str(
-                        captures.get(0).unwrap().as_str(),
-                    ))
+                    Ok(Value::string_from_str(captures.get(0).unwrap().as_str()))
                 } else if nth > 0 {
                     match captures.get(nth as usize) {
-                        Some(m) => Ok(Value::new_string_from_str(m.as_str())),
+                        Some(m) => Ok(Value::string_from_str(m.as_str())),
                         None => Ok(Value::nil()),
                     }
                 } else {
                     match len + nth {
-                        i if i > 0 => Ok(Value::new_string_from_str(
+                        i if i > 0 => Ok(Value::string_from_str(
                             captures.get(i as usize).unwrap().as_str(),
                         )),
                         _ => Ok(Value::nil()),
@@ -618,10 +614,10 @@ fn split(
                 let end_with = string.ends_with(|c: char| c.is_ascii_whitespace());
                 let mut v: Vec<_> = string
                     .split_ascii_whitespace()
-                    .map(Value::new_string_from_str)
+                    .map(Value::string_from_str)
                     .collect();
                 if end_with {
-                    v.push(Value::new_string_from_str(""))
+                    v.push(Value::string_from_str(""))
                 }
                 v
             } else if lim == 0 {
@@ -633,17 +629,17 @@ fn split(
                         break;
                     }
                 }
-                vec.into_iter().map(Value::new_string_from_str).collect()
+                vec.into_iter().map(Value::string_from_str).collect()
             } else {
                 string
                     .trim_start()
                     .splitn(lim as usize, |c: char| c.is_ascii_whitespace())
                     .map(|s| s.trim_start())
-                    .map(Value::new_string_from_str)
+                    .map(Value::string_from_str)
                     .collect()
             }
         } else if lim < 0 {
-            string.split(&sep).map(Value::new_string_from_str).collect()
+            string.split(&sep).map(Value::string_from_str).collect()
         } else if lim == 0 {
             let mut vec: Vec<&str> = string.split(&sep).collect();
             while let Some(s) = vec.last() {
@@ -653,11 +649,11 @@ fn split(
                     break;
                 }
             }
-            vec.into_iter().map(Value::new_string_from_str).collect()
+            vec.into_iter().map(Value::string_from_str).collect()
         } else {
             string
                 .splitn(lim as usize, &sep)
-                .map(Value::new_string_from_str)
+                .map(Value::string_from_str)
                 .collect()
         };
         match lfp.block() {
@@ -667,7 +663,7 @@ fn split(
                 vm.temp_clear(t);
                 Ok(lfp.self_val())
             }
-            None => Ok(Value::new_array_from_vec(v)),
+            None => Ok(Value::array_from_vec(v)),
         }
     } else if let Some(re) = arg0.is_regex() {
         let lim = if len > 1 {
@@ -713,13 +709,13 @@ fn split(
                 }
             }
         }
-        let iter = res.into_iter().map(|s| Value::new_string_from_str(s));
+        let iter = res.into_iter().map(|s| Value::string_from_str(s));
         match lfp.block() {
             Some(b) => {
                 vm.invoke_block_iter1(globals, b, iter)?;
                 Ok(lfp.self_val())
             }
-            None => Ok(Value::new_array_from_iter(iter)),
+            None => Ok(Value::array_from_iter(iter)),
         }
     } else {
         Err(MonorubyErr::is_not_regexp_nor_string(globals, arg0))
@@ -736,7 +732,7 @@ fn split(
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let (res, _) = sub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
-    Ok(Value::new_string(res))
+    Ok(Value::string(res))
 }
 
 ///
@@ -789,7 +785,7 @@ fn sub_main(
 #[monoruby_builtin]
 fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let (res, _) = gsub_main(vm, globals, lfp.self_val(), arg, len, lfp.block())?;
-    Ok(Value::new_string(res))
+    Ok(Value::string(res))
 }
 
 ///
@@ -937,14 +933,10 @@ fn ljust(
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Ok(Value::new_string(lhs.to_string()));
+        return Ok(Value::string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Ok(Value::new_string(format!(
-        "{}{}",
-        lhs,
-        gen_pad(&padding, tail)
-    )))
+    Ok(Value::string(format!("{}{}", lhs, gen_pad(&padding, tail))))
 }
 
 ///
@@ -976,14 +968,10 @@ fn rjust(
     let width = arg[0].coerce_to_fixnum(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
-        return Ok(Value::new_string(lhs.to_string()));
+        return Ok(Value::string(lhs.to_string()));
     }
     let tail = width as usize - str_len;
-    Ok(Value::new_string(format!(
-        "{}{}",
-        gen_pad(&padding, tail),
-        lhs
-    )))
+    Ok(Value::string(format!("{}{}", gen_pad(&padding, tail), lhs)))
 }
 
 ///
@@ -1003,8 +991,8 @@ fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) 
     let string = receiver.expect_string(globals)?;
     let ary = string
         .split_inclusive('\n')
-        .map(|line| Value::new_string_from_str(line));
-    Ok(Value::new_array_from_iter(ary))
+        .map(|line| Value::string_from_str(line));
+    Ok(Value::array_from_iter(ary))
 }
 
 ///
@@ -1050,7 +1038,7 @@ fn to_i(
     } else if let Ok(b) = BigInt::from_str_radix(&s, radix) {
         Value::bigint(b)
     } else {
-        Value::int32(0)
+        Value::i32(0)
     };
     Ok(num)
 }
@@ -1093,7 +1081,7 @@ fn upcase(
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let self_val = lfp.self_val();
     let s = self_val.as_str().as_ref().to_uppercase();
-    Ok(Value::new_string_from_vec(s.into_bytes()))
+    Ok(Value::string_from_vec(s.into_bytes()))
 }
 
 ///
@@ -1111,7 +1099,7 @@ fn tr(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
     assert_eq!(1, from.chars().count());
     assert_eq!(1, to.chars().count());
     let res = rec.replace(&from, &to);
-    Ok(Value::new_string(res))
+    Ok(Value::string(res))
 }
 
 #[cfg(test)]

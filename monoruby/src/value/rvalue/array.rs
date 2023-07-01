@@ -195,12 +195,12 @@ impl ArrayInner {
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
-            Value::new_empty_array()
+            Value::array_empty()
         } else {
             let len = len as usize;
             let start = index;
             let end = std::cmp::min(self_len, start + len);
-            Value::new_array_from_iter(self[start..end].iter().cloned())
+            Value::array_from_iter(self[start..end].iter().cloned())
         };
         Ok(val)
     }
@@ -220,7 +220,7 @@ impl ArrayInner {
             let start = if len < i_start {
                 return Ok(Value::nil());
             } else if len == i_start {
-                return Ok(Value::new_empty_array());
+                return Ok(Value::array_empty());
             } else {
                 i_start as usize
             };
@@ -236,9 +236,9 @@ impl ArrayInner {
                 (len + i_end + if range.exclude_end() { 0 } else { 1 }) as usize
             };
             if start >= end {
-                return Ok(Value::new_empty_array());
+                return Ok(Value::array_empty());
             }
-            Ok(Value::new_array_from_iter(self[start..end].iter().cloned()))
+            Ok(Value::array_from_iter(self[start..end].iter().cloned()))
         } else {
             Err(MonorubyErr::no_implicit_conversion(
                 globals,

@@ -584,7 +584,7 @@ impl Codegen {
                     }
                 }
                 TraceIr::Integer(ret, i) => {
-                    ctx.link_const(ret, Value::int32(i));
+                    ctx.link_const(ret, Value::i32(i));
                 }
                 TraceIr::Symbol(ret, id) => {
                     ctx.link_const(ret, Value::symbol(id));

@@ -781,7 +781,7 @@ impl BytecodeGen {
     fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, op: String, loc: Loc) -> Result<()> {
         let len = nodes.len() + 1;
         let arg = self.next_reg();
-        self.emit_literal(arg.into(), Value::new_string(format!("(?{op})")));
+        self.emit_literal(arg.into(), Value::string(format!("(?{op})")));
         self.push();
         for expr in nodes {
             self.push_expr(expr)?;
@@ -825,7 +825,7 @@ impl BytecodeGen {
             Ok(re) => re,
             Err(err) => return Err(MonorubyErr::syntax(err, loc, self.sourceinfo.clone())),
         };
-        Ok(Value::new_regexp(re))
+        Ok(Value::regexp(re))
     }
 }
 

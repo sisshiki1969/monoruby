@@ -119,7 +119,7 @@ impl RegexpInner {
             };
 
             let mut res = given.to_string();
-            let matched = Value::new_string_from_str(matched_str);
+            let matched = Value::string_from_str(matched_str);
             let result = vm.invoke_block_once(globals, block_handler, &[matched])?;
             let s = globals.to_s(result);
             res.replace_range(start..end, &s);
@@ -192,8 +192,8 @@ impl RegexpInner {
                         )));
                     }
                 };
-                let matched = Value::new_string_from_str(matched_str);
-                let result: Value = vm.invoke_block(globals, data.clone(), &[matched])?;
+                let matched = Value::string_from_str(matched_str);
+                let result = vm.invoke_block(globals, data.clone(), &[matched])?;
                 let replace = globals.to_s(result);
                 range.push((start, end, replace));
             }
@@ -234,16 +234,14 @@ impl RegexpInner {
             Ok(Some(captures)) => {
                 vm.save_captures(&captures, given);
                 if let Some(block_handler) = block {
-                    let matched = Value::new_string_from_str(captures.get(0).unwrap().as_str());
+                    let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
                     vm.invoke_block_once(globals, block_handler, &[matched])
                 } else {
                     let mut ary = ArrayInner::new();
                     for i in 0..captures.len() {
-                        ary.push(Value::new_string_from_str(
-                            captures.get(i).unwrap().as_str(),
-                        ));
+                        ary.push(Value::string_from_str(captures.get(i).unwrap().as_str()));
                     }
-                    Ok(Value::new_array(ary))
+                    Ok(Value::array(ary))
                 }
             }
             Err(err) => Err(MonorubyErr::internalerr(format!(
