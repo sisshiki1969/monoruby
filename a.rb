@@ -1,9 +1,12 @@
-      def initialize(argv)
-        @argv = argv.dup
-        @options = DEFAULT_OPTIONS.dup
-        parse_option until @argv.empty?
-        error "ROM file is not given" unless @options[:romfile]
-      rescue Invalid => e
-        puts "[FATAL] #{ e }"
-        exit 1
-      end
+class Foo
+  def foo(arg)
+    "foo called with arg #{arg}"
+  end
+end
+
+m = Foo.new.method(:foo) # => #<Method: Foo#foo>
+        res = []
+        res << m[1]       # => "foo called with arg 1"
+        res << m.call(2)  # => "foo called with arg 2"
+        res << (m === 3)    # => "foo called with arg 3"
+        puts res

@@ -534,7 +534,7 @@ impl Executor {
         len: usize,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func2(globals, func_id, receiver, args, len)
+            self.invoke_func(globals, func_id, receiver, args, len)
         } else {
             Ok(Value::nil())
         }
@@ -543,7 +543,7 @@ impl Executor {
     ///
     /// Invoke func with *args*: Args.
     ///
-    fn invoke_func2(
+    fn invoke_func(
         &mut self,
         globals: &mut Globals,
         func_id: FuncId,

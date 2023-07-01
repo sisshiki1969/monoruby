@@ -750,6 +750,11 @@ impl Value {
         assert_eq!(ObjKind::PROC, self.rvalue().kind());
         self.rvalue().as_proc()
     }
+
+    pub fn as_method(&self) -> &MethodInner {
+        assert_eq!(ObjKind::METHOD, self.rvalue().kind());
+        self.rvalue().as_method()
+    }
 }
 
 impl Value {

@@ -9,6 +9,7 @@ mod hash;
 mod integer;
 mod io;
 mod math;
+mod method;
 mod module;
 mod object;
 mod proc;
@@ -157,6 +158,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     range::init(globals);
     proc::init(globals);
     exception::init(globals);
+    method::init(globals);
     time::init(globals);
     io::init(globals);
     struct_class::init(globals);

@@ -188,6 +188,7 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::REGEXP => {}
             ObjKind::IO => {}
             ObjKind::EXCEPTION => {}
+            ObjKind::METHOD => self.as_method().receiver().mark(alloc),
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -375,6 +376,9 @@ impl RValue {
                     },
                     ObjKind::EXCEPTION => ObjKind {
                         exception: self.kind.exception.clone(),
+                    },
+                    ObjKind::METHOD => ObjKind {
+                        method: self.kind.method.clone(),
                     },
                     _ => unreachable!("clone()"),
                 }

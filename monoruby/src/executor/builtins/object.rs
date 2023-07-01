@@ -77,7 +77,7 @@ fn object_new(
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
-        vm.invoke_func2(globals, func_id, obj, arg, len)?;
+        vm.invoke_func(globals, func_id, obj, arg, len)?;
     };
     Ok(obj)
 }
