@@ -4,82 +4,65 @@ use crate::*;
 // Fiber class
 //
 
-pub(super) fn init(globals: &mut Globals, klass: ClassId) {
-    globals.define_builtin_class_under_obj("Fiber", klass);
-    globals.define_builtin_class_func(klass, "new", fiber_new, -1);
-    globals.define_builtin_class_func(klass, "yield", fiber_yield, -1);
-    globals.define_builtin_func(klass, "resume", resume, 0);
+pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Fiber", FIBER_CLASS);
+    globals.define_builtin_class_func(FIBER_CLASS, "new", fiber_new, 0);
+    globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield, -1);
+    globals.define_builtin_func(FIBER_CLASS, "resume", resume, -1);
 }
 
 ///
-/// ### Array.new
+/// ### Fiber.new
 ///
-/// - new(size = 0, val = nil) -> Array
-/// - new(ary) -> Array
-/// - new(size) {|index| ... } -> Array
+/// - new {|obj| ... } -> Fiber
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
-///
-/// TODO: Support arguments.
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
 fn fiber_new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: LFP,
+    _arg: Arg,
+    _len: usize,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::array_with_class(vec![], class);
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
-    Ok(obj)
+    Ok(Value::nil())
 }
 
 ///
-/// ### Array.new
+/// ### Fiber.yield
 ///
-/// - new(size = 0, val = nil) -> Array
-/// - new(ary) -> Array
-/// - new(size) {|index| ... } -> Array
+/// - yield(*arg = nil) -> object
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
-///
-/// TODO: Support arguments.
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
 fn fiber_yield(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: LFP,
+    _arg: Arg,
+    _len: usize,
 ) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::array_with_class(vec![], class);
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
-    Ok(obj)
+    Ok(Value::nil())
 }
 
 ///
-/// ### Array#length
+/// ### Fiber#resume
 ///
-/// - length -> Integer
-/// - size -> Integer
+/// - resume(*arg = nil) -> object
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/length.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/resume.html]
 #[monoruby_builtin]
 fn resume(
     _vm: &mut Executor,
     _globals: &mut Globals,
-    lfp: LFP,
+    _lfp: LFP,
     _arg: Arg,
-    len: usize,
+    _len: usize,
 ) -> Result<Value> {
-    MonorubyErr::check_number_of_arguments(len, 0)?;
-    let len = lfp.self_val().as_array().len();
-    Ok(Value::integer(len as i64))
+    Ok(Value::nil())
 }
 
 #[cfg(test)]
 mod test {
-    use super::tests::*;
+    //use super::tests::*;
 }

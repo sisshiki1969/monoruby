@@ -6,6 +6,7 @@ use num::ToPrimitive;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Integer", INTEGER_CLASS);
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func(INTEGER_CLASS, "step", step, -1);

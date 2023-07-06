@@ -5,6 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Array", ARRAY_CLASS);
     globals.define_builtin_class_func(ARRAY_CLASS, "new", new, -1);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);

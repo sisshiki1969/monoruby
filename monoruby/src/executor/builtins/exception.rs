@@ -4,8 +4,8 @@ use crate::*;
 // Exception class
 //
 
-pub(super) fn init(globals: &mut Globals, klass: ClassId) {
-    let exception_class = globals.define_builtin_class_under_obj("Exception", klass);
+pub(super) fn init(globals: &mut Globals) {
+    let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
     let standarderr = globals.define_class_by_str("StandardError", exception_class, OBJECT_CLASS);
     globals.define_class_by_str("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SecurityError", standarderr, OBJECT_CLASS);

@@ -5,6 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Hash", HASH_CLASS);
     globals.define_builtin_class_func(HASH_CLASS, "new", new, -1);
     globals.define_builtin_func(HASH_CLASS, "size", size, 0);
     globals.define_builtin_func(HASH_CLASS, "length", size, 0);

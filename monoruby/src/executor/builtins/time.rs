@@ -7,6 +7,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Time", TIME_CLASS);
     globals.define_builtin_class_func(TIME_CLASS, "new", now, 0);
     globals.define_builtin_class_func(TIME_CLASS, "now", now, 0);
     globals.define_builtin_func(TIME_CLASS, "inspect", inspect, 0);

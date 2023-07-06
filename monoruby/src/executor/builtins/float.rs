@@ -5,6 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Float", FLOAT_CLASS);
     globals.set_constant_by_str(FLOAT_CLASS, "NAN", Value::float(f64::NAN));
     globals.set_constant_by_str(FLOAT_CLASS, "INFINITY", Value::float(f64::INFINITY));
     globals.set_constant_by_str(FLOAT_CLASS, "MAX", Value::float(f64::MAX));
