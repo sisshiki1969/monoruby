@@ -5,6 +5,7 @@ use crate::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_under_obj("Method", METHOD_CLASS);
     globals.define_builtin_func(METHOD_CLASS, "call", call, -1);
     globals.define_builtin_func(METHOD_CLASS, "[]", call, -1);
     globals.define_builtin_func(METHOD_CLASS, "===", call, -1);
