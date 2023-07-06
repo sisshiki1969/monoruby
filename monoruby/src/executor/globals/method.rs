@@ -54,7 +54,7 @@ impl Globals {
         func_id
     }
 
-    pub(in crate::executor) fn define_builtin_func_inlinable(
+    pub(in crate::executor) fn define_builtin_inline_func(
         &mut self,
         class_id: ClassId,
         name: &str,
@@ -95,7 +95,7 @@ impl Globals {
         self.define_builtin_func(class_id, name, address, arity)
     }
 
-    pub(in crate::executor) fn define_builtin_module_func_inlinable(
+    pub(in crate::executor) fn define_builtin_module_inline_func(
         &mut self,
         class_id: ClassId,
         name: &str,

@@ -3,6 +3,7 @@ use super::*;
 mod array;
 mod class;
 mod exception;
+mod fiber;
 mod file;
 mod float;
 mod hash;
@@ -32,20 +33,10 @@ pub use time::TimeInner;
 //
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
-    assert_eq!(
-        OBJECT_CLASS,
-        globals
-            .define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS)
-            .id()
-    );
-    let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS);
-    assert_eq!(MODULE_CLASS, module.id());
-    assert_eq!(
-        CLASS_CLASS,
-        globals
-            .define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS)
-            .id()
-    );
+    object::init(globals, OBJECT_CLASS);
+    module::init(globals, MODULE_CLASS);
+    class::init(globals, CLASS_CLASS);
+    exception::init(globals, EXCEPTION_CLASS);
     assert_eq!(
         NIL_CLASS,
         globals
@@ -131,41 +122,23 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
             .id()
     );
 
-    let io_class = globals.define_builtin_class_under_obj("IO", IO_CLASS);
-    assert_eq!(IO_CLASS, io_class.id());
-
-    let exception_class = globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS);
-    assert_eq!(EXCEPTION_CLASS, exception_class.id());
-
-    let math_class = globals.define_module("Math").id();
-    let process_class = globals.define_module("Process").id();
-    let file_class = globals
-        .define_class_by_str("File", io_class, OBJECT_CLASS)
-        .id();
-    let random_class = globals
-        .define_class_by_str("Random", OBJECT_CLASS.get_obj(globals), OBJECT_CLASS)
-        .id();
-
-    object::init(globals);
     integer::init(globals);
     float::init(globals);
-    module::init(globals);
-    class::init(globals);
     string::init(globals);
     array::init(globals);
     hash::init(globals);
     regexp::init(globals);
     range::init(globals);
     proc::init(globals);
-    exception::init(globals);
     method::init(globals);
+    fiber::init(globals, FIBER_CLASS);
     time::init(globals);
     io::init(globals);
     struct_class::init(globals);
-    file::init(globals, file_class);
-    math::init(globals, math_class);
-    process::init(globals, process_class);
-    random::init(globals, random_class);
+    file::init(globals);
+    math::init(globals);
+    process::init(globals);
+    random::init(globals);
 
     let stdin = Value::new_io_stdin();
     globals.set_constant_by_str(OBJECT_CLASS, "STDIN", stdin);

@@ -5,18 +5,17 @@ use num::ToPrimitive;
 // Math class
 //
 
-pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.set_constant_by_str(class_id, "PI", Value::float(3.141592653589793));
-    globals.define_builtin_module_func_inlinable(
-        class_id,
-        "sqrt",
-        sqrt,
-        1,
-        math_sqrt,
-        analysis_sqrt,
-    );
-    globals.define_builtin_module_func_inlinable(class_id, "cos", cos, 1, math_cos, analysis_cos);
-    globals.define_builtin_module_func_inlinable(class_id, "sin", sin, 1, math_sin, analysis_sin);
+pub(super) fn init(globals: &mut Globals) {
+    let klass = globals.define_module("Math").id();
+    let standarderr = globals
+        .get_constant(OBJECT_CLASS, IdentId::get_id("StandardError"))
+        .unwrap()
+        .as_class();
+    globals.define_class_by_str("DomainError", standarderr, klass);
+    globals.set_constant_by_str(klass, "PI", Value::float(3.141592653589793));
+    globals.define_builtin_module_inline_func(klass, "sqrt", sqrt, 1, math_sqrt, analysis_sqrt);
+    globals.define_builtin_module_inline_func(klass, "cos", cos, 1, math_cos, analysis_cos);
+    globals.define_builtin_module_inline_func(klass, "sin", sin, 1, math_sin, analysis_sin);
 }
 
 /// ### Math.#sqrt

@@ -24,6 +24,7 @@ pub const IO_CLASS: ClassId = ClassId::new(17);
 pub const EXCEPTION_CLASS: ClassId = ClassId::new(18);
 pub const STRUCT_CLASS: ClassId = ClassId::new(19);
 pub const METHOD_CLASS: ClassId = ClassId::new(20);
+pub const FIBER_CLASS: ClassId = ClassId::new(21);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(transparent)]
@@ -71,6 +72,7 @@ impl std::fmt::Debug for ClassId {
             18 => write!(f, "EXCEPTION"),
             19 => write!(f, "STRUCT"),
             20 => write!(f, "METHOD"),
+            21 => write!(f, "FIBER"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -170,8 +172,12 @@ impl Globals {
         self.store[class_id].object.unwrap()
     }
 
+    pub fn object_class(&self) -> Module {
+        self.get_class_obj(OBJECT_CLASS)
+    }
+
     pub(crate) fn define_module(&mut self, name: &str) -> Module {
-        let object_class = OBJECT_CLASS.get_obj(self);
+        let object_class = self.object_class();
         let name_id = IdentId::get_id(name);
         self.define_class(name_id, Some(object_class), OBJECT_CLASS, true)
     }
@@ -181,7 +187,7 @@ impl Globals {
         name: &str,
         class_id: ClassId,
     ) -> Module {
-        let object_class = OBJECT_CLASS.get_obj(self);
+        let object_class = self.object_class();
         self.define_builtin_class_by_str(name, class_id, Some(object_class), OBJECT_CLASS)
     }
 
@@ -193,6 +199,12 @@ impl Globals {
     ) -> Module {
         let name_id = IdentId::get_id(name);
         self.define_class(name_id, superclass, parent, false)
+    }
+
+    pub(crate) fn define_class_under_obj(&mut self, name: &str) -> Module {
+        let name_id = IdentId::get_id(name);
+        let object_class = self.object_class();
+        self.define_class(name_id, Some(object_class), OBJECT_CLASS, false)
     }
 
     pub(in crate::executor) fn define_builtin_class_by_str(
@@ -224,7 +236,7 @@ impl Globals {
         let class_id = self.store.add_class();
         let superclass = match superclass {
             Some(class) => class,
-            None => OBJECT_CLASS.get_obj(self),
+            None => self.object_class(),
         };
         let class_obj = Value::class_empty(class_id, Some(superclass));
         self.store[class_id].object = Some(class_obj.as_class());

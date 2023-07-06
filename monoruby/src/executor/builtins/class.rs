@@ -5,18 +5,13 @@ use monoruby_attr::monoruby_builtin;
 // Class class
 //
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
-    globals.define_builtin_func_inlinable(
-        CLASS_CLASS,
-        "new",
-        new,
-        -1,
-        inline_class_new,
-        analysis_class_new,
-    );
-    globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+pub(super) fn init(globals: &mut Globals, klass: ClassId) {
+    let module = MODULE_CLASS.get_obj(globals);
+    globals.define_builtin_class_by_str("Class", klass, module, OBJECT_CLASS);
+    globals.define_builtin_class_func(klass, "new", class_new, -1);
+    globals.define_builtin_inline_func(klass, "new", new, -1, inline_class_new, analysis_class_new);
+    globals.define_builtin_func(klass, "superclass", superclass, 0);
+    globals.define_builtin_func(klass, "allocate", allocate, 0);
 }
 
 /// ### Class.new

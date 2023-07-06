@@ -5,13 +5,20 @@ use std::{fs::File, io::Write};
 // File class
 //
 
-pub(super) fn init(globals: &mut Globals, class_id: ClassId) {
-    globals.define_builtin_class_func(class_id, "write", write, 2);
-    globals.define_builtin_class_func(class_id, "read", read, 1);
-    globals.define_builtin_class_func(class_id, "join", join, -1);
-    globals.define_builtin_class_func(class_id, "expand_path", expand_path, -1);
-    globals.define_builtin_class_func(class_id, "dirname", dirname, 1);
-    globals.define_builtin_class_func(class_id, "exist?", exist, 1);
+pub(super) fn init(globals: &mut Globals) {
+    let io_class = globals
+        .get_constant(OBJECT_CLASS, IdentId::get_id("IO"))
+        .unwrap()
+        .as_class();
+    let klass = globals
+        .define_class_by_str("File", io_class, OBJECT_CLASS)
+        .id();
+    globals.define_builtin_class_func(klass, "write", write, 2);
+    globals.define_builtin_class_func(klass, "read", read, 1);
+    globals.define_builtin_class_func(klass, "join", join, -1);
+    globals.define_builtin_class_func(klass, "expand_path", expand_path, -1);
+    globals.define_builtin_class_func(klass, "dirname", dirname, 1);
+    globals.define_builtin_class_func(klass, "exist?", exist, 1);
 }
 
 ///

@@ -4,8 +4,8 @@ use crate::*;
 // Exception class
 //
 
-pub(super) fn init(globals: &mut Globals) {
-    let exception_class = EXCEPTION_CLASS.get_obj(globals);
+pub(super) fn init(globals: &mut Globals, klass: ClassId) {
+    let exception_class = globals.define_builtin_class_under_obj("Exception", klass);
     let standarderr = globals.define_class_by_str("StandardError", exception_class, OBJECT_CLASS);
     globals.define_class_by_str("NoMemoryError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("SecurityError", standarderr, OBJECT_CLASS);
@@ -22,11 +22,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("KeyError", indexerr, OBJECT_CLASS);
 
     globals.define_class_by_str("LocalJumpError", standarderr, OBJECT_CLASS);
-    let math_class = globals
-        .get_constant(OBJECT_CLASS, IdentId::get_id("Math"))
-        .unwrap()
-        .as_class_id();
-    globals.define_class_by_str("DomainError", standarderr, math_class);
 
     let nameerr = globals.define_class_by_str("NameError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("NoMethodError", nameerr, OBJECT_CLASS);

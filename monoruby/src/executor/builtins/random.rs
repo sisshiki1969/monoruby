@@ -5,9 +5,10 @@ use num::BigInt;
 // Random class
 //
 
-pub(super) fn init(globals: &mut Globals, class: ClassId) {
-    globals.define_builtin_class_func(class, "srand", srand, -1);
-    globals.define_builtin_class_func(class, "rand", rand, 0);
+pub(super) fn init(globals: &mut Globals) {
+    let klass = globals.define_class_under_obj("Random").id();
+    globals.define_builtin_class_func(klass, "srand", srand, -1);
+    globals.define_builtin_class_func(klass, "rand", rand, 0);
 }
 
 /// ### Random.srand

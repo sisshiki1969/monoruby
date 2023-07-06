@@ -1,7 +1,7 @@
 use crate::*;
 
 pub(crate) fn init(globals: &mut Globals) {
-    let module = globals.define_class_by_str("Struct", OBJECT_CLASS.get_obj(globals), OBJECT_CLASS);
+    let module = globals.define_class_under_obj("Struct");
     globals.define_builtin_class_func(module.id(), "new", struct_new, -1);
 }
 

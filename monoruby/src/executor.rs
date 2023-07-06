@@ -130,8 +130,9 @@ impl Cref {
 ///
 #[repr(C)]
 pub struct Executor {
-    cfp: Option<CFP>, // [rbx]
-    lfp_top: LFP,     // [rbx + 8]
+    cfp: Option<CFP>,  // [rbx]
+    lfp_top: LFP,      // [rbx + 8]
+    rsp_save: *mut u8, // [rbx + 16]
     lexical_class: Vec<Vec<Cref>>,
     sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
@@ -146,6 +147,7 @@ impl std::default::Default for Executor {
         Self {
             cfp: None,
             lfp_top: LFP::default(),
+            rsp_save: std::ptr::null_mut(),
             lexical_class: vec![vec![]],
             sp_last_match: None,
             sp_post_match: None,
@@ -583,7 +585,7 @@ impl Executor {
                         superclass.expect_class(globals)?;
                         superclass.as_class()
                     }
-                    None => OBJECT_CLASS.get_obj(globals),
+                    None => globals.object_class(),
                 };
                 globals.define_class(name, Some(superclass), parent, is_module == 1)
             }

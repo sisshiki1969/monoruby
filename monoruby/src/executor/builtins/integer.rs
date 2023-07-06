@@ -9,7 +9,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "chr", chr, 0);
     globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
     globals.define_builtin_func(INTEGER_CLASS, "step", step, -1);
-    globals.define_builtin_func_inlinable(
+    globals.define_builtin_inline_func(
         INTEGER_CLASS,
         "to_f",
         to_f,
