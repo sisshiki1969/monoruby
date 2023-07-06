@@ -33,9 +33,9 @@ pub use time::TimeInner;
 //
 
 pub(crate) fn init_builtins(globals: &mut Globals) {
-    object::init(globals, OBJECT_CLASS);
-    module::init(globals, MODULE_CLASS);
-    class::init(globals, CLASS_CLASS);
+    object::init(globals);
+    module::init(globals);
+    class::init(globals);
     exception::init(globals);
     integer::init(globals);
     float::init(globals);

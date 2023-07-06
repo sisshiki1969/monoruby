@@ -6,42 +6,59 @@ use std::io::Write;
 // Object class
 //
 
-pub(super) fn init(globals: &mut Globals, klass: ClassId) {
-    globals.define_builtin_class_by_str("Object", klass, None, OBJECT_CLASS);
+pub(super) fn init(globals: &mut Globals) {
+    globals.define_builtin_class_by_str("Object", OBJECT_CLASS, None, OBJECT_CLASS);
     //globals.define_builtin_class_func(OBJECT_CLASS, "new", object_new, -1);
-    globals.define_builtin_func(klass, "inspect", inspect, 0);
-    globals.define_builtin_func(klass, "p", p, -1);
-    globals.define_builtin_func(klass, "class", class, 0);
-    globals.define_builtin_func(klass, "singleton_class", singleton_class, 0);
-    globals.define_builtin_func(klass, "respond_to?", respond_to, 1);
-    globals.define_builtin_func(klass, "instance_of?", instance_of, 1);
-    globals.define_builtin_func(klass, "is_a?", is_a, 1);
-    globals.define_builtin_func(klass, "kind_of?", is_a, 1);
-    globals.define_builtin_inline_func(klass, "nil?", nil, 0, object_nil, analysis_object_nil);
-    globals.define_builtin_func(klass, "dup", dup, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "p", p, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "class", class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "singleton_class", singleton_class, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "respond_to?", respond_to, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+    globals.define_builtin_inline_func(
+        OBJECT_CLASS,
+        "nil?",
+        nil,
+        0,
+        object_nil,
+        analysis_object_nil,
+    );
+    globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(
-        klass,
+        OBJECT_CLASS,
         "instance_variable_defined?",
         instance_variable_defined,
         1,
     );
-    globals.define_builtin_func(klass, "instance_variable_set", instance_variable_set, 2);
-    globals.define_builtin_func(klass, "instance_variable_get", instance_variable_get, 1);
-    globals.define_builtin_func(klass, "puts", puts, -1);
-    globals.define_builtin_func(klass, "print", print, -1);
-    globals.define_builtin_func(klass, "block_given?", block_given, 0);
-    globals.define_builtin_func(klass, "to_s", to_s, 0);
-    globals.define_builtin_func(klass, "rand", rand, -1);
-    globals.define_builtin_func(klass, "method", method, 1);
-    globals.define_builtin_func(klass, "Integer", kernel_integer, 1);
-    globals.define_builtin_func(klass, "require", require, 1);
-    globals.define_builtin_func(klass, "require_relative", require_relative, 1);
-    globals.define_builtin_func(klass, "system", system, -1);
-    globals.define_builtin_func(klass, "`", command, 1);
-    globals.define_builtin_func(klass, "abort", abort, -1);
-    globals.define_builtin_func(klass, "__dir__", dir_, 0);
-    globals.define_builtin_func(klass, "__assert", assert, 2);
-    globals.define_builtin_func(klass, "__dump", dump, 0);
+    globals.define_builtin_func(
+        OBJECT_CLASS,
+        "instance_variable_set",
+        instance_variable_set,
+        2,
+    );
+    globals.define_builtin_func(
+        OBJECT_CLASS,
+        "instance_variable_get",
+        instance_variable_get,
+        1,
+    );
+    globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "block_given?", block_given, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "method", method, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "Integer", kernel_integer, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "require", require, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "require_relative", require_relative, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "system", system, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "`", command, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "abort", abort, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "__dir__", dir_, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "__assert", assert, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "__dump", dump, 0);
 }
 
 ///
