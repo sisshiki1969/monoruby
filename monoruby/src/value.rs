@@ -360,6 +360,10 @@ impl Value {
         RValue::new_method(receiver, func_id).pack()
     }
 
+    pub fn new_fiber(block_data: BlockData) -> Self {
+        RValue::new_fiber(block_data).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Integer(i)
@@ -754,6 +758,11 @@ impl Value {
     pub fn as_method(&self) -> &MethodInner {
         assert_eq!(ObjKind::METHOD, self.rvalue().kind());
         self.rvalue().as_method()
+    }
+
+    pub fn as_fiber(&self) -> &FiberInner {
+        assert_eq!(ObjKind::FIBER, self.rvalue().kind());
+        self.rvalue().as_fiber()
     }
 }
 

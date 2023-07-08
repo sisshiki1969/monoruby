@@ -67,6 +67,7 @@ impl std::fmt::Debug for RValue {
                     13 => format!("REGEXP({:?})", self.kind.regexp),
                     14 => format!("IO({:?})", self.kind.io),
                     15 => format!("METHOD({:?})", self.kind.method),
+                    16 => format!("FIBER({:?})", self.kind.fiber),
                     _ => unreachable!(),
                 }
             },
@@ -189,6 +190,7 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::IO => {}
             ObjKind::EXCEPTION => {}
             ObjKind::METHOD => self.as_method().receiver().mark(alloc),
+            ObjKind::FIBER => unsafe { self.as_fiber().handle.as_ref().unwrap().mark(alloc) },
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -598,6 +600,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_fiber(block_data: BlockData) -> Self {
+        RValue {
+            flags: RValueHeader::new(FIBER_CLASS, ObjKind::FIBER),
+            kind: ObjKind::fiber(block_data),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -734,6 +744,10 @@ impl RValue {
     pub(crate) fn as_method(&self) -> &MethodInner {
         unsafe { &self.kind.method }
     }
+
+    pub(crate) fn as_fiber(&self) -> &FiberInner {
+        unsafe { &self.kind.fiber }
+    }
 }
 
 impl RValue {
@@ -805,6 +819,12 @@ pub union ObjKind {
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
+    fiber: ManuallyDrop<FiberInner>,
+}
+
+#[derive(Debug)]
+pub struct FiberInner {
+    pub handle: *mut Executor,
 }
 
 #[allow(dead_code)]
@@ -825,6 +845,7 @@ impl ObjKind {
     pub const REGEXP: u8 = 13;
     pub const IO: u8 = 14;
     pub const METHOD: u8 = 15;
+    pub const FIBER: u8 = 16;
 }
 
 #[derive(Debug, Clone)]
@@ -959,6 +980,14 @@ impl ObjKind {
     fn method(receiver: Value, func_id: FuncId) -> Self {
         Self {
             method: ManuallyDrop::new(MethodInner::new(receiver, func_id)),
+        }
+    }
+
+    fn fiber(block_data: BlockData) -> Self {
+        let vm = Executor::default();
+        let handle = Box::into_raw(Box::new(vm));
+        Self {
+            fiber: ManuallyDrop::new(FiberInner { handle }),
         }
     }
 }

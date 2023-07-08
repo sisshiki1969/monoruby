@@ -7,6 +7,7 @@
 #![feature(result_flattening)]
 #![feature(let_chains)]
 #![feature(step_trait)]
+#![feature(naked_functions)]
 mod alloc;
 mod executor;
 mod id_table;
