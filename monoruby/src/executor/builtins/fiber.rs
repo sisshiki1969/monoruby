@@ -41,17 +41,25 @@ fn fiber_yield(
     vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
+    arg: Arg,
+    len: usize,
 ) -> Result<Value> {
-    let parent = vm.parent_fiber;
-    if parent.is_null() {
+    if vm.parent_fiber.is_null() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
         ));
     }
-    yield_fiber(vm as _, parent as _);
-    Ok(Value::nil())
+    let val = if len == 0 {
+        Value::nil()
+    } else if len == 1 {
+        arg[0]
+    } else {
+        Value::array_from_iter(arg.iter(len))
+    };
+    match yield_fiber(vm as _, val) {
+        Some(res) => Ok(res),
+        None => Err(vm.take_error()),
+    }
 }
 
 ///
@@ -63,24 +71,36 @@ fn fiber_yield(
 #[monoruby_builtin]
 fn resume(
     vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: LFP,
-    _arg: Arg,
-    _len: usize,
+    arg: Arg,
+    len: usize,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let FiberInner { handle, block_data } = self_val.as_fiber();
-    if unsafe { (**handle).rsp_save.is_null() } {
-        invoke_fiber(vm as _, *handle, block_data as _);
+    match if unsafe { (**handle).rsp_save.is_null() } {
+        let layout = std::alloc::Layout::from_size_align(8192, 8192).unwrap();
+        let ptr = unsafe { std::alloc::GlobalAlloc::alloc(&std::alloc::System, layout) };
+        unsafe { (**handle).rsp_save = ptr.add(8192) }
+        (globals.codegen.fiber_invoker)(vm, globals, block_data as _, *handle, arg.0, len)
     } else {
-        resume_fiber(vm as _, *handle);
+        let val = if len == 0 {
+            Value::nil()
+        } else if len == 1 {
+            arg[0]
+        } else {
+            Value::array_from_iter(arg.iter(len))
+        };
+        resume_fiber(vm as _, *handle, val)
+    } {
+        Some(val) => Ok(val),
+        None => Err(vm.take_error()),
     }
-    Ok(Value::nil())
 }
 
 #[cfg(not(tarpaulin_include))]
 #[naked]
-extern "C" fn invoke_fiber(vm: *mut Executor, child: *mut Executor, block_data: *const BlockData) {
+extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor, val: Value) -> Option<Value> {
     unsafe {
         std::arch::asm!(
             "push r15",
@@ -98,6 +118,7 @@ extern "C" fn invoke_fiber(vm: *mut Executor, child: *mut Executor, block_data: 
             "pop  r13",
             "pop  r14",
             "pop  r15",
+            "mov  rax, rdx",
             "ret",
             options(noreturn)
         );
@@ -106,7 +127,7 @@ extern "C" fn invoke_fiber(vm: *mut Executor, child: *mut Executor, block_data: 
 
 #[cfg(not(tarpaulin_include))]
 #[naked]
-extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor) {
+extern "C" fn yield_fiber(vm: *mut Executor, val: Value) -> Option<Value> {
     unsafe {
         std::arch::asm!(
             "push r15",
@@ -116,39 +137,15 @@ extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor) {
             "push rbx",
             "push rbp",
             "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
-            "mov  rsp, [rsi + 16]", // rsp <- [child_vm.rsp_save]
-            "mov  [rsi + 24], rdi", // [child_vm.parent_fiber] <- vm
+            "mov  rdi, [rdi + 24]", // rdi <- [vm.parent_fiber]
+            "mov  rsp, [rdi + 16]", // rsp <- [parent.rsp_save]
             "pop  rbp",
             "pop  rbx",
             "pop  r12",
             "pop  r13",
             "pop  r14",
             "pop  r15",
-            "ret",
-            options(noreturn)
-        );
-    }
-}
-
-#[cfg(not(tarpaulin_include))]
-#[naked]
-extern "C" fn yield_fiber(vm: *mut Executor, parent: *mut Executor) {
-    unsafe {
-        std::arch::asm!(
-            "push r15",
-            "push r14",
-            "push r13",
-            "push r12",
-            "push rbx",
-            "push rbp",
-            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
-            "mov  rsp, [rsi + 16]", // rsp <- [parent.rsp_save]
-            "pop  rbp",
-            "pop  rbx",
-            "pop  r12",
-            "pop  r13",
-            "pop  r14",
-            "pop  r15",
+            "mov  rax, rsi",
             "ret",
             options(noreturn)
         );
@@ -157,5 +154,9 @@ extern "C" fn yield_fiber(vm: *mut Executor, parent: *mut Executor) {
 
 #[cfg(test)]
 mod test {
-    //use super::tests::*;
+    use super::tests::*;
+    #[test]
+    fn fiber_error() {
+        run_test_error("Fiber.yield");
+    }
 }

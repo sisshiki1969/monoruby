@@ -1,12 +1,10 @@
-class Foo
-  def foo(arg)
-    "foo called with arg #{arg}"
-  end
+f = Fiber.new do
+  outer = 42
+  puts "invoked #{outer}"
+  3.times {|i| puts "yield = #{Fiber.yield i}"}
+  puts "terminated #{outer}"
 end
 
-m = Foo.new.method(:foo) # => #<Method: Foo#foo>
-        res = []
-        res << m[1]       # => "foo called with arg 1"
-        res << m.call(2)  # => "foo called with arg 2"
-        res << (m === 3)    # => "foo called with arg 3"
-        puts res
+4.times do |i|
+  puts "resume = #{f.resume i}"
+end

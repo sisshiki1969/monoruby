@@ -29,6 +29,15 @@ type BlockInvoker = extern "C" fn(
     usize,
 ) -> Option<Value>;
 
+type FiberInvoker = extern "C" fn(
+    &mut Executor,
+    &mut Globals,
+    *const BlockData,
+    *mut Executor,
+    *const Value,
+    usize,
+) -> Option<Value>;
+
 type MethodInvoker2 =
     extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
@@ -163,6 +172,7 @@ pub struct Codegen {
     pub(super) method_invoker2: MethodInvoker2,
     pub(super) block_invoker: BlockInvoker,
     pub(super) block_invoker_with_self: BlockInvoker,
+    pub(super) fiber_invoker: FiberInvoker,
 }
 
 impl Codegen {
@@ -256,6 +266,7 @@ impl Codegen {
             method_invoker2: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
             block_invoker_with_self: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
+            fiber_invoker: unsafe { std::mem::transmute(entry_unimpl.as_ptr()) },
         };
         codegen.construct_vm(no_jit);
         codegen.gen_entry_point(main_object);

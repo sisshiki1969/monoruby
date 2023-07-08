@@ -339,7 +339,7 @@ impl Codegen {
         // method invoker.
         self.method_invoker =
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
-        // rdi: &mut Interp
+        // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: *const FuncData
         // rcx: receiver: Value
@@ -348,12 +348,13 @@ impl Codegen {
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep();
+        self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
         // block invoker.
         self.block_invoker =
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
-        // rdi: &mut Interp
+        // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: *const FuncData
         // rcx: <dummy>
@@ -362,11 +363,12 @@ impl Codegen {
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, false);
         self.gen_invoker_prep();
+        self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
         self.block_invoker_with_self =
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
-        // rdi: &mut Interp
+        // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: *const FuncData
         // rcx: self: Value
@@ -375,12 +377,13 @@ impl Codegen {
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, true);
         self.gen_invoker_prep();
+        self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
         // method invoker.
         self.method_invoker2 =
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
-        // rdi: &mut Interp
+        // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: *const FuncData
         // rcx: receiver: Value
@@ -389,7 +392,45 @@ impl Codegen {
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep2();
+        self.gen_invoker_call();
         self.gen_invoker_epilogue();
+
+        // fiber invoker.
+        self.fiber_invoker =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        // rdi: &mut Executor
+        // rsi: &mut Globals
+        // rdx: *const FuncData
+        // rcx: *mut Executor
+        // r8:  *args: *const Value
+        // r9:  len: usize
+        monoasm! { &mut self.jit,
+            pushq r15;
+            pushq r14;
+            pushq r13;
+            pushq r12;
+            pushq rbx;
+            pushq rbp;
+            movq [rdi + 16], rsp;
+            movq rsp, [rcx + 16];
+            movq [rcx + 24], rdi;
+            movq rbx, rcx;
+            movq r12, rsi;
+        }
+        self.gen_invoker_frame_setup(true, false);
+        self.gen_invoker_prep();
+        self.gen_invoker_call();
+        monoasm! { &mut self.jit,
+            movq rbx, [rbx + 24]; // rbx <- [vm.parent_fiber]
+            movq rsp, [rbx + 16]; // rsp <- [parent.rsp_save]
+            popq rbp;
+            popq rbx;
+            popq r12;
+            popq r13;
+            popq r14;
+            popq r15;
+            ret;
+        };
     }
 
     fn gen_invoker_prologue(&mut self) {
@@ -439,7 +480,7 @@ impl Codegen {
         };
     }
 
-    fn gen_invoker_epilogue(&mut self) {
+    fn gen_invoker_call(&mut self) {
         monoasm! { &mut self.jit,
             movq rsi, [rsp - (16 + LBP_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
@@ -463,6 +504,11 @@ impl Codegen {
             call rax;
             movq rdi, [rsp - (16 + BP_PREV_CFP)];
             movq [rbx], rdi;
+        };
+    }
+
+    fn gen_invoker_epilogue(&mut self) {
+        monoasm! { &mut self.jit,
             popq r15;
             popq r14;
             popq r13;
