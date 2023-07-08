@@ -825,6 +825,7 @@ pub union ObjKind {
 #[derive(Debug)]
 pub struct FiberInner {
     pub handle: *mut Executor,
+    pub block_data: BlockData,
 }
 
 #[allow(dead_code)]
@@ -987,7 +988,7 @@ impl ObjKind {
         let vm = Executor::default();
         let handle = Box::into_raw(Box::new(vm));
         Self {
-            fiber: ManuallyDrop::new(FiberInner { handle }),
+            fiber: ManuallyDrop::new(FiberInner { handle, block_data }),
         }
     }
 }

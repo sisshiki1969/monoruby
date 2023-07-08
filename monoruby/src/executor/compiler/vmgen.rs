@@ -345,7 +345,7 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
-
+        self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
@@ -359,6 +359,7 @@ impl Codegen {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
+        self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, false);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
@@ -371,6 +372,7 @@ impl Codegen {
         // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
+        self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, true);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
@@ -384,17 +386,15 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
+        self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep2();
         self.gen_invoker_epilogue();
     }
 
-    fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
+    fn gen_invoker_prologue(&mut self) {
         // rdi: &mut Interp
         // rsi: &mut Globals
-        // rdx: (method)*const FuncData
-        // rdx: (block) *const BlockData
-        // rcx: self: Value
         monoasm! { &mut self.jit,
             pushq rbx;
             pushq r12;
@@ -404,6 +404,12 @@ impl Codegen {
             movq rbx, rdi;
             movq r12, rsi;
         }
+    }
+
+    fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
+        // rdx: (method)*const FuncData
+        // rdx: (block) *const BlockData
+        // rcx: self: Value
         if invoke_block {
             monoasm! { &mut self.jit,
                 movq rax, [rdx];        // rax <- outer_lfp

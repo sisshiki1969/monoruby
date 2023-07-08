@@ -46,7 +46,9 @@ fn fiber_yield(
 ) -> Result<Value> {
     let parent = vm.parent_fiber;
     if parent.is_null() {
-        unimplemented!()
+        return Err(MonorubyErr::fibererr(
+            "attempt to yield on a not resumed fiber".to_string(),
+        ));
     }
     yield_fiber(vm as _, parent as _);
     Ok(Value::nil())
@@ -66,14 +68,19 @@ fn resume(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let child = lfp.self_val().as_fiber().handle;
-    resume_fiber(vm as _, child);
+    let self_val = lfp.self_val();
+    let FiberInner { handle, block_data } = self_val.as_fiber();
+    if unsafe { (**handle).rsp_save.is_null() } {
+        invoke_fiber(vm as _, *handle, block_data as _);
+    } else {
+        resume_fiber(vm as _, *handle);
+    }
     Ok(Value::nil())
 }
 
 #[cfg(not(tarpaulin_include))]
 #[naked]
-extern "C" fn resume_fiber(_vm: *mut Executor, _child: *mut Executor) {
+extern "C" fn invoke_fiber(vm: *mut Executor, child: *mut Executor, block_data: *const BlockData) {
     unsafe {
         std::arch::asm!(
             "push r15",
@@ -99,7 +106,33 @@ extern "C" fn resume_fiber(_vm: *mut Executor, _child: *mut Executor) {
 
 #[cfg(not(tarpaulin_include))]
 #[naked]
-extern "C" fn yield_fiber(_vm: *mut Executor, _parent: *mut Executor) {
+extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor) {
+    unsafe {
+        std::arch::asm!(
+            "push r15",
+            "push r14",
+            "push r13",
+            "push r12",
+            "push rbx",
+            "push rbp",
+            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
+            "mov  rsp, [rsi + 16]", // rsp <- [child_vm.rsp_save]
+            "mov  [rsi + 24], rdi", // [child_vm.parent_fiber] <- vm
+            "pop  rbp",
+            "pop  rbx",
+            "pop  r12",
+            "pop  r13",
+            "pop  r14",
+            "pop  r15",
+            "ret",
+            options(noreturn)
+        );
+    }
+}
+
+#[cfg(not(tarpaulin_include))]
+#[naked]
+extern "C" fn yield_fiber(vm: *mut Executor, parent: *mut Executor) {
     unsafe {
         std::arch::asm!(
             "push r15",

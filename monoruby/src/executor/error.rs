@@ -31,6 +31,7 @@ pub enum MonorubyErrKind {
     Regex,
     Runtime,
     Key,
+    Fiber,
 }
 
 impl MonorubyErr {
@@ -109,6 +110,7 @@ impl MonorubyErr {
             MonorubyErrKind::Regex => "RegexError",
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::Key => "KeyError",
+            MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
     }
@@ -299,9 +301,9 @@ impl MonorubyErr {
         )
     }
 
-    /*pub(crate) fn range(msg: String) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Range(msg))
-    }*/
+    pub(crate) fn fibererr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Fiber, msg)
+    }
 
     pub(crate) fn char_out_of_range(globals: &Globals, val: Value) -> MonorubyErr {
         MonorubyErr::new(
