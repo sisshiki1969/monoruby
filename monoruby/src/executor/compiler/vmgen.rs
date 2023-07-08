@@ -346,7 +346,7 @@ impl Codegen {
         // r8:  *args: *const Value
         // r9:  len: usize
 
-        self.gen_method_invoker_prologue();
+        self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
 
@@ -359,7 +359,7 @@ impl Codegen {
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
-        self.gen_block_invoker_prologue(false);
+        self.gen_invoker_frame_setup(true, false);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
 
@@ -368,10 +368,10 @@ impl Codegen {
         // rdi: &mut Interp
         // rsi: &mut Globals
         // rdx: *const FuncData
-        // rcx: Value
+        // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
-        self.gen_block_invoker_prologue(true);
+        self.gen_invoker_frame_setup(true, true);
         self.gen_invoker_prep();
         self.gen_invoker_epilogue();
 
@@ -384,17 +384,9 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
-        self.gen_method_invoker_prologue();
+        self.gen_invoker_frame_setup(false, true);
         self.gen_invoker_prep2();
         self.gen_invoker_epilogue();
-    }
-
-    fn gen_block_invoker_prologue(&mut self, specify_self: bool) {
-        self.gen_invoker_frame_setup(true, specify_self);
-    }
-
-    fn gen_method_invoker_prologue(&mut self) {
-        self.gen_invoker_frame_setup(false, true);
     }
 
     fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
@@ -402,7 +394,7 @@ impl Codegen {
         // rsi: &mut Globals
         // rdx: (method)*const FuncData
         // rdx: (block) *const BlockData
-        // rcx: Value
+        // rcx: self: Value
         monoasm! { &mut self.jit,
             pushq rbx;
             pushq r12;
@@ -443,7 +435,7 @@ impl Codegen {
 
     fn gen_invoker_epilogue(&mut self) {
         monoasm! { &mut self.jit,
-            movq rsi, [rdx + (FUNCDATA_OFFSET_META)];
+            movq rsi, [rsp - (16 + LBP_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
             subq rsp, 4096;
             movq rcx, rdi; // arg_num
