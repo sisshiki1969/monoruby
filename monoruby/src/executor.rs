@@ -130,10 +130,20 @@ impl Cref {
 ///
 #[repr(C)]
 pub struct Executor {
-    cfp: Option<CFP>,              // [rbx]
-    lfp_top: LFP,                  // [rbx + 8]
-    rsp_save: *mut u8,             // [rbx + 16]
-    parent_fiber: *const Executor, // [rbx + 24]
+    /// control frame pointer.
+    /// #### [[rbx]]
+    cfp: Option<CFP>,
+    /// the top of local frame pointer.
+    /// #### [[rbx + 8]]                                  
+    lfp_top: LFP,
+    /// rsp save area.
+    ///
+    /// - 0: created
+    /// - -1: terminated
+    /// - other: suspended
+    /// #### [[rbx + 16]]  
+    rsp_save: Option<std::ptr::NonNull<u8>>,
+    parent_fiber: Option<std::ptr::NonNull<Executor>>, // [rbx + 24]
     lexical_class: Vec<Vec<Cref>>,
     sp_last_match: Option<Value>,   // $&        : Regexp.last_match(0)
     sp_post_match: Option<Value>,   // $'        : Regexp.post_match
@@ -148,8 +158,8 @@ impl std::default::Default for Executor {
         Self {
             cfp: None,
             lfp_top: LFP::default(),
-            rsp_save: std::ptr::null_mut(),
-            parent_fiber: std::ptr::null(),
+            rsp_save: None,
+            parent_fiber: None,
             lexical_class: vec![vec![]],
             sp_last_match: None,
             sp_post_match: None,

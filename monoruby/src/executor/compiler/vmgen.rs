@@ -411,9 +411,9 @@ impl Codegen {
             pushq r12;
             pushq rbx;
             pushq rbp;
-            movq [rdi + 16], rsp;
-            movq rsp, [rcx + 16];
-            movq [rcx + 24], rdi;
+            movq [rdi + 16], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rcx + 16]; // rsp <- [child_vm.rsp_save]
+            movq [rcx + 24], rdi; // [child_vm.parent_fiber] <- vm
             movq rbx, rcx;
             movq r12, rsi;
         }
@@ -421,6 +421,7 @@ impl Codegen {
         self.gen_invoker_prep();
         self.gen_invoker_call();
         monoasm! { &mut self.jit,
+            movq [rbx + 16], (-1); // [vm.rsp_save] <- -1 (terminated)
             movq rbx, [rbx + 24]; // rbx <- [vm.parent_fiber]
             movq rsp, [rbx + 16]; // rsp <- [parent.rsp_save]
             popq rbp;

@@ -44,7 +44,7 @@ fn fiber_yield(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    if vm.parent_fiber.is_null() {
+    if vm.parent_fiber.is_none() {
         return Err(MonorubyErr::fibererr(
             "attempt to yield on a not resumed fiber".to_string(),
         ));
@@ -76,23 +76,35 @@ fn resume(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
+    use std::alloc::*;
     let self_val = lfp.self_val();
     let FiberInner { handle, block_data } = self_val.as_fiber();
-    match if unsafe { (**handle).rsp_save.is_null() } {
-        let layout = std::alloc::Layout::from_size_align(8192, 8192).unwrap();
-        let ptr = unsafe { std::alloc::GlobalAlloc::alloc(&std::alloc::System, layout) };
-        unsafe { (**handle).rsp_save = ptr.add(8192) }
-        (globals.codegen.fiber_invoker)(vm, globals, block_data as _, *handle, arg.0, len)
-    } else {
-        let val = if len == 0 {
-            Value::nil()
-        } else if len == 1 {
-            arg[0]
-        } else {
-            Value::array_from_iter(arg.iter(len))
-        };
-        resume_fiber(vm as _, *handle, val)
-    } {
+    let res = match unsafe { (**handle).rsp_save } {
+        None => {
+            let layout = Layout::from_size_align(8192, 8192).unwrap();
+            unsafe {
+                let ptr = alloc(layout).add(8192);
+                (**handle).rsp_save = Some(std::ptr::NonNull::new(ptr).unwrap());
+            }
+            (globals.codegen.fiber_invoker)(vm, globals, block_data as _, *handle, arg.0, len)
+        }
+        Some(ptr) if ptr.as_ptr() as i64 == -1 => {
+            return Err(MonorubyErr::fibererr(
+                "attempt to resume a terminated fiber".to_string(),
+            ))
+        }
+        Some(_) => {
+            let val = if len == 0 {
+                Value::nil()
+            } else if len == 1 {
+                arg[0]
+            } else {
+                Value::array_from_iter(arg.iter(len))
+            };
+            resume_fiber(vm as _, *handle, val)
+        }
+    };
+    match res {
         Some(val) => Ok(val),
         None => Err(vm.take_error()),
     }
