@@ -26,27 +26,14 @@ pub(super) fn init(globals: &mut Globals) {
         analysis_object_nil,
     );
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
-    globals.define_builtin_func(
-        OBJECT_CLASS,
-        "instance_variable_defined?",
-        instance_variable_defined,
-        1,
-    );
-    globals.define_builtin_func(
-        OBJECT_CLASS,
-        "instance_variable_set",
-        instance_variable_set,
-        2,
-    );
-    globals.define_builtin_func(
-        OBJECT_CLASS,
-        "instance_variable_get",
-        instance_variable_get,
-        1,
-    );
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_set", iv_set, 2);
+    globals.define_builtin_func(OBJECT_CLASS, "instance_variable_get", iv_get, 1);
     globals.define_builtin_func(OBJECT_CLASS, "puts", puts, -1);
     globals.define_builtin_func(OBJECT_CLASS, "print", print, -1);
     globals.define_builtin_func(OBJECT_CLASS, "loop", loop_, 0);
+    globals.define_builtin_func(OBJECT_CLASS, "fail", raise, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "raise", raise, -1);
     globals.define_builtin_func(OBJECT_CLASS, "block_given?", block_given, 0);
     globals.define_builtin_func(OBJECT_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(OBJECT_CLASS, "rand", rand, -1);
@@ -213,6 +200,40 @@ fn loop_(
             };
         }
     }
+}
+
+///
+/// ### Kernel.#fail
+///
+/// - [NOT SUPPORTED] raise -> ()
+/// - [NOT SUPPORTED] fail -> ()
+/// - raise(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
+/// - fail(error_type, message = nil, backtrace = caller(0), cause: $!) -> ()
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
+#[monoruby_builtin]
+fn raise(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 1)?;
+    if let Some(ex) = arg[0].is_exception() {
+        return Err(MonorubyErr::new_from_exception(ex));
+    } else if let Some(klass) = arg[0].is_class() {
+        if klass.get_module(globals).is_exception() {
+            if let Some(ex) = vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[]) {
+                return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
+            } else {
+                return Err(vm.take_error());
+            };
+        }
+    }
+    Err(MonorubyErr::typeerr(
+        "exception class/object expected".to_string(),
+    ))
 }
 
 ///
@@ -451,7 +472,7 @@ fn singleton_class(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
-fn instance_variable_defined(
+fn iv_defined(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
@@ -474,7 +495,7 @@ fn instance_variable_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
-fn instance_variable_set(
+fn iv_set(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,
@@ -494,7 +515,7 @@ fn instance_variable_set(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
-fn instance_variable_get(
+fn iv_get(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: LFP,

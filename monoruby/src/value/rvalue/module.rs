@@ -58,6 +58,21 @@ impl Module {
     pub fn make_iclass(&self, superclass: Option<Module>) -> Module {
         Value::iclass(self.id(), superclass).as_class()
     }
+
+    pub fn is_exception(&self) -> bool {
+        let mut module = *self;
+        if module.id() == EXCEPTION_CLASS {
+            return true;
+        }
+        while let Some(superclass) = module.superclass() {
+            if superclass.id() == EXCEPTION_CLASS {
+                return true;
+            } else {
+                module = superclass;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

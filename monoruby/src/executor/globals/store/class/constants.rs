@@ -32,7 +32,7 @@ impl Globals {
         loop {
             match self.get_constant(class_id, name) {
                 Some(v) => return Some(v),
-                None => match class_id.get_obj(self).superclass_id() {
+                None => match class_id.get_module(self).superclass_id() {
                     Some(superclass) => class_id = superclass,
                     None => break,
                 },
@@ -51,7 +51,7 @@ impl Globals {
             }?
             .expect_class_or_module(self)?;
         }
-        Ok(class.get_obj(self).as_val())
+        Ok(class.get_obj(self))
     }
 
     ///
@@ -68,7 +68,7 @@ impl Globals {
         let mut names = vec![];
         loop {
             names.extend(self.store[class_id].constants.keys().cloned());
-            match class_id.get_obj(self).superclass_id() {
+            match class_id.get_module(self).superclass_id() {
                 Some(superclass) => {
                     if superclass == OBJECT_CLASS {
                         break;

@@ -30,25 +30,6 @@ pub const FIBER_CLASS: ClassId = ClassId::new(21);
 #[repr(transparent)]
 pub struct ClassId(pub u32);
 
-impl ClassId {
-    pub const fn new(id: u32) -> Self {
-        Self(id)
-    }
-
-    pub(crate) fn is_always_frozen(&self) -> bool {
-        matches!(
-            *self,
-            NIL_CLASS
-                | TRUE_CLASS
-                | FALSE_CLASS
-                | INTEGER_CLASS
-                | FLOAT_CLASS
-                | SYMBOL_CLASS
-                | RANGE_CLASS
-        )
-    }
-}
-
 impl std::fmt::Debug for ClassId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
@@ -85,9 +66,31 @@ impl From<ClassId> for u32 {
 }
 
 impl ClassId {
-    /// Get object for *ClassId*.
-    pub(crate) fn get_obj(self, globals: &Globals) -> Module {
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    pub(crate) fn is_always_frozen(&self) -> bool {
+        matches!(
+            *self,
+            NIL_CLASS
+                | TRUE_CLASS
+                | FALSE_CLASS
+                | INTEGER_CLASS
+                | FLOAT_CLASS
+                | SYMBOL_CLASS
+                | RANGE_CLASS
+        )
+    }
+
+    /// Get *Module* for *ClassId*.
+    pub(crate) fn get_module(self, globals: &Globals) -> Module {
         globals.get_class_obj(self)
+    }
+
+    /// Get Class object for *ClassId*.
+    pub(crate) fn get_obj(self, globals: &Globals) -> Value {
+        self.get_module(globals).as_val()
     }
 
     /// Get class name of *ClassId*.
@@ -95,13 +98,28 @@ impl ClassId {
         if self.0 == 0 {
             return "<INVALID>".to_string();
         }
-        let class = self.get_obj(globals);
+        let class = self.get_module(globals);
         match globals.store[self].name {
             Some(id) => id.to_string(),
             None => match class.is_singleton() {
                 None => format!("#<Class:{:016x}>", class.as_val().get()),
                 Some(base) => format!("#<Class:{}>", globals.to_s(base)),
             },
+        }
+    }
+
+    /// Get class name(IdentId) of *ClassId*.
+    pub(crate) fn get_name_id(self, globals: &Globals) -> Option<IdentId> {
+        if self.0 == 0 {
+            return None;
+        }
+        let class = self.get_module(globals);
+        match globals.store[self].name {
+            Some(id) => Some(id),
+            None => Some(IdentId::get_id_from_string(match class.is_singleton() {
+                None => format!("#<Class:{:016x}>", class.as_val().get()),
+                Some(base) => format!("#<Class:{}>", globals.to_s(base)),
+            })),
         }
     }
 }
@@ -299,7 +317,7 @@ impl Globals {
             }
             let super_singleton = match original_obj.superclass_id() {
                 Some(id) => self.get_metaclass(id),
-                None => CLASS_CLASS.get_obj(self),
+                None => CLASS_CLASS.get_module(self),
             };
             let mut original_obj = original_obj.as_val();
             let mut singleton = self.new_singleton_class(super_singleton, original_obj, class.id());
@@ -513,7 +531,7 @@ impl Globals {
     ) -> Option<MethodTableEntry> {
         let class_id = self_val.class();
         let MethodTableEntry { owner, .. } = self.check_method_for_class(class_id, name)?;
-        let superclass = owner.get_obj(self).superclass_id()?;
+        let superclass = owner.get_module(self).superclass_id()?;
         self.check_method_for_class(superclass, name)
     }
 
@@ -553,7 +571,7 @@ impl Globals {
     ///
     fn search_method(&mut self, class_id: ClassId, name: IdentId) -> Option<MethodTableEntry> {
         let mut visi = None;
-        let mut module = class_id.get_obj(self);
+        let mut module = class_id.get_module(self);
         loop {
             if let Some(entry) = self.get_method(module.id(), name) {
                 if entry.func_id.is_some() {

@@ -36,12 +36,19 @@ pub enum MonorubyErrKind {
 }
 
 impl MonorubyErr {
-    fn new(kind: MonorubyErrKind, msg: String) -> Self {
+    pub fn new(kind: MonorubyErrKind, msg: String) -> Self {
         MonorubyErr {
             kind,
             msg,
             trace: vec![],
         }
+    }
+
+    pub fn new_from_exception(ex: &ExceptionInner) -> Self {
+        let kind = ex.kind();
+        let msg = ex.msg().to_string();
+        let trace = ex.trace();
+        MonorubyErr { kind, msg, trace }
     }
 
     fn new_with_loc(
@@ -63,6 +70,10 @@ impl MonorubyErr {
 
     pub fn msg(&self) -> &str {
         &self.msg
+    }
+
+    pub fn trace(&self) -> &[(Loc, SourceInfoRef)] {
+        &self.trace
     }
 
     pub fn show_all_loc(&self) {
@@ -449,9 +460,9 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Key, msg)
     }
 
-    pub(crate) fn stopiterationerr() -> MonorubyErr {
+    /*pub(crate) fn stopiterationerr() -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::StopIteration, "StopIteration".to_string())
-    }
+    }*/
 
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {
         MonorubyErr::indexerr(format!(
@@ -551,7 +562,7 @@ impl Executor {
 
     pub fn exception_to_val(&self, globals: &Globals, err: MonorubyErr) -> Value {
         let class_id = globals.get_error_class(&err);
-        Value::new_exception_with_class(err, class_id)
+        Value::new_exception_from_err(err, class_id)
     }
 }
 

@@ -332,7 +332,7 @@ impl Globals {
                 ObjKind::HASH => self.hash_tos(val),
                 ObjKind::REGEXP => Self::regexp_tos(val),
                 ObjKind::IO => rvalue.as_io().to_string(),
-                ObjKind::EXCEPTION => rvalue.as_exception().err.msg().to_string(),
+                ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
                 _ => format!("{:016x}", val.get()),
@@ -360,7 +360,11 @@ impl Globals {
             }
             RV::Object(rvalue) => match rvalue.kind() {
                 ObjKind::OBJECT => return self.object_inspect(val),
-                ObjKind::EXCEPTION => return rvalue.as_exception().err.get_error_message(),
+                ObjKind::EXCEPTION => {
+                    let class_name = val.class().get_name(self);
+                    let msg = rvalue.as_exception().msg();
+                    return format!("#<{class_name}: {msg}>");
+                }
                 _ => {}
             },
         }

@@ -6,7 +6,7 @@ use monoruby_attr::monoruby_builtin;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let module = MODULE_CLASS.get_obj(globals);
+    let module = MODULE_CLASS.get_module(globals);
     globals.define_builtin_class_by_str("Class", CLASS_CLASS, module, OBJECT_CLASS);
     globals.define_builtin_class_func(CLASS_CLASS, "new", class_new, -1);
     globals.define_builtin_inline_func(

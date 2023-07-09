@@ -43,9 +43,6 @@ class Symbol
 end
 
 class Object
-  def raise
-    puts 100
-  end
   def freeze
   end
 end

@@ -65,7 +65,7 @@ fn initialize(
     len: usize,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let struct_class = self_val.class().get_obj(globals).as_val();
+    let struct_class = self_val.class().get_obj(globals);
     let members_val = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap();
@@ -93,7 +93,7 @@ fn inspect(
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();
     let class_id = self_val.class();
-    let struct_class = class_id.get_obj(globals).as_val();
+    let struct_class = class_id.get_obj(globals);
     if let Some(name) = globals.store[class_id].get_name_id() {
         inspect += &format!("{name}");
     };

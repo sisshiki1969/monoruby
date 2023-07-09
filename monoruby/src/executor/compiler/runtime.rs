@@ -795,7 +795,7 @@ pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
 
 pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
     match err_val.is_exception() {
-        Some(err) => vm.set_error(err.err.clone()),
+        Some(ex) => vm.set_error(MonorubyErr::new_from_exception(ex)),
         None => unimplemented!(),
     }
 }

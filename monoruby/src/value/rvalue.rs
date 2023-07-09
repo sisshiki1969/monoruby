@@ -1,5 +1,7 @@
 use crate::*;
 use num::BigInt;
+use ruruby_parse::Loc;
+use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
 pub use self::array::*;
@@ -541,10 +543,23 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
+    pub(super) fn new_exception(
+        kind: IdentId,
+        msg: String,
+        trace: Vec<(Loc, SourceInfoRef)>,
+        class_id: ClassId,
+    ) -> Self {
         RValue {
             flags: RValueHeader::new(class_id, ObjKind::EXCEPTION),
-            kind: ObjKind::exception(err),
+            kind: ObjKind::exception(kind, msg, trace),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_exception_from_err(err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue {
+            flags: RValueHeader::new(class_id, ObjKind::EXCEPTION),
+            kind: ObjKind::exception_from(err),
             var_table: None,
         }
     }
@@ -852,7 +867,27 @@ impl ObjKind {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ExceptionInner {
-    pub err: MonorubyErr,
+    class_name: IdentId,
+    msg: String,
+    trace: Vec<(ruruby_parse::Loc, ruruby_parse::SourceInfoRef)>,
+}
+
+impl ExceptionInner {
+    pub fn kind(&self) -> MonorubyErrKind {
+        MonorubyErrKind::Runtime
+    }
+
+    pub fn msg(&self) -> &str {
+        &self.msg
+    }
+
+    pub fn trace(&self) -> Vec<(ruruby_parse::Loc, ruruby_parse::SourceInfoRef)> {
+        self.trace.clone()
+    }
+
+    pub fn get_error_message(&self) -> String {
+        format!("{} ({:?})", self.msg, self.class_name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -936,9 +971,24 @@ impl ObjKind {
         }
     }
 
-    fn exception(err: MonorubyErr) -> Self {
+    fn exception(kind: IdentId, msg: String, trace: Vec<(Loc, SourceInfoRef)>) -> Self {
         Self {
-            exception: ManuallyDrop::new(Box::new(ExceptionInner { err })),
+            exception: ManuallyDrop::new(Box::new(ExceptionInner {
+                class_name: kind,
+                msg,
+                trace,
+            })),
+        }
+    }
+
+    fn exception_from(err: MonorubyErr) -> Self {
+        let kind = IdentId::get_id(err.get_class_name());
+        Self {
+            exception: ManuallyDrop::new(Box::new(ExceptionInner {
+                class_name: kind,
+                msg: err.msg().to_string(),
+                trace: err.trace().to_vec(),
+            })),
         }
     }
 

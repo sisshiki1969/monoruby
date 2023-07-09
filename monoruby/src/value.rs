@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use crate::alloc::{Allocator, GC};
 use crate::*;
 use num::BigInt;
-use ruruby_parse::{Node, NodeKind};
+use ruruby_parse::{Loc, Node, NodeKind, SourceInfoRef};
 
 pub mod rvalue;
 
@@ -110,7 +110,7 @@ impl Value {
     /// Get class object of *self.
     ///
     pub(crate) fn get_class_obj(self, globals: &Globals) -> Module {
-        self.class().get_obj(globals)
+        self.class().get_module(globals)
     }
 
     pub(crate) fn real_class(self, globals: &Globals) -> Module {
@@ -344,8 +344,17 @@ impl Value {
         RValue::new_range(start, end, exclude_end).pack()
     }
 
-    pub fn new_exception_with_class(err: MonorubyErr, class_id: ClassId) -> Self {
-        RValue::new_exception_with_class(err, class_id).pack()
+    pub fn new_exception(
+        kind: IdentId,
+        msg: String,
+        trace: Vec<(Loc, SourceInfoRef)>,
+        class_id: ClassId,
+    ) -> Self {
+        RValue::new_exception(kind, msg, trace, class_id).pack()
+    }
+
+    pub fn new_exception_from_err(err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue::new_exception_from_err(err, class_id).pack()
     }
 
     pub fn new_time(time: TimeInner) -> Self {

@@ -33,4 +33,33 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("SystemCallError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("TypeError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("ZeroDivisionError", standarderr, OBJECT_CLASS);
+
+    globals.define_builtin_class_func(EXCEPTION_CLASS, "new", exception_new, -1);
+    globals.define_builtin_class_func(EXCEPTION_CLASS, "exception", exception_new, -1);
+}
+
+///
+/// ### Exception.exception
+///
+/// - new(error_message = nil) -> Exception
+/// - exception(error_message = nil) -> Exception
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
+#[monoruby_builtin]
+fn exception_new(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let class_id = lfp.self_val().expect_class(globals)?;
+    let msg = if len == 0 {
+        class_id.get_name(globals)
+    } else {
+        arg[0].expect_string(globals)?
+    };
+    let kind = class_id.get_name_id(globals).unwrap();
+    Ok(Value::new_exception(kind, msg, vec![], class_id))
 }
