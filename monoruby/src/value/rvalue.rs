@@ -5,6 +5,7 @@ use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
 pub use self::array::*;
+pub use self::fiber::FiberInner;
 pub use self::hash::*;
 pub use self::io::IoInner;
 pub use self::method::MethodInner;
@@ -13,6 +14,7 @@ pub use self::regexp::RegexpInner;
 pub use self::string::StringInner;
 
 mod array;
+mod fiber;
 mod hash;
 mod io;
 mod method;
@@ -192,14 +194,33 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::IO => {}
             ObjKind::EXCEPTION => {}
             ObjKind::METHOD => self.as_method().receiver().mark(alloc),
-            ObjKind::FIBER => unsafe { self.as_fiber().handle.as_ref().mark(alloc) },
+            ObjKind::FIBER => self.as_fiber().handle().mark(alloc),
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
 }
 
 impl alloc::GCBox for RValue {
-    fn free(&mut self) {}
+    fn free(&mut self) {
+        unsafe {
+            match self.kind() {
+                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                ObjKind::MODULE | ObjKind::CLASS => ManuallyDrop::drop(&mut self.kind.class),
+                ObjKind::OBJECT => {}
+                ObjKind::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
+                ObjKind::BYTES => ManuallyDrop::drop(&mut self.kind.string),
+                ObjKind::TIME => ManuallyDrop::drop(&mut self.kind.time),
+                ObjKind::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
+                ObjKind::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),
+                ObjKind::HASH => ManuallyDrop::drop(&mut self.kind.hash),
+                ObjKind::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
+                ObjKind::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
+                _ => {}
+            }
+            self.set_next_none();
+            self.var_table = None;
+        }
+    }
 
     fn next(&self) -> Option<std::ptr::NonNull<RValue>> {
         let next = unsafe { self.flags.next };
@@ -862,75 +883,11 @@ impl ObjKind {
     pub const FIBER: u8 = 16;
 }
 
-#[derive(Debug)]
-pub struct FiberInner {
-    handle: std::ptr::NonNull<Executor>,
-    block_data: BlockData,
-    stack: Option<std::ptr::NonNull<u8>>,
-}
-
-const FIBER_STACK_SIZE: usize = 8192 * 8;
-
-impl FiberInner {
-    pub fn new(block_data: BlockData) -> Self {
-        let vm = Executor::default();
-        let handle = std::ptr::NonNull::new(Box::into_raw(Box::new(vm))).unwrap();
-        Self {
-            handle,
-            block_data,
-            stack: None,
-        }
-    }
-
-    pub fn drop(&mut self) {
-        use std::alloc::*;
-        unsafe { Box::from_raw(self.handle()) };
-        if let Some(stack) = self.stack {
-            let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
-            unsafe {
-                dealloc(stack.as_ptr(), layout);
-            }
-        }
-    }
-
-    pub fn state(&self) -> FiberState {
-        unsafe { self.handle.as_ref().fiber_state() }
-    }
-
-    pub fn handle(&self) -> *mut Executor {
-        self.handle.as_ptr()
-    }
-
-    pub fn block_data(&self) -> *const BlockData {
-        &self.block_data as _
-    }
-
-    pub fn func_id(&self) -> FuncId {
-        self.block_data.func_id()
-    }
-
-    pub fn init(&mut self) {
-        use std::alloc::*;
-        let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
-        unsafe {
-            let stack_bottom = alloc(layout);
-            libc::mprotect(stack_bottom as _, 4096, libc::PROT_NONE);
-            let stack_top = stack_bottom.add(FIBER_STACK_SIZE);
-            self.stack = Some(std::ptr::NonNull::new(stack_bottom).unwrap());
-            self.handle.as_mut().save_rsp(stack_top);
-        }
-    }
-
-    pub fn take_error(&mut self) -> MonorubyErr {
-        unsafe { self.handle.as_mut().take_error() }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ExceptionInner {
     class_name: IdentId,
     msg: String,
-    trace: Vec<(ruruby_parse::Loc, ruruby_parse::SourceInfoRef)>,
+    trace: Vec<(Loc, SourceInfoRef)>,
 }
 
 impl ExceptionInner {
@@ -942,7 +899,7 @@ impl ExceptionInner {
         &self.msg
     }
 
-    pub fn trace(&self) -> Vec<(ruruby_parse::Loc, ruruby_parse::SourceInfoRef)> {
+    pub fn trace(&self) -> Vec<(Loc, SourceInfoRef)> {
         self.trace.clone()
     }
 

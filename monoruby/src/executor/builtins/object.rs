@@ -219,13 +219,21 @@ fn raise(
     arg: Arg,
     len: usize,
 ) -> Result<Value> {
-    MonorubyErr::check_number_of_arguments(len, 1)?;
+    MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     if let Some(ex) = arg[0].is_exception() {
-        return Err(MonorubyErr::new_from_exception(ex));
+        let mut err = MonorubyErr::new_from_exception(ex);
+        if len == 2 {
+            err.set_msg(arg[1].expect_string(globals)?);
+        }
+        return Err(err);
     } else if let Some(klass) = arg[0].is_class() {
         if klass.get_module(globals).is_exception() {
             if let Some(ex) = vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[]) {
-                return Err(MonorubyErr::new_from_exception(ex.is_exception().unwrap()));
+                let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+                if len == 2 {
+                    err.set_msg(arg[1].expect_string(globals)?);
+                }
+                return Err(err);
             } else {
                 return Err(vm.take_error());
             };

@@ -283,7 +283,7 @@ impl Executor {
             self,
             globals,
             fiber.block_data(),
-            fiber.handle(),
+            fiber.handle_ptr(),
             arg.as_ptr(),
             len,
         ) {
@@ -293,7 +293,7 @@ impl Executor {
     }
 
     fn resume_fiber(&mut self, fiber: &mut FiberInner, val: Value) -> Result<Value> {
-        match resume_fiber(self, fiber.handle(), val) {
+        match resume_fiber(self, fiber.handle_ptr(), val) {
             Some(val) => Ok(val),
             None => Err(fiber.take_error()),
         }

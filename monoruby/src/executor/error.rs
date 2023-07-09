@@ -72,6 +72,10 @@ impl MonorubyErr {
         &self.msg
     }
 
+    pub fn set_msg(&mut self, msg: String) {
+        self.msg = msg;
+    }
+
     pub fn trace(&self) -> &[(Loc, SourceInfoRef)] {
         &self.trace
     }
