@@ -72,6 +72,10 @@ impl std::ops::Index<usize> for Arg {
 }
 
 impl Arg {
+    pub fn as_ptr(&self) -> *const Value {
+        self.0
+    }
+
     pub fn to_vec(&self, len: usize) -> Vec<Value> {
         if len == 0 {
             return vec![];

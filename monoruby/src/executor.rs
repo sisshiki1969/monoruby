@@ -237,14 +237,6 @@ impl Executor {
         self.temp_stack.len()
     }
 
-    pub fn fiber_state(&self) -> FiberState {
-        match self.rsp_save {
-            None => FiberState::Created,
-            Some(p) if p.as_ptr() as i64 == -1 => FiberState::Terminated,
-            _ => FiberState::Suspended,
-        }
-    }
-
     fn temp_push(&mut self, val: Value) {
         self.temp_stack.push(val);
     }
@@ -264,6 +256,111 @@ impl Executor {
     }
 }
 
+//
+// handling fiber.
+//
+impl Executor {
+    pub fn fiber_state(&self) -> FiberState {
+        match self.rsp_save {
+            None => FiberState::Created,
+            Some(p) if p.as_ptr() as i64 == -1 => FiberState::Terminated,
+            _ => FiberState::Suspended,
+        }
+    }
+
+    pub fn save_rsp(&mut self, rsp: *mut u8) {
+        self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
+    }
+
+    fn invoke_fiber(
+        &mut self,
+        globals: &mut Globals,
+        fiber: &mut FiberInner,
+        arg: Arg,
+        len: usize,
+    ) -> Result<Value> {
+        match (globals.codegen.fiber_invoker)(
+            self,
+            globals,
+            fiber.block_data(),
+            fiber.handle(),
+            arg.as_ptr(),
+            len,
+        ) {
+            Some(val) => Ok(val),
+            None => Err(fiber.take_error()),
+        }
+    }
+
+    fn resume_fiber(&mut self, fiber: &mut FiberInner, val: Value) -> Result<Value> {
+        match resume_fiber(self, fiber.handle(), val) {
+            Some(val) => Ok(val),
+            None => Err(fiber.take_error()),
+        }
+    }
+
+    fn yield_fiber(&mut self, val: Value) -> Result<Value> {
+        match yield_fiber(self as _, val) {
+            Some(res) => Ok(res),
+            None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
+        }
+    }
+}
+
+#[cfg(not(tarpaulin_include))]
+#[naked]
+extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor, val: Value) -> Option<Value> {
+    unsafe {
+        std::arch::asm!(
+            "push r15",
+            "push r14",
+            "push r13",
+            "push r12",
+            "push rbx",
+            "push rbp",
+            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
+            "mov  rsp, [rsi + 16]", // rsp <- [child_vm.rsp_save]
+            "mov  [rsi + 24], rdi", // [child_vm.parent_fiber] <- vm
+            "pop  rbp",
+            "pop  rbx",
+            "pop  r12",
+            "pop  r13",
+            "pop  r14",
+            "pop  r15",
+            "mov  rax, rdx",
+            "ret",
+            options(noreturn)
+        );
+    }
+}
+
+#[cfg(not(tarpaulin_include))]
+#[naked]
+extern "C" fn yield_fiber(vm: *mut Executor, val: Value) -> Option<Value> {
+    unsafe {
+        std::arch::asm!(
+            "push r15",
+            "push r14",
+            "push r13",
+            "push r12",
+            "push rbx",
+            "push rbp",
+            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
+            "mov  rdi, [rdi + 24]", // rdi <- [vm.parent_fiber]
+            "mov  rsp, [rdi + 16]", // rsp <- [parent.rsp_save]
+            "pop  rbp",
+            "pop  rbx",
+            "pop  r12",
+            "pop  r13",
+            "pop  r14",
+            "pop  r15",
+            "mov  rax, rsi",
+            "ret",
+            options(noreturn)
+        );
+    }
+}
+
 impl Executor {
     ///
     /// Execute top level method.
@@ -279,11 +376,7 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
-    pub(super) fn get_block_data(
-        &self,
-        globals: &mut Globals,
-        block_handler: BlockHandler,
-    ) -> BlockData {
+    pub fn get_block_data(&self, globals: &mut Globals, block_handler: BlockHandler) -> BlockData {
         if let Some((func_id, idx)) = block_handler.try_proxy() {
             let mut cfp = self.cfp();
             for _ in 0..idx {

@@ -447,12 +447,12 @@ impl Globals {
 
     fn fiber_tos(&self, val: Value) -> String {
         let fiber = val.as_fiber();
-        let state = match unsafe { fiber.handle.as_ref().fiber_state() } {
+        let state = match fiber.state() {
             FiberState::Created => "created",
             FiberState::Terminated => "terminated",
             FiberState::Suspended => "suspended",
         };
-        let func_id = fiber.block_data.func_id();
+        let func_id = fiber.func_id();
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
             val.get(),

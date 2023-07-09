@@ -763,6 +763,10 @@ impl RValue {
     pub(crate) fn as_fiber(&self) -> &FiberInner {
         unsafe { &self.kind.fiber }
     }
+
+    pub(crate) fn as_fiber_mut(&mut self) -> &mut FiberInner {
+        unsafe { &mut self.kind.fiber }
+    }
 }
 
 impl RValue {
@@ -837,12 +841,6 @@ pub union ObjKind {
     fiber: ManuallyDrop<FiberInner>,
 }
 
-#[derive(Debug)]
-pub struct FiberInner {
-    pub handle: std::ptr::NonNull<Executor>,
-    pub block_data: BlockData,
-}
-
 #[allow(dead_code)]
 impl ObjKind {
     pub const INVALID: u8 = 0;
@@ -864,8 +862,71 @@ impl ObjKind {
     pub const FIBER: u8 = 16;
 }
 
+#[derive(Debug)]
+pub struct FiberInner {
+    handle: std::ptr::NonNull<Executor>,
+    block_data: BlockData,
+    stack: Option<std::ptr::NonNull<u8>>,
+}
+
+const FIBER_STACK_SIZE: usize = 8192 * 8;
+
+impl FiberInner {
+    pub fn new(block_data: BlockData) -> Self {
+        let vm = Executor::default();
+        let handle = std::ptr::NonNull::new(Box::into_raw(Box::new(vm))).unwrap();
+        Self {
+            handle,
+            block_data,
+            stack: None,
+        }
+    }
+
+    pub fn drop(&mut self) {
+        use std::alloc::*;
+        unsafe { Box::from_raw(self.handle()) };
+        if let Some(stack) = self.stack {
+            let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
+            unsafe {
+                dealloc(stack.as_ptr(), layout);
+            }
+        }
+    }
+
+    pub fn state(&self) -> FiberState {
+        unsafe { self.handle.as_ref().fiber_state() }
+    }
+
+    pub fn handle(&self) -> *mut Executor {
+        self.handle.as_ptr()
+    }
+
+    pub fn block_data(&self) -> *const BlockData {
+        &self.block_data as _
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.block_data.func_id()
+    }
+
+    pub fn init(&mut self) {
+        use std::alloc::*;
+        let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
+        unsafe {
+            let stack_bottom = alloc(layout);
+            libc::mprotect(stack_bottom as _, 4096, libc::PROT_NONE);
+            let stack_top = stack_bottom.add(FIBER_STACK_SIZE);
+            self.stack = Some(std::ptr::NonNull::new(stack_bottom).unwrap());
+            self.handle.as_mut().save_rsp(stack_top);
+        }
+    }
+
+    pub fn take_error(&mut self) -> MonorubyErr {
+        unsafe { self.handle.as_mut().take_error() }
+    }
+}
+
 #[derive(Debug, Clone)]
-#[repr(C)]
 pub struct ExceptionInner {
     class_name: IdentId,
     msg: String,
@@ -1035,10 +1096,8 @@ impl ObjKind {
     }
 
     fn fiber(block_data: BlockData) -> Self {
-        let vm = Executor::default();
-        let handle = std::ptr::NonNull::new(Box::into_raw(Box::new(vm))).unwrap();
         Self {
-            fiber: ManuallyDrop::new(FiberInner { handle, block_data }),
+            fiber: ManuallyDrop::new(FiberInner::new(block_data)),
         }
     }
 }

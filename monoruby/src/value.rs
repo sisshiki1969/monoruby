@@ -773,6 +773,11 @@ impl Value {
         assert_eq!(ObjKind::FIBER, self.rvalue().kind());
         self.rvalue().as_fiber()
     }
+
+    pub fn as_fiber_mut(&mut self) -> &mut FiberInner {
+        assert_eq!(ObjKind::FIBER, self.rvalue().kind());
+        self.rvalue_mut().as_fiber_mut()
+    }
 }
 
 impl Value {
