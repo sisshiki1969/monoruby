@@ -334,6 +334,7 @@ impl Globals {
                 ObjKind::IO => rvalue.as_io().to_string(),
                 ObjKind::EXCEPTION => rvalue.as_exception().err.msg().to_string(),
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
+                ObjKind::FIBER => self.fiber_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -438,6 +439,21 @@ impl Globals {
                 format! {"{{{}}}", result}
             }
         }
+    }
+
+    fn fiber_tos(&self, val: Value) -> String {
+        let fiber = val.as_fiber();
+        let state = match unsafe { fiber.handle.as_ref().fiber_state() } {
+            FiberState::Created => "created",
+            FiberState::Terminated => "terminated",
+            FiberState::Suspended => "suspended",
+        };
+        let func_id = fiber.block_data.func_id();
+        format!(
+            "#<Fiber:0x{:016x} {} ({state})>",
+            val.get(),
+            self[func_id].as_ruby_func().get_location(),
+        )
     }
 
     fn regexp_tos(val: Value) -> String {

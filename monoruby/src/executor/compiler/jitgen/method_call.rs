@@ -538,7 +538,7 @@ impl Codegen {
                     if !callsite.hash_splat_pos.is_empty() {
                         monoasm! { &mut self.jit,
                             lea  rcx, [rsp - (16 + LBP_SELF)];
-                            subq rsp, 4088;
+                            subq rsp, 1016;
                             pushq rdi;
                             movq rdi, rbx;
                             movq rsi, r12;
@@ -547,7 +547,7 @@ impl Codegen {
                             movq rax, (runtime::jit_handle_hash_splat);
                             call rax;
                             popq rdi;
-                            addq rsp, 4088;
+                            addq rsp, 1016;
                         }
                     }
                 } else {

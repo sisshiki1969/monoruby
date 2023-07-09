@@ -17,11 +17,30 @@ pub fn run_test(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped, false);
     let ruby_res = run_ruby(code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
 }
+
+/*pub fn run_test_nogc(code: &str) {
+    let wrapped = format!(
+        r##"
+      __res = ({0})
+      for __i in 0..7 do
+          __res2 = ({0})
+          __assert(__res, __res2)
+      end
+      ({0})
+  "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped, true);
+    let ruby_res = run_ruby(code, &mut globals);
+
+    assert!(Value::eq(interp_val, ruby_res));
+}*/
 
 pub fn run_test_once(code: &str) {
     let wrapped = format!(
@@ -31,7 +50,7 @@ pub fn run_test_once(code: &str) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped, false);
     let ruby_res = run_ruby(code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
@@ -51,7 +70,7 @@ pub fn run_tests(code: &[String]) {
         code
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped, false);
     let ruby_res = run_ruby(&code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
@@ -97,7 +116,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
   "##
     );
     eprintln!("{}", wrapped);
-    let (interp_val, mut globals) = run_test_main(&wrapped);
+    let (interp_val, mut globals) = run_test_main(&wrapped, false);
     let ruby_res = run_ruby(&format!("{prelude}\n{code}"), &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
@@ -118,7 +137,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
 }*/
 
 pub fn run_test2(code: &str) {
-    let (interp_val, mut globals) = run_test_main(code);
+    let (interp_val, mut globals) = run_test_main(code, false);
     let ruby_res = run_ruby(code, &mut globals);
 
     assert!(Value::eq(interp_val, ruby_res));
@@ -127,7 +146,7 @@ pub fn run_test2(code: &str) {
 pub fn run_test_no_result_check(code: &str) -> Value {
     #[cfg(debug_assertions)]
     dbg!(code);
-    run_test_main(code).0
+    run_test_main(code, false).0
 }
 
 pub fn run_test_error(code: &str) {
@@ -140,10 +159,11 @@ pub fn run_test_error(code: &str) {
     }
 }
 
-fn run_test_main(code: &str) -> (Value, Globals) {
+fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
     #[cfg(not(debug_assertions))]
     let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
+    Globals::gc_enable(!no_gc);
     let res = globals
         .compile_and_run(code, std::path::Path::new(""))
         .unwrap();

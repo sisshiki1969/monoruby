@@ -62,6 +62,8 @@ fn fiber_yield(
     }
 }
 
+const FIBER_STACK_SIZE: usize = 8192 * 8;
+
 ///
 /// ### Fiber#resume
 ///
@@ -78,22 +80,35 @@ fn resume(
 ) -> Result<Value> {
     use std::alloc::*;
     let self_val = lfp.self_val();
-    let FiberInner { handle, block_data } = self_val.as_fiber();
-    let res = match unsafe { (**handle).rsp_save } {
-        None => {
-            let layout = Layout::from_size_align(8192, 8192).unwrap();
+    let FiberInner {
+        mut handle,
+        block_data,
+        ..
+    } = self_val.as_fiber();
+    let res = match unsafe { handle.as_ref().fiber_state() } {
+        FiberState::Created => {
+            let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
             unsafe {
-                let ptr = alloc(layout).add(8192);
-                (**handle).rsp_save = Some(std::ptr::NonNull::new(ptr).unwrap());
+                let stack_bottom = alloc(layout);
+                libc::mprotect(stack_bottom as _, 4096, libc::PROT_NONE);
+                let stack_top = stack_bottom.add(FIBER_STACK_SIZE);
+                handle.as_mut().rsp_save = Some(std::ptr::NonNull::new(stack_top).unwrap());
             }
-            (globals.codegen.fiber_invoker)(vm, globals, block_data as _, *handle, arg.0, len)
+            (globals.codegen.fiber_invoker)(
+                vm,
+                globals,
+                block_data as _,
+                handle.as_ptr(),
+                arg.0,
+                len,
+            )
         }
-        Some(ptr) if ptr.as_ptr() as i64 == -1 => {
+        FiberState::Terminated => {
             return Err(MonorubyErr::fibererr(
                 "attempt to resume a terminated fiber".to_string(),
             ))
         }
-        Some(_) => {
+        FiberState::Suspended => {
             let val = if len == 0 {
                 Value::nil()
             } else if len == 1 {
@@ -101,7 +116,7 @@ fn resume(
             } else {
                 Value::array_from_iter(arg.iter(len))
             };
-            resume_fiber(vm as _, *handle, val)
+            resume_fiber(vm as _, handle.as_ptr(), val)
         }
     };
     match res {
@@ -170,5 +185,34 @@ mod test {
     #[test]
     fn fiber_error() {
         run_test_error("Fiber.yield");
+        run_test_error(
+            r#"
+            f = Fiber.new do
+            end
+            f.resume
+            f.resume
+        "#,
+        );
+    }
+
+    #[test]
+    fn fiber() {
+        run_test(
+            r##"
+            answer = []
+            f = Fiber.new do
+                outer = 42
+                answer << "invoked #{outer}"
+                30.times {|i|
+                    answer << "yield = #{Fiber.yield i}"
+                }
+                "terminated #{outer}"
+            end
+            31.times do |i|
+              answer << "resume = #{f.resume i}"
+            end
+            answer
+        "##,
+        );
     }
 }

@@ -190,7 +190,7 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::IO => {}
             ObjKind::EXCEPTION => {}
             ObjKind::METHOD => self.as_method().receiver().mark(alloc),
-            ObjKind::FIBER => unsafe { self.as_fiber().handle.as_ref().unwrap().mark(alloc) },
+            ObjKind::FIBER => unsafe { self.as_fiber().handle.as_ref().mark(alloc) },
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -824,7 +824,7 @@ pub union ObjKind {
 
 #[derive(Debug)]
 pub struct FiberInner {
-    pub handle: *mut Executor,
+    pub handle: std::ptr::NonNull<Executor>,
     pub block_data: BlockData,
 }
 
@@ -986,7 +986,7 @@ impl ObjKind {
 
     fn fiber(block_data: BlockData) -> Self {
         let vm = Executor::default();
-        let handle = Box::into_raw(Box::new(vm));
+        let handle = std::ptr::NonNull::new(Box::into_raw(Box::new(vm))).unwrap();
         Self {
             fiber: ManuallyDrop::new(FiberInner { handle, block_data }),
         }

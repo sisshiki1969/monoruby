@@ -287,6 +287,15 @@ impl ISeqInfo {
         BcIndex::from(i)
     }
 
+    pub fn get_location(&self) -> String {
+        let loc = self.loc;
+        format!(
+            "{}:{}",
+            self.sourceinfo.short_file_name(),
+            self.sourceinfo.get_line(&loc)
+        )
+    }
+
     ///
     /// Explore exception table for pc(*BcPc*) and return error handler's pc(*BcPc*) and the slot where an error object is to be stored.
     ///

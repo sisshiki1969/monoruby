@@ -56,6 +56,12 @@ impl alloc::GC<RValue> for BlockData {
     }
 }
 
+impl BlockData {
+    pub fn func_id(&self) -> FuncId {
+        unsafe { (*self.func_data).meta.func_id() }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct BlockHandler(Value);
@@ -192,6 +198,13 @@ impl alloc::GC<RValue> for Executor {
     }
 }
 
+#[derive(Debug)]
+pub enum FiberState {
+    Created,
+    Suspended,
+    Terminated,
+}
+
 impl Executor {
     pub fn init(globals: &mut Globals) -> Self {
         let mut executor = Self::default();
@@ -222,6 +235,14 @@ impl Executor {
 
     fn temp_len(&self) -> usize {
         self.temp_stack.len()
+    }
+
+    pub fn fiber_state(&self) -> FiberState {
+        match self.rsp_save {
+            None => FiberState::Created,
+            Some(p) if p.as_ptr() as i64 == -1 => FiberState::Terminated,
+            _ => FiberState::Suspended,
+        }
     }
 
     fn temp_push(&mut self, val: Value) {
@@ -1776,6 +1797,10 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
-extern "C" fn execute_gc(globals: &Globals, executor: &Executor) {
+extern "C" fn execute_gc(globals: &Globals, mut executor: &Executor) {
+    // Get root Executor.
+    while let Some(parent) = executor.parent_fiber {
+        executor = unsafe { parent.as_ref() };
+    }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
 }

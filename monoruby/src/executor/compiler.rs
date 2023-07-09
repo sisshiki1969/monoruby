@@ -661,7 +661,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             lea  r9, [rsp - (16 + LBP_SELF)];   // callee_reg
             movq r8, rdi;
-            subq rsp, 4096;
+            subq rsp, 1024;
             pushq rdi;
             subq rsp, 24;
             movq rdi, rbx; // &mut Executor
@@ -675,7 +675,7 @@ impl Codegen {
             call rax;
             addq rsp, 24;
             popq rdi;
-            addq rsp, 4096;
+            addq rsp, 1024;
         }
     }
 

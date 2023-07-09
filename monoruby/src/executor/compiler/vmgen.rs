@@ -485,14 +485,14 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rsi, [rsp - (16 + LBP_META)];
             lea  rdx, [rsp - (16 + LBP_SELF)];
-            subq rsp, 4096;
+            subq rsp, 1024;
             movq rcx, rdi; // arg_num
             movq rdi, r12; // &Globals
             movq rax, (runtime::handle_invoker_arguments);
             call rax;
             // set arg len
             movq rdx, rax;
-            addq rsp, 4096;
+            addq rsp, 1024;
         }
         self.push_frame();
         self.set_lfp();
