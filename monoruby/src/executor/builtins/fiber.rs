@@ -58,7 +58,7 @@ fn fiber_yield(
     };
     match yield_fiber(vm as _, val) {
         Some(res) => Ok(res),
-        None => Err(vm.take_error()),
+        None => Err(unsafe { vm.parent_fiber.unwrap().as_mut().take_error() }),
     }
 }
 
@@ -121,7 +121,7 @@ fn resume(
     };
     match res {
         Some(val) => Ok(val),
-        None => Err(vm.take_error()),
+        None => Err(unsafe { handle.as_mut().take_error() }),
     }
 }
 

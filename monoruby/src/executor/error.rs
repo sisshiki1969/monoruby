@@ -32,6 +32,7 @@ pub enum MonorubyErrKind {
     Runtime,
     Key,
     Fiber,
+    StopIteration,
 }
 
 impl MonorubyErr {
@@ -111,6 +112,7 @@ impl MonorubyErr {
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::Key => "KeyError",
             MonorubyErrKind::Fiber => "FiberError",
+            MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::MethodReturn(..) => unreachable!(),
         }
     }
@@ -445,6 +447,10 @@ impl MonorubyErr {
 
     pub(crate) fn keyerr(msg: String) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Key, msg)
+    }
+
+    pub(crate) fn stopiterationerr() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::StopIteration, "StopIteration".to_string())
     }
 
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {

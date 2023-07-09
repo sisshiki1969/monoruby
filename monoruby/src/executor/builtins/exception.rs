@@ -20,6 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_class_by_str("IOError", standarderr, OBJECT_CLASS);
     let indexerr = globals.define_class_by_str("IndexError", standarderr, OBJECT_CLASS);
     globals.define_class_by_str("KeyError", indexerr, OBJECT_CLASS);
+    globals.define_class_by_str("StopIteration", indexerr, OBJECT_CLASS);
 
     globals.define_class_by_str("LocalJumpError", standarderr, OBJECT_CLASS);
 
