@@ -45,13 +45,14 @@ impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let meta = unsafe { self.header.meta };
         if !self.header.is_live() {
-            write!(f, "DEAD: {:016x} next:{:?}", self.id(), unsafe {
+            write!(f, "{:016x} DEAD: next:{:?}", self.id(), unsafe {
                 self.header.next
             })
         } else {
             write!(
                 f,
-                "RValue {{ class:{:?} {} {:016x} }}",
+                "{:016x} RValue {{ class:{:?} {} }}",
+                self.id(),
                 meta.class,
                 unsafe {
                     match meta.kind {
@@ -75,7 +76,6 @@ impl std::fmt::Debug for RValue {
                         _ => unreachable!(),
                     }
                 },
-                self as *const RValue as u64
             )
         }
     }
@@ -203,9 +203,18 @@ impl alloc::GC<RValue> for RValue {
 }
 
 impl alloc::GCBox for RValue {
+    ///
+    /// Free RValue slot.
+    ///
+    /// note that free() can be called for already free'd rvalue's, because slots in free list
+    /// are free'd in the next sweep phase once more.
+    ///
     fn free(&mut self) {
         #[cfg(feature = "gc-debug")]
         eprintln!("free {:?}", self);
+        if !self.header.is_live() {
+            return;
+        }
         unsafe {
             match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
