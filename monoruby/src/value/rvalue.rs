@@ -33,7 +33,7 @@ pub const RVALUE_OFFSET_HEAP_LEN: usize = 32;
 #[repr(C)]
 pub struct RValue {
     /// flags. 8 bytes
-    flags: RValueHeader,
+    header: Header,
     /// instance variable table. 8 bytes
     #[allow(clippy::box_collection)]
     var_table: Option<Box<Vec<Option<Value>>>>,
@@ -43,40 +43,39 @@ pub struct RValue {
 
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let flag = unsafe { self.flags.flag };
-        if flag.flag & 0b1 != 1 {
-            unreachable!("broken RValue: {:016x} flag:{:?}", self.id(), unsafe {
-                self.flags.flag
-            });
-        };
-        write!(
-            f,
-            "RValue {{ class:{:?} {} {:016x} }}",
-            flag.class,
-            unsafe {
-                match flag.kind {
-                    0 => "<INVALID>".to_string(),
-                    1 => format!("CLASS({:?})", self.kind.class),
-                    2 => format!("MODULE({:?})", self.kind.class),
-                    3 => format!("OBJECT({:?})", self.kind.object),
-                    4 => format!("BIGNUM({:?})", self.kind.bignum),
-                    5 => format!("FLOAT({:?})", self.kind.float),
-                    6 => format!("STRING({:?})", self.kind.string.as_str()),
-                    7 => format!("TIME({:?})", self.kind.time),
-                    8 => format!("ARRAY({:?})", self.kind.array),
-                    9 => format!("RANGE({:?})", self.kind.range),
-                    //10 => format!("SPLAT({:?})", self.kind.array),
-                    11 => format!("PROC({:?})", self.kind.proc),
-                    12 => format!("HASH({:?})", self.kind.hash),
-                    13 => format!("REGEXP({:?})", self.kind.regexp),
-                    14 => format!("IO({:?})", self.kind.io),
-                    15 => format!("METHOD({:?})", self.kind.method),
-                    16 => format!("FIBER({:?})", self.kind.fiber),
-                    _ => unreachable!(),
-                }
-            },
-            self as *const RValue as u64
-        )
+        let meta = unsafe { self.header.meta };
+        if meta.flag & 0b1 != 1 {
+            write!(f, "broken RValue: {:016x} flag:{:?}", self.id(), meta)
+        } else {
+            write!(
+                f,
+                "RValue {{ class:{:?} {} {:016x} }}",
+                meta.class,
+                unsafe {
+                    match meta.kind {
+                        0 => "<INVALID>".to_string(),
+                        1 => format!("CLASS({:?})", self.kind.class),
+                        2 => format!("MODULE({:?})", self.kind.class),
+                        3 => format!("OBJECT({:?})", self.kind.object),
+                        4 => format!("BIGNUM({:?})", self.kind.bignum),
+                        5 => format!("FLOAT({:?})", self.kind.float),
+                        6 => format!("STRING({:?})", self.kind.string.as_str()),
+                        7 => format!("TIME({:?})", self.kind.time),
+                        8 => format!("ARRAY({:?})", self.kind.array),
+                        9 => format!("RANGE({:?})", self.kind.range),
+                        //10 => format!("SPLAT({:?})", self.kind.array),
+                        11 => format!("PROC({:?})", self.kind.proc),
+                        12 => format!("HASH({:?})", self.kind.hash),
+                        13 => format!("REGEXP({:?})", self.kind.regexp),
+                        14 => format!("IO({:?})", self.kind.io),
+                        15 => format!("METHOD({:?})", self.kind.method),
+                        16 => format!("FIBER({:?})", self.kind.fiber),
+                        _ => unreachable!(),
+                    }
+                },
+                self as *const RValue as u64
+            )
+        }
     }
 }
 
@@ -223,22 +222,22 @@ impl alloc::GCBox for RValue {
     }
 
     fn next(&self) -> Option<std::ptr::NonNull<RValue>> {
-        let next = unsafe { self.flags.next };
+        let next = unsafe { self.header.next };
         assert!(unsafe { std::mem::transmute::<_, u64>(next) } & 0b1 != 1);
         next
     }
 
     fn set_next_none(&mut self) {
-        self.flags.next = None;
+        self.header.next = None;
     }
 
     fn set_next(&mut self, next: *mut RValue) {
-        self.flags.next = Some(std::ptr::NonNull::new(next).unwrap());
+        self.header.next = Some(std::ptr::NonNull::new(next).unwrap());
     }
 
     fn new_invalid() -> Self {
         RValue {
-            flags: RValueHeader { next: None },
+            header: Header { next: None },
             kind: ObjKind::invalid(),
             var_table: None,
         }
@@ -251,7 +250,7 @@ impl RValue {
     }
 
     pub(crate) fn kind(&self) -> u8 {
-        self.flags.kind()
+        self.header.kind()
     }
 
     pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
@@ -305,12 +304,12 @@ impl RValue {
     }
 
     pub(super) fn change_class(&mut self, new_class_id: ClassId) {
-        self.flags.change_class(new_class_id);
+        self.header.change_class(new_class_id);
     }
 
     pub(super) fn deep_copy(&self) -> Self {
         RValue {
-            flags: self.flags,
+            header: self.header,
             var_table: self
                 .var_table
                 .as_ref()
@@ -358,7 +357,7 @@ impl RValue {
 
     pub(super) fn dup(&self) -> Self {
         RValue {
-            flags: self.flags,
+            header: self.header,
             var_table: self.var_table.clone(),
             kind: unsafe {
                 match self.kind() {
@@ -412,7 +411,7 @@ impl RValue {
     }
 
     pub(super) fn class(&self) -> ClassId {
-        self.flags.class()
+        self.header.class()
     }
 }
 
@@ -422,7 +421,7 @@ impl RValue {
 impl RValue {
     pub(super) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
-            flags: RValueHeader::new(INTEGER_CLASS, ObjKind::BIGNUM),
+            header: Header::new(INTEGER_CLASS, ObjKind::BIGNUM),
             kind: ObjKind::bignum(bigint),
             var_table: None,
         }
@@ -430,7 +429,7 @@ impl RValue {
 
     pub(super) fn new_float(f: f64) -> Self {
         RValue {
-            flags: RValueHeader::new(FLOAT_CLASS, ObjKind::FLOAT),
+            header: Header::new(FLOAT_CLASS, ObjKind::FLOAT),
             kind: ObjKind::float(f),
             var_table: None,
         }
@@ -445,7 +444,7 @@ impl RValue {
         class_type: ModuleType,
     ) -> Self {
         RValue {
-            flags: RValueHeader::new(CLASS_CLASS, ObjKind::CLASS),
+            header: Header::new(CLASS_CLASS, ObjKind::CLASS),
             kind: ObjKind::class(id, superclass, class_type),
             var_table: None,
         }
@@ -456,7 +455,7 @@ impl RValue {
     ///
     pub(super) fn new_module(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            flags: RValueHeader::new(MODULE_CLASS, ObjKind::MODULE),
+            header: Header::new(MODULE_CLASS, ObjKind::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::RealClass),
             var_table: None,
         }
@@ -467,7 +466,7 @@ impl RValue {
     ///
     pub(super) fn new_iclass(id: ClassId, superclass: Option<Module>) -> Self {
         RValue {
-            flags: RValueHeader::new(MODULE_CLASS, ObjKind::MODULE),
+            header: Header::new(MODULE_CLASS, ObjKind::MODULE),
             kind: ObjKind::class(id, superclass, ModuleType::IClass),
             var_table: None,
         }
@@ -478,7 +477,7 @@ impl RValue {
     ///
     pub(super) fn new_object(class_id: ClassId) -> Self {
         RValue {
-            flags: RValueHeader::new(class_id, ObjKind::OBJECT),
+            header: Header::new(class_id, ObjKind::OBJECT),
             kind: ObjKind::object(),
             var_table: None,
         }
@@ -494,7 +493,7 @@ impl RValue {
 
     pub(super) fn new_bytes(v: Vec<u8>) -> Self {
         RValue {
-            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
+            header: Header::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes_from_vec(v),
             var_table: None,
         }
@@ -502,7 +501,7 @@ impl RValue {
 
     pub(super) fn new_bytes_from_inner(s: StringInner) -> Self {
         RValue {
-            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
+            header: Header::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes(s),
             var_table: None,
         }
@@ -510,7 +509,7 @@ impl RValue {
 
     pub(super) fn new_bytes_from_slice(slice: &[u8]) -> Self {
         RValue {
-            flags: RValueHeader::new(STRING_CLASS, ObjKind::BYTES),
+            header: Header::new(STRING_CLASS, ObjKind::BYTES),
             kind: ObjKind::bytes_from_slice(slice),
             var_table: None,
         }
@@ -518,7 +517,7 @@ impl RValue {
 
     pub(super) fn new_array(ary: ArrayInner) -> Self {
         RValue {
-            flags: RValueHeader::new(ARRAY_CLASS, ObjKind::ARRAY),
+            header: Header::new(ARRAY_CLASS, ObjKind::ARRAY),
             kind: ObjKind::array(ary),
             var_table: None,
         }
@@ -526,7 +525,7 @@ impl RValue {
 
     pub(super) fn new_array_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue {
-            flags: RValueHeader::new(class_id, ObjKind::ARRAY),
+            header: Header::new(class_id, ObjKind::ARRAY),
             kind: ObjKind::array(ArrayInner::from_vec(v)),
             var_table: None,
         }
@@ -534,7 +533,7 @@ impl RValue {
 
     pub(super) fn new_hash(map: IndexMap<HashKey, Value>) -> Self {
         RValue {
-            flags: RValueHeader::new(HASH_CLASS, ObjKind::HASH),
+            header: Header::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
@@ -542,7 +541,7 @@ impl RValue {
 
     pub(super) fn new_hash_from_inner(inner: HashInner) -> Self {
         RValue {
-            flags: RValueHeader::new(HASH_CLASS, ObjKind::HASH),
+            header: Header::new(HASH_CLASS, ObjKind::HASH),
             kind: ObjKind::hash_from_inner(inner),
             var_table: None,
         }
@@ -550,7 +549,7 @@ impl RValue {
 
     pub(super) fn new_hash_with_class(map: IndexMap<HashKey, Value>, class_id: ClassId) -> Self {
         RValue {
-            flags: RValueHeader::new(class_id, ObjKind::HASH),
+            header: Header::new(class_id, ObjKind::HASH),
             kind: ObjKind::hash(map),
             var_table: None,
         }
@@ -558,7 +557,7 @@ impl RValue {
 
     pub(super) fn new_regexp(regexp: RegexpInner) -> Self {
         RValue {
-            flags: RValueHeader::new(REGEXP_CLASS, ObjKind::REGEXP),
+            header: Header::new(REGEXP_CLASS, ObjKind::REGEXP),
             kind: ObjKind::regexp(regexp),
             var_table: None,
         }
@@ -571,7 +570,7 @@ impl RValue {
         class_id: ClassId,
     ) -> Self {
         RValue {
-            flags: RValueHeader::new(class_id, ObjKind::EXCEPTION),
+            header: Header::new(class_id, ObjKind::EXCEPTION),
             kind: ObjKind::exception(kind, msg, trace),
             var_table: None,
         }
@@ -579,7 +578,7 @@ impl RValue {
 
     pub(super) fn new_exception_from_err(err: MonorubyErr, class_id: ClassId) -> Self {
         RValue {
-            flags: RValueHeader::new(class_id, ObjKind::EXCEPTION),
+            header: Header::new(class_id, ObjKind::EXCEPTION),
             kind: ObjKind::exception_from(err),
             var_table: None,
         }
@@ -587,7 +586,7 @@ impl RValue {
 
     pub(super) fn new_io(io: IoInner) -> Self {
         RValue {
-            flags: RValueHeader::new(IO_CLASS, ObjKind::IO),
+            header: Header::new(IO_CLASS, ObjKind::IO),
             kind: ObjKind::io(io),
             var_table: None,
         }
@@ -607,7 +606,7 @@ impl RValue {
 
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
-            flags: RValueHeader::new(TIME_CLASS, ObjKind::TIME),
+            header: Header::new(TIME_CLASS, ObjKind::TIME),
             kind: ObjKind::time(time),
             var_table: None,
         }
@@ -615,7 +614,7 @@ impl RValue {
 
     pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
-            flags: RValueHeader::new(RANGE_CLASS, ObjKind::RANGE),
+            header: Header::new(RANGE_CLASS, ObjKind::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
             var_table: None,
         }
@@ -623,7 +622,7 @@ impl RValue {
 
     pub(super) fn new_proc(block_data: BlockData) -> Self {
         RValue {
-            flags: RValueHeader::new(PROC_CLASS, ObjKind::PROC),
+            header: Header::new(PROC_CLASS, ObjKind::PROC),
             kind: ObjKind::proc(block_data),
             var_table: None,
         }
@@ -631,7 +630,7 @@ impl RValue {
 
     pub(super) fn new_method(receiver: Value, func_id: FuncId) -> Self {
         RValue {
-            flags: RValueHeader::new(METHOD_CLASS, ObjKind::METHOD),
+            header: Header::new(METHOD_CLASS, ObjKind::METHOD),
             kind: ObjKind::method(receiver, func_id),
             var_table: None,
         }
@@ -639,7 +638,7 @@ impl RValue {
 
     pub(super) fn new_fiber(block_data: BlockData) -> Self {
         RValue {
-            flags: RValueHeader::new(FIBER_CLASS, ObjKind::FIBER),
+            header: Header::new(FIBER_CLASS, ObjKind::FIBER),
             kind: ObjKind::fiber(block_data),
             var_table: None,
         }
@@ -803,23 +802,23 @@ impl RValue {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-union RValueHeader {
-    flag: RValueMetadata,
+union Header {
+    meta: Metadata,
     next: Option<std::ptr::NonNull<RValue>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-struct RValueMetadata {
+struct Metadata {
     flag: u16,
     kind: u16,
     class: ClassId,
 }
 
-impl RValueHeader {
+impl Header {
     fn new(class: ClassId, kind: u8) -> Self {
-        RValueHeader {
-            flag: RValueMetadata {
+        Header {
+            meta: Metadata {
                 flag: 1,
                 kind: kind as u16,
                 class,
@@ -828,17 +827,17 @@ impl RValueHeader {
     }
 
     fn class(&self) -> ClassId {
-        let RValueMetadata { flag, class, .. } = unsafe { self.flag };
+        let Metadata { flag, class, .. } = unsafe { self.meta };
         assert!((flag & 0b1) == 1);
         class
     }
 
     fn kind(&self) -> u8 {
-        unsafe { self.flag.kind as u8 }
+        unsafe { self.meta.kind as u8 }
     }
 
     fn change_class(&mut self, class: ClassId) {
-        self.flag.class = class;
+        self.meta.class = class;
     }
 }
 

@@ -12,7 +12,7 @@ const FIBER_STACK_SIZE: usize = 8192 * 8;
 impl Drop for FiberInner {
     fn drop(&mut self) {
         use std::alloc::*;
-        unsafe { Box::from_raw(self.handle_ptr()) };
+        let _ = unsafe { Box::from_raw(self.handle_ptr()) };
         if let Some(stack) = self.stack {
             let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
             unsafe {
