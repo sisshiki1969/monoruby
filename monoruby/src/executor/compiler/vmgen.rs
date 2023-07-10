@@ -472,8 +472,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // set self
             movq [rsp - (16 + LBP_SELF)], rcx;
-            // set block
-            movq [rsp - (16 + LBP_BLOCK)], 0;
             // set meta
             movq rdi, [rdx + (FUNCDATA_OFFSET_META)];
             movq [rsp - (16 + LBP_META)], rdi;
@@ -523,6 +521,8 @@ impl Codegen {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
         monoasm! { &mut self.jit,
+            // set block
+            movq [rsp - (16 + LBP_BLOCK)], 0;
             // r8 : *args
             // r9 : len
             movq rdi, r9;
@@ -544,6 +544,9 @@ impl Codegen {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
         monoasm! { &mut self.jit,
+            // set block
+            movq rax, [r8 - ((LBP_BLOCK - LBP_ARG0))];
+            movq [rsp - (16 + LBP_BLOCK)], 0;
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;

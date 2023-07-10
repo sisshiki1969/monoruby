@@ -1,3 +1,5 @@
+use smallvec::smallvec;
+
 use crate::*;
 
 //
@@ -7,6 +9,7 @@ use crate::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS);
     globals.define_builtin_class_func(ARRAY_CLASS, "new", new, -1);
+    globals.define_builtin_func(ARRAY_CLASS, "initialize", initialize, -1);
     globals.define_builtin_func(ARRAY_CLASS, "size", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "length", size, 0);
     globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
@@ -47,14 +50,65 @@ pub(super) fn init(globals: &mut Globals) {
 /// - new(size) {|index| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
-///
-/// TODO: Support arguments.
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_with_class(vec![], class);
     vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
     Ok(obj)
+}
+
+///
+/// ### Array#initialize
+///
+/// - new(size = 0, val = nil) -> Array
+/// - new(ary) -> Array
+/// - new(size) {|index| ... } -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
+#[monoruby_builtin]
+fn initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 0..=2)?;
+    let mut self_val = lfp.self_val();
+    if len == 0 {
+        return Ok(self_val);
+    }
+    if len == 1 {
+        if let Some(ary) = arg[0].is_array() {
+            *self_val.as_array_mut() = ary.clone();
+            return Ok(self_val);
+        }
+    }
+    if let Some(size) = arg[0].try_fixnum() {
+        if size < 0 {
+            return Err(MonorubyErr::negative_array_size());
+        }
+        let size = size as usize;
+        if let Some(bh) = lfp.block() {
+            if len == 2 {
+                eprintln!("warning: block supersedes default value argument");
+            }
+            let iter = (0..=size).map(|i| Value::integer(i as i64)).into_iter();
+            let vec = vm.invoke_block_map1(globals, bh, iter)?;
+            *self_val.as_array_mut() = ArrayInner::from_vec(vec);
+        } else {
+            let val = if len == 1 { Value::nil() } else { arg[1] };
+            *self_val.as_array_mut() = ArrayInner::from(smallvec![val; size]);
+        }
+        Ok(self_val)
+    } else {
+        Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            arg[0],
+            INTEGER_CLASS,
+        ))
+    }
 }
 
 ///
@@ -732,16 +786,54 @@ mod test {
     fn array_new() {
         run_test_with_prelude(
             r##"
-        a = A.new
+        a = A.new(4, 42)
         a << 4
         a[2] = 5
-        a
+        [a, a.class]
         "##,
             r##"
         class A < Array
         end
         "##,
         );
+        run_test_with_prelude(
+            r##"
+        a = A.new(10)
+        a << 4
+        a[2] = 5
+        [a, a.class]
+        "##,
+            r##"
+        class A < Array
+        end
+        "##,
+        );
+        run_test_with_prelude(
+            r##"
+        a = A.new([1,2,3])
+        a << 4
+        a[2] = 5
+        [a, a.class]
+        "##,
+            r##"
+        class A < Array
+        end
+        "##,
+        );
+        /*run_test_with_prelude(
+            r##"
+        a = A.new(5) {|i| i*3 }
+        a << 4
+        a[2] = 5
+        [a, a.class]
+        "##,
+            r##"
+        class A < Array
+        end
+        "##,
+        );*/
+        run_test_error("Array.new(-5)");
+        run_test_error("Array.new(:r, 42)");
     }
 
     #[test]

@@ -27,6 +27,10 @@ impl ArrayInner {
         ArrayInner(smallvec!())
     }
 
+    pub fn from(smallvec: SmallVec<[Value; 5]>) -> Self {
+        ArrayInner(smallvec)
+    }
+
     pub fn from_vec(v: Vec<Value>) -> Self {
         ArrayInner(SmallVec::from_vec(v))
     }
