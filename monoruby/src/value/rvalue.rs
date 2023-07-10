@@ -44,8 +44,10 @@ pub struct RValue {
 impl std::fmt::Debug for RValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let meta = unsafe { self.header.meta };
-        if meta.flag & 0b1 != 1 {
-            write!(f, "broken RValue: {:016x} flag:{:?}", self.id(), meta)
+        if !self.header.is_live() {
+            write!(f, "DEAD: {:016x} next:{:?}", self.id(), unsafe {
+                self.header.next
+            })
         } else {
             write!(
                 f,
@@ -142,6 +144,7 @@ impl RValue {
 
 impl alloc::GC<RValue> for RValue {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        assert!(self.header.is_live());
         if alloc.gc_check_and_mark(self) {
             return;
         }
@@ -201,6 +204,8 @@ impl alloc::GC<RValue> for RValue {
 
 impl alloc::GCBox for RValue {
     fn free(&mut self) {
+        #[cfg(feature = "gc-debug")]
+        eprintln!("free {:?}", self);
         unsafe {
             match self.kind() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
@@ -826,10 +831,13 @@ impl Header {
         }
     }
 
+    fn is_live(&self) -> bool {
+        unsafe { self.meta.flag & 0b1 == 1 }
+    }
+
     fn class(&self) -> ClassId {
-        let Metadata { flag, class, .. } = unsafe { self.meta };
-        assert!((flag & 0b1) == 1);
-        class
+        assert!(self.is_live());
+        unsafe { self.meta.class }
     }
 
     fn kind(&self) -> u8 {

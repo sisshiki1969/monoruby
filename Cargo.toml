@@ -1,5 +1,5 @@
 [workspace]
-members = ["monoruby", "monoruby_attr", "rust-smallvec"]
+members = ["monoruby", "monoruby_attr"]
 resolver = "2"
 
 [profile.dev]
