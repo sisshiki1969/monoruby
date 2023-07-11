@@ -66,7 +66,7 @@ fn object_new(
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
     if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
-        vm.invoke_func(globals, func_id, obj, arg, len)?;
+        vm.invoke_func(globals, func_id, obj, arg, len, lfp.block())?;
     };
     Ok(obj)
 }
@@ -228,7 +228,9 @@ fn raise(
         return Err(err);
     } else if let Some(klass) = arg[0].is_class() {
         if klass.get_module(globals).is_exception() {
-            if let Some(ex) = vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[]) {
+            if let Some(ex) =
+                vm.invoke_method(globals, IdentId::NEW, klass.get_obj(globals), &[], None)
+            {
                 let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
                 if len == 2 {
                     err.set_msg(arg[1].expect_string(globals)?);

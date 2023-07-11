@@ -497,6 +497,7 @@ impl Executor {
         method: IdentId,
         receiver: Value,
         args: &[Value],
+        block_handler: Option<BlockHandler>,
     ) -> Option<Value> {
         let func_id = match globals.find_method(receiver, method, false) {
             Ok(id) => id,
@@ -506,7 +507,15 @@ impl Executor {
             }
         };
         let data = globals.compile_on_demand(func_id) as *const _;
-        (globals.codegen.method_invoker)(self, globals, data, receiver, args.as_ptr(), args.len())
+        (globals.codegen.method_invoker)(
+            self,
+            globals,
+            data,
+            receiver,
+            args.as_ptr(),
+            args.len(),
+            block_handler,
+        )
     }
 
     ///
@@ -518,6 +527,7 @@ impl Executor {
         method: IdentId,
         receiver: Value,
         args: &[Value],
+        block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
         let data = globals.compile_on_demand(func_id) as *const _;
@@ -528,6 +538,7 @@ impl Executor {
             receiver,
             args.as_ptr(),
             args.len(),
+            block_handler,
         ) {
             Some(res) => Ok(res),
             None => Err(self.take_error()),
@@ -660,9 +671,10 @@ impl Executor {
         receiver: Value,
         args: Arg,
         len: usize,
+        block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func(globals, func_id, receiver, args, len)
+            self.invoke_func(globals, func_id, receiver, args, len, block_handler)
         } else {
             Ok(Value::nil())
         }
@@ -678,9 +690,10 @@ impl Executor {
         receiver: Value,
         args: Arg,
         len: usize,
+        block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let data = globals.compile_on_demand(func_id) as *const _;
-        (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len)
+        (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len, block_handler)
             .ok_or_else(|| self.take_error())
     }
 

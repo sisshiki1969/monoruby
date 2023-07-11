@@ -434,7 +434,7 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    vm.invoke_method(globals, IdentId::_INDEX, base, &[index])
+    vm.invoke_method(globals, IdentId::_INDEX, base, &[index], None)
 }
 
 pub(super) extern "C" fn get_array_integer_index(base: Value, index: i64) -> Option<Value> {
@@ -467,7 +467,7 @@ pub(super) extern "C" fn set_index(
         }
         _ => {}
     }
-    vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
+    vm.invoke_method(globals, IdentId::_INDEX_ASSIGN, base, &[index, src], None)
 }
 
 pub(super) extern "C" fn set_array_integer_index(

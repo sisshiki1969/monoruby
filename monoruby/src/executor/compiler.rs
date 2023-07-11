@@ -18,6 +18,17 @@ type MethodInvoker = extern "C" fn(
     Value,
     *const Value,
     usize,
+    Option<BlockHandler>,
+) -> Option<Value>;
+
+type MethodInvoker2 = extern "C" fn(
+    &mut Executor,
+    &mut Globals,
+    *const FuncData,
+    Value,
+    Arg,
+    usize,
+    Option<BlockHandler>,
 ) -> Option<Value>;
 
 type BlockInvoker = extern "C" fn(
@@ -37,9 +48,6 @@ type FiberInvoker = extern "C" fn(
     *const Value,
     usize,
 ) -> Option<Value>;
-
-type MethodInvoker2 =
-    extern "C" fn(&mut Executor, &mut Globals, *const FuncData, Value, Arg, usize) -> Option<Value>;
 
 macro_rules! cmp_main {
     ($op:ident) => {

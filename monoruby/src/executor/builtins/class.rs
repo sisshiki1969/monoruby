@@ -61,7 +61,7 @@ pub(super) fn new(
     len: usize,
 ) -> Result<Value> {
     let obj = __allocate(vm, globals, lfp, arg, 0)?;
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
+    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
 
@@ -139,8 +139,11 @@ fn inline_class_new(
         movq rcx, r15;
         lea r8, [r14 - (conv(*args))];
         movl r9, (*len);
+        subq rsp, 16;
+        movq [rsp], 0;
         movq rax, (gen.method_invoker2);
         call rax;
+        addq rsp, 16;
     exit:
     );
     gen.xmm_restore(&using);

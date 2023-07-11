@@ -345,9 +345,32 @@ impl Codegen {
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
+        // r11: Option<BlockHandler>
+        monoasm! { &mut self.jit,
+            movq r11, [rsp + 8];
+        }
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(false, true);
-        self.gen_invoker_prep();
+        self.gen_invoker_prep(false);
+        self.gen_invoker_call();
+        self.gen_invoker_epilogue();
+
+        // method invoker.
+        self.method_invoker2 =
+            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
+        // rdi: &mut Executor
+        // rsi: &mut Globals
+        // rdx: *const FuncData
+        // rcx: receiver: Value
+        // r8:  args: Arg
+        // r9:  len: usize
+        // r11: Option<BlockHandler>
+        monoasm! { &mut self.jit,
+            movq r11, [rsp + 8];
+        }
+        self.gen_invoker_prologue();
+        self.gen_invoker_frame_setup(false, true);
+        self.gen_invoker_prep2();
         self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
@@ -362,7 +385,7 @@ impl Codegen {
         // r9:  len: usize
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, false);
-        self.gen_invoker_prep();
+        self.gen_invoker_prep(true);
         self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
@@ -376,22 +399,7 @@ impl Codegen {
         // r9:  len: usize
         self.gen_invoker_prologue();
         self.gen_invoker_frame_setup(true, true);
-        self.gen_invoker_prep();
-        self.gen_invoker_call();
-        self.gen_invoker_epilogue();
-
-        // method invoker.
-        self.method_invoker2 =
-            unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: *const FuncData
-        // rcx: receiver: Value
-        // r8:  args: Arg
-        // r9:  len: usize
-        self.gen_invoker_prologue();
-        self.gen_invoker_frame_setup(false, true);
-        self.gen_invoker_prep2();
+        self.gen_invoker_prep(true);
         self.gen_invoker_call();
         self.gen_invoker_epilogue();
 
@@ -418,7 +426,7 @@ impl Codegen {
             movq r12, rsi;
         }
         self.gen_invoker_frame_setup(true, false);
-        self.gen_invoker_prep();
+        self.gen_invoker_prep(true);
         self.gen_invoker_call();
         monoasm! { &mut self.jit,
             movq [rbx + 16], (-1); // [vm.rsp_save] <- -1 (terminated)
@@ -517,9 +525,20 @@ impl Codegen {
         };
     }
 
-    fn gen_invoker_prep(&mut self) {
+    fn gen_invoker_prep(&mut self, invoke_block: bool) {
         let loop_exit = self.jit.label();
         let loop_ = self.jit.label();
+        if invoke_block {
+            monoasm! { &mut self.jit,
+                // set block
+                movq [rsp - (16 + LBP_BLOCK)], 0;
+            };
+        } else {
+            monoasm! { &mut self.jit,
+                // set block
+                movq [rsp - (16 + LBP_BLOCK)], r11;
+            };
+        }
         monoasm! { &mut self.jit,
             // set block
             movq [rsp - (16 + LBP_BLOCK)], 0;
@@ -545,8 +564,7 @@ impl Codegen {
         let loop_ = self.jit.label();
         monoasm! { &mut self.jit,
             // set block
-            movq rax, [r8 - ((LBP_BLOCK - LBP_ARG0))];
-            movq [rsp - (16 + LBP_BLOCK)], 0;
+            movq [rsp - (16 + LBP_BLOCK)], r11;
             // r8 <- *args
             // r9 <- len
             movq rdi, r9;

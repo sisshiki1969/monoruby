@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 ///
-/// ### Module#call
+/// ### Method#call
 ///
 /// - self[*args] -> object
 /// - call(*args) -> object
@@ -27,7 +27,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize
     let func_id = method.func_id();
     let receiver = method.receiver();
 
-    vm.invoke_func(globals, func_id, receiver, arg, len)
+    vm.invoke_func(globals, func_id, receiver, arg, len, lfp.block())
 }
 
 #[cfg(test)]
@@ -48,6 +48,21 @@ mod test {
         class Foo
           def foo(arg)
             "foo called with arg #{arg}"
+          end
+        end
+        "##,
+        );
+        run_test_with_prelude(
+            r##"
+        m = Foo.new.method(:foo)
+        m.call(42) do |x|
+            x ** 2
+        end
+            "##,
+            r##"
+        class Foo
+          def foo(arg)
+            yield arg
           end
         end
         "##,

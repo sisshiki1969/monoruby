@@ -40,7 +40,7 @@ macro_rules! binop_values {
                         return None;
                     }
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
                     }
                 };
                 Some(v)
@@ -119,7 +119,7 @@ pub(super) extern "C" fn pow_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => pow_ff(lhs, rhs.to_f64().unwrap()),
         (RV::Float(lhs), RV::Float(rhs)) => pow_ff(lhs, rhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_POW, lhs, &[rhs], None);
         }
     };
     Some(v)
@@ -173,7 +173,7 @@ pub(super) extern "C" fn div_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => Value::float(lhs.div(&rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => Value::float(lhs.div(&rhs)),
         _ => {
-            return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_DIV, lhs, &[rhs], None);
         }
     };
     Some(v)
@@ -194,7 +194,7 @@ macro_rules! int_binop_values {
                     (RV::BigInt(lhs), RV::Integer(rhs)) => Value::bigint(lhs.$op(BigInt::from(rhs))),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => Value::bigint(lhs.$op(rhs)),
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
                     }
                 };
                 Some(v)
@@ -235,7 +235,7 @@ pub(super) extern "C" fn shr_values(
             }
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHR, lhs, &[rhs], None);
         }
     };
     Some(v)
@@ -263,7 +263,7 @@ pub(super) extern "C" fn shl_values(
             }
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHL, lhs, &[rhs], None);
         }
     };
     Some(v)
@@ -311,7 +311,7 @@ macro_rules! cmp_values {
                     (RV::Float(lhs), RV::BigInt(rhs)) => lhs.$op(&(rhs.to_f64().unwrap())),
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     _ => {
-                        return vm.invoke_method(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, lhs, &[rhs], None);
                     }
                 };
                 Some(Value::bool(b))
@@ -379,7 +379,7 @@ macro_rules! eq_values {
                         (RV::String(lhs), RV::String(rhs)) => lhs.$op(rhs),
                         (RV::String(lhs), _) => false.$op(&true),
                         _ => {
-                            self.invoke_method_inner(globals, $op_str, lhs, &[rhs])?.as_bool()
+                            self.invoke_method_inner(globals, $op_str, lhs, &[rhs], None)?.as_bool()
                         }
                     };
                     Ok(b)
@@ -461,7 +461,7 @@ pub(super) extern "C" fn cmp_teq_values(
         (RV::Float(lhs), RV::BigInt(rhs)) => lhs.eq(&(rhs.to_f64().unwrap())),
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_TEQ, lhs, &[rhs], None);
         }
     };
     Some(Value::bool(b))
@@ -518,7 +518,7 @@ impl Executor {
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
             _ => {
                 if let Some(i) = self
-                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs])?
+                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None)?
                     .try_fixnum()
                 {
                     match i {
@@ -554,7 +554,7 @@ pub(super) extern "C" fn neg_value(
         RV::Float(lhs) => Value::float(-lhs),
         RV::BigInt(lhs) => Value::bigint(-lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_UMINUS, lhs, &[], None);
         }
     };
     Some(v)
@@ -570,7 +570,7 @@ pub(super) extern "C" fn pos_value(
         RV::Float(lhs) => Value::float(lhs),
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         _ => {
-            return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[]);
+            return vm.invoke_method(globals, IdentId::get_id("@+"), lhs, &[], None);
         }
     };
     Some(v)
@@ -585,7 +585,7 @@ pub(super) extern "C" fn bitnot_value(
         RV::Integer(lhs) => Value::integer(!lhs),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::get_id("~"), lhs, &[]);
+            return vm.invoke_method(globals, IdentId::get_id("~"), lhs, &[], None);
         }
     };
     Some(v)

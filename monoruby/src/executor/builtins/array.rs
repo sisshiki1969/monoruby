@@ -54,7 +54,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_with_class(vec![], class);
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len)?;
+    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
 
@@ -94,7 +94,7 @@ fn initialize(
             if len == 2 {
                 eprintln!("warning: block supersedes default value argument");
             }
-            let iter = (0..=size).map(|i| Value::integer(i as i64)).into_iter();
+            let iter = (0..size).map(|i| Value::integer(i as i64)).into_iter();
             let vec = vm.invoke_block_map1(globals, bh, iter)?;
             *self_val.as_array_mut() = ArrayInner::from_vec(vec);
         } else {
@@ -820,7 +820,7 @@ mod test {
         end
         "##,
         );
-        /*run_test_with_prelude(
+        run_test_with_prelude(
             r##"
         a = A.new(5) {|i| i*3 }
         a << 4
@@ -831,7 +831,7 @@ mod test {
         class A < Array
         end
         "##,
-        );*/
+        );
         run_test_error("Array.new(-5)");
         run_test_error("Array.new(:r, 42)");
     }
