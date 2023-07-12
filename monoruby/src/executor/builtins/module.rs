@@ -114,11 +114,11 @@ fn const_get(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let name = arg[0].expect_symbol_or_string(globals)?;
-    let class_id = lfp.self_val().as_class_id();
+    let module = lfp.self_val().as_class();
     let v = if len == 1 || arg[1].as_bool() {
-        globals.search_constant_superclass(class_id, name)
+        globals.search_constant_superclass(module, name)
     } else {
-        globals.get_constant(class_id, name)
+        globals.get_constant(module.id(), name)
     };
     match v {
         Some(v) => Ok(v),

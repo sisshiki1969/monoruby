@@ -24,16 +24,12 @@ impl Globals {
         self.store[class_id].constants.get(&name).cloned()
     }
 
-    pub fn search_constant_superclass(
-        &self,
-        mut class_id: ClassId,
-        name: IdentId,
-    ) -> Option<Value> {
+    pub fn search_constant_superclass(&self, mut module: Module, name: IdentId) -> Option<Value> {
         loop {
-            match self.get_constant(class_id, name) {
+            match self.get_constant(module.id(), name) {
                 Some(v) => return Some(v),
-                None => match class_id.get_module(self).superclass_id() {
-                    Some(superclass) => class_id = superclass,
+                None => match module.superclass() {
+                    Some(superclass) => module = superclass,
                     None => break,
                 },
             };
@@ -126,13 +122,14 @@ impl Globals {
         if let Some(v) = self.search_lexical_stack(name, current_func) {
             return Ok(v);
         }
-        let class_id = self[current_func]
+        let module = self[current_func]
             .as_ruby_func()
             .lexical_context
             .last()
-            .map_or(OBJECT_CLASS, |m| m.superclass_id().unwrap_or(OBJECT_CLASS));
+            .unwrap_or(&OBJECT_CLASS.get_module(self))
+            .to_owned();
 
-        match self.search_constant_superclass(class_id, name) {
+        match self.search_constant_superclass(module, name) {
             Some(v) => Ok(v),
             None => Err(MonorubyErr::uninitialized_constant(name)),
         }
