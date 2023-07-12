@@ -301,8 +301,6 @@ impl<T: GCBox> Allocator<T> {
     }
 
     fn sweep_bits(bit: usize, mut map: u64, ptr: &mut *mut T, head: &mut *mut T) -> usize {
-        #[cfg(feature = "gc-debug")]
-        eprintln!("sweeping ptr:{:?} map:{:016x}", *ptr, map);
         let mut c = 0;
         let min = map.trailing_ones() as usize;
         *ptr = unsafe { (*ptr).add(min) };

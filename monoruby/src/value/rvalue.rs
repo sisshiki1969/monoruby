@@ -210,8 +210,6 @@ impl alloc::GCBox for RValue {
     /// are free'd in the next sweep phase once more.
     ///
     fn free(&mut self) {
-        #[cfg(feature = "gc-debug")]
-        eprintln!("free {:?}", self);
         if !self.header.is_live() {
             return;
         }

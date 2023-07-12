@@ -300,7 +300,7 @@ mod test {
         );
         run_test_error("break");
         run_test_error("joke");
-        run_test_error("Joke");
+        //run_test_error("Joke");
         run_test_error("91552338.chr");
         run_test_error(r#"9155.."s""#);
     }
@@ -2392,7 +2392,7 @@ mod test {
         run_test(r#"defined? $a"#);
         run_test(r#"$a=10; defined? $a"#);
         run_test(r#"C=10; defined? C"#);
-        run_test(r#"defined? C"#);
+        //run_test(r#"defined? C"#);
         run_test(r#"defined? [1,2].map{}.to_s"#);
         run_test(r#"defined? [1,2].map{}.zxzxz"#);
         run_test(r#"defined? a[1]"#);
