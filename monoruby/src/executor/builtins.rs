@@ -9,6 +9,7 @@ mod float;
 mod hash;
 mod integer;
 mod io;
+mod kernel;
 mod math;
 mod method;
 mod module;
@@ -36,6 +37,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
     module::init(globals);
     class::init(globals);
+    kernel::init(globals);
     exception::init(globals);
     integer::init(globals);
     float::init(globals);
@@ -77,38 +79,25 @@ impl Arg {
     }
 
     pub fn to_vec(&self, len: usize) -> Vec<Value> {
-        if len == 0 {
-            return vec![];
-        }
-        unsafe {
-            let data = self.0.sub(len - 1);
-            std::slice::from_raw_parts(data, len)
-                .iter()
-                .rev()
-                .cloned()
-                .collect()
-        }
+        self.iter(len).collect()
     }
 
-    pub fn iter(&self, len: usize) -> impl Iterator<Item = Value> {
+    pub fn iter(&self, len: usize) -> impl DoubleEndedIterator<Item = Value> + '_ {
+        self.iter_inner(len).rev().cloned()
+    }
+
+    pub fn rev(&self, len: usize) -> impl Iterator<Item = Value> + '_ {
+        self.iter_inner(len).cloned()
+    }
+
+    fn iter_inner(&self, len: usize) -> impl DoubleEndedIterator<Item = &Value> {
         unsafe {
             let data = if len == 0 {
                 self.0
             } else {
                 self.0.sub(len - 1)
             };
-            std::slice::from_raw_parts(data, len).iter().rev().cloned()
-        }
-    }
-
-    pub fn rev(&self, len: usize) -> impl Iterator<Item = Value> {
-        unsafe {
-            let data = if len == 0 {
-                self.0
-            } else {
-                self.0.sub(len - 1)
-            };
-            std::slice::from_raw_parts(data, len).iter().cloned()
+            std::slice::from_raw_parts(data, len).iter()
         }
     }
 }

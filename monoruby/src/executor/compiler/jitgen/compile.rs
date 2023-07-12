@@ -490,54 +490,58 @@ mod test {
 
     #[test]
     fn deopt_reader_recv_class() {
-        run_test(
+        run_test_with_prelude(
             r##"
-        class A
-            attr_accessor :w
-        end
-        class B
-          def w
-            100
-          end
-        end
-        a = A.new
-        a.w = 42
-        res = []
-        for i in 0..10
-          if i == 8
-            a = B.new
-          end
-          res << a.w
-        end
-        res
+            a = A.new
+            a.w = 42
+            res = []
+            for i in 0..10
+              if i == 8
+                a = B.new
+              end
+              res << a.w
+            end
+            res
         "##,
+            r##"
+            class A
+                attr_accessor :w
+            end
+            class B
+              def w
+                100
+              end
+            end
+            "##,
         );
     }
 
     #[test]
     fn deopt_writer_recv_class() {
-        run_test(
+        run_test_with_prelude(
             r##"
-        class A
-          attr_accessor :w
-        end
-        class B
-          attr_reader :w
-          def w=(v)
-            @w = v * 2
-          end
-        end
-        a = A.new
-        res = []
-        for i in 0..10
-          if i == 8
-            a = B.new
-          end
-          a.w = 42
-          res << a.w
-        end
-        res
+            a = A.new
+            res = []
+            for i in 0..10
+              if i == 8
+                a = B.new
+              end
+              a.w = 42
+              res << a.w
+            end
+            res
         "##,
+            r##"
+            class A
+              attr_accessor :w
+            end
+            class B
+              attr_reader :w
+              def w=(v)
+                @w = v * 2
+              end
+            end
+            "##,
         );
     }
 
