@@ -43,9 +43,11 @@ impl std::ops::IndexMut<FuncId> for Funcs {
 
 impl std::default::Default for Funcs {
     fn default() -> Self {
+        let mut info = Vec::with_capacity(1024);
+        info.push(FuncInfo::default());
         Self {
-            info: vec![FuncInfo::default()],
-            compile_info: vec![],
+            info,
+            compile_info: Vec::with_capacity(1024),
         }
     }
 }

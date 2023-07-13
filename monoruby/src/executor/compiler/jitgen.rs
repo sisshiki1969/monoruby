@@ -360,11 +360,12 @@ extern "C" fn log_deoptimize(
                 globals.deopt_stats.insert((func_id, index), 1);
             }
         };
-        if let TraceIr::LoadConst(..) = pc.get_ir() {
+        let trace_ir = pc.get_ir();
+        if let TraceIr::LoadConst(..) = trace_ir {
             // inline constant cache miss
             eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);
-        } else if let TraceIr::ClassDef { .. } = pc.get_ir() {
+        } else if let TraceIr::ClassDef { .. } = trace_ir {
             // error in class def (illegal superclass etc.)
             eprint!("<-- deopt occurs in {} {:?}.", name, func_id);
             eprintln!("    [{:05}] {fmt}", index);

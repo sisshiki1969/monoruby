@@ -490,8 +490,16 @@ mod test {
 
     #[test]
     fn deopt_reader_recv_class() {
-        run_test_with_prelude(
+        run_test(
             r##"
+            class A
+                attr_accessor :w
+            end
+            class B
+              def w
+                100
+              end
+            end
             a = A.new
             a.w = 42
             res = []
@@ -503,23 +511,22 @@ mod test {
             end
             res
         "##,
-            r##"
-            class A
-                attr_accessor :w
-            end
-            class B
-              def w
-                100
-              end
-            end
-            "##,
         );
     }
 
     #[test]
     fn deopt_writer_recv_class() {
-        run_test_with_prelude(
+        run_test(
             r##"
+            class A
+              attr_accessor :w
+            end
+            class B
+              attr_reader :w
+              def w=(v)
+                @w = v * 2
+              end
+            end
             a = A.new
             res = []
             for i in 0..10
@@ -531,17 +538,6 @@ mod test {
             end
             res
         "##,
-            r##"
-            class A
-              attr_accessor :w
-            end
-            class B
-              attr_reader :w
-              def w=(v)
-                @w = v * 2
-              end
-            end
-            "##,
         );
     }
 
