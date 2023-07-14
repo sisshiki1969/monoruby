@@ -22,6 +22,7 @@ mod regexp;
 mod string;
 mod struct_class;
 mod time;
+mod enumerator;
 
 pub(self) use crate::executor::jitgen::analysis::SlotInfo;
 pub(self) use crate::executor::jitgen::BBContext;
@@ -53,6 +54,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     proc::init(globals);
     method::init(globals);
     fiber::init(globals);
+    enumerator::init(globals);
     time::init(globals);
     io::init(globals);
     struct_class::init(globals);

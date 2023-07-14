@@ -73,6 +73,7 @@ impl std::fmt::Debug for RValue {
                         14 => format!("IO({:?})", self.kind.io),
                         15 => format!("METHOD({:?})", self.kind.method),
                         16 => format!("FIBER({:?})", self.kind.fiber),
+                        17 => format!("ENUMERATOR({:?})", self.kind.enumerator),
                         _ => unreachable!(),
                     }
                 },
@@ -197,6 +198,13 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::EXCEPTION => {}
             ObjKind::METHOD => self.as_method().receiver().mark(alloc),
             ObjKind::FIBER => self.as_fiber().handle().mark(alloc),
+            ObjKind::ENUMERATOR => {
+                let enum_ = self.as_enumerator();
+                enum_.internal.handle().mark(alloc);
+                if let Some(v) = enum_.yielder {
+                    v.mark(alloc)
+                }
+            }
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -226,6 +234,7 @@ impl alloc::GCBox for RValue {
                 ObjKind::HASH => ManuallyDrop::drop(&mut self.kind.hash),
                 ObjKind::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
                 ObjKind::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
+                ObjKind::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
                 _ => {}
             }
             self.set_next_none();
@@ -655,6 +664,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_enumerator(block_data: BlockData) -> Self {
+        RValue {
+            header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
+            kind: ObjKind::enumerator(block_data),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -799,6 +816,14 @@ impl RValue {
     pub(crate) fn as_fiber_mut(&mut self) -> &mut FiberInner {
         unsafe { &mut self.kind.fiber }
     }
+
+    pub(crate) fn as_enumerator(&self) -> &EnumeratorInner {
+        unsafe { &self.kind.enumerator }
+    }
+
+    pub(crate) fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
+        unsafe { &mut self.kind.enumerator }
+    }
 }
 
 impl RValue {
@@ -874,6 +899,7 @@ pub union ObjKind {
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
     fiber: ManuallyDrop<FiberInner>,
+    enumerator: ManuallyDrop<EnumeratorInner>,
 }
 
 #[allow(dead_code)]
@@ -895,6 +921,7 @@ impl ObjKind {
     pub const IO: u8 = 14;
     pub const METHOD: u8 = 15;
     pub const FIBER: u8 = 16;
+    pub const ENUMERATOR: u8 = 17;
 }
 
 #[derive(Debug, Clone)]
@@ -939,6 +966,21 @@ impl RangeInner {
 
     pub fn exclude_end(&self) -> bool {
         self.exclude_end != 0
+    }
+}
+
+#[derive(Debug)]
+pub struct EnumeratorInner {
+    pub internal: Box<FiberInner>,
+    pub yielder: Option<Value>,
+}
+
+impl EnumeratorInner {
+    pub fn new(data: BlockData) -> Self {
+        Self {
+            internal: Box::new(FiberInner::new(data)),
+            yielder: None,
+        }
     }
 }
 
@@ -1069,6 +1111,12 @@ impl ObjKind {
     fn fiber(block_data: BlockData) -> Self {
         Self {
             fiber: ManuallyDrop::new(FiberInner::new(block_data)),
+        }
+    }
+
+    fn enumerator(block_data: BlockData) -> Self {
+        Self {
+            enumerator: ManuallyDrop::new(EnumeratorInner::new(block_data)),
         }
     }
 }

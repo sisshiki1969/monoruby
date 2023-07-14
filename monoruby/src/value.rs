@@ -373,6 +373,10 @@ impl Value {
         RValue::new_fiber(block_data).pack()
     }
 
+    pub fn new_enumerator(block_data: BlockData) -> Self {
+        RValue::new_enumerator(block_data).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Integer(i)
@@ -777,6 +781,11 @@ impl Value {
     pub fn as_fiber_mut(&mut self) -> &mut FiberInner {
         assert_eq!(ObjKind::FIBER, self.rvalue().kind());
         self.rvalue_mut().as_fiber_mut()
+    }
+
+    pub fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
+        assert_eq!(ObjKind::ENUMERATOR, self.rvalue().kind());
+        self.rvalue_mut().as_enumerator_mut()
     }
 }
 
