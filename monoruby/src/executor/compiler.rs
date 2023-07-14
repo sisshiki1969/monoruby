@@ -9,12 +9,12 @@ mod wrapper;
 use super::*;
 //use runtime::*;
 
-type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, *const FuncData) -> Option<Value>;
+type EntryPoint = extern "C" fn(&mut Executor, &mut Globals, &FuncData) -> Option<Value>;
 
 type MethodInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    *const FuncData,
+    &FuncData,
     Value,
     *const Value,
     usize,
@@ -24,7 +24,7 @@ type MethodInvoker = extern "C" fn(
 type MethodInvoker2 = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    *const FuncData,
+    &FuncData,
     Value,
     Arg,
     usize,
@@ -34,7 +34,7 @@ type MethodInvoker2 = extern "C" fn(
 type BlockInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    *const BlockData,
+    &BlockData,
     Value,
     *const Value,
     usize,
@@ -43,7 +43,7 @@ type BlockInvoker = extern "C" fn(
 type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    *const BlockData,
+    &BlockData,
     *mut Executor,
     *const Value,
     usize,

@@ -341,7 +341,7 @@ impl Codegen {
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: &FuncData
         // rcx: receiver: Value
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -360,7 +360,7 @@ impl Codegen {
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: &FuncData
         // rcx: receiver: Value
         // r8:  args: Arg
         // r9:  len: usize
@@ -379,7 +379,7 @@ impl Codegen {
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: &BlockData
         // rcx: <dummy>
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -393,7 +393,7 @@ impl Codegen {
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: &BlockData
         // rcx: self: Value
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -408,7 +408,7 @@ impl Codegen {
             unsafe { std::mem::transmute(self.jit.get_current_address().as_ptr()) };
         // rdi: &mut Executor
         // rsi: &mut Globals
-        // rdx: *const FuncData
+        // rdx: &BlockkData
         // rcx: *mut Executor
         // r8:  *args: *const Value
         // r9:  len: usize
@@ -457,13 +457,13 @@ impl Codegen {
     }
 
     fn gen_invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
-        // rdx: (method)*const FuncData
-        // rdx: (block) *const BlockData
+        // rdx: (method) &FuncData
+        // rdx: (block)  &BlockData
         // rcx: self: Value
         if invoke_block {
             monoasm! { &mut self.jit,
                 movq rax, [rdx];        // rax <- outer_lfp
-                movq rdx, [rdx + 8];    // rdx <- &FuncData
+                lea  rdx, [rdx + 8];    // rdx <- &FuncData
                 // set outer
                 lea  rsi, [rax - (LBP_OUTER)];
                 movq [rsp - (16 + LBP_OUTER)], rsi;

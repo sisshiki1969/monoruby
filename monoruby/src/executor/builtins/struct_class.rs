@@ -45,7 +45,7 @@ fn struct_new(
     if let Some(block) = lfp.block() {
         vm.push_class_context(class_id);
         let data = vm.get_block_data(globals, block);
-        vm.invoke_block_with_self(globals, data, class, &[class])?;
+        vm.invoke_block_with_self(globals, &data, class, &[class])?;
         vm.pop_class_context();
     };
     Ok(class)

@@ -38,14 +38,14 @@ const LBP_ARG0: i64 = LBP_SELF + 8;
 #[repr(C)]
 pub struct BlockData {
     outer_lfp: LFP,
-    func_data: *const FuncData,
+    func_data: FuncData,
 }
 
 impl std::default::Default for BlockData {
     fn default() -> Self {
         Self {
             outer_lfp: LFP::default(),
-            func_data: std::ptr::null(),
+            func_data: FuncData::default(),
         }
     }
 }
@@ -58,7 +58,7 @@ impl alloc::GC<RValue> for BlockData {
 
 impl BlockData {
     pub fn func_id(&self) -> FuncId {
-        unsafe { (*self.func_data).meta.func_id() }
+        self.func_data.meta.func_id()
     }
 }
 
@@ -367,12 +367,12 @@ impl Executor {
     ///
     /// *main* object is set to *self*.
     pub fn eval(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
-        let main_data = globals.compile_on_demand(func_id) as *const _;
+        let main_data = globals.compile_on_demand(func_id).clone();
 
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let res = (globals.codegen.entry_point)(self, globals, main_data);
+        let res = (globals.codegen.entry_point)(self, globals, &main_data);
         res.ok_or_else(|| self.take_error())
     }
 
@@ -382,7 +382,7 @@ impl Executor {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
-            let func_data = globals.compile_on_demand(func_id) as _;
+            let func_data = globals.compile_on_demand(func_id).clone();
             BlockData {
                 outer_lfp: cfp.lfp(),
                 func_data,
@@ -506,11 +506,11 @@ impl Executor {
                 return None;
             }
         };
-        let data = globals.compile_on_demand(func_id) as *const _;
+        let data = globals.compile_on_demand(func_id).clone();
         (globals.codegen.method_invoker)(
             self,
             globals,
-            data,
+            &data,
             receiver,
             args.as_ptr(),
             args.len(),
@@ -530,11 +530,11 @@ impl Executor {
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
         let func_id = globals.find_method(receiver, method, false)?;
-        let data = globals.compile_on_demand(func_id) as *const _;
+        let data = globals.compile_on_demand(func_id).clone();
         match (globals.codegen.method_invoker)(
             self,
             globals,
-            data,
+            &data,
             receiver,
             args.as_ptr(),
             args.len(),
@@ -555,13 +555,13 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        data: BlockData,
+        data: &BlockData,
         args: &[Value],
     ) -> Result<Value> {
         match (globals.codegen.block_invoker)(
             self,
             globals,
-            &data as _,
+            data,
             Value::nil(),
             args.as_ptr(),
             args.len(),
@@ -574,14 +574,14 @@ impl Executor {
     pub(crate) fn invoke_block_with_self(
         &mut self,
         globals: &mut Globals,
-        data: BlockData,
+        data: &BlockData,
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
         match (globals.codegen.block_invoker_with_self)(
             self,
             globals,
-            &data as _,
+            data as _,
             self_val,
             args.as_ptr(),
             args.len(),
@@ -598,7 +598,7 @@ impl Executor {
         args: &[Value],
     ) -> Result<Value> {
         let data = self.get_block_data(globals, block_handler);
-        self.invoke_block(globals, data, args)
+        self.invoke_block(globals, &data, args)
     }
 
     pub(crate) fn invoke_block_iter1(
@@ -607,9 +607,9 @@ impl Executor {
         block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let block_data = self.get_block_data(globals, block_handler);
+        let data = self.get_block_data(globals, block_handler);
         for val in iter {
-            self.invoke_block(globals, block_data.clone(), &[val])?;
+            self.invoke_block(globals, &data, &[val])?;
         }
         Ok(())
     }
@@ -620,10 +620,10 @@ impl Executor {
         block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<Vec<Value>> {
-        let block_data = self.get_block_data(globals, block_handler);
+        let data = self.get_block_data(globals, block_handler);
         let t = self.temp_len();
         for v in iter {
-            let res = self.invoke_block(globals, block_data.clone(), &[v])?;
+            let res = self.invoke_block(globals, &data, &[v])?;
             self.temp_push(res);
         }
         let vec = self.temp_tear(t);
@@ -639,7 +639,7 @@ impl Executor {
     ) -> Result<Value> {
         let data = self.get_block_data(globals, block_handler);
         for elem in iter {
-            res = self.invoke_block(globals, data.clone(), &[res, elem])?;
+            res = self.invoke_block(globals, &data, &[res, elem])?;
         }
         Ok(res)
     }
@@ -656,7 +656,7 @@ impl Executor {
         (globals.codegen.block_invoker)(
             self,
             globals,
-            block_data as _,
+            block_data,
             Value::nil(),
             args.as_ptr(),
             args.len(),
@@ -692,8 +692,8 @@ impl Executor {
         len: usize,
         block_handler: Option<BlockHandler>,
     ) -> Result<Value> {
-        let data = globals.compile_on_demand(func_id) as *const _;
-        (globals.codegen.method_invoker2)(self, globals, data, receiver, args, len, block_handler)
+        let data = globals.compile_on_demand(func_id).clone();
+        (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, block_handler)
             .ok_or_else(|| self.take_error())
     }
 

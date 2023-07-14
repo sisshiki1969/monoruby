@@ -193,7 +193,7 @@ impl RegexpInner {
                     }
                 };
                 let matched = Value::string_from_str(matched_str);
-                let result = vm.invoke_block(globals, data.clone(), &[matched])?;
+                let result = vm.invoke_block(globals, &data, &[matched])?;
                 let replace = globals.to_s(result);
                 range.push((start, end, replace));
             }

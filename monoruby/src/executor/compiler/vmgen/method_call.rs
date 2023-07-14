@@ -249,12 +249,25 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // rsp + 08:[%ret]
             // rsp + 00:[pc]
+            //
+            // -00 |                  |
+            //     | FuncData.pc      |
+            // -16 | FuncData.meta    |
+            //     | FuncData.codeptr |
+            // -32 | outer_lfp        |
+            //     |    (rdi)         |
+            // -48 |    (rsi)         |
+            //
+            subq rsp, 32;
             pushq rdi;
             pushq rsi;
-            movq rdi, rbx;
-            movq rsi, r12;
+            lea  rdi, [rsp + 16];
+            movq rsi, rbx;
+            movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
+            lea  rdx, [rax + 8];
+            movq rax, [rax];
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args
@@ -299,6 +312,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             popq r13;   // pop pc
             popq r15;   // pop %ret
+            addq rsp, 32;
         };
         self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);

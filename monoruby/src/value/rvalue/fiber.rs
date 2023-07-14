@@ -45,8 +45,8 @@ impl FiberInner {
         unsafe { self.handle.as_ref() }
     }
 
-    pub fn block_data(&self) -> *const BlockData {
-        &self.block_data as _
+    pub fn block_data(&self) -> &BlockData {
+        &self.block_data
     }
 
     pub fn func_id(&self) -> FuncId {

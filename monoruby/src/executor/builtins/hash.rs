@@ -198,7 +198,7 @@ fn each(
     let ary = lfp.self_val();
     let data = vm.get_block_data(globals, block_handler);
     for (k, v) in ary.as_hash().iter() {
-        vm.invoke_block(globals, data.clone(), &[k, v])?;
+        vm.invoke_block(globals, &data, &[k, v])?;
     }
     Ok(lfp.self_val())
 }

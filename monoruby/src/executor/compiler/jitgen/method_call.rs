@@ -594,10 +594,14 @@ impl Codegen {
         self.xmm_save(&xmm_using);
         let no_block = self.no_block;
         monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
+            subq rsp, 32;
+            lea  rdi, [rsp];
+            movq rsi, rbx;
+            movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
+            lea  rdx, [rax + 8];
+            movq rax, [rax];
             // rax <- outer_cfp, rdx <- &FuncData
             testq rax, rax;
             jz  no_block;
@@ -642,6 +646,9 @@ impl Codegen {
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
         };
         self.call_rax();
+        monoasm! { &mut self.jit,
+            addq rsp, 32;
+        }
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {

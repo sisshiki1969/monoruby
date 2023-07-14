@@ -70,6 +70,13 @@ pub(super) extern "C" fn get_super_data(
     Some(func_data.as_ptr())
 }
 
+///
+/// Get *BlockData* for yield.
+///
+/// - rdi: &BlockData
+/// - rsi: &Executor
+/// - rdx: &mut Globals
+///
 pub(super) extern "C" fn get_yield_data(vm: &Executor, globals: &mut Globals) -> BlockData {
     vm.cfp()
         .get_block()

@@ -488,7 +488,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
         Some(b) => {
             let data = vm.get_block_data(globals, b);
             for v in iter {
-                let rhs = vm.invoke_block(globals, data.clone(), &[v])?;
+                let rhs = vm.invoke_block(globals, &data, &[v])?;
                 sum = executor::op::add_values(vm, globals, sum, rhs)
                     .ok_or_else(|| vm.take_error())?;
             }
@@ -661,7 +661,7 @@ fn detect(
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh);
     for elem in ary.as_array().iter() {
-        if vm.invoke_block(globals, data.clone(), &[*elem])?.as_bool() {
+        if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
             return Ok(*elem);
         };
     }
