@@ -27,7 +27,7 @@ gc-stress = []
 
 [dependencies]
 clap = { version = "4.1.4", features = ["derive"] }
-rustyline = "11.0.0"
+rustyline = "12.0.0"
 paste = "1.0.7"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git" }
@@ -42,12 +42,12 @@ smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features
 escape_string = "0.1.2"
 hex = "0.4.3"
 rand = "0.8.5"
-indexmap = "1.9.2"
+indexmap = "2.0.0"
 regex = "1.7.1"
 fancy-regex = "0.11.0"
 libc = "0.2.139"
 getrandom = "0.2.8"
 sfmt = "0.7.0"
-dirs = "4.0.0"
+dirs = "5.0.1"
 bitvec = "1.0.1"
 ansi_term = "0.12.1"

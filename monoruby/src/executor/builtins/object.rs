@@ -141,34 +141,6 @@ fn print(
 }
 
 ///
-/// ### Kernel.#loop
-///
-/// - loop { ... } -> object | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
-#[monoruby_builtin]
-fn loop_(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
-    MonorubyErr::check_number_of_arguments(len, 0)?;
-    let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh);
-    loop {
-        if let Err(err) = vm.invoke_block(globals, &data, &[]) {
-            return if err.kind() == &MonorubyErrKind::StopIteration {
-                Ok(Value::nil())
-            } else {
-                Err(err)
-            };
-        }
-    }
-}
-
-///
 /// ### Kernel.#fail
 ///
 /// - [NOT SUPPORTED] raise -> ()

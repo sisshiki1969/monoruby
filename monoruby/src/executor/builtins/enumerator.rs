@@ -1,5 +1,10 @@
 use crate::*;
 
+use std::sync::Once;
+
+static mut YIELDER: Option<Module> = None;
+static YIELDER_INIT: Once = Once::new();
+
 //
 // Enumerator class
 //
@@ -11,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
+    unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
     //globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield, -1);
     globals.define_builtin_func(yielder.id(), "<<", yielder_shl, 0);
     globals.define_builtin_func(yielder.id(), "yield", yielder_yield, -1);
@@ -42,28 +48,28 @@ fn enumerator_new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
-fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+fn next(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut self_val = lfp.self_val();
-    let fiber = &mut (*self_val.as_enumerator_mut().internal);
-    match fiber.state() {
+    let enum_ = &mut (*self_val.as_enumerator_mut());
+    match enum_.internal.state() {
         FiberState::Created => {
-            fiber.init();
-            vm.invoke_fiber(globals, fiber, arg, len)
+            let yielder = Value::object(unsafe { YIELDER.unwrap().id() });
+            enum_.yielder = Some(yielder);
+            enum_.internal.init();
+            let arg = Arg::from(&yielder);
+            vm.invoke_fiber(globals, &mut enum_.internal, arg, 1)
         }
-        FiberState::Terminated => Err(MonorubyErr::fibererr(
-            "attempt to resume a terminated fiber".to_string(),
+        FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
+            "iteration reached an end".to_string(),
         )),
-        FiberState::Suspended => {
-            let val = if len == 0 {
-                Value::nil()
-            } else if len == 1 {
-                arg[0]
-            } else {
-                Value::array_from_iter(arg.iter(len))
-            };
-            vm.resume_fiber(fiber, val)
-        }
+        FiberState::Suspended => vm.resume_fiber(&mut enum_.internal, enum_.yielder.unwrap()),
     }
 }
 

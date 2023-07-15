@@ -2,6 +2,7 @@ use super::*;
 
 mod array;
 mod class;
+mod enumerator;
 mod exception;
 mod fiber;
 mod file;
@@ -22,7 +23,6 @@ mod regexp;
 mod string;
 mod struct_class;
 mod time;
-mod enumerator;
 
 pub(self) use crate::executor::jitgen::analysis::SlotInfo;
 pub(self) use crate::executor::jitgen::BBContext;
@@ -76,6 +76,10 @@ impl std::ops::Index<usize> for Arg {
 }
 
 impl Arg {
+    pub fn from(val: &Value) -> Arg {
+        Arg(val as _)
+    }
+
     pub fn as_ptr(&self) -> *const Value {
         self.0
     }

@@ -335,6 +335,7 @@ impl Globals {
                 ObjKind::EXCEPTION => rvalue.as_exception().msg().to_string(),
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
+                ObjKind::ENUMERATOR => self.enumerator_tos(),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -458,6 +459,10 @@ impl Globals {
             val.get(),
             self[func_id].as_ruby_func().get_location(),
         )
+    }
+
+    fn enumerator_tos(&self) -> String {
+        format!("#<Enumerator: ...>",)
     }
 
     fn regexp_tos(val: Value) -> String {

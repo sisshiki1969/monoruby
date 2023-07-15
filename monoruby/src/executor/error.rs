@@ -33,6 +33,7 @@ pub enum MonorubyErrKind {
     Key,
     Fiber,
     StopIteration,
+    Exception,
 }
 
 impl MonorubyErr {
@@ -45,7 +46,7 @@ impl MonorubyErr {
     }
 
     pub fn new_from_exception(ex: &ExceptionInner) -> Self {
-        let kind = ex.kind();
+        let kind = ex.kind().clone();
         let msg = ex.msg().to_string();
         let trace = ex.trace();
         MonorubyErr { kind, msg, trace }
@@ -110,6 +111,7 @@ impl MonorubyErr {
 
     pub fn get_class_name(&self) -> &str {
         match &self.kind {
+            MonorubyErrKind::Exception => "Exception",
             MonorubyErrKind::NotMethod => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
@@ -464,9 +466,9 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Key, msg)
     }
 
-    /*pub(crate) fn stopiterationerr() -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::StopIteration, "StopIteration".to_string())
-    }*/
+    pub(crate) fn stopiterationerr(msg: String) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::StopIteration, msg)
+    }
 
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {
         MonorubyErr::indexerr(format!(
