@@ -113,9 +113,15 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn fiber() {
+    fn enumerator() {
         run_test(
             r##"
+            a = Enumerator.new do |y|
+                3.times do |i|
+                    y << i
+                end
+            end
+            [a.next, a.next, a.next]
         "##,
         );
     }

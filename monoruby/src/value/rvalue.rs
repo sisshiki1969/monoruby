@@ -971,14 +971,20 @@ impl RangeInner {
 
 #[derive(Debug)]
 pub struct EnumeratorInner {
-    pub internal: Box<FiberInner>,
+    pub internal: Box<ManuallyDrop<FiberInner>>,
     pub yielder: Option<Value>,
+}
+
+impl Drop for EnumeratorInner {
+    fn drop(&mut self) {
+        //unsafe { ManuallyDrop::drop(&mut self.internal) };
+    }
 }
 
 impl EnumeratorInner {
     pub fn new(data: BlockData) -> Self {
         Self {
-            internal: Box::new(FiberInner::new(data)),
+            internal: Box::new(ManuallyDrop::new(FiberInner::new(data))),
             yielder: None,
         }
     }
