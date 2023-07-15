@@ -1,0 +1,13 @@
+prelude: |
+  fib = Enumerator.new do |y|
+      a = b = 1
+      loop do 
+          y << a
+          a, b = a + b, a
+      end
+  end
+benchmark:
+  enumerator: |
+    fib.next
+
+loop_count: 300000

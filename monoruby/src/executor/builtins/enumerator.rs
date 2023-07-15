@@ -125,4 +125,21 @@ mod test {
         "##,
         );
     }
+
+    #[test]
+    fn fib() {
+        run_test(
+            r##"
+            fib = Enumerator.new do |y|
+                a = b = 1
+                loop do 
+                    y << a
+                    a, b = a + b, a
+                end
+            end
+            30.times do fib.next end
+            fib.next
+        "##,
+        );
+    }
 }
