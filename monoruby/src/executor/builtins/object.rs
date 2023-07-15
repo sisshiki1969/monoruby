@@ -498,6 +498,17 @@ mod test {
     }
 
     #[test]
+    fn dup() {
+        run_test("1.dup");
+        run_test("1.5.dup");
+        run_test("'Ruby'.dup");
+        run_test(":Ruby.dup");
+        run_test("[1,2,3].dup");
+        run_test("{a:1,b:2}.dup");
+        run_test("(1..3).dup");
+    }
+
+    #[test]
     fn block_given() {
         run_test_with_prelude(
             r##"

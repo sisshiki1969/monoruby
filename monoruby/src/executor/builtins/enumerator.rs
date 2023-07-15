@@ -124,6 +124,16 @@ mod test {
             [a.next, a.next, a.next]
         "##,
         );
+        run_test_no_result_check(
+            r##"
+            a = Enumerator.new do |y|
+                3.times do |i|
+                    y << i
+                end
+            end
+            [a.inspect, a.to_s]
+        "##,
+        );
     }
 
     #[test]

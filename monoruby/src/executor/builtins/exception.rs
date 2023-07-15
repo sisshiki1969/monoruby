@@ -63,3 +63,22 @@ fn exception_new(
     let kind = class_id.get_name_id(globals).unwrap();
     Ok(Value::new_exception(kind, msg, vec![], class_id))
 }
+
+#[cfg(test)]
+mod test {
+    use super::tests::*;
+
+    #[test]
+    fn exception() {
+        run_test_error(
+            r##"
+            raise StopIteration
+        "##,
+        );
+        run_test_error(
+            r##"
+            raise StopIteration.new
+        "##,
+        );
+    }
+}
