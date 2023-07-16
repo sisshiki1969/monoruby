@@ -973,6 +973,7 @@ impl RangeInner {
 pub struct EnumeratorInner {
     pub internal: Box<ManuallyDrop<FiberInner>>,
     pub yielder: Option<Value>,
+    pub buffer: Option<Value>,
 }
 
 impl Drop for EnumeratorInner {
@@ -986,6 +987,7 @@ impl EnumeratorInner {
         Self {
             internal: Box::new(ManuallyDrop::new(FiberInner::new(data))),
             yielder: None,
+            buffer: None,
         }
     }
 }

@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
     globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
@@ -41,6 +42,26 @@ fn enumerator_new(
     Ok(Value::new_enumerator(block_data))
 }
 
+fn get_next_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    enum_: &mut EnumeratorInner,
+) -> Result<Value> {
+    match enum_.internal.state() {
+        FiberState::Created => {
+            let yielder = Value::object(unsafe { YIELDER.unwrap().id() });
+            enum_.yielder = Some(yielder);
+            enum_.internal.init();
+            let arg = Arg::from(&yielder);
+            vm.invoke_fiber(globals, &mut enum_.internal, arg, 1)
+        }
+        FiberState::Suspended => vm.resume_fiber(&mut enum_.internal, enum_.yielder.unwrap()),
+        FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
+            "iteration reached an end".to_string(),
+        )),
+    }
+}
+
 ///
 /// ### Enumerator#next
 ///
@@ -57,20 +78,41 @@ fn next(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut self_val = lfp.self_val();
-    let enum_ = &mut (*self_val.as_enumerator_mut());
-    match enum_.internal.state() {
-        FiberState::Created => {
-            let yielder = Value::object(unsafe { YIELDER.unwrap().id() });
-            enum_.yielder = Some(yielder);
-            enum_.internal.init();
-            let arg = Arg::from(&yielder);
-            vm.invoke_fiber(globals, &mut enum_.internal, arg, 1)
-        }
-        FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
-            "iteration reached an end".to_string(),
-        )),
-        FiberState::Suspended => vm.resume_fiber(&mut enum_.internal, enum_.yielder.unwrap()),
-    }
+    let enum_ = self_val.as_enumerator_mut();
+    let v = if let Some(v) = std::mem::take(&mut enum_.buffer) {
+        v
+    } else {
+        let v = get_next_value(vm, globals, enum_)?;
+        v
+    };
+    Ok(v)
+}
+
+///
+/// ### Enumerator#peek
+///
+/// - peek -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
+#[monoruby_builtin]
+fn peek(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let mut self_val = lfp.self_val();
+    let enum_ = self_val.as_enumerator_mut();
+    let v = if let Some(v) = enum_.buffer {
+        v
+    } else {
+        let v = get_next_value(vm, globals, enum_)?;
+        enum_.buffer = Some(v);
+        v
+    };
+    Ok(v)
 }
 
 ///
@@ -121,7 +163,7 @@ mod test {
                     y << i
                 end
             end
-            [a.next, a.next, a.next]
+            [a.next, a.peek, a.peek, a.next, a.peek, a.next]
         "##,
         );
         run_test_no_result_check(
