@@ -15,6 +15,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, -1);
 
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
@@ -63,6 +65,32 @@ fn is_a(
 ) -> Result<Value> {
     let class = arg[0].expect_class_or_module(globals)?;
     Ok(Value::bool(lfp.self_val().is_kind_of(globals, class)))
+}
+
+///
+/// ### Object#enum_for
+///
+/// - to_enum(method = :each, *args) -> Enumerator
+/// - enum_for(method = :each, *args) -> Enumerator
+/// - to_enum(method = :each, *args) {|*args| ... } -> Enumerator
+/// - enum_for(method = :each, *args) {|*args| ... } -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
+#[monoruby_builtin]
+fn to_enum(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    _len: usize,
+) -> Result<Value> {
+    let func_id = globals.find_method(lfp.self_val(), IdentId::EACH, false)?;
+    let func_data = globals.compile_on_demand(func_id).clone();
+    let block_data = BlockData {
+        outer_lfp: None,
+        func_data,
+    };
+    Ok(Value::new_enumerator(block_data))
 }
 
 ///

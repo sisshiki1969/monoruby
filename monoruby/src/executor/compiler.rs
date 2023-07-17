@@ -178,9 +178,9 @@ pub struct Codegen {
     pub(super) entry_point: EntryPoint,
     pub(super) method_invoker: MethodInvoker,
     pub(super) method_invoker2: MethodInvoker2,
-    pub(super) block_invoker: BlockInvoker,
-    pub(super) block_invoker_with_self: BlockInvoker,
-    pub(super) fiber_invoker: FiberInvoker,
+    pub block_invoker: BlockInvoker,
+    pub block_invoker_with_self: BlockInvoker,
+    pub fiber_invoker: FiberInvoker,
 }
 
 impl Codegen {

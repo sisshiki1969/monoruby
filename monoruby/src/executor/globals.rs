@@ -170,11 +170,23 @@ impl Globals {
         }
     }
 
-    pub fn get_block_data(&mut self, mut cfp: CFP) -> BlockData {
-        let block_handler = cfp
-            .get_block()
+    pub fn get_block_data(&mut self, cfp: CFP) -> BlockData {
+        let bh = cfp
+            .lfp()
+            .block()
             .unwrap_or_else(|| panic!("block not given."));
-        if let Some((func_id, idx)) = block_handler.try_proxy() {
+        self.get_data(cfp, bh)
+    }
+
+    pub fn get_yield_data(&mut self, cfp: CFP) -> BlockData {
+        match cfp.get_block() {
+            Some(bh) => self.get_data(cfp, bh),
+            None => BlockData::default(),
+        }
+    }
+
+    fn get_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> BlockData {
+        if let Some((func_id, idx)) = bh.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();
             }
@@ -184,7 +196,7 @@ impl Globals {
                 func_data,
             }
         } else {
-            block_handler.as_proc().clone()
+            bh.as_proc().clone()
         }
     }
 

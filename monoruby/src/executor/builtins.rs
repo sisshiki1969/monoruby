@@ -26,6 +26,7 @@ mod time;
 
 pub(self) use crate::executor::jitgen::analysis::SlotInfo;
 pub(self) use crate::executor::jitgen::BBContext;
+pub use enumerator::YIELDER;
 pub(self) use monoasm::DestLabel;
 pub(self) use monoasm_macro::monoasm;
 pub use time::TimeInner;

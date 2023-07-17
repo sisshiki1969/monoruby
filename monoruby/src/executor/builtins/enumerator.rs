@@ -2,7 +2,7 @@ use crate::*;
 
 use std::sync::Once;
 
-static mut YIELDER: Option<Module> = None;
+pub static mut YIELDER: Option<Module> = None;
 static YIELDER_INIT: Once = Once::new();
 
 //
@@ -18,7 +18,6 @@ pub(super) fn init(globals: &mut Globals) {
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
-    //globals.define_builtin_class_func(FIBER_CLASS, "yield", fiber_yield, -1);
     globals.define_builtin_func(yielder.id(), "<<", yielder_shl, 0);
     globals.define_builtin_func(yielder.id(), "yield", yielder_yield, -1);
 }
@@ -42,26 +41,6 @@ fn enumerator_new(
     Ok(Value::new_enumerator(block_data))
 }
 
-fn get_next_value(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    enum_: &mut EnumeratorInner,
-) -> Result<Value> {
-    match enum_.internal.state() {
-        FiberState::Created => {
-            let yielder = Value::object(unsafe { YIELDER.unwrap().id() });
-            enum_.yielder = Some(yielder);
-            enum_.internal.init();
-            let arg = Arg::from(&yielder);
-            vm.invoke_fiber(globals, &mut enum_.internal, arg, 1)
-        }
-        FiberState::Suspended => vm.resume_fiber(&mut enum_.internal, enum_.yielder.unwrap()),
-        FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
-            "iteration reached an end".to_string(),
-        )),
-    }
-}
-
 ///
 /// ### Enumerator#next
 ///
@@ -77,15 +56,7 @@ fn next(
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    let mut self_val = lfp.self_val();
-    let enum_ = self_val.as_enumerator_mut();
-    let v = if let Some(v) = std::mem::take(&mut enum_.buffer) {
-        v
-    } else {
-        let v = get_next_value(vm, globals, enum_)?;
-        v
-    };
-    Ok(v)
+    lfp.self_val().as_enumerator_mut().next(vm, globals)
 }
 
 ///
@@ -103,16 +74,7 @@ fn peek(
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    let mut self_val = lfp.self_val();
-    let enum_ = self_val.as_enumerator_mut();
-    let v = if let Some(v) = enum_.buffer {
-        v
-    } else {
-        let v = get_next_value(vm, globals, enum_)?;
-        enum_.buffer = Some(v);
-        v
-    };
-    Ok(v)
+    lfp.self_val().as_enumerator_mut().peek(vm, globals)
 }
 
 ///

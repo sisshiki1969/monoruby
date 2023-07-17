@@ -5,6 +5,7 @@ use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
 pub use self::array::*;
+pub use self::enumerator::EnumeratorInner;
 pub use self::fiber::FiberInner;
 pub use self::hash::*;
 pub use self::io::IoInner;
@@ -14,6 +15,7 @@ pub use self::regexp::RegexpInner;
 pub use self::string::StringInner;
 
 mod array;
+mod enumerator;
 mod fiber;
 mod hash;
 mod io;
@@ -197,14 +199,8 @@ impl alloc::GC<RValue> for RValue {
             ObjKind::IO => {}
             ObjKind::EXCEPTION => {}
             ObjKind::METHOD => self.as_method().receiver().mark(alloc),
-            ObjKind::FIBER => self.as_fiber().handle().mark(alloc),
-            ObjKind::ENUMERATOR => {
-                let enum_ = self.as_enumerator();
-                enum_.internal.handle().mark(alloc);
-                if let Some(v) = enum_.yielder {
-                    v.mark(alloc)
-                }
-            }
+            ObjKind::FIBER => self.as_fiber().mark(alloc),
+            ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
             _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
@@ -969,29 +965,6 @@ impl RangeInner {
     }
 }
 
-#[derive(Debug)]
-pub struct EnumeratorInner {
-    pub internal: Box<ManuallyDrop<FiberInner>>,
-    pub yielder: Option<Value>,
-    pub buffer: Option<Value>,
-}
-
-impl Drop for EnumeratorInner {
-    fn drop(&mut self) {
-        //unsafe { ManuallyDrop::drop(&mut self.internal) };
-    }
-}
-
-impl EnumeratorInner {
-    pub fn new(data: BlockData) -> Self {
-        Self {
-            internal: Box::new(ManuallyDrop::new(FiberInner::new(data))),
-            yielder: None,
-            buffer: None,
-        }
-    }
-}
-
 impl ObjKind {
     fn invalid() -> Self {
         Self { invalid: () }
@@ -1124,7 +1097,7 @@ impl ObjKind {
 
     fn enumerator(block_data: BlockData) -> Self {
         Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new(block_data)),
+            enumerator: ManuallyDrop::new(EnumeratorInner::new_generator(block_data)),
         }
     }
 }

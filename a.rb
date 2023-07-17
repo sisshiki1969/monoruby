@@ -1,3 +1,2 @@
-m = 100
-a = Array.new(10) {|i| m * i}
-puts "#{a}"
+e = [1,2,3,4,5].to_enum
+#puts e.next

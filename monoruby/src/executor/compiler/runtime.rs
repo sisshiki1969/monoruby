@@ -73,14 +73,12 @@ pub(super) extern "C" fn get_super_data(
 ///
 /// Get *BlockData* for yield.
 ///
-/// - rdi: &BlockData
+/// - rdi: &mut BlockData
 /// - rsi: &Executor
 /// - rdx: &mut Globals
 ///
 pub(super) extern "C" fn get_yield_data(cfp: CFP, globals: &mut Globals) -> BlockData {
-    cfp.get_block()
-        .map(|_| globals.get_block_data(cfp))
-        .unwrap_or_default()
+    globals.get_yield_data(cfp)
 }
 
 pub(super) extern "C" fn block_arg(

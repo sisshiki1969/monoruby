@@ -74,26 +74,7 @@ fn resume(
     len: usize,
 ) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    let fiber = self_val.as_fiber_mut();
-    match fiber.state() {
-        FiberState::Created => {
-            fiber.init();
-            vm.invoke_fiber(globals, fiber, arg, len)
-        }
-        FiberState::Terminated => Err(MonorubyErr::fibererr(
-            "attempt to resume a terminated fiber".to_string(),
-        )),
-        FiberState::Suspended => {
-            let val = if len == 0 {
-                Value::nil()
-            } else if len == 1 {
-                arg[0]
-            } else {
-                Value::array_from_iter(arg.iter(len))
-            };
-            vm.resume_fiber(fiber, val)
-        }
-    }
+    self_val.as_fiber_mut().resume(vm, globals, arg, len)
 }
 
 #[cfg(test)]

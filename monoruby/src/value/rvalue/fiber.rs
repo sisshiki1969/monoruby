@@ -12,13 +12,19 @@ const FIBER_STACK_SIZE: usize = 8192 * 8;
 impl Drop for FiberInner {
     fn drop(&mut self) {
         use std::alloc::*;
-        let _ = unsafe { Box::from_raw(self.handle_ptr()) };
+        let _ = unsafe { Box::from_raw(self.handle.as_ptr()) };
         if let Some(stack) = self.stack {
             let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
             unsafe {
                 dealloc(stack.as_ptr(), layout);
             }
         }
+    }
+}
+
+impl alloc::GC<RValue> for FiberInner {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        unsafe { self.handle.as_ref().mark(alloc) }
     }
 }
 
@@ -37,23 +43,39 @@ impl FiberInner {
         unsafe { self.handle.as_ref().fiber_state() }
     }
 
-    pub fn handle_ptr(&self) -> *mut Executor {
-        self.handle.as_ptr()
-    }
-
-    pub fn handle(&self) -> &Executor {
-        unsafe { self.handle.as_ref() }
-    }
-
-    pub fn block_data(&self) -> &BlockData {
-        &self.block_data
-    }
-
     pub fn func_id(&self) -> FuncId {
         self.block_data.func_id()
     }
 
-    pub fn init(&mut self) {
+    pub fn resume(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg: Arg,
+        len: usize,
+    ) -> Result<Value> {
+        match self.state() {
+            FiberState::Created => {
+                self.init();
+                self.invoke_fiber(vm, globals, arg, len)
+            }
+            FiberState::Terminated => Err(MonorubyErr::fibererr(
+                "attempt to resume a terminated fiber".to_string(),
+            )),
+            FiberState::Suspended => {
+                let val = if len == 0 {
+                    Value::nil()
+                } else if len == 1 {
+                    arg[0]
+                } else {
+                    Value::array_from_iter(arg.iter(len))
+                };
+                self.resume_fiber(vm, val)
+            }
+        }
+    }
+
+    pub(super) fn init(&mut self) {
         use std::alloc::*;
         let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
         unsafe {
@@ -65,7 +87,61 @@ impl FiberInner {
         }
     }
 
-    pub fn take_error(&mut self) -> MonorubyErr {
+    pub(super) fn invoke_fiber(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        arg: Arg,
+        len: usize,
+    ) -> Result<Value> {
+        match (globals.codegen.fiber_invoker)(
+            vm,
+            globals,
+            &self.block_data,
+            self.handle.as_ptr(),
+            arg.as_ptr(),
+            len,
+        ) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error()),
+        }
+    }
+
+    pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
+        match resume_fiber(vm, self.handle.as_ptr(), val) {
+            Some(val) => Ok(val),
+            None => Err(self.take_error()),
+        }
+    }
+
+    fn take_error(&mut self) -> MonorubyErr {
         unsafe { self.handle.as_mut().take_error() }
+    }
+}
+
+#[cfg(not(tarpaulin_include))]
+#[naked]
+extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor, val: Value) -> Option<Value> {
+    unsafe {
+        std::arch::asm!(
+            "push r15",
+            "push r14",
+            "push r13",
+            "push r12",
+            "push rbx",
+            "push rbp",
+            "mov  [rdi + 16], rsp", // [vm.rsp_save] <- rsp
+            "mov  rsp, [rsi + 16]", // rsp <- [child_vm.rsp_save]
+            "mov  [rsi + 24], rdi", // [child_vm.parent_fiber] <- vm
+            "pop  rbp",
+            "pop  rbx",
+            "pop  r12",
+            "pop  r13",
+            "pop  r14",
+            "pop  r15",
+            "mov  rax, rdx",
+            "ret",
+            options(noreturn)
+        );
     }
 }
