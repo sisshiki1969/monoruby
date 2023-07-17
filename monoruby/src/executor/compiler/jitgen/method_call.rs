@@ -451,13 +451,23 @@ impl Codegen {
             lea  rcx, [r14 - (conv(args))];  // args: *const Value
         );
         let stack_offset = (LBP_SELF + 31) & !0xf;
-        let entry = self.jit.label();
+        let return_address = self.jit.label();
         self.push_frame();
         monoasm!( &mut self.jit,
             // set lfp
             lea  rdx, [rsp - 16];
             movq [rsp - (16 + BP_LFP)], rdx;
-            call entry;
+            movq rdi, rbx;  // &mut Interp
+            movq rsi, r12;  // &mut Globals
+            movq r8, (len); // len
+            lea  rax, [rip + return_address];
+            pushq rax;
+            pushq rbp;
+            subq rsp, (stack_offset);
+            movq rax, (abs_address);
+            call rax;
+        return_address:
+            addq rsp, (stack_offset + 16);
         );
         self.pop_frame();
         self.xmm_restore(&xmm_using);
@@ -465,21 +475,6 @@ impl Codegen {
         if !ret.is_zero() {
             self.store_rax(ret);
         }
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        entry:
-            pushq rbp;
-            subq rsp, (stack_offset);
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq r8, (len); // len
-            movq rax, (abs_address);
-            call rax;
-            addq rsp, (stack_offset);
-            popq rbp;
-            ret;
-        );
-        self.jit.select_page(0);
     }
 
     fn method_call_cached(
