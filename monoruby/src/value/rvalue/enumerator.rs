@@ -13,6 +13,11 @@ pub enum EnumeratorKind {
         internal: Box<ManuallyDrop<FiberInner>>,
         yielder: Option<Value>,
     },
+    Iterator {
+        internal: Option<Box<ManuallyDrop<FiberInner>>>,
+        obj: Value,
+        method: IdentId,
+    },
 }
 
 impl Drop for EnumeratorInner {
@@ -30,6 +35,12 @@ impl alloc::GC<RValue> for EnumeratorInner {
                     v.mark(alloc)
                 }
             }
+            EnumeratorKind::Iterator { internal, obj, .. } => {
+                if let Some(internal) = internal {
+                    internal.mark(alloc)
+                }
+                obj.mark(alloc)
+            }
         }
         if let Some(buf) = self.buffer {
             buf.mark(alloc)
@@ -42,6 +53,15 @@ impl EnumeratorInner {
         let kind = EnumeratorKind::Generator {
             internal: Box::new(ManuallyDrop::new(FiberInner::new(data))),
             yielder: None,
+        };
+        Self { kind, buffer: None }
+    }
+
+    pub fn new_iterator(obj: Value, method: IdentId) -> Self {
+        let kind = EnumeratorKind::Iterator {
+            internal: None,
+            obj,
+            method,
         };
         Self { kind, buffer: None }
     }
@@ -79,6 +99,33 @@ impl EnumeratorInner {
                     "iteration reached an end".to_string(),
                 )),
             },
+            EnumeratorKind::Iterator {
+                internal,
+                obj,
+                method,
+            } => {
+                if internal.is_none() {
+                    let func_id = globals.find_method(*obj, *method, false)?;
+                    let func_data = globals.compile_on_demand(func_id).clone();
+                    let block_data = BlockData::new(None, func_data);
+                    let mut fiber = FiberInner::new(block_data);
+                    fiber.init();
+                    *internal = Some(Box::new(ManuallyDrop::new(fiber)));
+                }
+                let internal = internal.as_mut().unwrap();
+                match internal.state() {
+                    FiberState::Created => {
+                        let nil = Value::nil();
+                        let arg = Arg::from(&nil);
+                        internal.invoke_fiber(vm, globals, arg, 1)
+                    }
+                    FiberState::Suspended => internal.resume_fiber(vm, Value::nil()),
+                    FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
+                        "iteration reached an end".to_string(),
+                    )),
+                }
+                //unimplemented!()
+            }
         }
     }
 }

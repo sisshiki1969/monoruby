@@ -301,7 +301,7 @@ impl Globals {
     ///  - (old rbp) is to be set by callee.
     ///
 
-    pub(super) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
+    pub fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
         if self[func_id].data.codeptr.is_none() {
             let kind = self[func_id].kind.clone();
             let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);

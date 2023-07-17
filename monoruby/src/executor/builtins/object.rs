@@ -79,18 +79,12 @@ fn is_a(
 #[monoruby_builtin]
 fn to_enum(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let func_id = globals.find_method(lfp.self_val(), IdentId::EACH, false)?;
-    let func_data = globals.compile_on_demand(func_id).clone();
-    let block_data = BlockData {
-        outer_lfp: None,
-        func_data,
-    };
-    Ok(Value::new_generator(block_data))
+    Ok(Value::new_iterator(lfp.self_val(), IdentId::EACH))
 }
 
 ///
@@ -656,5 +650,16 @@ mod test {
         run_test(r#"`pwd`"#);
         run_test(r#"`*`"#);
         run_test_error(r#"``"#);
+    }
+
+    #[test]
+    #[ignore]
+    fn to_enum() {
+        run_test(
+            r#"
+        e = [1,2,3,4,5].to_enum
+        puts e.next
+        "#,
+        );
     }
 }

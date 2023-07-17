@@ -668,6 +668,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_iterator(obj: Value, method: IdentId) -> Self {
+        RValue {
+            header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
+            kind: ObjKind::iterator(obj, method),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -1098,6 +1106,12 @@ impl ObjKind {
     fn generator(block_data: BlockData) -> Self {
         Self {
             enumerator: ManuallyDrop::new(EnumeratorInner::new_generator(block_data)),
+        }
+    }
+
+    fn iterator(obj: Value, method: IdentId) -> Self {
+        Self {
+            enumerator: ManuallyDrop::new(EnumeratorInner::new_iterator(obj, method)),
         }
     }
 }

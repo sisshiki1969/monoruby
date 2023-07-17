@@ -436,7 +436,7 @@ impl Globals {
     ///
     /// If not found, return MethodNotFound error.
     ///
-    pub(in crate::executor) fn find_method(
+    pub fn find_method(
         &mut self,
         recv: Value,
         func_name: IdentId,

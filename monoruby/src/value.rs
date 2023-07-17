@@ -377,6 +377,10 @@ impl Value {
         RValue::new_generator(block_data).pack()
     }
 
+    pub fn new_iterator(obj: Value, method: IdentId) -> Self {
+        RValue::new_iterator(obj, method).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Integer(i)

@@ -59,6 +59,13 @@ impl alloc::GC<RValue> for BlockData {
 }
 
 impl BlockData {
+    pub fn new(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+        Self {
+            outer_lfp,
+            func_data,
+        }
+    }
+
     pub fn func_id(&self) -> FuncId {
         self.func_data.meta.func_id()
     }
@@ -1642,7 +1649,7 @@ type FuncDataPtr = std::ptr::NonNull<FuncData>;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
-struct FuncData {
+pub struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,
     /// metadata of this function.
