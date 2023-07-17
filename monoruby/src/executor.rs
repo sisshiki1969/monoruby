@@ -221,7 +221,7 @@ impl Executor {
         executor
     }
 
-    fn cfp(&self) -> CFP {
+    pub fn cfp(&self) -> CFP {
         self.cfp.unwrap()
     }
 
@@ -374,22 +374,6 @@ impl Executor {
 
         let res = (globals.codegen.entry_point)(self, globals, &main_data);
         res.ok_or_else(|| self.take_error())
-    }
-
-    pub fn get_block_data(&self, globals: &mut Globals, block_handler: BlockHandler) -> BlockData {
-        if let Some((func_id, idx)) = block_handler.try_proxy() {
-            let mut cfp = self.cfp();
-            for _ in 0..idx {
-                cfp = cfp.prev().unwrap();
-            }
-            let func_data = globals.compile_on_demand(func_id).clone();
-            BlockData {
-                outer_lfp: cfp.lfp(),
-                func_data,
-            }
-        } else {
-            block_handler.as_proc().clone()
-        }
     }
 
     fn eval_script(
@@ -548,9 +532,9 @@ impl Executor {
     ///
     /// Invoke block for *block_handler*.
     ///
-    /// To get BlockData, use Executor.get_block_data().
+    /// To get BlockData, get_block_data().
     ///  
-    /// let data = vm.get_block_data(globals, block);
+    /// let data = globals.get_block_data(cfp, block);
     ///
     pub(crate) fn invoke_block(
         &mut self,
@@ -597,7 +581,7 @@ impl Executor {
         block_handler: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, block_handler);
+        let data = globals.get_block_data(self.cfp(), block_handler);
         self.invoke_block(globals, &data, args)
     }
 
@@ -607,7 +591,7 @@ impl Executor {
         block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = self.get_block_data(globals, block_handler);
+        let data = globals.get_block_data(self.cfp(), block_handler);
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -620,7 +604,7 @@ impl Executor {
         block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<Vec<Value>> {
-        let data = self.get_block_data(globals, block_handler);
+        let data = globals.get_block_data(self.cfp(), block_handler);
         let t = self.temp_len();
         for v in iter {
             let res = self.invoke_block(globals, &data, &[v])?;
@@ -637,7 +621,7 @@ impl Executor {
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = self.get_block_data(globals, block_handler);
+        let data = globals.get_block_data(self.cfp(), block_handler);
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }

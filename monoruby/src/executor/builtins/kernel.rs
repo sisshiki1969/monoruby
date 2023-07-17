@@ -131,7 +131,7 @@ fn loop_(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh);
+    let data = globals.get_block_data(vm.cfp(), bh);
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
             return if err.kind() == &MonorubyErrKind::StopIteration {

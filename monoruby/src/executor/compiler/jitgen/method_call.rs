@@ -591,7 +591,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             subq rsp, 32;
             lea  rdi, [rsp];
-            movq rsi, rbx;
+            movq rsi, [rbx];
             movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;

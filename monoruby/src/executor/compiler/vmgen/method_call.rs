@@ -262,7 +262,7 @@ impl Codegen {
             pushq rdi;
             pushq rsi;
             lea  rdi, [rsp + 16];
-            movq rsi, rbx;
+            movq rsi, [rbx];
             movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;

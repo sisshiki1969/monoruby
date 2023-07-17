@@ -170,6 +170,21 @@ impl Globals {
         }
     }
 
+    pub fn get_block_data(&mut self, mut cfp: CFP, block_handler: BlockHandler) -> BlockData {
+        if let Some((func_id, idx)) = block_handler.try_proxy() {
+            for _ in 0..idx {
+                cfp = cfp.prev().unwrap();
+            }
+            let func_data = self.compile_on_demand(func_id).clone();
+            BlockData {
+                outer_lfp: cfp.lfp(),
+                func_data,
+            }
+        } else {
+            block_handler.as_proc().clone()
+        }
+    }
+
     pub fn gc_enable(flag: bool) {
         alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = flag);
     }

@@ -486,7 +486,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
             }
         }
         Some(b) => {
-            let data = vm.get_block_data(globals, b);
+            let data = globals.get_block_data(vm.cfp(), b);
             for v in iter {
                 let rhs = vm.invoke_block(globals, &data, &[v])?;
                 sum = executor::op::add_values(vm, globals, sum, rhs)
@@ -659,7 +659,7 @@ fn detect(
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let bh = lfp.expect_block()?;
-    let data = vm.get_block_data(globals, bh);
+    let data = globals.get_block_data(vm.cfp(), bh);
     for elem in ary.as_array().iter() {
         if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
             return Ok(*elem);

@@ -196,7 +196,7 @@ fn each(
 ) -> Result<Value> {
     let block_handler = lfp.expect_block()?;
     let ary = lfp.self_val();
-    let data = vm.get_block_data(globals, block_handler);
+    let data = globals.get_block_data(vm.cfp(), block_handler);
     for (k, v) in ary.as_hash().iter() {
         vm.invoke_block(globals, &data, &[k, v])?;
     }
