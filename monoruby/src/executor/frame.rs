@@ -30,13 +30,6 @@ impl CFP {
     }
 
     ///
-    /// Get a return address of *self*.
-    ///
-    pub unsafe fn return_addr(&self) -> *const usize {
-        *(self.as_ptr().add(2) as *const *const usize)
-    }
-
-    ///
     /// Get base pointer address of *self*.
     ///
     pub unsafe fn bp(&self) -> *const usize {
@@ -49,7 +42,7 @@ impl CFP {
     pub(super) fn lfp(&self) -> LFP {
         unsafe {
             let bp = self.bp();
-            LFP(*bp.sub(BP_LFP as usize / 8) as _)
+            LFP::new(*bp.sub(BP_LFP as usize / 8) as _)
         }
     }
 
@@ -72,7 +65,7 @@ impl CFP {
     ///
     pub unsafe fn set_lfp(&mut self, lfp: LFP) {
         let bp = self.bp() as *mut usize;
-        *bp.sub(BP_LFP as usize / 8) = lfp.0 as _;
+        *bp.sub(BP_LFP as usize / 8) = lfp.as_ptr() as _;
     }
 
     ///
@@ -121,23 +114,24 @@ impl CFP {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct LFP(*const u8);
+pub struct LFP(std::ptr::NonNull<u8>);
 
-impl std::default::Default for LFP {
-    fn default() -> Self {
-        Self(std::ptr::null())
+impl std::ops::Deref for LFP {
+    type Target = std::ptr::NonNull<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 impl std::cmp::PartialEq<CFP> for LFP {
     fn eq(&self, other: &CFP) -> bool {
-        self.0 == other.as_ptr() as _
+        self.as_ptr() == other.as_ptr() as _
     }
 }
 
 impl std::cmp::PartialOrd<CFP> for LFP {
     fn partial_cmp(&self, other: &CFP) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&(other.as_ptr() as *const u8))
+        self.as_ptr().partial_cmp(&(other.as_ptr() as _))
     }
 }
 
@@ -160,27 +154,35 @@ impl alloc::GC<RValue> for LFP {
 }
 
 impl LFP {
+    pub unsafe fn new(ptr: *mut u8) -> Self {
+        Self(std::ptr::NonNull::new(ptr).unwrap())
+    }
+
+    pub fn sub(self, count: i64) -> *mut u8 {
+        unsafe { self.as_ptr().sub(count as usize) }
+    }
+
     ///
     /// Move local frame on the stack to the heap.
     ///
     pub fn move_to_heap(&self) -> Self {
         let len = self.len_in_bytes();
         let v = self.registers().to_vec().into_boxed_slice();
-        LFP((Box::into_raw(v) as *mut u64 as usize + len - 8) as _)
+        unsafe { LFP::new((Box::into_raw(v) as *mut u64 as usize + len - 8) as _) }
     }
 
     ///
     /// Get CFP.
     ///
     pub unsafe fn cfp(&self) -> CFP {
-        CFP::new(self.0.sub(BP_PREV_CFP as usize) as _)
+        CFP::new(self.sub(BP_PREV_CFP) as _)
     }
 
     ///
     /// Get the address of outer.
     ///
     pub fn outer_address(&self) -> DFP {
-        DFP::new(unsafe { self.0.sub(LBP_OUTER as usize) } as _)
+        unsafe { DFP::new(self.sub(LBP_OUTER) as _) }
     }
 
     ///
@@ -201,21 +203,21 @@ impl LFP {
     /// Get Meta.
     ///
     pub(in crate::executor) fn meta(&self) -> Meta {
-        Meta::from(unsafe { *(self.0.sub(LBP_META as usize) as *const u64) })
+        Meta::from(unsafe { *(self.sub(LBP_META) as *const u64) })
     }
 
     ///
     /// Get *self*.
     ///
     pub fn self_val(&self) -> Value {
-        unsafe { *(self.0.sub(LBP_SELF as usize) as *const _) }
+        unsafe { *(self.sub(LBP_SELF) as *const _) }
     }
 
     ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {
-        unsafe { *(self.0.sub(LBP_BLOCK as usize) as *const _) }
+        unsafe { *(self.sub(LBP_BLOCK) as *const _) }
     }
 
     pub fn expect_block(&self) -> Result<BlockHandler> {
@@ -238,14 +240,14 @@ impl LFP {
     /// Get a value of register slot *index*.
     ///
     pub unsafe fn register(&self, index: usize) -> Value {
-        *(self.0.sub(LBP_SELF as usize + 8 * index) as *const Value)
+        *(self.sub(LBP_SELF + 8 * index as i64) as *const Value)
     }
 
     ///
     /// Get a value of register slot *index*.
     ///
     pub unsafe fn set_register(&mut self, index: usize, val: Value) {
-        *(self.0.sub(LBP_SELF as usize + 8 * index) as *mut Value) = val;
+        *(self.sub(LBP_SELF + 8 * index as i64) as *mut Value) = val;
     }
 
     fn len_in_bytes(&self) -> usize {
@@ -254,7 +256,9 @@ impl LFP {
 
     fn registers(&self) -> &[u8] {
         let len = self.len_in_bytes();
-        unsafe { std::slice::from_raw_parts((self.0 as usize + 8 - len) as *const u8, len) }
+        unsafe {
+            std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
+        }
     }
 }
 
@@ -263,7 +267,7 @@ impl LFP {
 pub struct DFP(std::ptr::NonNull<Option<DFP>>);
 
 impl DFP {
-    fn new(ptr: *mut u8) -> Self {
+    unsafe fn new(ptr: *mut u8) -> Self {
         DFP(std::ptr::NonNull::new(ptr as *mut Option<DFP>).unwrap())
     }
 
@@ -293,6 +297,6 @@ impl DFP {
     /// Get LFP.
     ///
     pub fn lfp(&self) -> LFP {
-        LFP(unsafe { (self.get() as *const u8).add(LBP_OUTER as usize) })
+        unsafe { LFP::new((self.get() as *const u8).add(LBP_OUTER as usize) as _) }
     }
 }

@@ -889,9 +889,7 @@ pub extern "C" fn _dump_stacktrace(vm: &mut Executor, globals: &mut Globals) {
     eprintln!("-----begin stacktrace");
     unsafe {
         for i in 0..16 {
-            eprint!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
-            let ret_addr = cfp.return_addr();
-            eprintln!(" ret adr: {ret_addr:?} ");
+            eprintln!("  [{}]: {:?} {:?}", i, cfp, cfp.lfp());
             let prev_cfp = cfp.prev();
             globals.dump_frame_info(cfp.lfp());
             if let Some(prev_cfp) = prev_cfp {

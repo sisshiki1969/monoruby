@@ -180,7 +180,7 @@ impl Globals {
             }
             let func_data = self.compile_on_demand(func_id).clone();
             BlockData {
-                outer_lfp: cfp.lfp(),
+                outer_lfp: Some(cfp.lfp()),
                 func_data,
             }
         } else {

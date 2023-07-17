@@ -37,14 +37,14 @@ const LBP_ARG0: i64 = LBP_SELF + 8;
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct BlockData {
-    outer_lfp: LFP,
+    outer_lfp: Option<LFP>,
     func_data: FuncData,
 }
 
 impl std::default::Default for BlockData {
     fn default() -> Self {
         Self {
-            outer_lfp: LFP::default(),
+            outer_lfp: None,
             func_data: FuncData::default(),
         }
     }
@@ -52,7 +52,9 @@ impl std::default::Default for BlockData {
 
 impl alloc::GC<RValue> for BlockData {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.outer_lfp.mark(alloc)
+        if let Some(outer) = self.outer_lfp {
+            outer.mark(alloc)
+        }
     }
 }
 
@@ -148,7 +150,7 @@ pub struct Executor {
     cfp: Option<CFP>,
     /// the top of local frame pointer.
     /// #### [[rbx + 8]]                                  
-    lfp_top: LFP,
+    lfp_top: Option<LFP>,
     /// rsp save area.
     ///
     /// - 0: created
@@ -170,7 +172,7 @@ impl std::default::Default for Executor {
     fn default() -> Self {
         Self {
             cfp: None,
-            lfp_top: LFP::default(),
+            lfp_top: None,
             rsp_save: None,
             parent_fiber: None,
             lexical_class: vec![vec![]],
@@ -237,7 +239,7 @@ impl Executor {
     }
 
     fn within_stack(&self, lfp: LFP) -> bool {
-        self.lfp_top >= lfp && lfp > self.cfp.unwrap()
+        self.lfp_top.unwrap() >= lfp && lfp > self.cfp.unwrap()
     }
 
     fn temp_len(&self) -> usize {
