@@ -42,7 +42,7 @@ fn struct_new(
     }
     class.set_instance_var(globals, "/members", Value::array_from_vec(arg_vec))?;
 
-    if let Some(block) = lfp.block() {
+    if lfp.block().is_some() {
         vm.push_class_context(class_id);
         let data = globals.get_block_data(vm.cfp());
         vm.invoke_block_with_self(globals, &data, class, &[class])?;

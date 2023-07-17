@@ -80,6 +80,13 @@ impl BlockHandler {
         })
     }
 
+    pub fn delegate(self) -> Self {
+        match self.0.try_fixnum() {
+            Some(i) => Self(Value::integer(i + 1)),
+            None => self,
+        }
+    }
+
     pub fn try_proc(&self) -> bool {
         self.0.is_proc().is_some()
     }
@@ -578,7 +585,6 @@ impl Executor {
     pub(crate) fn invoke_block_once(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
         let data = globals.get_block_data(self.cfp());
@@ -645,17 +651,17 @@ impl Executor {
         .ok_or_else(|| self.take_error())
     }
 
-    fn invoke_method2_if_exists(
+    fn invoke_method_if_exists(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
         receiver: Value,
         args: Arg,
         len: usize,
-        block_handler: Option<BlockHandler>,
+        bh: Option<BlockHandler>,
     ) -> Result<Value> {
         if let Some(func_id) = globals.check_method(receiver, method) {
-            self.invoke_func(globals, func_id, receiver, args, len, block_handler)
+            self.invoke_func(globals, func_id, receiver, args, len, bh)
         } else {
             Ok(Value::nil())
         }
@@ -671,10 +677,11 @@ impl Executor {
         receiver: Value,
         args: Arg,
         len: usize,
-        block_handler: Option<BlockHandler>,
+        bh: Option<BlockHandler>,
     ) -> Result<Value> {
         let data = globals.compile_on_demand(func_id).clone();
-        (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, block_handler)
+        let bh = bh.map(|bh| bh.delegate());
+        (globals.codegen.method_invoker2)(self, globals, &data, receiver, args, len, bh)
             .ok_or_else(|| self.take_error())
     }
 

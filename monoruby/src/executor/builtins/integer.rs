@@ -98,7 +98,7 @@ fn step(
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
-    let block = match lfp.block() {
+    match lfp.block() {
         None => return Err(MonorubyErr::runtimeerr("not implemented".to_string())),
         Some(block) => block,
     };

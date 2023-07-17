@@ -37,7 +37,7 @@ fn enumerator_new(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    lfp.expect_block()?;
     let block_data = globals.get_block_data(vm.cfp());
     Ok(Value::new_enumerator(block_data))
 }

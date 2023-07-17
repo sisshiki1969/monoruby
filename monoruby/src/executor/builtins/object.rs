@@ -42,9 +42,7 @@ fn object_new(
 ) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::object(class);
-    if let Some(func_id) = globals.check_method(obj, IdentId::INITIALIZE) {
-        vm.invoke_func(globals, func_id, obj, arg, len, lfp.block())?;
-    };
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
 

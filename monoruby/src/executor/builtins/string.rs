@@ -658,7 +658,7 @@ fn split(
                 .collect()
         };
         match lfp.block() {
-            Some(b) => {
+            Some(_) => {
                 let t = vm.temp_append(v.clone());
                 vm.invoke_block_iter1(globals, v.into_iter())?;
                 vm.temp_clear(t);
@@ -712,7 +712,7 @@ fn split(
         }
         let iter = res.into_iter().map(|s| Value::string_from_str(s));
         match lfp.block() {
-            Some(b) => {
+            Some(_) => {
                 vm.invoke_block_iter1(globals, iter)?;
                 Ok(lfp.self_val())
             }
@@ -767,10 +767,10 @@ fn sub_main(
             let replace = arg[1].expect_string(globals)?;
             RegexpInner::replace_one(vm, globals, arg[0], &given, &replace)
         }
-        Some(block) => {
+        Some(_) => {
             MonorubyErr::check_number_of_arguments(len, 1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInner::replace_one_block(vm, globals, arg[0], &given, block)
+            RegexpInner::replace_one_block(vm, globals, arg[0], &given)
         }
     }
 }
@@ -827,10 +827,10 @@ fn gsub_main(
             let replace = args[1].expect_string(globals)?;
             RegexpInner::replace_all(vm, globals, args[0], &given, &replace)
         }
-        Some(block) => {
+        Some(_) => {
             MonorubyErr::check_number_of_arguments(len, 1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInner::replace_all_block(vm, globals, args[0], &given, block)
+            RegexpInner::replace_all_block(vm, globals, args[0], &given)
         }
     }
 }

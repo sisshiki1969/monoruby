@@ -54,7 +54,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::array_with_class(vec![], class);
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
 
@@ -90,7 +90,7 @@ fn initialize(
             return Err(MonorubyErr::negative_array_size());
         }
         let size = size as usize;
-        if let Some(bh) = lfp.block() {
+        if lfp.block().is_some() {
             if len == 2 {
                 eprintln!("warning: block supersedes default value argument");
             }
@@ -421,7 +421,7 @@ fn inject(
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let self_ = lfp.self_val();
     let mut iter = self_.as_array().iter().cloned();
     let res = if len == 0 {
@@ -485,7 +485,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
                     executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
             }
         }
-        Some(b) => {
+        Some(_) => {
             let data = globals.get_block_data(vm.cfp());
             for v in iter {
                 let rhs = vm.invoke_block(globals, &data, &[v])?;
@@ -658,7 +658,7 @@ fn detect(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
-    let bh = lfp.expect_block()?;
+    lfp.expect_block()?;
     let data = globals.get_block_data(vm.cfp());
     for elem in ary.as_array().iter() {
         if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
@@ -822,7 +822,8 @@ mod test {
         );
         run_test_with_prelude(
             r##"
-        a = A.new(5) {|i| i*3 }
+        mul = 3
+        a = A.new(5) {|i| i * mul }
         a << 4
         a[2] = 5
         [a, a.class]

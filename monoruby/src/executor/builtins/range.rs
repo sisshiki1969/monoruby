@@ -81,7 +81,7 @@ fn each(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
@@ -116,7 +116,7 @@ fn map(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {

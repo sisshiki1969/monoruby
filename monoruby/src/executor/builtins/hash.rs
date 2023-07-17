@@ -380,11 +380,11 @@ fn fetch(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let map = self_.as_hash();
-    let s = if let Some(bh) = lfp.block() {
+    let s = if lfp.block().is_some() {
         MonorubyErr::check_number_of_arguments(len, 1)?;
         match map.get(arg[0]) {
             Some(v) => v,
-            None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
+            None => vm.invoke_block_once(globals, &[arg[0]])?,
         }
     } else if len == 1 {
         match map.get(arg[0]) {

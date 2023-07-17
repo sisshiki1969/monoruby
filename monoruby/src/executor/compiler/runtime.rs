@@ -79,7 +79,7 @@ pub(super) extern "C" fn get_super_data(
 ///
 pub(super) extern "C" fn get_yield_data(cfp: CFP, globals: &mut Globals) -> BlockData {
     cfp.get_block()
-        .map(|bh| globals.get_block_data(cfp))
+        .map(|_| globals.get_block_data(cfp))
         .unwrap_or_default()
 }
 

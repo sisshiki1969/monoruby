@@ -61,7 +61,7 @@ pub(super) fn new(
     len: usize,
 ) -> Result<Value> {
     let obj = __allocate(vm, globals, lfp, arg, 0)?;
-    vm.invoke_method2_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
+    vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
 
