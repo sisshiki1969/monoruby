@@ -90,7 +90,7 @@ fn to_enum(
         outer_lfp: None,
         func_data,
     };
-    Ok(Value::new_enumerator(block_data))
+    Ok(Value::new_generator(block_data))
 }
 
 ///

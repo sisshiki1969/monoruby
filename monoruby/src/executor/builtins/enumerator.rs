@@ -38,7 +38,7 @@ fn enumerator_new(
 ) -> Result<Value> {
     lfp.expect_block()?;
     let block_data = globals.get_block_data(vm.cfp());
-    Ok(Value::new_enumerator(block_data))
+    Ok(Value::new_generator(block_data))
 }
 
 ///

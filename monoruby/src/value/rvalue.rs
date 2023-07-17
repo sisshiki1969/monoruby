@@ -661,10 +661,10 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_enumerator(block_data: BlockData) -> Self {
+    pub(super) fn new_generator(block_data: BlockData) -> Self {
         RValue {
             header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
-            kind: ObjKind::enumerator(block_data),
+            kind: ObjKind::generator(block_data),
             var_table: None,
         }
     }
@@ -1095,7 +1095,7 @@ impl ObjKind {
         }
     }
 
-    fn enumerator(block_data: BlockData) -> Self {
+    fn generator(block_data: BlockData) -> Self {
         Self {
             enumerator: ManuallyDrop::new(EnumeratorInner::new_generator(block_data)),
         }
