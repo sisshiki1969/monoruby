@@ -581,17 +581,16 @@ impl Executor {
         block_handler: BlockHandler,
         args: &[Value],
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), block_handler);
+        let data = globals.get_block_data(self.cfp());
         self.invoke_block(globals, &data, args)
     }
 
     pub(crate) fn invoke_block_iter1(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<()> {
-        let data = globals.get_block_data(self.cfp(), block_handler);
+        let data = globals.get_block_data(self.cfp());
         for val in iter {
             self.invoke_block(globals, &data, &[val])?;
         }
@@ -601,10 +600,9 @@ impl Executor {
     pub(crate) fn invoke_block_map1(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
     ) -> Result<Vec<Value>> {
-        let data = globals.get_block_data(self.cfp(), block_handler);
+        let data = globals.get_block_data(self.cfp());
         let t = self.temp_len();
         for v in iter {
             let res = self.invoke_block(globals, &data, &[v])?;
@@ -617,11 +615,10 @@ impl Executor {
     pub(crate) fn invoke_block_fold1(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
         iter: impl Iterator<Item = Value>,
         mut res: Value,
     ) -> Result<Value> {
-        let data = globals.get_block_data(self.cfp(), block_handler);
+        let data = globals.get_block_data(self.cfp());
         for elem in iter {
             res = self.invoke_block(globals, &data, &[res, elem])?;
         }

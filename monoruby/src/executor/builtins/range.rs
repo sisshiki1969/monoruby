@@ -92,7 +92,7 @@ fn each(
         }
 
         let iter = (start..end).map(|i| Value::fixnum(i));
-        vm.invoke_block_iter1(globals, block_handler, iter)?;
+        vm.invoke_block_iter1(globals, iter)?;
         Ok(self_)
     } else {
         Err(MonorubyErr::runtimeerr("not supported".to_string()))
@@ -127,7 +127,7 @@ fn map(
         }
 
         let iter = (start..end).map(|i| Value::fixnum(i));
-        let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
+        let vec = vm.invoke_block_map1(globals, iter)?;
         Ok(Value::array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported".to_string()))

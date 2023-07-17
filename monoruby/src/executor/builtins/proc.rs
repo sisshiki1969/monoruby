@@ -44,7 +44,7 @@ impl Executor {
         if block_handler.try_proxy().is_some() {
             let lfp = self.cfp().prev().unwrap().lfp();
             unsafe { self.move_frame_to_heap(lfp) };
-            let block_data = globals.get_block_data(self.cfp(), block_handler);
+            let block_data = globals.get_block_data(self.cfp());
             Ok(Value::new_proc(block_data))
         } else if block_handler.try_proc() {
             Ok(block_handler.0)

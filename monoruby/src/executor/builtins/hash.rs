@@ -194,9 +194,9 @@ fn each(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let ary = lfp.self_val();
-    let data = globals.get_block_data(vm.cfp(), block_handler);
+    let data = globals.get_block_data(vm.cfp());
     for (k, v) in ary.as_hash().iter() {
         vm.invoke_block(globals, &data, &[k, v])?;
     }
@@ -218,10 +218,10 @@ fn each_value(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(_, v)| v);
-    vm.invoke_block_iter1(globals, block_handler, iter)?;
+    vm.invoke_block_iter1(globals, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -240,10 +240,10 @@ fn each_key(
     _arg: Arg,
     _len: usize,
 ) -> Result<Value> {
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(k, _)| k);
-    vm.invoke_block_iter1(globals, block_handler, iter)?;
+    vm.invoke_block_iter1(globals, iter)?;
     Ok(lfp.self_val())
 }
 

@@ -33,9 +33,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 #[monoruby_builtin]
 fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    lfp.expect_block()?;
     match lfp.self_val().unpack() {
-        RV::Integer(i) => vm.invoke_block_iter1(globals, bh, (0..i).map(Value::integer))?,
+        RV::Integer(i) => vm.invoke_block_iter1(globals, (0..i).map(Value::integer))?,
         RV::BigInt(_) => unimplemented!(),
         _ => unreachable!(),
     };
@@ -116,10 +116,10 @@ fn step(
 
     if step > 0 {
         let iter = PosStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, block, iter)?;
+        vm.invoke_block_iter1(globals, iter)?;
     } else {
         let iter = NegStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, block, iter)?;
+        vm.invoke_block_iter1(globals, iter)?;
     }
     Ok(lfp.self_val())
 }

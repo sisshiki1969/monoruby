@@ -95,7 +95,7 @@ fn initialize(
                 eprintln!("warning: block supersedes default value argument");
             }
             let iter = (0..size).map(|i| Value::integer(i as i64)).into_iter();
-            let vec = vm.invoke_block_map1(globals, bh, iter)?;
+            let vec = vm.invoke_block_map1(globals, iter)?;
             *self_val.as_array_mut() = ArrayInner::from_vec(vec);
         } else {
             let val = if len == 1 { Value::nil() } else { arg[1] };
@@ -429,7 +429,7 @@ fn inject(
     } else {
         arg[0]
     };
-    vm.invoke_block_fold1(globals, block_handler, iter, res)
+    vm.invoke_block_fold1(globals, iter, res)
 }
 
 ///
@@ -486,7 +486,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
             }
         }
         Some(b) => {
-            let data = globals.get_block_data(vm.cfp(), b);
+            let data = globals.get_block_data(vm.cfp());
             for v in iter {
                 let rhs = vm.invoke_block(globals, &data, &[v])?;
                 sum = executor::op::add_values(vm, globals, sum, rhs)
@@ -588,8 +588,8 @@ fn each(
     _len: usize,
 ) -> Result<Value> {
     let ary = lfp.self_val();
-    let block_handler = lfp.expect_block()?;
-    vm.invoke_block_iter1(globals, block_handler, ary.as_array().iter().cloned())?;
+    lfp.expect_block()?;
+    vm.invoke_block_iter1(globals, ary.as_array().iter().cloned())?;
     Ok(lfp.self_val())
 }
 
@@ -604,8 +604,8 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, len: usize) -
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let iter = ary.as_array().iter().cloned();
-    let block_handler = lfp.expect_block()?;
-    let vec = vm.invoke_block_map1(globals, block_handler, iter)?;
+    lfp.expect_block()?;
+    let vec = vm.invoke_block_map1(globals, iter)?;
     let res = Value::array_from_vec(vec);
     Ok(res)
 }
@@ -629,9 +629,9 @@ fn flat_map(
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let iter = ary.as_array().iter().cloned();
-    let block_handler = lfp.expect_block()?;
+    lfp.expect_block()?;
     let mut v = vec![];
-    for elem in vm.invoke_block_map1(globals, block_handler, iter)? {
+    for elem in vm.invoke_block_map1(globals, iter)? {
         match elem.is_array() {
             Some(ary) => v.extend(ary.iter()),
             None => v.push(elem),
@@ -659,7 +659,7 @@ fn detect(
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary = lfp.self_val();
     let bh = lfp.expect_block()?;
-    let data = globals.get_block_data(vm.cfp(), bh);
+    let data = globals.get_block_data(vm.cfp());
     for elem in ary.as_array().iter() {
         if vm.invoke_block(globals, &data, &[*elem])?.as_bool() {
             return Ok(*elem);

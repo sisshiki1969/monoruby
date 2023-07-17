@@ -170,7 +170,10 @@ impl Globals {
         }
     }
 
-    pub fn get_block_data(&mut self, mut cfp: CFP, block_handler: BlockHandler) -> BlockData {
+    pub fn get_block_data(&mut self, mut cfp: CFP) -> BlockData {
+        let block_handler = cfp
+            .get_block()
+            .unwrap_or_else(|| panic!("block not given."));
         if let Some((func_id, idx)) = block_handler.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();

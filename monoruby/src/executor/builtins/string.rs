@@ -660,7 +660,7 @@ fn split(
         match lfp.block() {
             Some(b) => {
                 let t = vm.temp_append(v.clone());
-                vm.invoke_block_iter1(globals, b, v.into_iter())?;
+                vm.invoke_block_iter1(globals, v.into_iter())?;
                 vm.temp_clear(t);
                 Ok(lfp.self_val())
             }
@@ -713,7 +713,7 @@ fn split(
         let iter = res.into_iter().map(|s| Value::string_from_str(s));
         match lfp.block() {
             Some(b) => {
-                vm.invoke_block_iter1(globals, b, iter)?;
+                vm.invoke_block_iter1(globals, iter)?;
                 Ok(lfp.self_val())
             }
             None => Ok(Value::array_from_iter(iter)),
