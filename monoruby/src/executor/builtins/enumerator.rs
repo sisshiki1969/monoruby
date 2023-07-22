@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
     globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, -1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
 
     let yielder =
@@ -37,6 +38,7 @@ fn enumerator_new(
     _len: usize,
 ) -> Result<Value> {
     lfp.expect_block()?;
+    vm.move_caller_frames_to_heap();
     let block_data = globals.get_block_data(vm.cfp());
     Ok(Value::new_generator(block_data))
 }
@@ -57,6 +59,43 @@ fn next(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().next(vm, globals)
+}
+
+///
+/// ### Enumerator#each
+///
+/// - each {...} -> object
+/// - each -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
+#[monoruby_builtin]
+fn each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let data = if lfp.block().is_some() {
+        globals.get_block_data(vm.cfp())
+    } else {
+        return Ok(lfp.self_val());
+    };
+    loop {
+        match lfp.self_val().as_enumerator_mut().next(vm, globals) {
+            Ok(val) => {
+                vm.invoke_block(globals, &data, &[val])?;
+            }
+            Err(err) => {
+                if err.kind() == &MonorubyErrKind::StopIteration {
+                    return Ok(lfp.self_val());
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
 }
 
 ///

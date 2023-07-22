@@ -26,6 +26,7 @@ fn fiber_new(
     _len: usize,
 ) -> Result<Value> {
     lfp.expect_block()?;
+    vm.move_caller_frames_to_heap();
     let block_data = globals.get_block_data(vm.cfp());
     Ok(Value::new_fiber(block_data))
 }
@@ -112,5 +113,22 @@ mod test {
             answer
         "##,
         );
+    }
+
+    #[test]
+    fn fiber_closure() {
+        run_test_with_prelude(
+            r#"
+            create_fiber.resume
+        "#,
+            r#"
+            def create_fiber
+              a = 100
+              Fiber.new do
+                Fiber.yield a
+              end
+            end
+        "#,
+        )
     }
 }

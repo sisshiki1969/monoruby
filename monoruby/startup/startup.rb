@@ -45,6 +45,15 @@ end
 class Object
   def freeze
   end
+
+  def to_enum
+    Enumerator.new do
+      self.each do |x|
+        Fiber.yield x
+      end
+      raise StopIteration
+    end
+  end
 end
 
 class Module

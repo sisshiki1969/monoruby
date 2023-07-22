@@ -937,6 +937,9 @@ pub struct ExceptionInner {
 
 impl ExceptionInner {
     pub fn kind(&self) -> MonorubyErrKind {
+        if self.class_name == IdentId::get_id("StopIteration") {
+            return MonorubyErrKind::StopIteration;
+        }
         MonorubyErrKind::Runtime
     }
 
