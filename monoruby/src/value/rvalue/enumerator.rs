@@ -1,5 +1,4 @@
 use crate::*;
-use std::mem::ManuallyDrop;
 
 #[derive(Debug)]
 pub struct EnumeratorInner {
@@ -10,11 +9,11 @@ pub struct EnumeratorInner {
 #[derive(Debug)]
 pub enum EnumeratorKind {
     Generator {
-        internal: Box<ManuallyDrop<FiberInner>>,
+        internal: Value,
         yielder: Option<Value>,
     },
     Iterator {
-        internal: Option<Box<ManuallyDrop<FiberInner>>>,
+        internal: Option<Value>,
         obj: Value,
         method: IdentId,
     },
@@ -51,7 +50,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
 impl EnumeratorInner {
     pub fn new_generator(data: BlockData) -> Self {
         let kind = EnumeratorKind::Generator {
-            internal: Box::new(ManuallyDrop::new(FiberInner::new(data))),
+            internal: Value::new_fiber(data),
             yielder: None,
         };
         Self { kind, buffer: None }
@@ -86,15 +85,15 @@ impl EnumeratorInner {
 
     fn yield_next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         match &mut self.kind {
-            EnumeratorKind::Generator { internal, yielder } => match internal.state() {
+            EnumeratorKind::Generator { internal, yielder } => match internal.as_fiber().state() {
                 FiberState::Created => {
                     let y = Value::object(unsafe { crate::executor::YIELDER.unwrap().id() });
                     *yielder = Some(y);
-                    internal.init();
                     let arg = Arg::from(&y);
-                    internal.invoke_fiber(vm, globals, arg, 1)
+                    internal.as_fiber_mut().init();
+                    internal.as_fiber_mut().invoke_fiber(vm, globals, arg, 1)
                 }
-                FiberState::Suspended => internal.resume_fiber(vm, yielder.unwrap()),
+                FiberState::Suspended => internal.as_fiber_mut().resume_fiber(vm, yielder.unwrap()),
                 FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
                     "iteration reached an end".to_string(),
                 )),
@@ -108,18 +107,18 @@ impl EnumeratorInner {
                     let func_id = globals.find_method(*obj, *method, false)?;
                     let func_data = globals.compile_on_demand(func_id).clone();
                     let block_data = BlockData::new(None, func_data);
-                    let mut fiber = FiberInner::new(block_data);
-                    fiber.init();
-                    *internal = Some(Box::new(ManuallyDrop::new(fiber)));
+                    let mut fiber = Value::new_fiber(block_data);
+                    fiber.as_fiber_mut().init();
+                    *internal = Some(fiber);
                 }
-                let internal = internal.as_mut().unwrap();
-                match internal.state() {
+                let mut internal = internal.unwrap();
+                match internal.as_fiber().state() {
                     FiberState::Created => {
                         let nil = Value::nil();
                         let arg = Arg::from(&nil);
-                        internal.invoke_fiber(vm, globals, arg, 1)
+                        internal.as_fiber_mut().invoke_fiber(vm, globals, arg, 1)
                     }
-                    FiberState::Suspended => internal.resume_fiber(vm, Value::nil()),
+                    FiberState::Suspended => internal.as_fiber_mut().resume_fiber(vm, Value::nil()),
                     FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
                         "iteration reached an end".to_string(),
                     )),

@@ -141,6 +141,23 @@ mod test {
     }
 
     #[test]
+    fn enum_free() {
+        run_test(
+            r##"
+            1000.times do
+                a = Enumerator.new do |y|
+                    3.times do |i|
+                        y << i
+                    end
+                end
+                a.next
+                a.next
+            end
+        "##,
+        );
+    }
+
+    #[test]
     fn fib() {
         run_test(
             r##"
