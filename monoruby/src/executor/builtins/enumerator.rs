@@ -212,4 +212,18 @@ mod test {
         "##,
         );
     }
+
+    #[test]
+    fn each() {
+        run_test(
+            r##"
+            res = []
+            e = [1,2,3,4].to_enum
+            e.each do |x|
+                res << x.to_s
+            end
+            res
+        "##,
+        );
+    }
 }

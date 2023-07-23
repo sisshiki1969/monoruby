@@ -27,7 +27,8 @@ impl Drop for FiberInner {
 
 impl alloc::GC<RValue> for FiberInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        unsafe { self.handle.unwrap().as_ref().mark(alloc) }
+        unsafe { self.handle.unwrap().as_ref().mark(alloc) };
+        self.block_data.mark(alloc);
     }
 }
 
