@@ -2,7 +2,7 @@ use crate::*;
 
 #[derive(Debug)]
 pub struct FiberInner {
-    handle: Option<std::ptr::NonNull<Executor>>,
+    handle: Box<Executor>,
     block_data: BlockData,
     stack: Option<std::ptr::NonNull<u8>>,
 }
@@ -12,8 +12,8 @@ const FIBER_STACK_SIZE: usize = 8192 * 8;
 impl Drop for FiberInner {
     fn drop(&mut self) {
         use std::alloc::*;
-        let _ = unsafe { Box::from_raw(self.handle.unwrap().as_ptr()) };
-        self.handle = None;
+        //let _ = unsafe { Box::from_raw(self.handle.unwrap().as_ptr()) };
+        //self.handle = None;
         if let Some(stack) = self.stack {
             let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
             unsafe {
@@ -27,7 +27,7 @@ impl Drop for FiberInner {
 
 impl alloc::GC<RValue> for FiberInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        unsafe { self.handle.unwrap().as_ref().mark(alloc) };
+        self.handle.mark(alloc);
         self.block_data.mark(alloc);
     }
 }
@@ -35,7 +35,7 @@ impl alloc::GC<RValue> for FiberInner {
 impl FiberInner {
     pub fn new(block_data: BlockData) -> Self {
         let vm = Executor::default();
-        let handle = Some(std::ptr::NonNull::new(Box::into_raw(Box::new(vm))).unwrap());
+        let handle = Box::new(vm);
         Self {
             handle,
             block_data,
@@ -44,7 +44,7 @@ impl FiberInner {
     }
 
     pub fn state(&self) -> FiberState {
-        unsafe { self.handle.unwrap().as_ref().fiber_state() }
+        self.handle.fiber_state()
     }
 
     pub fn func_id(&self) -> FuncId {
@@ -87,7 +87,7 @@ impl FiberInner {
             libc::mprotect(stack_bottom as _, 4096, libc::PROT_NONE);
             let stack_top = stack_bottom.add(FIBER_STACK_SIZE);
             self.stack = Some(std::ptr::NonNull::new(stack_bottom).unwrap());
-            self.handle.unwrap().as_mut().save_rsp(stack_top);
+            self.handle.save_rsp(stack_top);
         }
     }
 
@@ -102,7 +102,7 @@ impl FiberInner {
             vm,
             globals,
             &self.block_data,
-            self.handle.unwrap().as_ptr(),
+            &mut self.handle as _,
             arg.as_ptr(),
             len,
         ) {
@@ -112,20 +112,20 @@ impl FiberInner {
     }
 
     pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
-        match resume_fiber(vm, self.handle.unwrap().as_ptr(), val) {
+        match resume_fiber(vm, &mut self.handle as _, val) {
             Some(val) => Ok(val),
             None => Err(self.take_error()),
         }
     }
 
     fn take_error(&mut self) -> MonorubyErr {
-        unsafe { self.handle.unwrap().as_mut().take_error() }
+        self.handle.take_error()
     }
 }
 
 #[cfg(not(tarpaulin_include))]
 #[naked]
-extern "C" fn resume_fiber(vm: *mut Executor, child: *mut Executor, val: Value) -> Option<Value> {
+extern "C" fn resume_fiber(vm: *mut Executor, child: &mut Executor, val: Value) -> Option<Value> {
     unsafe {
         std::arch::asm!(
             "push r15",

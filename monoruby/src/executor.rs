@@ -150,6 +150,7 @@ impl Cref {
 ///
 /// Bytecode interpreter.
 ///
+#[derive(Debug)]
 #[repr(C)]
 pub struct Executor {
     /// control frame pointer.

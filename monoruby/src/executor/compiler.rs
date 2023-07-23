@@ -44,7 +44,7 @@ type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
     &BlockData,
-    *mut Executor,
+    &mut Executor,
     *const Value,
     usize,
 ) -> Option<Value>;
