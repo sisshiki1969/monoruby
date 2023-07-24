@@ -131,4 +131,22 @@ mod test {
         "#,
         )
     }
+
+    #[test]
+    fn fib() {
+        run_test(
+            r##"
+            fib = Fiber.new do
+                a = b = 1
+                loop do 
+                    Fiber.yield a
+                    a, b = a + b, a
+                end
+            end
+            
+            30.times do fib.resume end
+            fib.resume
+        "##,
+        );
+    }
 }
