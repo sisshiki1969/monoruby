@@ -88,7 +88,7 @@ impl BytecodeGen {
                     hash_splat_pos: vec![],
                 })
             };
-            let callid = self.add_callsite(None, arg_num, kw, vec![]);
+            let callid = self.add_callsite(None, arg_num, kw, vec![], None);
             (callid, args, arg_num)
         };
         let ret = if ret.is_some() {
@@ -137,7 +137,7 @@ impl BytecodeGen {
 
         let old_temp = self.temp;
         let arg = self.next_reg();
-        self.handle_block(optional_params, block)?;
+        let block_func_id = self.handle_block(optional_params, block)?;
         self.push_nil();
         self.temp = old_temp;
 
@@ -153,7 +153,7 @@ impl BytecodeGen {
         } else {
             None
         };
-        let callid = self.add_callsite(IdentId::EACH, 0, None, vec![]);
+        let callid = self.add_callsite(IdentId::EACH, 0, None, vec![], Some(block_func_id));
         self.emit_call(recv, callid, ret, arg.into(), 0, true, false, loc);
         if use_mode.is_ret() {
             self.emit_ret(None);
@@ -221,7 +221,8 @@ impl BytecodeGen {
         loc: Loc,
     ) -> Result<(CallSiteId, BcReg, usize)> {
         let old_temp = self.temp;
-        let (args, arg_len, splat_pos) = self.handle_positional_arguments(&mut arglist, loc)?;
+        let (args, arg_len, splat_pos, block_func_id) =
+            self.handle_positional_arguments(&mut arglist, loc)?;
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let hash_splat = std::mem::take(&mut arglist.hash_splat);
 
@@ -246,7 +247,7 @@ impl BytecodeGen {
         };
 
         self.temp = old_temp;
-        let callid = self.add_callsite(method, arg_len, kw, splat_pos);
+        let callid = self.add_callsite(method, arg_len, kw, splat_pos, block_func_id);
         Ok((callid, args, arg_len))
     }
 
@@ -254,12 +255,12 @@ impl BytecodeGen {
         &mut self,
         arglist: &mut ArgList,
         loc: Loc,
-    ) -> Result<(BcReg, usize, Vec<usize>)> {
+    ) -> Result<(BcReg, usize, Vec<usize>, Option<FuncId>)> {
         let with_block = arglist.block.is_some();
         let args = self.next_reg().into();
-        if with_block {
+        let block_func_id = if with_block {
             let block = std::mem::take(&mut arglist.block);
-            self.handle_block_param(block, loc)?;
+            self.handle_block_param(block, loc)?
         } else if arglist.args.len() == 1
             && arglist.kw_args.is_empty()
             && arglist.hash_splat.is_empty()
@@ -268,26 +269,27 @@ impl BytecodeGen {
             if let NodeKind::LocalVar(0, ident) = &arglist.args[0].kind {
                 // in the case of "f(a)"
                 let local = self.refer_local(ident).unwrap().into();
-                return Ok((local, 1, vec![]));
+                return Ok((local, 1, vec![], None));
             } else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
                 // in the case of "f(*a)"
                 if let NodeKind::LocalVar(0, ident) = &node.kind {
                     let local = self.refer_local(ident).unwrap().into();
-                    return Ok((local, 1, vec![0]));
+                    return Ok((local, 1, vec![0], None));
                 }
             }
-        }
+            None
+        } else {
+            None
+        };
 
         let (_, arg_len, splat_pos) = self.gen_args(std::mem::take(&mut arglist.args))?;
-        Ok((args, arg_len, splat_pos))
+        Ok((args, arg_len, splat_pos, block_func_id))
     }
 
-    fn handle_block_param(&mut self, block: Option<Box<Node>>, loc: Loc) -> Result<()> {
+    fn handle_block_param(&mut self, block: Option<Box<Node>>, loc: Loc) -> Result<Option<FuncId>> {
         if let Some(box block) = block {
             match block.kind {
-                NodeKind::Lambda(block) => {
-                    self.handle_block(vec![], block)?;
-                }
+                NodeKind::Lambda(block) => return Ok(Some(self.handle_block(vec![], block)?)),
                 NodeKind::LocalVar(0, proc_local) => {
                     if let Some(local) = self.refer_local(&proc_local) {
                         self.emit_temp_mov(local.into());
@@ -317,7 +319,7 @@ impl BytecodeGen {
         } else {
             self.push_nil();
         }
-        Ok(())
+        Ok(None)
     }
 
     fn emit_call(
@@ -355,14 +357,14 @@ impl BytecodeGen {
         &mut self,
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         block: BlockInfo,
-    ) -> Result<()> {
+    ) -> Result<FuncId> {
         let outer_locals = self.get_locals();
         let mother = self.mother.as_ref().unwrap().0;
         let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
-        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+        let bh = BlockHandler::from(func_id);
         let dst = self.push().into();
-        self.emit_literal(dst, Value::integer(block_handler));
-        Ok(())
+        self.emit_literal(dst, bh.0);
+        Ok(func_id)
     }
 }
 

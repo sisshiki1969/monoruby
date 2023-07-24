@@ -21,6 +21,7 @@ impl BytecodeGen {
             pos_num,
             kw,
             splat_pos,
+            block_func_id,
         } in std::mem::take(&mut self.callsites)
         {
             if let Some(KeywordArgs {
@@ -29,12 +30,20 @@ impl BytecodeGen {
                 hash_splat_pos,
             }) = kw
             {
-                let pos = self.get_index(&kw_pos);
+                let kw_pos = self.get_index(&kw_pos);
                 let hash_splat_pos = hash_splat_pos
                     .into_iter()
                     .map(|r| self.get_index(&r))
                     .collect();
-                store.add_callsite(name, pos_num, pos, kw_args, splat_pos, hash_splat_pos);
+                store.add_callsite(
+                    name,
+                    pos_num,
+                    kw_pos,
+                    kw_args,
+                    splat_pos,
+                    hash_splat_pos,
+                    block_func_id,
+                );
             } else {
                 store.add_callsite(
                     name,
@@ -43,6 +52,7 @@ impl BytecodeGen {
                     HashMap::default(),
                     splat_pos,
                     vec![],
+                    block_func_id,
                 );
             }
         }

@@ -80,6 +80,12 @@ impl BlockHandler {
         Self(val)
     }
 
+    pub fn from(func_id: FuncId) -> Self {
+        let block_handler = ((u32::from(func_id) as i64) << 16) + 1;
+        let bh = Value::integer(block_handler);
+        Self::new(bh)
+    }
+
     pub fn try_proxy(&self) -> Option<(FuncId, u16)> {
         self.0.try_fixnum().map(|i| {
             let i = i as u64;

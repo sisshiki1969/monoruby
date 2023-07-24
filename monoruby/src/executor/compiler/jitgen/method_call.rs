@@ -79,6 +79,7 @@ impl Codegen {
                 assert_eq!(0, len);
                 assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
+                assert!(store[callid].block_func_id.is_none());
                 if cached.class_id.is_always_frozen() {
                     if !ret.is_zero() {
                         monoasm!( &mut self.jit,
@@ -98,6 +99,7 @@ impl Codegen {
                 assert_eq!(1, len);
                 assert!(block.is_none());
                 assert!(store[callid].kw_args.is_empty());
+                assert!(store[callid].block_func_id.is_none());
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
@@ -108,7 +110,15 @@ impl Codegen {
                 if !self_in_rdi_flag {
                     self.load_rdi(recv);
                 }
-                self.native_call(ctx, method_info, func_id, ret, block, abs_address, pc);
+                self.native_call(
+                    ctx,
+                    method_info,
+                    func_id,
+                    store[callid].block_func_id,
+                    block,
+                    abs_address,
+                    pc,
+                );
             }
             FuncKind::ISeq(_) => {
                 self.method_call_cached(
@@ -116,7 +126,6 @@ impl Codegen {
                     store,
                     callid,
                     method_info,
-                    ret,
                     block,
                     pc,
                     has_splat,
@@ -416,13 +425,13 @@ impl Codegen {
         ctx: &BBContext,
         method_info: MethodInfo,
         func_id: FuncId,
-        ret: SlotId,
+        block_func_id: Option<FuncId>,
         block: Option<SlotId>,
         abs_address: u64,
         pc: BcPc,
     ) {
         // rdi : receiver(self)
-        let MethodInfo { args, len, .. } = method_info;
+        let MethodInfo { args, len, ret, .. } = method_info;
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
         monoasm!( &mut self.jit,
@@ -431,17 +440,24 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rdi;  // self: Value
             movq [rsp - (16 + LBP_OUTER)], 0;
         );
-        match block {
-            Some(block) => {
-                monoasm!( &mut self.jit,
-                    movq rax, [r14 - (conv(block))];
-                    movq [rsp - (16 + LBP_BLOCK)], rax;
-                );
-            }
-            None => {
-                monoasm!( &mut self.jit,
-                    movq [rsp - (16 + LBP_BLOCK)], 0;
-                );
+        if let Some(block_func_id) = block_func_id {
+            let bh = BlockHandler::from(block_func_id);
+            monoasm!( &mut self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], (bh.0.get());
+            );
+        } else {
+            match block {
+                Some(block) => {
+                    monoasm!( &mut self.jit,
+                        movq rax, [r14 - (conv(block))];
+                        movq [rsp - (16 + LBP_BLOCK)], rax;
+                    );
+                }
+                None => {
+                    monoasm!( &mut self.jit,
+                        movq [rsp - (16 + LBP_BLOCK)], 0;
+                    );
+                }
             }
         }
         monoasm!( &mut self.jit,
@@ -480,7 +496,6 @@ impl Codegen {
         store: &Store,
         callid: CallSiteId,
         method_info: MethodInfo,
-        ret: SlotId,
         block: Option<SlotId>,
         pc: BcPc,
         has_splat: bool,
@@ -488,6 +503,7 @@ impl Codegen {
     ) {
         let func_data = method_info.func_data.unwrap();
         let xmm_using = ctx.get_xmm_using();
+        let ret = method_info.ret;
         self.xmm_save(&xmm_using);
         self.execute_gc();
         self.set_method_outer();
@@ -564,7 +580,6 @@ impl Codegen {
             Some(dest) => self.call_label(dest),
             None => self.call_codeptr(func_data.codeptr.unwrap()),
         };
-        //self.call_codeptr(func_data.codeptr.unwrap());
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {
@@ -686,7 +701,12 @@ impl Codegen {
         );
         self.jit_set_arguments(args, len, has_splat, callsite);
         // set block
-        if let Some(block) = block {
+        if let Some(func_id) = callsite.block_func_id {
+            let bh = BlockHandler::from(func_id);
+            monoasm!( &mut self.jit,
+                movq [rsp - (16 + LBP_BLOCK)], (bh.0.get());
+            );
+        } else if let Some(block) = block {
             self.load_rax(block);
             monoasm!( &mut self.jit,
                 movq [rsp - (16 + LBP_BLOCK)], rax;
