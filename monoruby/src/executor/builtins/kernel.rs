@@ -705,13 +705,12 @@ fn object_nil(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
-    let MethodInfo { recv, .. } = method_info;
+    let MethodInfo { recv, ret, .. } = method_info;
     gen.load_rdi(*recv);
-    ctx.dealloc_xmm(ret);
+    ctx.dealloc_xmm(*ret);
     let l1 = gen.jit.label();
     monoasm!( &mut gen.jit,
         movq rax, (FALSE_VALUE);
@@ -720,12 +719,12 @@ fn object_nil(
         movq rax, (TRUE_VALUE);
     l1:
     );
-    gen.store_rax(ret);
+    gen.store_rax(*ret);
 }
 
-fn analysis_object_nil(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_object_nil(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.use_non_float(method_info.recv);
-    info.def_as(ret, false);
+    info.def_as(method_info.ret, false);
 }
 
 #[cfg(test)]

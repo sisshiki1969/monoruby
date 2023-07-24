@@ -390,17 +390,17 @@ impl JitContext {
                     info.def_as(ret, false);
                 }
                 TraceIr::MethodCall {
-                    ret,
-                    info: method_info,
-                    ..
+                    info: method_info, ..
                 }
                 | TraceIr::Super {
-                    ret,
-                    info: method_info,
-                    ..
+                    info: method_info, ..
                 } => {
                     let MethodInfo {
-                        recv, args, len, ..
+                        recv,
+                        args,
+                        len,
+                        ret,
+                        ..
                     } = method_info;
                     info.use_non_float(recv);
                     for i in 0..len {
@@ -410,12 +410,14 @@ impl JitContext {
                     info.def_as(ret, false);
                 }
                 TraceIr::MethodCallBlock {
-                    ret,
-                    info: method_info,
-                    ..
+                    info: method_info, ..
                 } => {
                     let MethodInfo {
-                        recv, args, len, ..
+                        recv,
+                        args,
+                        len,
+                        ret,
+                        ..
                     } = method_info;
                     info.use_non_float(recv);
                     for i in 0..len + 1 {
@@ -426,12 +428,11 @@ impl JitContext {
                 }
                 TraceIr::MethodArgs(..) => {}
                 TraceIr::InlineCall {
-                    ret,
                     inline_id,
                     info: method_info,
                     ..
                 } => {
-                    store.get_inline_info(inline_id).1(&mut info, &method_info, ret);
+                    store.get_inline_info(inline_id).1(&mut info, &method_info);
                 }
                 TraceIr::Ret(src)
                 | TraceIr::MethodRet(src)

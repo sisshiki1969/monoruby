@@ -416,15 +416,23 @@ impl Bc2 {
 #[derive(Debug, Clone)]
 pub(in crate::executor) struct MethodInfo {
     pub recv: SlotId,
+    pub ret: SlotId,
     pub args: SlotId,
     pub len: u16,
     pub func_data: Option<&'static FuncData>,
 }
 
 impl MethodInfo {
-    fn new(recv: SlotId, args: SlotId, len: u16, func_data: Option<&'static FuncData>) -> Self {
+    fn new(
+        recv: SlotId,
+        ret: SlotId,
+        args: SlotId,
+        len: u16,
+        func_data: Option<&'static FuncData>,
+    ) -> Self {
         MethodInfo {
             recv,
+            ret,
             args,
             len,
             func_data,
@@ -588,7 +596,6 @@ pub(in crate::executor) enum TraceIr {
     //                +-------+-------+-------+-------+
     /// func call(%ret, name)
     MethodCall {
-        ret: SlotId,
         callid: CallSiteId,
         has_splat: bool,
         info: MethodInfo,
@@ -598,7 +605,6 @@ pub(in crate::executor) enum TraceIr {
         version: u32,
     },
     MethodCallBlock {
-        ret: SlotId,
         callid: CallSiteId,
         has_splat: bool,
         info: MethodInfo,
@@ -608,7 +614,6 @@ pub(in crate::executor) enum TraceIr {
         version: u32,
     },
     Super {
-        ret: SlotId,
         callid: CallSiteId,
         info: MethodInfo,
         #[allow(dead_code)]
@@ -617,7 +622,6 @@ pub(in crate::executor) enum TraceIr {
         version: u32,
     },
     InlineCall {
-        ret: SlotId,
         inline_id: crate::executor::inline::InlineMethodId,
         info: MethodInfo,
         #[allow(dead_code)]
@@ -778,10 +782,11 @@ impl TraceIr {
                 },
                 30..=31 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
+                    let mut info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
+                    info.ret = SlotId::new(op1);
                     let has_splat = opcode == 30;
 
                     if let Some(func_data) = info.func_data {
@@ -790,7 +795,6 @@ impl TraceIr {
                                 inline::InlineTable::get_inline(func_data.meta.func_id())
                             {
                                 return Self::InlineCall {
-                                    ret: SlotId::new(op1),
                                     inline_id,
                                     info,
                                     class,
@@ -800,7 +804,6 @@ impl TraceIr {
                         }
                     }
                     Self::MethodCall {
-                        ret: SlotId::new(op1),
                         callid: op2.into(),
                         has_splat,
                         info,
@@ -810,12 +813,12 @@ impl TraceIr {
                 }
                 32..=33 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
+                    let mut info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
+                    info.ret = SlotId::new(op1);
                     Self::MethodCallBlock {
-                        ret: SlotId::new(op1),
                         callid: op2.into(),
                         has_splat: opcode == 32,
                         info,
@@ -825,12 +828,12 @@ impl TraceIr {
                 }
                 34 => {
                     let (class, version) = pc.class_version();
-                    let info = match Self::from_bc(pc + 1) {
+                    let mut info = match Self::from_bc(pc + 1) {
                         Self::MethodArgs(info) => info,
                         _ => unreachable!(),
                     };
+                    info.ret = SlotId::new(op1);
                     Self::Super {
-                        ret: SlotId::new(op1),
                         callid: op2.into(),
                         info,
                         class,
@@ -886,6 +889,7 @@ impl TraceIr {
                 },
                 130 => Self::MethodArgs(MethodInfo::new(
                     SlotId::new(op1),
+                    SlotId::new(0),
                     SlotId::new(op2),
                     op3,
                     pc.func_data(),

@@ -102,14 +102,17 @@ fn inline_class_new(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     _pc: BcPc,
     _deopt: DestLabel,
 ) {
     let MethodInfo {
-        recv, args, len, ..
+        recv,
+        args,
+        len,
+        ret,
+        ..
     } = method_info;
-    ctx.dealloc_xmm(ret);
+    ctx.dealloc_xmm(*ret);
     gen.fetch_range(ctx, *args, *len);
     let using = ctx.get_xmm_using();
     gen.xmm_save(&using);
@@ -149,7 +152,7 @@ fn inline_class_new(
     gen.xmm_restore(&using);
     //gen.jit_handle_error(ctx, pc);
     if !ret.is_zero() {
-        gen.store_r15(ret);
+        gen.store_r15(*ret);
     }
 
     gen.jit.select_page(1);
@@ -171,15 +174,19 @@ fn conv(reg: SlotId) -> i64 {
     reg.0 as i64 * 8 + LBP_SELF
 }
 
-fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_class_new(info: &mut SlotInfo, method_info: &MethodInfo) {
     let MethodInfo {
-        recv, args, len, ..
+        recv,
+        args,
+        len,
+        ret,
+        ..
     } = method_info;
     info.use_non_float(*recv);
     for r in args.0..args.0 + len {
         info.use_non_float(SlotId(r));
     }
-    info.def_as(ret, false);
+    info.def_as(*ret, false);
 }
 
 extern "C" fn allocate_instance(class_val: Value) -> Value {

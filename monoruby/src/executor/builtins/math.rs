@@ -94,43 +94,45 @@ fn math_sqrt(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     pc: BcPc,
     deopt: DestLabel,
 ) {
-    let MethodInfo { recv, args, .. } = method_info;
+    let MethodInfo {
+        recv, args, ret, ..
+    } = method_info;
     gen.load_rdi(*recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(ret);
+    let fret = ctx.xmm_write_enc(*ret);
     monoasm!( &mut gen.jit,
         sqrtsd xmm(fret), xmm(fsrc);
     );
 }
 
-fn analysis_sqrt(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_sqrt(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.use_non_float(method_info.recv);
     info.use_as(method_info.args, true, FLOAT_CLASS);
-    info.def_as(ret, true);
+    info.def_as(method_info.ret, true);
 }
 
 fn math_cos(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     pc: BcPc,
     deopt: DestLabel,
 ) {
-    let MethodInfo { recv, args, .. } = method_info;
+    let MethodInfo {
+        recv, args, ret, ..
+    } = method_info;
     gen.load_rdi(*recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(ret);
+    let fret = ctx.xmm_write_enc(*ret);
     let xmm_using = ctx.get_xmm_using();
     gen.xmm_save(&xmm_using);
     monoasm!( &mut gen.jit,
@@ -144,27 +146,28 @@ fn math_cos(
     );
 }
 
-fn analysis_cos(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_cos(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.use_non_float(method_info.recv);
     info.use_as(method_info.args, true, FLOAT_CLASS);
-    info.def_as(ret, true);
+    info.def_as(method_info.ret, true);
 }
 
 fn math_sin(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     pc: BcPc,
     deopt: DestLabel,
 ) {
-    let MethodInfo { recv, args, .. } = method_info;
+    let MethodInfo {
+        recv, args, ret, ..
+    } = method_info;
     gen.load_rdi(*recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
     let fsrc = gen.fetch_float_assume_float_enc(ctx, *args, pc);
-    let fret = ctx.xmm_write_enc(ret);
+    let fret = ctx.xmm_write_enc(*ret);
     let xmm_using = ctx.get_xmm_using();
     gen.xmm_save(&xmm_using);
     monoasm!( &mut gen.jit,
@@ -178,10 +181,10 @@ fn math_sin(
     );
 }
 
-fn analysis_sin(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_sin(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.use_non_float(method_info.recv);
     info.use_as(method_info.args, true, FLOAT_CLASS);
-    info.def_as(ret, true);
+    info.def_as(method_info.ret, true);
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {

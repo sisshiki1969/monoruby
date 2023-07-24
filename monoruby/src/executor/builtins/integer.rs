@@ -222,25 +222,24 @@ fn integer_tof(
     gen: &mut Codegen,
     ctx: &mut BBContext,
     method_info: &MethodInfo,
-    ret: SlotId,
     pc: BcPc,
     deopt: DestLabel,
 ) {
-    let MethodInfo { recv, .. } = method_info;
+    let MethodInfo { recv, ret, .. } = method_info;
     gen.load_rdi(*recv);
     if !recv.is_zero() {
         gen.guard_class(pc.class_version().0, deopt);
     }
-    let fret = ctx.xmm_write_enc(ret);
+    let fret = ctx.xmm_write_enc(*ret);
     monoasm!( &mut gen.jit,
         sarq  rdi, 1;
         cvtsi2sdq xmm(fret), rdi;
     );
 }
 
-fn analysis_integer_tof(info: &mut SlotInfo, method_info: &MethodInfo, ret: SlotId) {
+fn analysis_integer_tof(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.use_non_float(method_info.recv);
-    info.def_as(ret, true);
+    info.def_as(method_info.ret, true);
 }
 
 #[cfg(test)]

@@ -1065,14 +1065,17 @@ impl Codegen {
                     self.jit_handle_error(&ctx, pc);
                 }
                 TraceIr::MethodCall {
-                    ret,
                     callid,
                     has_splat,
                     info,
                     ..
                 } => {
                     let MethodInfo {
-                        args, len, recv, ..
+                        args,
+                        len,
+                        recv,
+                        ret,
+                        ..
                     } = info;
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_args(&mut ctx, args, len, &store[callid]);
@@ -1083,18 +1086,21 @@ impl Codegen {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
                     } else {
-                        self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, has_splat);
+                        self.gen_call(store, &mut ctx, info, callid, None, pc + 1, has_splat);
                     }
                 }
                 TraceIr::MethodCallBlock {
-                    ret,
                     callid,
                     has_splat,
                     mut info,
                     ..
                 } => {
                     let MethodInfo {
-                        args, len, recv, ..
+                        args,
+                        len,
+                        recv,
+                        ret,
+                        ..
                     } = info;
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_args(&mut ctx, args, len + 1, &store[callid]);
@@ -1106,23 +1112,16 @@ impl Codegen {
                         return;
                     } else {
                         info.args = args + 1;
-                        self.gen_call(
-                            store,
-                            &mut ctx,
-                            info,
-                            callid,
-                            Some(args),
-                            ret,
-                            pc + 1,
-                            has_splat,
-                        );
+                        self.gen_call(store, &mut ctx, info, callid, Some(args), pc + 1, has_splat);
                     }
                 }
-                TraceIr::Super {
-                    ret, callid, info, ..
-                } => {
+                TraceIr::Super { callid, info, .. } => {
                     let MethodInfo {
-                        args, len, recv, ..
+                        args,
+                        len,
+                        recv,
+                        ret,
+                        ..
                     } = info;
                     self.fetch_slot(&mut ctx, recv);
                     self.fetch_range(&mut ctx, args, len);
@@ -1133,18 +1132,15 @@ impl Codegen {
                         self.recompile_and_deopt(&mut ctx, position, pc);
                         return;
                     } else {
-                        self.gen_call(store, &mut ctx, info, callid, None, ret, pc + 1, false);
+                        self.gen_call(store, &mut ctx, info, callid, None, pc + 1, false);
                     }
                 }
                 TraceIr::InlineCall {
-                    ret,
-                    inline_id,
-                    info,
-                    ..
+                    inline_id, info, ..
                 } => {
                     self.fetch_slot(&mut ctx, info.recv);
                     let gen = store.get_inline_info(inline_id).0;
-                    self.gen_inlinable(&mut ctx, &info, gen, ret, pc);
+                    self.gen_inlinable(&mut ctx, &info, gen, pc);
                 }
                 TraceIr::Yield {
                     ret,

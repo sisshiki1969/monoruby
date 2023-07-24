@@ -6,7 +6,6 @@ impl Codegen {
         ctx: &mut BBContext,
         method_info: &MethodInfo,
         inline_gen: InlineGen,
-        ret: SlotId,
         pc: BcPc,
     ) {
         let (_, version) = pc.class_version();
@@ -14,7 +13,7 @@ impl Codegen {
         // If recv is *self*, a recv's class is guaranteed to be ctx.self_class.
         // Thus, we can omit a class guard.
         self.guard_version(version, deopt);
-        inline_gen(self, ctx, method_info, ret, pc, deopt);
+        inline_gen(self, ctx, method_info, pc, deopt);
     }
 
     pub(super) fn gen_call(
@@ -24,7 +23,6 @@ impl Codegen {
         info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
-        ret: SlotId,
         pc: BcPc,
         has_splat: bool,
     ) {
@@ -34,9 +32,9 @@ impl Codegen {
         if func_data.is_some() {
             let cached = InlineCached::new(pc);
             if recv.is_zero() && ctx.self_value.class() != cached.class_id {
-                self.gen_call_not_cached(store, ctx, info, callid, block, ret, pc, has_splat);
+                self.gen_call_not_cached(store, ctx, info, callid, block, pc, has_splat);
             } else {
-                self.gen_call_cached(store, ctx, callid, info, block, ret, cached, pc, has_splat);
+                self.gen_call_cached(store, ctx, callid, info, block, cached, pc, has_splat);
             }
         } else {
             unreachable!();
@@ -54,7 +52,6 @@ impl Codegen {
         callid: CallSiteId,
         method_info: MethodInfo,
         block: Option<SlotId>,
-        ret: SlotId,
         cached: InlineCached,
         pc: BcPc,
         has_splat: bool,
@@ -63,6 +60,7 @@ impl Codegen {
             recv,
             len,
             func_data,
+            ret,
             ..
         } = method_info;
         let deopt = self.gen_side_deopt(pc - 1, ctx);
@@ -138,11 +136,10 @@ impl Codegen {
         method_info: MethodInfo,
         callid: CallSiteId,
         block: Option<SlotId>,
-        ret: SlotId,
         pc: BcPc,
         has_splat: bool,
     ) {
-        let MethodInfo { recv, .. } = method_info;
+        let MethodInfo { recv, ret, .. } = method_info;
         // argument registers:
         //   rdi: args len
         //

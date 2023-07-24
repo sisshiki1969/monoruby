@@ -1101,7 +1101,6 @@ impl BcPc {
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::Mov(dst, src) => format!("{:?} = {:?}", dst, src),
             TraceIr::MethodCall {
-                ret,
                 callid,
                 has_splat,
                 info,
@@ -1111,7 +1110,11 @@ impl BcPc {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
                 let MethodInfo {
-                    recv, args, len, ..
+                    recv,
+                    args,
+                    len,
+                    ret,
+                    ..
                 } = info;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
@@ -1133,7 +1136,6 @@ impl BcPc {
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::MethodCallBlock {
-                ret,
                 callid,
                 has_splat,
                 info,
@@ -1143,7 +1145,11 @@ impl BcPc {
                 let callsite = &globals.store[callid];
                 let name = callsite.name.unwrap();
                 let MethodInfo {
-                    recv, args, len, ..
+                    recv,
+                    args,
+                    len,
+                    ret,
+                    ..
                 } = info;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
@@ -1166,14 +1172,13 @@ impl BcPc {
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::Super {
-                ret,
                 callid,
                 class,
                 info,
                 ..
             } => {
                 let callsite = &globals.store[callid];
-                let MethodInfo { args, len, .. } = info;
+                let MethodInfo { args, len, ret, .. } = info;
                 let kw_len = callsite.kw_args.len();
                 let op1 = format!(
                     "{} = super({}{}){}",
@@ -1193,14 +1198,17 @@ impl BcPc {
                 format!("{:36} [{}]", op1, class.get_name(globals))
             }
             TraceIr::InlineCall {
-                ret,
                 inline_id,
                 info,
                 class,
                 ..
             } => {
                 let MethodInfo {
-                    recv, args, len, ..
+                    recv,
+                    args,
+                    len,
+                    ret,
+                    ..
                 } = info;
                 let name = &globals.store.get_inline_info(inline_id).2;
                 let op1 = if len == 0 {
