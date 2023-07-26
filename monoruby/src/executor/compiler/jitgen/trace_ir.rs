@@ -242,7 +242,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 impl TraceIr {
     pub(crate) fn from_bc(pc: BcPc) -> Self {
         let op = pc.op1;
-        let opcode = (op >> 48) as u16;
+        let opcode = pc.opcode();
         if opcode & 0xffc0 == 0 {
             let (op1, op2) = dec_wl(op);
             match opcode {

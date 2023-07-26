@@ -287,7 +287,7 @@ impl ISeqInfo {
         BcIndex::from(i)
     }
 
-    pub fn get_location(&self) -> String {
+    pub(in crate::executor) fn get_location(&self) -> String {
         let loc = self.loc;
         format!(
             "{}:{}",

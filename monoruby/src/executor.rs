@@ -787,15 +787,19 @@ impl BcPc {
         matches!(self.get_ir(), TraceIr::LoopStart(_))
     }
 
-    pub(crate) fn from(bc: &Bc) -> Self {
+    fn opcode(&self) -> u16 {
+        (self.op1 >> 48) as u16
+    }
+
+    fn from(bc: &Bc) -> Self {
         Self(std::ptr::NonNull::from(bc))
     }
 
-    pub(crate) fn get_u64(self) -> u64 {
+    fn get_u64(self) -> u64 {
         self.0.as_ptr() as _
     }
 
-    pub(crate) fn write2(self, data: u64) {
+    fn write2(self, data: u64) {
         unsafe { *((self.as_ptr() as *mut u64).add(1)) = data }
     }
 }
@@ -854,7 +858,7 @@ impl BcPc {
 
     pub(crate) fn is_branch(self) -> Option<i32> {
         let op = self.op1;
-        let opcode = (op >> 48) as u16;
+        let opcode = self.opcode();
         if opcode & 0x80 == 0 {
             let (_, op2) = compiler::jitgen::trace_ir::dec_wl(op);
             match opcode {
@@ -871,21 +875,18 @@ impl BcPc {
     }
 
     pub(crate) fn is_terminal(self) -> bool {
-        let op = self.op1;
-        let opcode = (op >> 48) as u16;
+        let opcode = self.opcode();
         // Br or Ret or MethodRet or Break or Raise
         opcode == 3 || opcode == 80 || opcode == 81 || opcode == 82 || opcode == 83
     }
 
     pub(crate) fn is_loop_start(self) -> bool {
-        let op = self.op1;
-        let opcode = (op >> 48) as u16;
+        let opcode = self.opcode();
         opcode == 14 // LoopStart
     }
 
     pub(crate) fn is_loop_end(self) -> bool {
-        let op = self.op1;
-        let opcode = (op >> 48) as u16;
+        let opcode = self.opcode();
         opcode == 15 // LoopEnd
     }
 }
