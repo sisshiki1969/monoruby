@@ -168,7 +168,7 @@ pub(super) enum BcIr {
 }
 
 #[derive(Clone, PartialEq, Default)]
-pub(in crate::executor) struct FnInitInfo {
+pub struct FnInitInfo {
     pub reg_num: usize,
     pub arg_num: usize,
     req_num: usize,
@@ -231,7 +231,7 @@ impl FnInitInfo {
 
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
-pub(in crate::executor) struct Bc {
+pub struct Bc {
     op1: u64,
     op2: Bc2,
 }
@@ -414,7 +414,7 @@ impl Bc2 {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::executor) struct MethodInfo {
+pub(crate) struct MethodInfo {
     pub recv: SlotId,
     pub ret: SlotId,
     pub args: SlotId,
@@ -441,7 +441,7 @@ impl MethodInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::executor) enum BrKind {
+pub enum BrKind {
     BrIf = 0,
     BrIfNot = 1,
 }
@@ -476,7 +476,7 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 /// Bytecode instructions.
 ///
 #[derive(Debug, Clone)]
-pub(in crate::executor) enum TraceIr {
+pub(crate) enum TraceIr {
     /// branch(dest)
     Br(i32),
     /// conditional branch(%reg, dest, optimizable)  : branch when reg was true.
@@ -792,7 +792,9 @@ impl TraceIr {
                     if let Some(func_data) = info.func_data {
                         if !has_splat {
                             if let Some(inline_id) =
-                                inline::InlineTable::get_inline(func_data.meta.func_id())
+                                crate::executor::inline::InlineTable::get_inline(
+                                    func_data.func_id(),
+                                )
                             {
                                 return Self::InlineCall {
                                     inline_id,
@@ -1069,5 +1071,17 @@ impl TraceIr {
         let op = pc.op1;
         let opcode = (op >> 48) as u16;
         opcode == 15 // LoopEnd
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DynVar {
+    pub reg: SlotId,
+    pub outer: usize,
+}
+
+impl std::fmt::Debug for DynVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dynvar({}, {:?})", self.outer, self.reg)
     }
 }

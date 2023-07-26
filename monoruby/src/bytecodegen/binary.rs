@@ -1,4 +1,5 @@
 use super::*;
+use ::paste::paste;
 
 impl BytecodeGen {
     /// Generate bytecode Ir for binary operations.

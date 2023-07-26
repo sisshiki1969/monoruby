@@ -9,19 +9,18 @@
 #![feature(step_trait)]
 #![feature(naked_functions)]
 mod alloc;
-mod executor;
+mod bytecodegen;
+pub mod executor;
 mod id_table;
 #[cfg(test)]
 mod tests;
 mod value;
 
-// use alloc::*;
 pub use executor::*;
 use fxhash::FxHashMap as HashMap;
 pub use monoruby_attr::monoruby_builtin;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, fxhash::FxBuildHasher>;
 pub type IndexSet<T> = indexmap::IndexSet<T>;
-pub use executor::bytecodegen::BytecodeGen;
 use id_table::*;
 pub use value::*;
 

@@ -79,7 +79,8 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let args = self.handle_args(info, vec![], &sourceinfo)?;
+        let (args, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
+        self.compile_info.push(compile_info);
         Ok(self.add_method_iseq(name, args, loc, sourceinfo))
     }
 
@@ -92,7 +93,8 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let args = self.handle_args(info, for_params, &sourceinfo)?;
+        let (args, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
+        self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         let info = FuncInfo::new_block_iseq(Some(func_id), mother, outer, args, loc, sourceinfo);
         self.info.push(info);
@@ -106,7 +108,8 @@ impl Funcs {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Result<FuncId> {
-        let _ = self.handle_args(info, vec![], &sourceinfo)?;
+        let (_, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
+        self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
         let info = FuncInfo::new_classdef_iseq(name, Some(func_id), loc, sourceinfo);
         self.info.push(info);
@@ -157,11 +160,10 @@ impl Funcs {
     }
 
     fn handle_args(
-        &mut self,
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
         sourceinfo: &SourceInfoRef,
-    ) -> Result<ParamsInfo> {
+    ) -> Result<(ParamsInfo, CompileInfo)> {
         let BlockInfo {
             params,
             box body,
@@ -180,11 +182,7 @@ impl Funcs {
         let mut block_param = None;
         let mut for_param_info = vec![];
         for (dst_outer, dst_reg, _name) in for_params {
-            for_param_info.push(ForParamInfo {
-                dst_outer,
-                dst_reg,
-                src_reg: args_names.len(),
-            });
+            for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
             args_names.push(None);
             required_num += 1;
         }
@@ -206,7 +204,7 @@ impl Funcs {
                     let local = BcLocal(args_names.len() as u16);
                     args_names.push(Some(IdentId::get_id_from_string(name)));
                     optional_num += 1;
-                    optional_info.push(OptionalInfo { local, initializer });
+                    optional_info.push(OptionalInfo::new(local, initializer));
                 }
                 ParamKind::Rest(name) => {
                     args_names.push(name.map(|n| IdentId::get_id_from_string(n)));
@@ -236,29 +234,26 @@ impl Funcs {
         let reqopt_num = required_num + optional_num;
         let expand_info: Vec<_> = expand
             .into_iter()
-            .map(|(src, dst, len)| DestructureInfo {
-                src,
-                dst: args_names.len() + dst,
-                len,
-            })
+            .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
             .collect();
         args_names.append(&mut destruct_args);
-        self.compile_info.push(CompileInfo::new(
+        let compile_info = CompileInfo::new(
             body,
             keyword_initializers,
             expand_info,
             optional_info,
             for_param_info,
             loc,
-        ));
-        Ok(ParamsInfo {
+        );
+        let params_info = ParamsInfo {
             args_names,
             keyword_names,
             pos_num: reqopt_num + rest,
             reqopt_num,
             required_num,
             block_param,
-        })
+        };
+        Ok((params_info, compile_info))
     }
 }
 

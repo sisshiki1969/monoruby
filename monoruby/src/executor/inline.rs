@@ -20,9 +20,9 @@ impl InlineMethodId {
 }
 
 #[derive(Debug, Default)]
-pub struct InlineTable(HashMap<FuncId, InlineMethodId>);
+pub(crate) struct InlineTable(HashMap<FuncId, InlineMethodId>);
 impl InlineTable {
-    pub(in crate::executor) fn get_inline(func_id: FuncId) -> Option<InlineMethodId> {
+    pub fn get_inline(func_id: FuncId) -> Option<InlineMethodId> {
         INLINE_INFO.read().unwrap().get(func_id)
     }
 

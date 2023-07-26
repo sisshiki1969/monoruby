@@ -48,7 +48,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub fn new_generator(data: BlockData) -> Self {
+    pub(crate) fn new_generator(data: BlockData) -> Self {
         let kind = EnumeratorKind::Generator {
             internal: Value::new_fiber(data),
             yielder: None,

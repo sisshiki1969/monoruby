@@ -361,7 +361,7 @@ impl Value {
         RValue::new_time(time).pack()
     }
 
-    pub fn new_proc(block: BlockData) -> Self {
+    pub(crate) fn new_proc(block: BlockData) -> Self {
         RValue::new_proc(block).pack()
     }
 
@@ -369,11 +369,11 @@ impl Value {
         RValue::new_method(receiver, func_id).pack()
     }
 
-    pub fn new_fiber(block_data: BlockData) -> Self {
+    pub(crate) fn new_fiber(block_data: BlockData) -> Self {
         RValue::new_fiber(block_data).pack()
     }
 
-    pub fn new_generator(block_data: BlockData) -> Self {
+    pub(crate) fn new_generator(block_data: BlockData) -> Self {
         RValue::new_generator(block_data).pack()
     }
 

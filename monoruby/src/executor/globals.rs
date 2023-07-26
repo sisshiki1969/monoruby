@@ -39,7 +39,7 @@ pub struct Globals {
     /// code generator.
     pub codegen: Codegen,
     /// function and class info.
-    pub(super) store: Store,
+    pub(crate) store: Store,
     /// globals variables.
     global_vars: HashMap<IdentId, Value>,
     /// global method cache.
@@ -169,7 +169,7 @@ impl Globals {
         }
     }
 
-    pub fn get_block_data(&mut self, cfp: CFP) -> BlockData {
+    pub(crate) fn get_block_data(&mut self, cfp: CFP) -> BlockData {
         let bh = cfp
             .lfp()
             .block()
@@ -177,7 +177,7 @@ impl Globals {
         self.get_data(cfp, bh)
     }
 
-    pub fn get_yield_data(&mut self, cfp: CFP) -> BlockData {
+    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> BlockData {
         match cfp.get_block() {
             Some(bh) => self.get_data(cfp, bh),
             None => BlockData::default(),
@@ -300,7 +300,7 @@ impl Globals {
     ///  - (old rbp) is to be set by callee.
     ///
 
-    pub fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
+    pub(crate) fn compile_on_demand(&mut self, func_id: FuncId) -> &FuncData {
         if self[func_id].data.codeptr.is_none() {
             let kind = self[func_id].kind.clone();
             let codeptr = self.codegen.gen_wrapper(kind, self.no_jit);

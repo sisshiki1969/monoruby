@@ -14,7 +14,7 @@ pub use function::*;
 pub(crate) use iseq::ISeqInfo;
 
 #[derive(Default)]
-pub(in crate::executor) struct Store {
+pub(crate) struct Store {
     /// function info.
     functions: function::Funcs,
     /// inline function info.
@@ -123,7 +123,7 @@ impl Store {
 }
 
 impl Store {
-    pub(crate) fn add_inline_info(
+    pub(in crate::executor) fn add_inline_info(
         &mut self,
         inline_gen: InlineGen,
         inline_analysis: InlineAnalysis,
@@ -134,7 +134,7 @@ impl Store {
         InlineMethodId::new(id)
     }
 
-    pub(crate) fn get_inline_info(
+    pub(in crate::executor) fn get_inline_info(
         &self,
         id: InlineMethodId,
     ) -> &(InlineGen, InlineAnalysis, String) {
@@ -153,7 +153,7 @@ impl Store {
         self.functions.function_len()
     }
 
-    pub(in crate::executor) fn get_compile_info(&mut self) -> CompileInfo {
+    pub(crate) fn get_compile_info(&mut self) -> CompileInfo {
         self.functions.get_compile_info()
     }
 
@@ -171,7 +171,7 @@ impl Store {
         )
     }
 
-    pub(in crate::executor) fn add_method(
+    pub fn add_method(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -181,7 +181,7 @@ impl Store {
         self.functions.add_method(name, info, loc, sourceinfo)
     }
 
-    pub(in crate::executor) fn add_classdef(
+    pub fn add_classdef(
         &mut self,
         name: Option<IdentId>,
         info: BlockInfo,
@@ -191,7 +191,7 @@ impl Store {
         self.functions.add_classdef(name, info, loc, sourceinfo)
     }
 
-    pub(in crate::executor) fn add_block(
+    pub fn add_block(
         &mut self,
         mother: FuncId,
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
@@ -296,7 +296,7 @@ impl Store {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::executor) struct ConstSiteInfo {
+pub(crate) struct ConstSiteInfo {
     /// Name of constants.
     pub name: IdentId,
     /// Qualifier.

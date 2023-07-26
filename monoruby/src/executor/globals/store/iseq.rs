@@ -13,7 +13,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Mother method.
     ///
-    pub(crate) mother: Option<FuncId>,
+    pub mother: Option<FuncId>,
     ///
     /// Name of this function.
     ///
@@ -40,7 +40,7 @@ pub(crate) struct ISeqInfo {
         Option<SlotId>,        // a slot where an error object is assigned
     )>,
     /// the name of arguments.
-    pub(in crate::executor) args: ParamsInfo,
+    pub args: ParamsInfo,
     ///
     /// outer local variables. (dynamic_locals, block_param)
     ///
@@ -168,7 +168,7 @@ impl ISeqInfo {
     ///
     /// Set bytecode to the *ISeqInfo*.
     ///
-    pub(in crate::executor) fn set_bytecode(&mut self, bc: Vec<Bc>) {
+    pub(crate) fn set_bytecode(&mut self, bc: Vec<Bc>) {
         self.bytecode = Some(Box::into_pin(bc.into_boxed_slice()));
     }
 
@@ -264,7 +264,7 @@ impl ISeqInfo {
     ///
     /// Get pc(*BcPc*) for instruction index(*idx*).
     ///
-    pub(in crate::executor) fn get_pc(&self, idx: BcIndex) -> BcPc {
+    pub fn get_pc(&self, idx: BcIndex) -> BcPc {
         BcPc::from(&self.bytecode()[idx.0 as usize])
     }
 
@@ -315,7 +315,7 @@ impl ISeqInfo {
             .nth(0)
     }
 
-    pub(in crate::executor) fn exception_push(
+    pub(crate) fn exception_push(
         &mut self,
         range: std::ops::Range<BcPc>,
         rescue: Option<BcPc>,

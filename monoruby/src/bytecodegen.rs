@@ -1,6 +1,5 @@
 use super::*;
 use num::BigInt;
-use paste::paste;
 use ruruby_parse::{
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, Node, NodeKind, RescueEntry,
     SourceInfoRef, UnOp,
@@ -13,7 +12,7 @@ mod expression;
 pub mod inst;
 mod method_call;
 mod statement;
-pub(in crate::executor) use inst::*;
+pub use inst::*;
 
 ///
 /// ID of register.
@@ -76,7 +75,7 @@ impl std::ops::Add<usize> for BcTemp {
 /// ID of local variable.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(super) struct BcLocal(pub u16);
+pub(crate) struct BcLocal(pub u16);
 
 impl std::fmt::Debug for BcLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -182,6 +181,87 @@ struct ExceptionEntry {
     rescue: Option<Label>,
     ensure: Option<Label>,
     err_reg: Option<BcReg>,
+}
+
+///
+/// Information for bytecode compiler.
+///
+/// this includes AST and information for initialization of optional, keyword, destructuring parameters.
+///
+pub(crate) struct CompileInfo {
+    /// AST.
+    ast: Node,
+    /// keyword params initializers.
+    keyword_initializers: Vec<Option<Box<Node>>>,
+    /// param expansion info
+    destruct_info: Vec<DestructureInfo>,
+    /// optional parameters initializers.
+    optional_info: Vec<OptionalInfo>,
+    /// *for* statement parameters info.
+    for_param_info: Vec<ForParamInfo>,
+    loc: Loc,
+}
+
+impl CompileInfo {
+    pub fn new(
+        ast: Node,
+        keyword_initializers: Vec<Option<Box<Node>>>,
+        expand_info: Vec<DestructureInfo>,
+        optional_info: Vec<OptionalInfo>,
+        for_param_info: Vec<ForParamInfo>,
+        loc: Loc,
+    ) -> Self {
+        Self {
+            ast,
+            keyword_initializers,
+            destruct_info: expand_info,
+            optional_info,
+            for_param_info,
+            loc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct DestructureInfo {
+    src: usize,
+    dst: usize,
+    len: usize,
+}
+
+impl DestructureInfo {
+    pub fn new(src: usize, dst: usize, len: usize) -> Self {
+        Self { src, dst, len }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct OptionalInfo {
+    local: BcLocal,
+    initializer: Node,
+}
+
+impl OptionalInfo {
+    pub fn new(local: BcLocal, initializer: Node) -> Self {
+        Self { local, initializer }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ForParamInfo {
+    dst_outer: usize,
+    dst_reg: BcLocal,
+    src_reg: usize,
+}
+
+impl ForParamInfo {
+    pub fn new(dst_outer: usize, dst_reg: BcLocal, src_reg: usize) -> Self {
+        Self {
+            dst_outer,
+            dst_reg,
+            src_reg,
+        }
+    }
 }
 
 #[derive(Debug)]

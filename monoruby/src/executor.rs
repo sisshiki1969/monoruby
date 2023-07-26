@@ -1,14 +1,13 @@
 use super::*;
 use monoasm::*;
-use ruruby_parse::{Loc, Node};
+use ruruby_parse::Node;
 
 mod builtins;
-pub mod bytecodegen;
 mod compiler;
 mod error;
 mod frame;
 mod globals;
-mod inline;
+pub mod inline;
 mod op;
 pub use builtins::*;
 pub use bytecodegen::*;
@@ -32,11 +31,11 @@ const LBP_META_REGNUM: i64 = LBP_META - 4;
 const LBP_META_FUNCID: i64 = LBP_META;
 const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
-const LBP_ARG0: i64 = LBP_SELF + 8;
+pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct BlockData {
+pub(crate) struct BlockData {
     outer_lfp: Option<LFP>,
     func_data: FuncData,
 }
@@ -73,7 +72,7 @@ impl BlockData {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct BlockHandler(Value);
+pub struct BlockHandler(pub Value);
 
 impl BlockHandler {
     pub fn new(val: Value) -> Self {
@@ -772,7 +771,7 @@ impl BcPcBase {
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
-struct BcPc(std::ptr::NonNull<Bc>);
+pub struct BcPc(std::ptr::NonNull<Bc>);
 
 impl BcPc {
     fn new(ptr: *mut Bc) -> Self {
@@ -1326,14 +1325,14 @@ impl BcPc {
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub(crate) struct SlotId(u16);
+pub(crate) struct SlotId(pub u16);
 
 impl SlotId {
-    fn new(reg: u16) -> Self {
+    pub fn new(reg: u16) -> Self {
         Self(reg)
     }
 
-    fn self_() -> Self {
+    pub fn self_() -> Self {
         Self(0)
     }
 
@@ -1367,7 +1366,7 @@ impl std::ops::Add<u16> for SlotId {
 /// kinds of binary operation.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum BinOpK {
+pub enum BinOpK {
     Add = 0,
     Sub = 1,
     Mul = 2,
@@ -1402,7 +1401,7 @@ impl fmt::Display for BinOpK {
 }
 
 impl BinOpK {
-    fn from(i: u16) -> Self {
+    pub fn from(i: u16) -> Self {
         match i {
             0 => BinOpK::Add,
             1 => BinOpK::Sub,
@@ -1436,23 +1435,11 @@ impl BinOpK {
     }
 }
 
-#[derive(Clone)]
-struct DynVar {
-    reg: SlotId,
-    outer: usize,
-}
-
-impl std::fmt::Debug for DynVar {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "dynvar({}, {:?})", self.outer, self.reg)
-    }
-}
-
 ///
 /// an index of bytecode instruction.
 ///
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd)]
-pub(crate) struct BcIndex(u32);
+pub(crate) struct BcIndex(pub u32);
 
 impl std::fmt::Debug for BcIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1623,7 +1610,7 @@ impl Meta {
         Self::new(Some(func_id), reg_num, 2, false)
     }
 
-    fn func_id(&self) -> FuncId {
+    pub fn func_id(&self) -> FuncId {
         self.func_id.unwrap()
     }
 
@@ -1664,7 +1651,7 @@ type FuncDataPtr = std::ptr::NonNull<FuncData>;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 #[repr(C)]
-pub struct FuncData {
+pub(crate) struct FuncData {
     /// address of function.
     codeptr: Option<monoasm::CodePtr>,
     /// metadata of this function.
@@ -1688,6 +1675,10 @@ impl FuncData {
 
     fn as_ptr(&self) -> FuncDataPtr {
         std::ptr::NonNull::new(self as *const _ as _).unwrap()
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.meta.func_id()
     }
 }
 
@@ -1769,75 +1760,16 @@ mod test {
 /// Parameters information in *ISeqInfo*.
 ///
 #[derive(Debug, Clone, Default, PartialEq)]
-struct ParamsInfo {
+pub struct ParamsInfo {
     required_num: usize,
     // required + optional
     reqopt_num: usize,
     // required + optional + rest
-    pos_num: usize,
+    pub pos_num: usize,
     // for param, req(incl. destruct slot), opt, rest, keyword, destructed local, block
-    args_names: Vec<Option<IdentId>>,
-    keyword_names: Vec<IdentId>,
+    pub args_names: Vec<Option<IdentId>>,
+    pub keyword_names: Vec<IdentId>,
     block_param: Option<IdentId>,
-}
-
-///
-/// Information for bytecode compiler.
-///
-/// this includes AST and information for initialization of optional, keyword, destructuring parameters.
-///
-struct CompileInfo {
-    /// AST.
-    ast: Node,
-    /// keyword params initializers.
-    keyword_initializers: Vec<Option<Box<Node>>>,
-    /// param expansion info
-    destruct_info: Vec<DestructureInfo>,
-    /// optional parameters initializers.
-    optional_info: Vec<OptionalInfo>,
-    /// *for* statement parameters info.
-    for_param_info: Vec<ForParamInfo>,
-    loc: Loc,
-}
-
-impl CompileInfo {
-    fn new(
-        ast: Node,
-        keyword_initializers: Vec<Option<Box<Node>>>,
-        expand_info: Vec<DestructureInfo>,
-        optional_info: Vec<OptionalInfo>,
-        for_param_info: Vec<ForParamInfo>,
-        loc: Loc,
-    ) -> Self {
-        Self {
-            ast,
-            keyword_initializers,
-            destruct_info: expand_info,
-            optional_info,
-            for_param_info,
-            loc,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct DestructureInfo {
-    src: usize,
-    dst: usize,
-    len: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct OptionalInfo {
-    local: BcLocal,
-    initializer: Node,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-struct ForParamInfo {
-    dst_outer: usize,
-    dst_reg: BcLocal,
-    src_reg: usize,
 }
 
 struct Root<'a, 'b> {

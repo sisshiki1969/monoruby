@@ -33,7 +33,7 @@ impl alloc::GC<RValue> for FiberInner {
 }
 
 impl FiberInner {
-    pub fn new(block_data: BlockData) -> Self {
+    pub(crate) fn new(block_data: BlockData) -> Self {
         let vm = Executor::default();
         let handle = Box::new(vm);
         Self {
