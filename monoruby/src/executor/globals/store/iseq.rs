@@ -344,23 +344,23 @@ impl ISeqInfo {
         for (i, pc) in self.bytecode().iter().enumerate() {
             let idx = BcIndex::from(i);
             let pc = BcPc::from(pc);
-            if let Some(disp) = TraceIr::is_branch(pc) {
+            if let Some(disp) = pc.is_branch() {
                 let dest = ((i + 1) as i32 + disp) as usize;
                 info[dest].push(idx);
-                if !TraceIr::is_terminal(pc) {
+                if !pc.is_terminal() {
                     // "not taken" edge for conditional branches.
                     if !info[i + 1].contains(&idx) {
                         info[i + 1].push(idx);
                     }
                 }
-            } else if TraceIr::is_loop_end(pc) {
+            } else if pc.is_loop_end() {
                 info[i + 1].push(idx);
             }
         }
         for (i, pc) in self.bytecode().iter().enumerate() {
             let idx = BcIndex::from(i);
             let pc = BcPc::from(pc);
-            if !info[i + 1].is_empty() && !TraceIr::is_terminal(pc) {
+            if !info[i + 1].is_empty() && !pc.is_terminal() {
                 if !info[i + 1].contains(&idx) {
                     info[i + 1].push(idx);
                 }

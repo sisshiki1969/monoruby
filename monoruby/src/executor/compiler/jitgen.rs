@@ -20,6 +20,7 @@ mod merge;
 mod method_call;
 mod read_slot;
 mod slot;
+pub mod trace_ir;
 
 //
 // Just-in-time compiler module.

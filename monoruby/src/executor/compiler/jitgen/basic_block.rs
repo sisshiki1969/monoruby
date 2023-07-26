@@ -82,7 +82,7 @@ impl BasicBlockInfo {
             .map(|(i, v)| {
                 i == 0 || !v.is_empty() || {
                     let pc = BcPc::from(&info.bytecode()[i - 1]);
-                    TraceIr::is_terminal(pc)
+                    pc.is_terminal()
                 }
             })
             .collect();
@@ -111,9 +111,9 @@ impl BasicBlockInfo {
         for (i, incoming) in incoming.into_iter().enumerate() {
             let idx = BcIndex::from(i);
             let pc = info.get_pc(idx);
-            if TraceIr::is_loop_start(pc) {
+            if pc.is_loop_start() {
                 loop_stack.push(idx);
-            } else if TraceIr::is_loop_end(pc) {
+            } else if pc.is_loop_end() {
                 let start = loop_stack.pop().unwrap();
                 bb_info
                     .loops
