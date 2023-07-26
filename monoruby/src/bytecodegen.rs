@@ -14,6 +14,84 @@ mod method_call;
 mod statement;
 pub use inst::*;
 
+pub fn compile_script(
+    globals: &mut Globals,
+    ast: Node,
+    sourceinfo: SourceInfoRef,
+) -> Result<FuncId> {
+    let store = &mut globals.store;
+    let main_fid = store.add_main(ast, sourceinfo)?;
+    let mut fid = main_fid;
+
+    while store.func_len() > fid.get() as usize {
+        compile_func(store, fid)?;
+        fid = FuncId::new(fid.get() + 1);
+    }
+
+    Ok(main_fid)
+}
+
+fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
+    let CompileInfo {
+        ast,
+        for_param_info,
+        keyword_initializers,
+        destruct_info,
+        optional_info,
+        loc,
+    } = store.get_compile_info();
+    let info = store[func_id].as_ruby_func();
+    let mother = info
+        .mother
+        .map(|fid| (fid, store[fid].as_ruby_func().args.clone()));
+    let mut gen = BytecodeGen::new(info, mother, store.callsite_offset(), store.func_len());
+    // arguments preparation
+    for ForParamInfo {
+        dst_outer,
+        dst_reg,
+        src_reg,
+    } in for_param_info
+    {
+        gen.emit(
+            BcIr::StoreDynVar {
+                dst: (dst_reg).into(),
+                outer: dst_outer,
+                src: BcLocal(src_reg as u16).into(),
+            },
+            Loc::default(),
+        );
+    }
+    for DestructureInfo { src, dst, len } in destruct_info {
+        gen.gen_expand_array(src, dst, len);
+    }
+    for OptionalInfo { local, initializer } in optional_info {
+        let local = local.into();
+        let next = gen.new_label();
+        gen.emit_check_local(local, next);
+        gen.gen_store_expr(local, initializer)?;
+        gen.apply_label(next);
+    }
+    let kw_reg = info.pos_num();
+    // keyword args preparation
+    for (id, initializer) in keyword_initializers.into_iter().enumerate() {
+        let local = BcLocal((kw_reg + id) as u16).into();
+        let next = gen.new_label();
+        gen.emit_check_local(local, next);
+        if let Some(box init) = initializer {
+            gen.gen_store_expr(local, init)?;
+        } else {
+            gen.emit_nil(local);
+        }
+        gen.apply_label(next);
+    }
+    gen.gen_expr(ast, UseMode::Ret)?;
+    gen.replace_init(info);
+    //assert_eq!(0, ir.temp);
+    gen.into_bytecode(store, func_id, loc)?;
+    store.set_func_data(func_id);
+    Ok(())
+}
+
 ///
 /// ID of register.
 ///
@@ -265,7 +343,7 @@ impl ForParamInfo {
 }
 
 #[derive(Debug)]
-pub struct BytecodeGen {
+struct BytecodeGen {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
@@ -308,86 +386,6 @@ impl std::ops::Index<Label> for BytecodeGen {
     type Output = BcIndex;
     fn index(&self, index: Label) -> &Self::Output {
         self.labels[index.0].as_ref().unwrap()
-    }
-}
-
-impl BytecodeGen {
-    pub fn compile_script(
-        globals: &mut Globals,
-        ast: Node,
-        sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
-        let store = &mut globals.store;
-        let main_fid = store.add_main(ast, sourceinfo)?;
-        let mut fid = main_fid;
-
-        while store.func_len() > fid.get() as usize {
-            BytecodeGen::compile_func(store, fid)?;
-            fid = FuncId::new(fid.get() + 1);
-        }
-
-        Ok(main_fid)
-    }
-
-    fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
-        let CompileInfo {
-            ast,
-            for_param_info,
-            keyword_initializers,
-            destruct_info,
-            optional_info,
-            loc,
-        } = store.get_compile_info();
-        let info = store[func_id].as_ruby_func();
-        let mother = info
-            .mother
-            .map(|fid| (fid, store[fid].as_ruby_func().args.clone()));
-        let mut gen = BytecodeGen::new(info, mother, store.callsite_offset(), store.func_len());
-        // arguments preparation
-        for ForParamInfo {
-            dst_outer,
-            dst_reg,
-            src_reg,
-        } in for_param_info
-        {
-            gen.emit(
-                BcIr::StoreDynVar {
-                    dst: (dst_reg).into(),
-                    outer: dst_outer,
-                    src: BcLocal(src_reg as u16).into(),
-                },
-                Loc::default(),
-            );
-        }
-        for DestructureInfo { src, dst, len } in destruct_info {
-            gen.gen_expand_array(src, dst, len);
-        }
-        for OptionalInfo { local, initializer } in optional_info {
-            let local = local.into();
-            let next = gen.new_label();
-            gen.emit_check_local(local, next);
-            gen.gen_store_expr(local, initializer)?;
-            gen.apply_label(next);
-        }
-        let kw_reg = info.pos_num();
-        // keyword args preparation
-        for (id, initializer) in keyword_initializers.into_iter().enumerate() {
-            let local = BcLocal((kw_reg + id) as u16).into();
-            let next = gen.new_label();
-            gen.emit_check_local(local, next);
-            if let Some(box init) = initializer {
-                gen.gen_store_expr(local, init)?;
-            } else {
-                gen.emit_nil(local);
-            }
-            gen.apply_label(next);
-        }
-        gen.gen_expr(ast, UseMode::Ret)?;
-        gen.replace_init(info);
-        //assert_eq!(0, ir.temp);
-        gen.into_bytecode(store, func_id, loc)?;
-        store.set_func_data(func_id);
-        Ok(())
     }
 }
 

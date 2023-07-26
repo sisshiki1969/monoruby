@@ -164,7 +164,7 @@ impl Globals {
         path: impl Into<PathBuf>,
     ) -> Result<FuncId> {
         match Parser::parse_program(code, path.into()) {
-            Ok(res) => BytecodeGen::compile_script(self, res.node, res.source_info),
+            Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),
         }
     }

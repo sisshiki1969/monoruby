@@ -10,7 +10,7 @@ mod globals;
 pub mod inline;
 mod op;
 pub use builtins::*;
-pub use bytecodegen::*;
+use bytecodegen::*;
 use fancy_regex::Captures;
 pub use frame::*;
 pub use globals::*;

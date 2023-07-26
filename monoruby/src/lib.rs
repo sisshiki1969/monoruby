@@ -9,7 +9,7 @@
 #![feature(step_trait)]
 #![feature(naked_functions)]
 mod alloc;
-mod bytecodegen;
+pub mod bytecodegen;
 pub mod executor;
 mod id_table;
 #[cfg(test)]

@@ -57,7 +57,7 @@ fn main() {
                 ) {
                     Ok(res) => {
                         let collector = res.lvar_collector;
-                        let fid = match BytecodeGen::compile_script(
+                        let fid = match monoruby::bytecodegen::compile_script(
                             &mut globals,
                             res.node,
                             res.source_info,
