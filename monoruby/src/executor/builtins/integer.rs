@@ -1,5 +1,5 @@
 use super::*;
-use num::ToPrimitive;
+use num::{ToPrimitive, Zero};
 
 //
 // Integer class
@@ -22,6 +22,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(INTEGER_CLASS, "to_int", to_i, 0);
     globals.define_builtin_func(INTEGER_CLASS, "+", add, 1);
     globals.define_builtin_func(INTEGER_CLASS, "[]", index, 1);
+    globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
+    globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
 }
 
 ///
@@ -242,6 +244,52 @@ fn analysis_integer_tof(info: &mut SlotInfo, method_info: &MethodInfo) {
     info.def_as(method_info.ret, true);
 }
 
+///
+/// ### Integer#even?
+///
+/// - even? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/even=3f.html]
+#[monoruby_builtin]
+fn even_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let b = match lfp.self_val().unpack() {
+        RV::Integer(i) => i % 2 == 0,
+        RV::BigInt(b) => (b % 2u32).is_zero(),
+        _ => unreachable!(),
+    };
+    Ok(Value::bool(b))
+}
+
+///
+/// ### Integer#odd?
+///
+/// - odd? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/odd=3f.html]
+#[monoruby_builtin]
+fn odd_(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let b = match lfp.self_val().unpack() {
+        RV::Integer(i) => i % 2 != 0,
+        RV::BigInt(b) => !(b % 2u32).is_zero(),
+        _ => unreachable!(),
+    };
+    Ok(Value::bool(b))
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -321,5 +369,17 @@ mod test {
         run_test("27[2]");
         run_test("27[200]");
         run_test("27[2000000000000000000000000000000000000000000]");
+    }
+
+    #[test]
+    fn even_() {
+        run_test("100.even?");
+        run_test("-100.even?");
+        run_test("10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.even?");
+        run_test("-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.even?");
+        run_test("100.odd?");
+        run_test("-100.odd?");
+        run_test("10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?");
+        run_test("-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.odd?");
     }
 }
