@@ -59,10 +59,7 @@ impl FiberInner {
         len: usize,
     ) -> Result<Value> {
         match self.state() {
-            FiberState::Created => {
-                self.init();
-                self.invoke_fiber(vm, globals, arg, len)
-            }
+            FiberState::Created => self.invoke_fiber(vm, globals, arg, len),
             FiberState::Terminated => Err(MonorubyErr::fibererr(
                 "attempt to resume a terminated fiber".to_string(),
             )),
@@ -79,7 +76,25 @@ impl FiberInner {
         }
     }
 
-    pub(super) fn init(&mut self) {
+    pub fn enum_resume(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        yielder: Value,
+    ) -> Result<Value> {
+        match self.state() {
+            FiberState::Created => {
+                let arg = Arg::from(&yielder);
+                self.invoke_fiber(vm, globals, arg, 1)
+            }
+            FiberState::Suspended => self.resume_fiber(vm, yielder),
+            FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
+                "iteration reached an end".to_string(),
+            )),
+        }
+    }
+
+    fn init(&mut self) {
         use std::alloc::*;
         let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
         unsafe {
@@ -91,6 +106,11 @@ impl FiberInner {
         }
     }
 
+    ///
+    /// Initialize and invoke the fiber.
+    ///
+    /// - the fiber must be FiberState::Created.
+    ///
     pub(super) fn invoke_fiber(
         &mut self,
         vm: &mut Executor,
@@ -98,6 +118,8 @@ impl FiberInner {
         arg: Arg,
         len: usize,
     ) -> Result<Value> {
+        assert_eq!(FiberState::Created, self.state());
+        self.init();
         match (globals.codegen.fiber_invoker)(
             vm,
             globals,

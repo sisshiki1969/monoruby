@@ -51,7 +51,6 @@ class Object
       self.each do |x|
         Fiber.yield x
       end
-      raise StopIteration
     end
   end
 end

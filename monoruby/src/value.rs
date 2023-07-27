@@ -268,6 +268,10 @@ impl Value {
         RValue::new_object(class_id).pack()
     }
 
+    pub fn yielder_object() -> Self {
+        Value::object(unsafe { crate::executor::YIELDER.unwrap().id() })
+    }
+
     pub fn string(s: String) -> Self {
         RValue::new_string(s).pack()
     }
@@ -375,10 +379,6 @@ impl Value {
 
     pub(crate) fn new_generator(block_data: BlockData) -> Self {
         RValue::new_generator(block_data).pack()
-    }
-
-    pub fn new_iterator(obj: Value, method: IdentId) -> Self {
-        RValue::new_iterator(obj, method).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {

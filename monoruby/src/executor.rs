@@ -59,13 +59,6 @@ impl alloc::GC<RValue> for BlockData {
 }
 
 impl BlockData {
-    pub fn new(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
-        Self {
-            outer_lfp,
-            func_data,
-        }
-    }
-
     pub fn func_id(&self) -> FuncId {
         self.func_data.meta.func_id()
     }
@@ -221,7 +214,7 @@ impl alloc::GC<RValue> for Executor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum FiberState {
     Created,
     Suspended,
@@ -256,11 +249,11 @@ impl Executor {
         self.lfp_top.unwrap() >= lfp && lfp > self.cfp.unwrap()
     }
 
-    fn temp_len(&self) -> usize {
+    pub fn temp_len(&self) -> usize {
         self.temp_stack.len()
     }
 
-    fn temp_push(&mut self, val: Value) {
+    pub fn temp_push(&mut self, val: Value) {
         self.temp_stack.push(val);
     }
 
@@ -270,7 +263,7 @@ impl Executor {
         len
     }
 
-    fn temp_clear(&mut self, len: usize) {
+    pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }
 

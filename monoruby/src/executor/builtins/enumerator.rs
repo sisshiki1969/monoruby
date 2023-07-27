@@ -82,17 +82,17 @@ fn each(
     } else {
         return Ok(lfp.self_val());
     };
-    loop {
-        match lfp.self_val().as_enumerator_mut().next(vm, globals) {
-            Ok(val) => {
-                vm.invoke_block(globals, &data, &[val])?;
-            }
-            Err(err) => {
-                if err.kind() == &MonorubyErrKind::StopIteration {
-                    return Ok(lfp.self_val());
-                } else {
-                    return Err(err);
-                }
+    match lfp
+        .self_val()
+        .as_enumerator_mut()
+        .iterate(vm, globals, &data)
+    {
+        Ok(val) => Ok(val),
+        Err(err) => {
+            if err.kind() == &MonorubyErrKind::StopIteration {
+                Ok(lfp.self_val())
+            } else {
+                Err(err)
             }
         }
     }
@@ -209,6 +209,24 @@ mod test {
             end
             30.times do fib.next end
             fib.next
+        "##,
+        );
+    }
+
+    #[test]
+    fn fib_each() {
+        run_test(
+            r##"
+            fib = Enumerator.new do |y|
+                a = b = 1
+                loop do 
+                    y << a
+                    a, b = a + b, a
+                    if a > 30 then break end
+                end
+            end
+            ans = []
+            ans << fib.each {|x| ans << x}
         "##,
         );
     }

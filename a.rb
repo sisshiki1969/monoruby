@@ -1,6 +1,10 @@
-res = []
-e = [1,2,3,4,5].to_enum
-e.each do |x|
-  res << x.to_s
+fib = Enumerator.new do |y|
+    a = b = 1
+    loop do 
+        y << a
+        a, b = a + b, a
+        if a > 100 then break end
+    end
+    7777
 end
-puts "#{res}"
+puts "res = #{fib.each {|x| puts x}}"
