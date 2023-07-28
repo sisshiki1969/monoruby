@@ -1100,7 +1100,7 @@ impl ObjKind {
 
     fn generator(block_data: BlockData) -> Self {
         Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new_generator(block_data)),
+            enumerator: ManuallyDrop::new(EnumeratorInner::new_enumerator(block_data)),
         }
     }
 }

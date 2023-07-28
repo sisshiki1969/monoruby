@@ -77,25 +77,24 @@ fn each(
     len: usize,
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
+    let mut self_val = lfp.self_val();
     let data = if lfp.block().is_some() {
         globals.get_block_data(vm.cfp())
     } else {
-        return Ok(lfp.self_val());
+        return Ok(self_val);
     };
-    match lfp
-        .self_val()
+    let internal = self_val.as_enumerator_mut().create_internal();
+
+    let len = vm.temp_len();
+    vm.temp_push(internal);
+
+    let res = self_val
         .as_enumerator_mut()
-        .iterate(vm, globals, &data)
-    {
-        Ok(val) => Ok(val),
-        Err(err) => {
-            if err.kind() == &MonorubyErrKind::StopIteration {
-                Ok(lfp.self_val())
-            } else {
-                Err(err)
-            }
-        }
-    }
+        .iterate(vm, globals, internal, &data);
+
+    vm.temp_clear(len);
+
+    res
 }
 
 ///

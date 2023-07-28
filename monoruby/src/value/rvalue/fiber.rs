@@ -81,17 +81,20 @@ impl FiberInner {
         vm: &mut Executor,
         globals: &mut Globals,
         yielder: Value,
-    ) -> Result<Value> {
-        match self.state() {
+    ) -> Result<(Value, bool)> {
+        let v = match self.state() {
             FiberState::Created => {
                 let arg = Arg::from(&yielder);
-                self.invoke_fiber(vm, globals, arg, 1)
+                self.invoke_fiber(vm, globals, arg, 1)?
             }
-            FiberState::Suspended => self.resume_fiber(vm, yielder),
-            FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
-                "iteration reached an end".to_string(),
-            )),
-        }
+            FiberState::Suspended => self.resume_fiber(vm, yielder)?,
+            FiberState::Terminated => {
+                return Err(MonorubyErr::stopiterationerr(
+                    "iteration reached an end".to_string(),
+                ))
+            }
+        };
+        Ok((v, self.state() == FiberState::Terminated))
     }
 
     fn init(&mut self) {

@@ -28,7 +28,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new_generator(data: BlockData) -> Self {
+    pub(crate) fn new_enumerator(data: BlockData) -> Self {
         let internal = Some(Value::new_fiber(data.clone()));
         Self {
             internal,
@@ -38,74 +38,68 @@ impl EnumeratorInner {
         }
     }
 
+    ///
+    /// Peek next yield value from the enumerator.
+    ///
     pub fn peek(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         if let Some(v) = self.buffer {
             Ok(v)
         } else {
-            let (v, is_return) = self.yield_next(vm, globals)?;
-            if is_return {
-                return Err(MonorubyErr::stopiterationerr(
-                    "iteration reached an end".to_string(),
-                ));
-            }
+            let v = self.yield_next(vm, globals)?;
             self.buffer = Some(v);
             Ok(v)
         }
     }
 
+    ///
+    /// Get next yield value from the enumerator.
+    ///
     pub fn next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         if let Some(v) = std::mem::take(&mut self.buffer) {
             Ok(v)
         } else {
-            let (v, is_return) = self.yield_next(vm, globals)?;
-            if is_return {
-                Err(MonorubyErr::stopiterationerr(
-                    "iteration reached an end".to_string(),
-                ))
-            } else {
-                Ok(v)
-            }
+            self.yield_next(vm, globals)
         }
     }
 
-    fn yield_next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<(Value, bool)> {
+    ///
+    /// Yield next value from the enumerator.
+    ///
+    /// If the enumerator has been exhausted, return StopIteration error.
+    ///
+    fn yield_next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let mut internal = self.internal.unwrap();
-        let v = internal
+        let (v, is_return) = internal
             .as_fiber_mut()
             .enum_resume(vm, globals, self.yielder)?;
-        let is_return = matches!(
-            self.internal.unwrap().as_fiber().state(),
-            FiberState::Terminated
-        );
-        Ok((v, is_return))
+        if is_return {
+            Err(MonorubyErr::stopiterationerr(
+                "iteration reached an end".to_string(),
+            ))
+        } else {
+            Ok(v)
+        }
+    }
+
+    pub(crate) fn create_internal(&self) -> Value {
+        Value::new_fiber((*self.block).clone())
     }
 
     pub(crate) fn iterate(
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
+        mut internal: Value,
         block_data: &BlockData,
     ) -> Result<Value> {
-        let mut internal = Value::new_fiber((*self.block).clone());
-        let len = vm.temp_len();
-        vm.temp_push(internal);
         loop {
-            match internal
+            let (v, is_return) = internal
                 .as_fiber_mut()
-                .enum_resume(vm, globals, self.yielder)
-            {
-                Ok(v) => {
-                    if matches!(internal.as_fiber().state(), FiberState::Terminated) {
-                        vm.temp_clear(len);
-                        return Ok(v);
-                    }
-                    vm.invoke_block(globals, block_data, &[v])?;
-                }
-                Err(err) => {
-                    vm.temp_clear(len);
-                    return Err(err);
-                }
-            };
+                .enum_resume(vm, globals, self.yielder)?;
+            if is_return {
+                return Ok(v);
+            }
+            vm.invoke_block(globals, block_data, &[v])?;
         }
     }
 }
