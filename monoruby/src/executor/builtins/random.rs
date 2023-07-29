@@ -30,7 +30,7 @@ fn srand(
         None
     } else {
         match arg[0].unpack() {
-            RV::Integer(i) => Some(i),
+            RV::Fixnum(i) => Some(i),
             _ => unimplemented!(),
         }
     };

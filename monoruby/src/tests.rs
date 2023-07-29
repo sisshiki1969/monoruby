@@ -164,9 +164,14 @@ fn run_test_main(code: &str, no_gc: bool) -> (Value, Globals) {
     let now = std::time::Instant::now();
     let mut globals = Globals::new(1, false);
     Globals::gc_enable(!no_gc);
-    let res = globals
-        .compile_and_run(code, std::path::Path::new(""))
-        .unwrap();
+    let res = match globals.compile_and_run(code, std::path::Path::new("")) {
+        Ok(res) => res,
+        Err(err) => {
+            err.show_error_message_and_all_loc();
+            panic!();
+        }
+    };
+
     let jit_str = globals.inspect(res);
     #[cfg(not(debug_assertions))]
     eprintln!("monoruby:  {jit_str} elapsed:{:?}", now.elapsed());

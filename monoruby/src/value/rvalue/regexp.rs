@@ -44,7 +44,7 @@ impl RegexpInner {
                     globals.regexp_cache.insert(reg_str, regex.clone());
                     Ok(RegexpInner(regex))
                 }
-                Err(err) => Err(MonorubyErr::regexerr(err.to_string())),
+                Err(err) => Err(MonorubyErr::regexerr(err)),
             },
         }
     }
@@ -84,7 +84,7 @@ impl RegexpInner {
                 .map(|(s, c)| (s, c.is_some()))
         } else {
             Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.".to_string(),
+                "1st arg must be RegExp or String.",
             ))
         }
     }
@@ -131,7 +131,7 @@ impl RegexpInner {
             replace_(vm, globals, re, given)
         } else {
             Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.".to_string(),
+                "1st arg must be RegExp or String.",
             ))
         }
     }
@@ -151,7 +151,7 @@ impl RegexpInner {
             re.replace_repeat(vm, given, replace)
         } else {
             Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.".to_string(),
+                "1st arg must be RegExp or String.",
             ))
         }
     }
@@ -208,7 +208,7 @@ impl RegexpInner {
             replace_(vm, globals, re, given)
         } else {
             Err(MonorubyErr::argumenterr(
-                "1st arg must be RegExp or String.".to_string(),
+                "1st arg must be RegExp or String.",
             ))
         }
     }

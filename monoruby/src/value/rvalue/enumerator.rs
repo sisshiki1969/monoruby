@@ -38,6 +38,14 @@ impl EnumeratorInner {
         }
     }
 
+    pub(crate) fn create_internal(&self) -> Value {
+        Value::new_fiber((*self.block).clone())
+    }
+
+    pub(crate) fn yielder(&self) -> Value {
+        self.yielder
+    }
+
     ///
     /// Peek next yield value from the enumerator.
     ///
@@ -78,28 +86,6 @@ impl EnumeratorInner {
             ))
         } else {
             Ok(v)
-        }
-    }
-
-    pub(crate) fn create_internal(&self) -> Value {
-        Value::new_fiber((*self.block).clone())
-    }
-
-    pub(crate) fn iterate(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-        mut internal: Value,
-        block_data: &BlockData,
-    ) -> Result<Value> {
-        loop {
-            let (v, is_return) = internal
-                .as_fiber_mut()
-                .enum_resume(vm, globals, self.yielder)?;
-            if is_return {
-                return Ok(v);
-            }
-            vm.invoke_block(globals, block_data, &[v])?;
         }
     }
 }

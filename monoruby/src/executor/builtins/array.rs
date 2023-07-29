@@ -241,7 +241,7 @@ fn shift(
         ary.drain(0..1);
         Ok(res)
     } else {
-        let i = arg[0].coerce_to_fixnum(globals)?;
+        let i = arg[0].coerce_to_i64(globals)?;
         if i < 0 {
             return Err(MonorubyErr::negative_array_size());
         }
@@ -340,8 +340,8 @@ fn index_assign(
             unimplemented!()
         }
     } else if len == 3 {
-        let i = arg[0].coerce_to_fixnum(globals)?;
-        let l = arg[1].coerce_to_fixnum(globals)?;
+        let i = arg[0].coerce_to_i64(globals)?;
+        let l = arg[1].coerce_to_i64(globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
@@ -755,19 +755,17 @@ fn transpose(
     }
     let len = ary[0]
         .is_array()
-        .ok_or_else(|| {
-            MonorubyErr::argumenterr("Each element of receiver must be an array.".to_string())
-        })?
+        .ok_or_else(|| MonorubyErr::argumenterr("Each element of receiver must be an array."))?
         .len();
     let mut trans = vec![];
     for i in 0..len {
         let mut temp = vec![];
         for v in ary.iter().cloned() {
             let a = v.is_array().ok_or_else(|| {
-                MonorubyErr::argumenterr("Each element of receiver must be an array.".to_string())
+                MonorubyErr::argumenterr("Each element of receiver must be an array.")
             })?;
             if a.len() != len {
-                return Err(MonorubyErr::indexerr("Element size differs.".to_string()));
+                return Err(MonorubyErr::indexerr("Element size differs."));
             }
             temp.push(a[i]);
         }

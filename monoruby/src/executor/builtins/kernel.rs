@@ -182,9 +182,7 @@ fn raise(
             };
         }
     }
-    Err(MonorubyErr::typeerr(
-        "exception class/object expected".to_string(),
-    ))
+    Err(MonorubyErr::typeerr("exception class/object expected"))
 }
 
 ///
@@ -354,7 +352,7 @@ fn rand(
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let i = match len {
         0 => 0i64,
-        1 => arg[0].coerce_to_fixnum(globals)?,
+        1 => arg[0].coerce_to_i64(globals)?,
         _ => unreachable!(),
     };
     if !i.is_zero() {
@@ -482,7 +480,7 @@ fn kernel_integer(
 ) -> Result<Value> {
     let arg0 = arg[0];
     match arg0.unpack() {
-        RV::Integer(num) => return Ok(Value::integer(num)),
+        RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
         RV::Float(num) => return Ok(Value::integer(num.trunc() as i64)),
         RV::String(b) => {

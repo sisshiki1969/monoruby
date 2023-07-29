@@ -209,9 +209,7 @@ fn raise(
             };
         }
     }
-    Err(MonorubyErr::typeerr(
-        "exception class/object expected".to_string(),
-    ))
+    Err(MonorubyErr::typeerr("exception class/object expected"))
 }
 
 ///
@@ -501,7 +499,7 @@ fn command(
             std::io::stderr().write_all(&output.stderr).unwrap();
             Ok(Value::string_from_vec(output.stdout))
         }
-        Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
+        Err(err) => Err(MonorubyErr::runtimeerr(err)),
     }
 }
 

@@ -383,7 +383,7 @@ impl Value {
 
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
-            RV::Integer(i)
+            RV::Fixnum(i)
         } else if let Some(f) = self.try_flonum() {
             RV::Float(f)
         } else if self.get() == 0 {
@@ -435,10 +435,26 @@ impl Value {
         }
     }
 
-    pub(crate) fn coerce_to_fixnum(&self, globals: &mut Globals) -> Result<i64> {
+    ///
+    /// Try to convert `self` to i64.
+    ///
+    /// - if `self` is a Fixnum, return it as i64.
+    /// - if `self` is a Float, return it as i64.
+    /// - if `self` is a Bignum, return RangeError.
+    ///
+    pub(crate) fn coerce_to_i64(&self, globals: &mut Globals) -> Result<i64> {
         match self.unpack() {
-            RV::Integer(i) => Ok(i),
-            RV::Float(f) => Ok(f.trunc() as i64),
+            RV::Fixnum(i) => Ok(i),
+            RV::Float(f) => {
+                if f.is_nan() || f.is_infinite() || f < (i64::MIN as f64) || (i64::MAX as f64) < f {
+                    Err(MonorubyErr::float_out_of_range_of_integer(f))
+                } else {
+                    Ok(f.trunc() as i64)
+                }
+            }
+            RV::BigInt(_) => Err(MonorubyErr::rangeerr(
+                "bignum too big to convert into `long'",
+            )),
             _ => Err(MonorubyErr::no_implicit_conversion(
                 globals,
                 *self,
@@ -707,7 +723,7 @@ impl Value {
     }
 
     pub(crate) fn expect_integer(&self, globals: &mut Globals) -> Result<i64> {
-        if let RV::Integer(i) = self.unpack() {
+        if let RV::Fixnum(i) = self.unpack() {
             Ok(i)
         } else {
             Err(MonorubyErr::no_implicit_conversion(
@@ -887,7 +903,7 @@ pub enum RV<'a> {
     None,
     Nil,
     Bool(bool),
-    Integer(i64),
+    Fixnum(i64),
     BigInt(&'a BigInt),
     Float(f64),
     Symbol(IdentId),
@@ -901,7 +917,7 @@ impl<'a> std::fmt::Debug for RV<'a> {
             RV::None => write!(f, "Undef"),
             RV::Nil => write!(f, "nil"),
             RV::Bool(b) => write!(f, "{b:?}"),
-            RV::Integer(n) => write!(f, "{n}"),
+            RV::Fixnum(n) => write!(f, "{n}"),
             RV::BigInt(n) => write!(f, "Bignum({n})"),
             RV::Float(n) => write!(f, "{}", dtoa::Buffer::new().format(*n),),
             RV::Symbol(id) => write!(f, "Symbol({})", id.get()),

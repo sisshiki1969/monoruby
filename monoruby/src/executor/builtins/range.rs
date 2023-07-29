@@ -95,7 +95,7 @@ fn each(
         vm.invoke_block_iter1(globals, iter)?;
         Ok(self_)
     } else {
-        Err(MonorubyErr::runtimeerr("not supported".to_string()))
+        Err(MonorubyErr::runtimeerr("not supported"))
     }
 }
 
@@ -130,7 +130,7 @@ fn map(
         let vec = vm.invoke_block_map1(globals, iter)?;
         Ok(Value::array_from_vec(vec))
     } else {
-        Err(MonorubyErr::runtimeerr("not supported".to_string()))
+        Err(MonorubyErr::runtimeerr("not supported"))
     }
 }
 
@@ -161,7 +161,7 @@ fn toa(
         let vec = (start..end).map(|i| Value::fixnum(i)).collect();
         Ok(Value::array_from_vec(vec))
     } else {
-        Err(MonorubyErr::runtimeerr("not supported".to_string()))
+        Err(MonorubyErr::runtimeerr("not supported"))
     }
 }
 

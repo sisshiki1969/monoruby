@@ -71,7 +71,7 @@ fn initialize(
         .unwrap();
     let members = members_val.as_array();
     if members.len() < len {
-        return Err(MonorubyErr::argumenterr("Struct size differs.".to_string()));
+        return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
     for (i, val) in arg.iter(len).enumerate() {
         let id = members[i].as_symbol();

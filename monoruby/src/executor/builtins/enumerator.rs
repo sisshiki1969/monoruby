@@ -13,7 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
     globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, -1);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index, -1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
 
     let yielder =
@@ -88,13 +89,111 @@ fn each(
     let len = vm.temp_len();
     vm.temp_push(internal);
 
-    let res = self_val
-        .as_enumerator_mut()
-        .iterate(vm, globals, internal, &data);
+    let res = each_inner(
+        vm,
+        globals,
+        internal,
+        &data,
+        self_val.as_enumerator_mut().yielder(),
+    );
 
     vm.temp_clear(len);
 
     res
+}
+
+fn each_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut internal: Value,
+    block_data: &BlockData,
+    yielder: Value,
+) -> Result<Value> {
+    loop {
+        let (v, is_return) = internal.as_fiber_mut().enum_resume(vm, globals, yielder)?;
+        if is_return {
+            return Ok(v);
+        }
+        vm.invoke_block(globals, block_data, &[v])?;
+    }
+}
+
+///
+/// ### Enumerator#with_index
+///
+/// - with_index(offset = 0) {|(*args), idx| ... } -> object
+/// - with_index(offset = 0) -> Enumeratorf
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_index.html]
+#[monoruby_builtin]
+fn with_index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: LFP,
+    arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
+    let count = if len == 0 {
+        Value::integer(0)
+    } else {
+        match arg[0].unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => arg[0],
+            RV::Float(f) => Value::integer(f as i64),
+            _ => {
+                return Err(MonorubyErr::no_implicit_conversion(
+                    globals,
+                    arg[0],
+                    INTEGER_CLASS,
+                ))
+            }
+        }
+    };
+    let mut self_val = lfp.self_val();
+    let data = if lfp.block().is_some() {
+        globals.get_block_data(vm.cfp())
+    } else {
+        return Ok(self_val);
+    };
+    let internal = self_val.as_enumerator_mut().create_internal();
+
+    let len = vm.temp_len();
+    vm.temp_push(internal);
+
+    let res = with_index_inner(
+        vm,
+        globals,
+        internal,
+        &data,
+        count,
+        self_val.as_enumerator_mut().yielder(),
+    );
+
+    vm.temp_clear(len);
+
+    res
+}
+
+fn with_index_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut internal: Value,
+    block_data: &BlockData,
+    mut count: Value,
+    yielder: Value,
+) -> Result<Value> {
+    loop {
+        let (v, is_return) = internal.as_fiber_mut().enum_resume(vm, globals, yielder)?;
+        if is_return {
+            return Ok(v);
+        }
+        vm.invoke_block(globals, block_data, &[v, count])?;
+        match count.unpack() {
+            RV::Fixnum(i) => count = Value::integer(i + 1),
+            RV::BigInt(i) => count = Value::bigint(i + 1),
+            _ => unreachable!(),
+        }
+    }
 }
 
 ///
@@ -213,8 +312,12 @@ mod test {
     }
 
     #[test]
-    fn fib_each() {
-        run_test(
+    fn fib_each1() {
+        run_test_with_prelude(
+            r##"
+            ans = []
+            ans << fib.each {|x| ans << x}
+        "##,
             r##"
             fib = Enumerator.new do |y|
                 a = b = 1
@@ -223,10 +326,43 @@ mod test {
                     a, b = a + b, a
                     if a > 30 then break end
                 end
-            end
+            end"##,
+        );
+    }
+
+    #[test]
+    fn fib_each2() {
+        run_test_with_prelude(
+            r##"
             ans = []
-            ans << fib.each {|x| ans << x}
+            ans << fib.with_index {|x, i| ans << x; ans << i}
         "##,
+            r##"
+            fib = Enumerator.new do |y|
+                a = b = 1
+                loop do
+                    y.<< a
+                    a, b = a + b, a
+                    if a > 100 then break end
+                end
+            end"##,
+        );
+
+        run_test_with_prelude(
+            r##"
+            ans = []
+            ans << fib.with_index(1000) {|x, i| ans << x; ans << i}
+            ans
+        "##,
+            r##"
+            fib = Enumerator.new do |y|
+                a = b = 1
+                loop do 
+                    y.<< a
+                    a, b = a + b, a
+                    if a > 100 then break end
+                end
+            end"##,
         );
     }
 

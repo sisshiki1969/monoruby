@@ -33,7 +33,7 @@ fn sqrt(
     let arg0 = arg[0];
     let f = match arg0.unpack() {
         RV::Float(f) => f,
-        RV::Integer(i) => i as f64,
+        RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
@@ -57,7 +57,7 @@ fn sin(
     let arg0 = arg[0];
     let f = match arg0.unpack() {
         RV::Float(f) => f,
-        RV::Integer(i) => i as f64,
+        RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));
@@ -81,7 +81,7 @@ fn cos(
     let arg0 = arg[0];
     let f = match arg0.unpack() {
         RV::Float(f) => f,
-        RV::Integer(i) => i as f64,
+        RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => {
             return Err(MonorubyErr::cant_convert_into_float(globals, arg0));

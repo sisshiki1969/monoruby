@@ -37,7 +37,7 @@ pub(super) fn init(globals: &mut Globals) {
 fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     lfp.expect_block()?;
     match lfp.self_val().unpack() {
-        RV::Integer(i) => vm.invoke_block_iter1(globals, (0..i).map(Value::integer))?,
+        RV::Fixnum(i) => vm.invoke_block_iter1(globals, (0..i).map(Value::integer))?,
         RV::BigInt(_) => unimplemented!(),
         _ => unreachable!(),
     };
@@ -101,15 +101,15 @@ fn step(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     match lfp.block() {
-        None => return Err(MonorubyErr::runtimeerr("not implemented".to_string())),
+        None => return Err(MonorubyErr::runtimeerr("not implemented")),
         Some(block) => block,
     };
     let cur = lfp.self_val().as_fixnum();
-    let limit = args[0].coerce_to_fixnum(globals)?;
+    let limit = args[0].coerce_to_i64(globals)?;
     let step = if len == 2 {
-        let step = args[1].coerce_to_fixnum(globals)?;
+        let step = args[1].coerce_to_i64(globals)?;
         if step == 0 {
-            return Err(MonorubyErr::argumenterr("Step can not be 0.".to_string()));
+            return Err(MonorubyErr::argumenterr("Step can not be 0."));
         }
         step
     } else {
@@ -156,7 +156,7 @@ fn to_f(
     _len: usize,
 ) -> Result<Value> {
     let f = match lfp.self_val().unpack() {
-        RV::Integer(i) => i as f64,
+        RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
         _ => unimplemented!(),
     };
@@ -260,7 +260,7 @@ fn even_(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let b = match lfp.self_val().unpack() {
-        RV::Integer(i) => i % 2 == 0,
+        RV::Fixnum(i) => i % 2 == 0,
         RV::BigInt(b) => (b % 2u32).is_zero(),
         _ => unreachable!(),
     };
@@ -283,7 +283,7 @@ fn odd_(
 ) -> Result<Value> {
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let b = match lfp.self_val().unpack() {
-        RV::Integer(i) => i % 2 != 0,
+        RV::Fixnum(i) => i % 2 != 0,
         RV::BigInt(b) => !(b % 2u32).is_zero(),
         _ => unreachable!(),
     };

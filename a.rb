@@ -1,10 +1,12 @@
 fib = Enumerator.new do |y|
     a = b = 1
     loop do 
-        y << a
+        y.<< a
         a, b = a + b, a
         if a > 100 then break end
     end
-    7777
+    777
 end
-puts "res = #{fib.each {|x| puts x}}"
+
+ans = []
+puts "#{ans << fib.with_index(1.1) {|x, i| ans << x; ans << i}}"

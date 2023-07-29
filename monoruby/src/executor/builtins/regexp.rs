@@ -75,7 +75,7 @@ fn regexp_last_match(
     if len == 0 {
         Ok(vm.get_last_matchdata())
     } else {
-        let nth = arg[0].coerce_to_fixnum(globals)?;
+        let nth = arg[0].coerce_to_i64(globals)?;
         Ok(vm.get_special_matches(nth))
     }
 }

@@ -52,7 +52,7 @@ fn write(
     let bytes = globals.to_s(arg[1]).into_bytes();
     match file.write_all(&bytes) {
         Ok(_) => {}
-        Err(err) => return Err(MonorubyErr::runtimeerr(err.to_string())),
+        Err(err) => return Err(MonorubyErr::runtimeerr(err)),
     };
     Ok(Value::integer(bytes.len() as i64))
 }
@@ -85,9 +85,7 @@ fn read(
     match std::io::Read::read_to_string(&mut file, &mut contents) {
         Ok(file) => file,
         Err(_) => {
-            return Err(MonorubyErr::runtimeerr(
-                "Could not read the file.".to_string(),
-            ));
+            return Err(MonorubyErr::runtimeerr("Could not read the file."));
         }
     };
     Ok(Value::string(contents))
@@ -159,15 +157,13 @@ fn expand_path(
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
-            return Err(MonorubyErr::runtimeerr(err.to_string()));
+            return Err(MonorubyErr::runtimeerr(err));
         }
     };
     let home_dir = match dirs::home_dir() {
         Some(dir) => dir,
         None => {
-            return Err(MonorubyErr::runtimeerr(
-                "Failed to get home directory.".to_string(),
-            ));
+            return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
         }
     };
     let path = if len == 1 {

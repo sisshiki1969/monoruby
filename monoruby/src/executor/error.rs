@@ -37,10 +37,10 @@ pub enum MonorubyErrKind {
 }
 
 impl MonorubyErr {
-    pub fn new(kind: MonorubyErrKind, msg: String) -> Self {
+    pub fn new(kind: MonorubyErrKind, msg: impl ToString) -> Self {
         MonorubyErr {
             kind,
-            msg,
+            msg: msg.to_string(),
             trace: vec![],
         }
     }
@@ -345,7 +345,7 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn typeerr(msg: String) -> MonorubyErr {
+    pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Type, msg)
     }
 
@@ -407,24 +407,24 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn argumenterr(msg: String) -> MonorubyErr {
+    pub(crate) fn argumenterr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Arguments, msg)
     }
 
     pub(crate) fn zero_width_padding() -> MonorubyErr {
-        MonorubyErr::argumenterr("zero width padding".to_string())
+        MonorubyErr::argumenterr("zero width padding")
     }
 
     pub(crate) fn negative_argument() -> MonorubyErr {
-        MonorubyErr::argumenterr("negativeargument".to_string())
+        MonorubyErr::argumenterr("negativeargument")
     }
 
     pub(crate) fn negative_array_size() -> MonorubyErr {
-        MonorubyErr::argumenterr("negative array size".to_string())
+        MonorubyErr::argumenterr("negative array size")
     }
 
     pub(crate) fn create_proc_no_block() -> MonorubyErr {
-        MonorubyErr::argumenterr("tried to create Proc object without a block".to_string())
+        MonorubyErr::argumenterr("tried to create Proc object without a block")
     }
 
     pub(crate) fn check_number_of_arguments(given: usize, expect: usize) -> Result<()> {
@@ -458,7 +458,7 @@ impl MonorubyErr {
         Err(MonorubyErr::wrong_number_of_arg_min(given, min))
     }
 
-    pub(crate) fn indexerr(msg: String) -> MonorubyErr {
+    pub(crate) fn indexerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Index, msg)
     }
 
@@ -477,7 +477,7 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn frozenerr(msg: String) -> MonorubyErr {
+    pub(crate) fn frozenerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Frozen, msg)
     }
 
@@ -489,7 +489,7 @@ impl MonorubyErr {
         ))
     }
 
-    pub(crate) fn loaderr(msg: String) -> MonorubyErr {
+    pub(crate) fn loaderr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Load, msg)
     }
 
@@ -500,16 +500,24 @@ impl MonorubyErr {
         })
     }
 
-    pub(crate) fn internalerr(msg: String) -> MonorubyErr {
+    pub(crate) fn internalerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Internal, msg)
     }
 
-    pub(crate) fn regexerr(msg: String) -> MonorubyErr {
+    pub(crate) fn regexerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Regex, msg)
     }
 
-    pub(crate) fn runtimeerr(msg: String) -> MonorubyErr {
+    pub(crate) fn runtimeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
+    }
+
+    pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Range, msg)
+    }
+
+    pub(crate) fn float_out_of_range_of_integer(f: f64) -> MonorubyErr {
+        MonorubyErr::rangeerr(format!("float {:?} out of range of integer", f))
     }
 }
 

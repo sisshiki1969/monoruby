@@ -94,7 +94,7 @@ fn clock_gettime(
     _len: usize,
 ) -> Result<Value> {
     let mut tp = TimeSpec::default();
-    let clk_id = arg[0].coerce_to_fixnum(globals)? as i32;
+    let clk_id = arg[0].coerce_to_i64(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);
     Ok(Value::float(tp.to_f64()))
 }

@@ -232,7 +232,7 @@ impl LFP {
         if self.block().is_none() {
             Ok(())
         } else {
-            Err(MonorubyErr::runtimeerr("not supported.".to_string()))
+            Err(MonorubyErr::runtimeerr("not supported."))
         }
     }
 

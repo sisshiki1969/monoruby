@@ -343,7 +343,7 @@ impl Globals {
             RV::None => "Undef".to_string(),
             RV::Nil => "".to_string(),
             RV::Bool(b) => format!("{:?}", b),
-            RV::Integer(n) => format!("{}", n),
+            RV::Fixnum(n) => format!("{}", n),
             RV::BigInt(n) => format!("{}", n),
             RV::Float(f) => dtoa::Buffer::new().format(f).to_string(),
             RV::Symbol(id) => id.to_string(),
@@ -379,7 +379,7 @@ impl Globals {
 
     pub fn inspect(&self, val: Value) -> String {
         match val.unpack() {
-            RV::None | RV::Bool(_) | RV::Integer(_) | RV::BigInt(_) | RV::Float(_) => {}
+            RV::None | RV::Bool(_) | RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {}
             RV::Nil => return "nil".to_string(),
             RV::Symbol(id) => return format!(":{id}"),
             RV::String(s) => {

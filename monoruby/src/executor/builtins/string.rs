@@ -72,7 +72,7 @@ fn mul(
     _len: usize,
 ) -> Result<Value> {
     let mut lhs = StringInner::from_slice(lfp.self_val().as_bytes());
-    let count = match arg[0].coerce_to_fixnum(globals)? {
+    let count = match arg[0].coerce_to_i64(globals)? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
     };
@@ -133,7 +133,7 @@ fn expect_char(chars: &mut std::str::Chars) -> Result<char> {
         Some(ch) => ch,
         None => {
             return Err(MonorubyErr::argumenterr(
-                "Invalid termination of format string".to_string(),
+                "Invalid termination of format string",
             ));
         }
     };
@@ -147,7 +147,7 @@ enum Integer {
 
 fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
     match val.unpack() {
-        RV::Integer(i) => return Ok(Integer::Fixnum(i)),
+        RV::Fixnum(i) => return Ok(Integer::Fixnum(i)),
         RV::String(s) => {
             if let Ok(s) = String::from_utf8(s.to_vec()) {
                 match s.parse::<i64>() {
@@ -171,7 +171,7 @@ fn coerce_to_integer(globals: &mut Globals, val: Value) -> Result<Integer> {
 
 fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
     match val.unpack() {
-        RV::Integer(i) => Ok(i as f64),
+        RV::Fixnum(i) => Ok(i as f64),
         RV::Float(f) => Ok(f),
         _ => {
             let s = globals.to_s(val);
@@ -185,13 +185,13 @@ fn coerce_to_float(globals: &mut Globals, val: Value) -> Result<f64> {
 
 fn coerce_to_char(val: Value) -> Result<char> {
     match val.unpack() {
-        RV::Integer(i) => {
+        RV::Fixnum(i) => {
             if let Ok(u) = u32::try_from(i) {
                 if let Some(c) = char::from_u32(u) {
                     return Ok(c);
                 }
             }
-            Err(MonorubyErr::argumenterr("invalid character".to_string()))
+            Err(MonorubyErr::argumenterr("invalid character"))
         }
         RV::Float(f) => {
             let f = f.trunc();
@@ -200,23 +200,19 @@ fn coerce_to_char(val: Value) -> Result<char> {
                     return Ok(c);
                 }
             }
-            Err(MonorubyErr::argumenterr("invalid character".to_string()))
+            Err(MonorubyErr::argumenterr("invalid character"))
         }
         RV::String(s) => match String::from_utf8(s.to_vec()) {
             Ok(s) => {
                 if s.chars().count() != 1 {
-                    Err(MonorubyErr::argumenterr(
-                        "%c requires a character".to_string(),
-                    ))
+                    Err(MonorubyErr::argumenterr("%c requires a character"))
                 } else {
                     Ok(s.chars().next().unwrap())
                 }
             }
-            _ => Err(MonorubyErr::argumenterr(
-                "%c requires a character".to_string(),
-            )),
+            _ => Err(MonorubyErr::argumenterr("%c requires a character")),
         },
-        _ => Err(MonorubyErr::argumenterr("invalid character".to_string())),
+        _ => Err(MonorubyErr::argumenterr("invalid character")),
     }
 }
 
@@ -273,7 +269,7 @@ fn rem(
             Some(c) => ch = c,
             None => {
                 return Err(MonorubyErr::argumenterr(
-                    "incomplete format specifier; use %% (double %) instead".to_string(),
+                    "incomplete format specifier; use %% (double %) instead",
                 ));
             }
         };
@@ -301,7 +297,7 @@ fn rem(
             precision = 6;
         };
         if arguments.len() <= arg_no {
-            return Err(MonorubyErr::argumenterr("too few arguments".to_string()));
+            return Err(MonorubyErr::argumenterr("too few arguments"));
         };
         // Specifier
         let val = arguments[arg_no];
@@ -472,7 +468,7 @@ fn index(
             None => return Ok(Value::nil()),
         };
         if len == 2 {
-            let len = match arg[1].coerce_to_fixnum(globals)? {
+            let len = match arg[1].coerce_to_i64(globals)? {
                 0 => return Ok(Value::string_from_str("")),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
@@ -498,9 +494,7 @@ fn index(
                 _ => return Ok(Value::nil()),
             },
             _ => {
-                return Err(MonorubyErr::argumenterr(
-                    "Index must be Integer.".to_string(),
-                ));
+                return Err(MonorubyErr::argumenterr("Index must be Integer."));
             }
         };
         let s: String = lhs.chars().skip(start).take(end - start + 1).collect();
@@ -509,7 +503,7 @@ fn index(
         let nth = if len == 1 {
             0
         } else {
-            arg[1].coerce_to_fixnum(globals)?
+            arg[1].coerce_to_i64(globals)?
         };
         match info.captures(&lhs) {
             Ok(None) => return Ok(Value::nil()),
@@ -538,7 +532,7 @@ fn index(
             ))),
         }
     } else {
-        Err(MonorubyErr::argumenterr("Bad type for index.".to_string()))
+        Err(MonorubyErr::argumenterr("Bad type for index."))
     }
 }
 
@@ -606,7 +600,7 @@ fn split(
     let arg0 = arg[0];
     if let Some(sep) = arg0.is_string() {
         let lim = if len > 1 {
-            arg[1].coerce_to_fixnum(globals)?
+            arg[1].coerce_to_i64(globals)?
         } else {
             0
         };
@@ -668,7 +662,7 @@ fn split(
         }
     } else if let Some(re) = arg0.is_regex() {
         let lim = if len > 1 {
-            arg[1].coerce_to_fixnum(globals)?
+            arg[1].coerce_to_i64(globals)?
         } else {
             0
         };
@@ -853,7 +847,7 @@ fn string_match(
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let pos = match len {
         1 => 0usize,
-        2 => match arg[1].coerce_to_fixnum(globals)? {
+        2 => match arg[1].coerce_to_i64(globals)? {
             pos if pos >= 0 => pos as usize,
             _ => return Ok(Value::nil()),
         },
@@ -931,7 +925,7 @@ fn ljust(
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = arg[0].coerce_to_fixnum(globals)?;
+    let width = arg[0].coerce_to_i64(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));
@@ -966,7 +960,7 @@ fn rjust(
     };
     let self_ = lfp.self_val();
     let lhs = self_.as_str();
-    let width = arg[0].coerce_to_fixnum(globals)?;
+    let width = arg[0].coerce_to_i64(globals)?;
     let str_len = lhs.chars().count();
     if width <= 0 || width as usize <= str_len {
         return Ok(Value::string(lhs.to_string()));
@@ -984,9 +978,7 @@ fn rjust(
 #[monoruby_builtin]
 fn lines(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
     if lfp.block().is_some() {
-        return Err(MonorubyErr::runtimeerr(
-            "block is not supported.".to_string(),
-        ));
+        return Err(MonorubyErr::runtimeerr("block is not supported."));
     }
     let receiver = lfp.self_val();
     let string = receiver.expect_string(globals)?;
