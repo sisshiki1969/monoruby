@@ -8,12 +8,6 @@ pub struct EnumeratorInner {
     buffer: Option<Value>,
 }
 
-impl Drop for EnumeratorInner {
-    fn drop(&mut self) {
-        //unsafe { ManuallyDrop::drop(&mut self.internal) };
-    }
-}
-
 impl alloc::GC<RValue> for EnumeratorInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         if let Some(internal) = self.internal {
@@ -44,6 +38,11 @@ impl EnumeratorInner {
 
     pub(crate) fn yielder(&self) -> Value {
         self.yielder
+    }
+
+    pub fn rewind(&mut self) {
+        self.internal = Some(Value::new_fiber((*self.block).clone()));
+        self.buffer = None;
     }
 
     ///

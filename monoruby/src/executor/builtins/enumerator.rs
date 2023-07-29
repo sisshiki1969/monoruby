@@ -16,6 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index, -1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
@@ -215,6 +216,25 @@ fn peek(
 }
 
 ///
+/// ### Enumerator#rewind
+///
+/// - rewind -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
+#[monoruby_builtin]
+fn rewind(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: LFP,
+    _arg: Arg,
+    len: usize,
+) -> Result<Value> {
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    lfp.self_val().as_enumerator_mut().rewind();
+    Ok(lfp.self_val())
+}
+
+///
 /// ### Enumerator::Yielder#<<
 ///
 /// - self << object -> ()
@@ -375,6 +395,25 @@ mod test {
             e.each do |x|
                 res << x.to_s
             end
+            res
+        "##,
+        );
+    }
+
+    #[test]
+    fn rewind() {
+        run_test(
+            r##"
+            res = []
+            e = [1,2,3,4].to_enum
+            res << e.next
+            res << e.next
+            res << e.next
+            e.rewind
+            res << e.next
+            res << e.next
+            e.rewind
+            res << e.next
             res
         "##,
         );
