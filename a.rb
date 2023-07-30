@@ -1,12 +1,5 @@
-fib = Enumerator.new do |y|
-    a = b = 1
-    loop do 
-        y.<< a
-        a, b = a + b, a
-        if a > 100 then break end
-    end
-    777
-end
+e = [1,2,3,4,5,6,7,8].to_enum
 
-ans = []
-puts "#{ans << fib.with_index(1.1) {|x, i| ans << x; ans << i}}"
+e.each do |x|
+    puts "#{x}"
+end

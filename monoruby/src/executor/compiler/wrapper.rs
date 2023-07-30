@@ -122,7 +122,9 @@ impl Codegen {
             subq rsp, rax;
             lea  rcx, [r14 - (LBP_ARG0)];     // rcx <- *const arg[0]
             // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movw [r14 - (LBP_META_REGNUM)], rdx;
+            movl rax, rdx;
+            addl rax, 1;
+            movw [r14 - (LBP_META_REGNUM)], rax;
 
             movq rdi, rbx;
             movq rsi, r12;

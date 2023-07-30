@@ -38,7 +38,7 @@ fn fiber_new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
-fn fiber_yield(
+pub(crate) fn fiber_yield(
     vm: &mut Executor,
     _globals: &mut Globals,
     _lfp: LFP,

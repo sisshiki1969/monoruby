@@ -59,6 +59,13 @@ impl alloc::GC<RValue> for BlockData {
 }
 
 impl BlockData {
+    pub fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+        Self {
+            outer_lfp,
+            func_data,
+        }
+    }
+
     pub fn func_id(&self) -> FuncId {
         self.func_data.meta.func_id()
     }
@@ -1636,10 +1643,10 @@ impl Meta {
         Self::new(func_id.into(), reg_num, 0, true)
     }
 
-    fn native(func_id: FuncId, reg_num: i64) -> Self {
+    fn native(func_id: FuncId, _reg_num: i64) -> Self {
         // kind = NATIVE, mode = method
-        let reg_num = reg_num as i16 as u16;
-        Self::new(Some(func_id), reg_num, 2, false)
+        //let reg_num = reg_num as i16 as u16;
+        Self::new(Some(func_id), 1, 2, false)
     }
 
     pub fn func_id(&self) -> FuncId {

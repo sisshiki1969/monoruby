@@ -467,6 +467,10 @@ impl Codegen {
         let return_address = self.jit.label();
         self.push_frame();
         monoasm!( &mut self.jit,
+            // we should overwrite reg_num because the func itself does not know actual number of arguments.
+            movl rax, 1;
+            movw [rsp - (16 + LBP_META_REGNUM)], rax;
+
             // set lfp
             lea  rdx, [rsp - 16];
             movq [rsp - (16 + BP_LFP)], rdx;

@@ -15,8 +15,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(OBJECT_CLASS, "instance_of?", instance_of, 1);
     globals.define_builtin_func(OBJECT_CLASS, "is_a?", is_a, 1);
     globals.define_builtin_func(OBJECT_CLASS, "kind_of?", is_a, 1);
-    //globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, -1);
-    //globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "to_enum", to_enum, -1);
+    globals.define_builtin_func(OBJECT_CLASS, "enum_for", to_enum, -1);
 
     globals.define_builtin_func(OBJECT_CLASS, "dup", dup, 0);
     globals.define_builtin_func(OBJECT_CLASS, "instance_variable_defined?", iv_defined, 1);
@@ -76,26 +76,28 @@ fn is_a(
 /// - enum_for(method = :each, *args) {|*args| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
-/*#[monoruby_builtin]
+#[monoruby_builtin]
 fn to_enum(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
+    _lfp: LFP,
+    _arg: Arg,
+    _len: usize,
 ) -> Result<Value> {
-    if len == 0 {
-        Ok(Value::new_iterator(lfp.self_val(), IdentId::EACH, None))
-    } else if len == 1 {
-        let method = arg[0].expect_symbol_or_string(globals)?;
-        Ok(Value::new_iterator(lfp.self_val(), method, None))
-    } else {
-        let mut args = arg.iter(len);
-        let method = args.next().unwrap().expect_symbol_or_string(globals)?;
-        let args = Value::array_from_iter(args);
-        Ok(Value::new_iterator(lfp.self_val(), method, Some(args)))
-    }
-}*/
+    let outer_lfp = vm.move_current_frame_to_heap();
+    let func_id = globals.compile_script(
+        r#"
+        self.each do |x|
+            __fiber_yield x
+        end
+        "#
+        .to_string(),
+        "",
+    )?;
+    let func_data = globals.compile_on_demand(func_id).clone();
+    let block_data = BlockData::from(Some(outer_lfp), func_data);
+    Ok(Value::new_generator(block_data))
+}
 
 ///
 /// ### Object#dup
@@ -661,12 +663,11 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn to_enum() {
         run_test(
             r#"
         e = [1,2,3,4,5].to_enum
-        puts e.next
+        e.next
         "#,
         );
     }

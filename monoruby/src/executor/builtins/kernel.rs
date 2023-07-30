@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
+    globals.define_builtin_func(kernel_class, "__fiber_yield", super::fiber::fiber_yield, -1);
 }
 
 ///

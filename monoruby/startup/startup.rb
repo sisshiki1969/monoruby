@@ -46,13 +46,13 @@ class Object
   def freeze
   end
 
-  def to_enum
-    Enumerator.new do
-      self.each do |x|
-        Fiber.yield x
-      end
-    end
-  end
+  #def to_enum
+  #  Enumerator.new do
+  #    self.each do |x|
+  #      Fiber.yield x
+  #    end
+  #  end
+  #end
 end
 
 class Module

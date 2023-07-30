@@ -57,6 +57,11 @@ impl Executor {
         unsafe { self.move_frame_to_heap(outer_lfp) }
     }
 
+    pub fn move_current_frame_to_heap(&mut self) -> LFP {
+        let outer_lfp = self.cfp().lfp();
+        unsafe { self.move_frame_to_heap(outer_lfp) }
+    }
+
     /// ## return
     /// - the address of outer in *lfp*.
     unsafe fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
