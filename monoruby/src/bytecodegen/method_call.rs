@@ -69,16 +69,28 @@ impl BytecodeGen {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, loc)?
         } else {
-            let (mother_id, mother_args, outer) = self.mother.as_ref().unwrap();
-            assert_eq!(self.id, *mother_id);
+            let (_, mother_args, outer) = self.mother.as_ref().unwrap().clone();
+            let old = self.temp;
             let arg_num = mother_args.pos_num;
-            let args = BcLocal(0).into();
             let kw_list = &mother_args.keyword_names;
             let kw = if kw_list.len() == 0 {
                 None
             } else {
                 let mut kw_args = HashMap::default();
-                let kw_pos = BcLocal(mother_args.pos_num as u16).into();
+                let kw_pos = if outer == 0 {
+                    BcLocal(mother_args.pos_num as u16).into()
+                } else {
+                    let ret = self.push().into();
+                    self.emit(
+                        BcIr::LoadDynVar {
+                            ret,
+                            src: BcLocal(mother_args.pos_num as u16).into(),
+                            outer,
+                        },
+                        loc,
+                    );
+                    ret
+                };
                 for (id, name) in kw_list.iter().enumerate() {
                     kw_args.insert(*name, id);
                 }
@@ -88,6 +100,24 @@ impl BytecodeGen {
                     hash_splat_pos: vec![],
                 })
             };
+            let args = if outer == 0 {
+                BcLocal(0).into()
+            } else {
+                let args = self.next_reg().into();
+                for i in 0..arg_num {
+                    let ret = self.push().into();
+                    self.emit(
+                        BcIr::LoadDynVar {
+                            ret,
+                            src: BcLocal(i as _).into(),
+                            outer,
+                        },
+                        loc,
+                    );
+                }
+                args
+            };
+            self.temp = old;
             let callid = self.add_callsite(None, arg_num, kw, vec![], None);
             (callid, args, arg_num)
         };
