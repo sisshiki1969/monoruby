@@ -43,7 +43,7 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
     let info = store[func_id].as_ruby_func();
     let mother = info
         .mother
-        .map(|fid| (fid, store[fid].as_ruby_func().args.clone()));
+        .map(|(fid, outer)| (fid, store[fid].as_ruby_func().args.clone(), outer));
     let mut gen = BytecodeGen::new(info, mother, store.callsite_offset(), store.func_len());
     // arguments preparation
     for ForParamInfo {
@@ -239,7 +239,7 @@ enum Functions {
         info: BlockInfo,
     },
     Block {
-        mother: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
@@ -347,7 +347,7 @@ struct BytecodeGen {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
-    mother: Option<(FuncId, ParamsInfo)>,
+    mother: Option<(FuncId, ParamsInfo, usize)>,
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
@@ -392,7 +392,7 @@ impl std::ops::Index<Label> for BytecodeGen {
 impl BytecodeGen {
     fn new(
         info: &ISeqInfo,
-        mother: Option<(FuncId, ParamsInfo)>,
+        mother: Option<(FuncId, ParamsInfo, usize)>,
         callsite_offset: usize,
         functions_offset: usize,
     ) -> Self {
@@ -462,7 +462,7 @@ impl BytecodeGen {
 
     fn add_block(
         &mut self,
-        mother: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,

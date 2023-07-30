@@ -1,5 +1,17 @@
-e = [1,2,3,4,5,6,7,8].to_enum
+$res = 0
 
-e.each do |x|
-    puts "#{x}"
+class S
+    def f
+        $res += 100
+    end
 end
+
+class C < S
+    def f
+        3.times do
+            super
+        end
+    end
+end
+
+C.new.f

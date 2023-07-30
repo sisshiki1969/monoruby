@@ -9,11 +9,11 @@ pub(crate) struct ISeqInfo {
     ///
     /// *FuncId* of this function.
     ///
-    id: Option<FuncId>,
+    id: FuncId,
     ///
     /// Mother method.
     ///
-    pub mother: Option<FuncId>,
+    pub mother: Option<(FuncId, usize)>,
     ///
     /// Name of this function.
     ///
@@ -90,8 +90,8 @@ impl alloc::GC<RValue> for ISeqInfo {
 
 impl ISeqInfo {
     pub(in crate::executor) fn new(
-        id: Option<FuncId>,
-        mother: Option<FuncId>,
+        id: FuncId,
+        mother: Option<(FuncId, usize)>,
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
         args: ParamsInfo,
@@ -141,8 +141,8 @@ impl ISeqInfo {
     }
 
     pub(in crate::executor) fn new_block(
-        id: Option<FuncId>,
-        mother: FuncId,
+        id: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ParamsInfo,
         loc: Loc,
@@ -152,17 +152,26 @@ impl ISeqInfo {
     }
 
     pub(in crate::executor) fn new_method(
-        id: Option<FuncId>,
+        id: FuncId,
         name: Option<IdentId>,
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, id, vec![], name, args, loc, sourceinfo, false)
+        Self::new(
+            id,
+            Some((id, 0)),
+            vec![],
+            name,
+            args,
+            loc,
+            sourceinfo,
+            false,
+        )
     }
 
     pub(crate) fn id(&self) -> FuncId {
-        self.id.unwrap()
+        self.id
     }
 
     ///

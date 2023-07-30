@@ -69,7 +69,7 @@ impl BytecodeGen {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, loc)?
         } else {
-            let (mother_id, mother_args) = self.mother.as_ref().unwrap();
+            let (mother_id, mother_args, outer) = self.mother.as_ref().unwrap();
             assert_eq!(self.id, *mother_id);
             let arg_num = mother_args.pos_num;
             let args = BcLocal(0).into();
@@ -359,8 +359,13 @@ impl BytecodeGen {
         block: BlockInfo,
     ) -> Result<FuncId> {
         let outer_locals = self.get_locals();
-        let mother = self.mother.as_ref().unwrap().0;
-        let func_id = self.add_block(mother, (self.id, outer_locals), optional_params, block);
+        let (mother, _, outer) = self.mother.as_ref().unwrap();
+        let func_id = self.add_block(
+            (*mother, outer + 1),
+            (self.id, outer_locals),
+            optional_params,
+            block,
+        );
         let bh = BlockHandler::from(func_id);
         let dst = self.push().into();
         self.emit_literal(dst, bh.0);

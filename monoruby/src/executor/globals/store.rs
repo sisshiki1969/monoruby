@@ -193,7 +193,7 @@ impl Store {
 
     pub fn add_block(
         &mut self,
-        mother: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         optional_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
@@ -277,7 +277,7 @@ impl Store {
         let info = &self[func_id];
         if let Some(func) = info.is_ruby_func() {
             match func.mother {
-                Some(mother) => {
+                Some((mother, _)) => {
                     if mother != func_id {
                         format!("<block in {}>", self[mother].as_ruby_func().name())
                     } else {

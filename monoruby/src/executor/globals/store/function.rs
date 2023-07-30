@@ -86,7 +86,7 @@ impl Funcs {
 
     pub(super) fn add_block(
         &mut self,
-        mother: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         for_params: Vec<(usize, BcLocal, IdentId)>,
         info: BlockInfo,
@@ -96,7 +96,7 @@ impl Funcs {
         let (args, compile_info) = Self::handle_args(info, for_params, &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_block_iseq(Some(func_id), mother, outer, args, loc, sourceinfo);
+        let info = FuncInfo::new_block_iseq(func_id, mother, outer, args, loc, sourceinfo);
         self.info.push(info);
         Ok(func_id)
     }
@@ -111,7 +111,7 @@ impl Funcs {
         let (_, compile_info) = Self::handle_args(info, vec![], &sourceinfo)?;
         self.compile_info.push(compile_info);
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_classdef_iseq(name, Some(func_id), loc, sourceinfo);
+        let info = FuncInfo::new_classdef_iseq(name, func_id, loc, sourceinfo);
         self.info.push(info);
         Ok(func_id)
     }
@@ -150,7 +150,7 @@ impl Funcs {
         sourceinfo: SourceInfoRef,
     ) -> FuncId {
         let func_id = self.next_func_id();
-        let info = FuncInfo::new_method_iseq(name, Some(func_id), args, loc, sourceinfo);
+        let info = FuncInfo::new_method_iseq(name, func_id, args, loc, sourceinfo);
         self.info.push(info);
         func_id
     }
@@ -303,7 +303,7 @@ impl alloc::GC<RValue> for FuncInfo {
 impl FuncInfo {
     fn new_method_iseq(
         name: impl Into<Option<IdentId>>,
-        func_id: Option<FuncId>,
+        func_id: FuncId,
         args: ParamsInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
@@ -323,8 +323,8 @@ impl FuncInfo {
     }
 
     fn new_block_iseq(
-        func_id: Option<FuncId>,
-        mother: FuncId,
+        func_id: FuncId,
+        mother: (FuncId, usize),
         outer: (FuncId, Vec<(HashMap<IdentId, u16>, Option<IdentId>)>),
         args: ParamsInfo,
         loc: Loc,
@@ -345,7 +345,7 @@ impl FuncInfo {
 
     fn new_classdef_iseq(
         name: Option<IdentId>,
-        func_id: Option<FuncId>,
+        func_id: FuncId,
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {

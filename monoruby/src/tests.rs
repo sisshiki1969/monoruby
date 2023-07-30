@@ -2165,6 +2165,29 @@ mod test {
             end
             "##,
         );
+
+        run_test(
+            r#"
+        $res = []
+
+        class S
+            def f(x)
+                $res << x
+            end
+        end
+
+        class C < S
+            def f(x)
+                3.times do
+                    super x
+                end
+            end
+        end
+
+        C.new.f(200)
+        $res
+        "#,
+        );
     }
 
     #[test]
