@@ -69,7 +69,7 @@ impl BytecodeGen {
             assert!(!arglist.delegate);
             self.handle_arguments(arglist, None, loc)?
         } else {
-            let (_, mother_args, outer) = self.mother.as_ref().unwrap().clone();
+            let (_, mother_args, outer) = self.mother.clone();
             let old = self.temp;
             let arg_num = mother_args.pos_num;
             let kw_list = &mother_args.keyword_names;
@@ -81,14 +81,8 @@ impl BytecodeGen {
                     BcLocal(mother_args.pos_num as u16).into()
                 } else {
                     let ret = self.push().into();
-                    self.emit(
-                        BcIr::LoadDynVar {
-                            ret,
-                            src: BcLocal(mother_args.pos_num as u16).into(),
-                            outer,
-                        },
-                        loc,
-                    );
+                    let src = BcLocal(mother_args.pos_num as u16).into();
+                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                     ret
                 };
                 for (id, name) in kw_list.iter().enumerate() {
@@ -106,14 +100,8 @@ impl BytecodeGen {
                 let args = self.next_reg().into();
                 for i in 0..arg_num {
                     let ret = self.push().into();
-                    self.emit(
-                        BcIr::LoadDynVar {
-                            ret,
-                            src: BcLocal(i as _).into(),
-                            outer,
-                        },
-                        loc,
-                    );
+                    let src = BcLocal(i as _).into();
+                    self.emit(BcIr::LoadDynVar { ret, src, outer }, loc);
                 }
                 args
             };
@@ -389,9 +377,9 @@ impl BytecodeGen {
         block: BlockInfo,
     ) -> Result<FuncId> {
         let outer_locals = self.get_locals();
-        let (mother, _, outer) = self.mother.as_ref().unwrap();
+        let (mother, _, outer) = self.mother;
         let func_id = self.add_block(
-            (*mother, outer + 1),
+            (mother, outer + 1),
             (self.id, outer_locals),
             optional_params,
             block,

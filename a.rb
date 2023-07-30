@@ -1,17 +1,6 @@
-$res = 0
-
-class S
-    def f
-        $res += 100
-    end
+a = [1,2,3]
+b = []
+10.times do
+    b.prepend(*a)
 end
-
-class C < S
-    def f
-        3.times do
-            super
-        end
-    end
-end
-
-C.new.f
+puts "#{b}"

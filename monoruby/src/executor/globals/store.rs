@@ -276,15 +276,11 @@ impl Store {
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
         let info = &self[func_id];
         if let Some(func) = info.is_ruby_func() {
-            match func.mother {
-                Some((mother, _)) => {
-                    if mother != func_id {
-                        format!("<block in {}>", self[mother].as_ruby_func().name())
-                    } else {
-                        format!("<{}>", func.name())
-                    }
-                }
-                None => format!("<{}>", func.name()),
+            let mother = func.mother.0;
+            if mother != func_id {
+                format!("<block in {}>", self[mother].as_ruby_func().name())
+            } else {
+                format!("<{}>", func.name())
             }
         } else {
             match info.name() {

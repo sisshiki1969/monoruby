@@ -41,10 +41,14 @@ fn compile_func(store: &mut Store, func_id: FuncId) -> Result<()> {
         loc,
     } = store.get_compile_info();
     let info = store[func_id].as_ruby_func();
-    let mother = info
-        .mother
-        .map(|(fid, outer)| (fid, store[fid].as_ruby_func().args.clone(), outer));
-    let mut gen = BytecodeGen::new(info, mother, store.callsite_offset(), store.func_len());
+    let (fid, outer) = info.mother;
+    let params = store[fid].as_ruby_func().args.clone();
+    let mut gen = BytecodeGen::new(
+        info,
+        (fid, params, outer),
+        store.callsite_offset(),
+        store.func_len(),
+    );
     // arguments preparation
     for ForParamInfo {
         dst_outer,
@@ -347,7 +351,7 @@ struct BytecodeGen {
     /// ID of this function.
     id: FuncId,
     /// ID of the mother method.
-    mother: Option<(FuncId, ParamsInfo, usize)>,
+    mother: (FuncId, ParamsInfo, usize),
     /// bytecode IR.
     ir: Vec<(BcIr, Loc)>,
     /// destination labels.
@@ -392,7 +396,7 @@ impl std::ops::Index<Label> for BytecodeGen {
 impl BytecodeGen {
     fn new(
         info: &ISeqInfo,
-        mother: Option<(FuncId, ParamsInfo, usize)>,
+        mother: (FuncId, ParamsInfo, usize),
         callsite_offset: usize,
         functions_offset: usize,
     ) -> Self {

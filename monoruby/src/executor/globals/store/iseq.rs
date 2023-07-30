@@ -13,7 +13,7 @@ pub(crate) struct ISeqInfo {
     ///
     /// Mother method.
     ///
-    pub mother: Option<(FuncId, usize)>,
+    pub mother: (FuncId, usize),
     ///
     /// Name of this function.
     ///
@@ -91,7 +91,7 @@ impl alloc::GC<RValue> for ISeqInfo {
 impl ISeqInfo {
     pub(in crate::executor) fn new(
         id: FuncId,
-        mother: Option<(FuncId, usize)>,
+        mother: (FuncId, usize),
         outer_locals: Vec<(HashMap<IdentId, u16>, Option<IdentId>)>,
         name: Option<IdentId>,
         args: ParamsInfo,
@@ -148,7 +148,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(id, Some(mother), outer.1, None, args, loc, sourceinfo, true)
+        Self::new(id, mother, outer.1, None, args, loc, sourceinfo, true)
     }
 
     pub(in crate::executor) fn new_method(
@@ -158,16 +158,7 @@ impl ISeqInfo {
         loc: Loc,
         sourceinfo: SourceInfoRef,
     ) -> Self {
-        Self::new(
-            id,
-            Some((id, 0)),
-            vec![],
-            name,
-            args,
-            loc,
-            sourceinfo,
-            false,
-        )
+        Self::new(id, (id, 0), vec![], name, args, loc, sourceinfo, false)
     }
 
     pub(crate) fn id(&self) -> FuncId {
