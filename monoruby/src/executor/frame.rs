@@ -268,6 +268,8 @@ impl LFP {
         }
     }
 
+    // APIs for native methods.
+
     pub fn to_vec(&self) -> Vec<Value> {
         self.iter().collect()
     }
@@ -292,11 +294,11 @@ impl LFP {
         }
     }
 
-    fn arg(&self, i: usize) -> Value {
+    pub fn arg(&self, i: usize) -> Value {
         unsafe { *(self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8) as *mut Value) }
     }
 
-    fn as_arg(&self) -> Arg {
+    pub fn as_arg(&self) -> Arg {
         unsafe {
             Arg::from(
                 (self.0.as_ptr().sub(LBP_ARG0 as usize) as *mut Value)

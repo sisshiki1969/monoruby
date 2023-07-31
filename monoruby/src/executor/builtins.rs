@@ -89,11 +89,11 @@ impl Arg {
         self.iter(len).collect()
     }*/
 
-    pub fn iter(&self, len: usize) -> impl DoubleEndedIterator<Item = Value> + '_ {
+    /*pub fn iter(&self, len: usize) -> impl DoubleEndedIterator<Item = Value> + '_ {
         self.iter_inner(len).rev().cloned()
-    }
+    }*/
 
-    fn iter_inner(&self, len: usize) -> impl DoubleEndedIterator<Item = &Value> {
+    /*fn iter_inner(&self, len: usize) -> impl DoubleEndedIterator<Item = &Value> {
         unsafe {
             let data = if len == 0 {
                 self.0
@@ -102,5 +102,5 @@ impl Arg {
             };
             std::slice::from_raw_parts(data, len).iter()
         }
-    }
+    }*/
 }

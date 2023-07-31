@@ -222,9 +222,8 @@ fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 #[monoruby_builtin]
-fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Private)
+fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Private)
 }
 
 /// ### Module#protected
@@ -233,9 +232,8 @@ fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 #[monoruby_builtin]
-fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Protected)
+fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Protected)
 }
 
 /// ### Module#public
@@ -244,39 +242,38 @@ fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 #[monoruby_builtin]
-fn public(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Public)
+fn public(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    change_visi(vm, globals, lfp.self_val(), lfp, Visibility::Public)
 }
 
 fn change_visi(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
-    arg: Arg,
-    len: usize,
+    lfp: LFP,
     visi: Visibility,
 ) -> Result<Value> {
+    let len = lfp.arg_len();
     if len == 0 {
         vm.set_context_visibility(visi);
         return Ok(Value::nil());
     }
     let class_id = self_val.as_class_id();
     let mut names = vec![];
-    if let Some(ary) = arg[0].is_array() {
+    if let Some(ary) = lfp.arg(0).is_array() {
         if len == 1 {
             for v in ary.iter() {
                 names.push(v.expect_symbol_or_string(globals)?);
             }
             globals.change_method_visibility_for_class(class_id, &names, visi);
-            return Ok(arg[0]);
+            return Ok(lfp.arg(0));
         }
     }
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         names.push(v.expect_symbol_or_string(globals)?);
     }
     globals.change_method_visibility_for_class(class_id, &names, visi);
-    let res = Value::array_from_iter(arg.iter(len));
+    let res = Value::array_from_iter(lfp.iter());
     Ok(res)
 }
 

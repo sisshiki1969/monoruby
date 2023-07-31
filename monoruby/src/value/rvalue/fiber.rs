@@ -51,15 +51,10 @@ impl FiberInner {
         self.block_data.func_id()
     }
 
-    pub fn resume(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-        arg: Arg,
-        len: usize,
-    ) -> Result<Value> {
+    pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: LFP) -> Result<Value> {
+        let len = lfp.arg_len();
         match self.state() {
-            FiberState::Created => self.invoke_fiber(vm, globals, arg, len),
+            FiberState::Created => self.invoke_fiber(vm, globals, lfp.as_arg(), len),
             FiberState::Terminated => Err(MonorubyErr::fibererr(
                 "attempt to resume a terminated fiber".to_string(),
             )),
@@ -67,9 +62,9 @@ impl FiberInner {
                 let val = if len == 0 {
                     Value::nil()
                 } else if len == 1 {
-                    arg[0]
+                    lfp.arg(0)
                 } else {
-                    Value::array_from_iter(arg.iter(len))
+                    Value::array_from_iter(lfp.iter())
                 };
                 self.resume_fiber(vm, val)
             }
