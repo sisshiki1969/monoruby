@@ -227,11 +227,10 @@ fn shift(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/prepend.html]
 #[monoruby_builtin]
-fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn unshift(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let mut self_val = lfp.self_val();
     let ary = self_val.as_array_mut();
-    let iter = arg.iter(len);
+    let iter = lfp.iter();
     ary.insert_many(0, iter);
     Ok(self_val)
 }

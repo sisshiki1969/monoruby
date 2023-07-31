@@ -10,7 +10,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let len = lfp.arg_len();
     let self_val = lfp.self_val();
     MonorubyErr::check_min_number_of_arguments(len, 1)?;
-    let mut arg_vec = arg.to_vec(len);
+    let mut arg_vec = lfp.to_vec();
 
     let mut class = globals.new_unnamed_class(Some(self_val.as_class()));
     let class_id = class.as_class_id();
@@ -52,7 +52,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<V
 }
 
 #[monoruby_builtin]
-fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     let self_val = lfp.self_val();
     let struct_class = self_val.class().get_obj(globals);
@@ -63,7 +63,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
-    for (i, val) in arg.iter(len).enumerate() {
+    for (i, val) in lfp.iter().enumerate() {
         let id = members[i].as_symbol();
         let ivar_name = IdentId::add_ivar_prefix(id);
         globals.set_ivar(self_val, ivar_name, val)?;

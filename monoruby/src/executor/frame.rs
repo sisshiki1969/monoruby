@@ -267,6 +267,44 @@ impl LFP {
             std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u8, len)
         }
     }
+
+    pub fn to_vec(&self) -> Vec<Value> {
+        self.iter().collect()
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = Value> + '_ {
+        self.iter_inner().rev().cloned()
+    }
+
+    pub fn rev(&self) -> impl Iterator<Item = Value> + '_ {
+        self.iter_inner().cloned()
+    }
+
+    fn iter_inner(&self) -> impl DoubleEndedIterator<Item = &Value> {
+        let len = self.arg_len();
+        unsafe {
+            let data = if len == 0 {
+                self.0.as_ptr().sub(LBP_ARG0 as usize)
+            } else {
+                self.0.as_ptr().sub(LBP_ARG0 as usize + len * 8 - 8)
+            };
+            std::slice::from_raw_parts(data as *const Value, len).iter()
+        }
+    }
+
+    fn arg(&self, i: usize) -> Value {
+        unsafe { *(self.0.as_ptr().sub(LBP_ARG0 as usize + i * 8) as *mut Value) }
+    }
+
+    fn as_arg(&self) -> Arg {
+        unsafe {
+            Arg::from(
+                (self.0.as_ptr().sub(LBP_ARG0 as usize) as *mut Value)
+                    .as_ref()
+                    .unwrap(),
+            )
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]

@@ -223,12 +223,11 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
-fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let mut inner = self_val.as_hash().clone();
-    for arg in arg.iter(len) {
+    for arg in lfp.iter() {
         let other = arg.expect_hash(globals)?;
         for (k, v) in other.iter() {
             inner.insert(k, v);

@@ -85,16 +85,12 @@ impl Arg {
         self.0
     }
 
-    pub fn to_vec(&self, len: usize) -> Vec<Value> {
+    /*pub fn to_vec(&self, len: usize) -> Vec<Value> {
         self.iter(len).collect()
-    }
+    }*/
 
     pub fn iter(&self, len: usize) -> impl DoubleEndedIterator<Item = Value> + '_ {
         self.iter_inner(len).rev().cloned()
-    }
-
-    pub fn rev(&self, len: usize) -> impl Iterator<Item = Value> + '_ {
-        self.iter_inner(len).cloned()
     }
 
     fn iter_inner(&self, len: usize) -> impl DoubleEndedIterator<Item = &Value> {

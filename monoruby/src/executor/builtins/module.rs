@@ -126,12 +126,11 @@ fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
-fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
@@ -144,12 +143,11 @@ fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
-fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_writer(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
@@ -162,12 +160,11 @@ fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
-fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
+fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         let arg_name = v.expect_symbol_or_string(globals)?;
         let method_name = globals.define_attr_reader(class_id, arg_name, visi);
         ary.push(Value::symbol(method_name));
@@ -182,7 +179,7 @@ fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
 #[monoruby_builtin]
-fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     if len == 0 {
         vm.set_module_function();
@@ -190,14 +187,14 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg)
     } else {
         let class_id = lfp.self_val().as_class_id();
         let visi = vm.context_visibility();
-        for v in arg.iter(len) {
+        for v in lfp.iter() {
             let name = v.expect_symbol_or_string(globals)?;
             let func_id = globals
                 .find_method_entry_for_class(class_id, name)?
                 .func_id();
             globals.add_singleton_method(class_id, name, func_id, visi);
         }
-        let res = Value::array_from_iter(arg.iter(len));
+        let res = Value::array_from_iter(lfp.iter());
         Ok(res)
     }
 }
@@ -207,12 +204,12 @@ fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
-fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     let self_ = lfp.self_val();
     MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let class = self_.as_class();
-    for v in arg.rev(len) {
+    for v in lfp.rev() {
         v.expect_module(globals)?;
         globals.include_module(class, v.as_class());
     }

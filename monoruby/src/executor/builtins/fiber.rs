@@ -49,7 +49,7 @@ pub(crate) fn fiber_yield(
     } else if len == 1 {
         arg[0]
     } else {
-        Value::array_from_iter(arg.iter(len))
+        Value::array_from_iter(lfp.iter())
     };
     vm.yield_fiber(val)
 }

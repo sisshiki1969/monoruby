@@ -67,7 +67,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 #[monoruby_builtin]
-fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.is_array() {
             Some(ary) => {
@@ -76,9 +76,8 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
             None => collector.push(val),
         }
     }
-    let len = lfp.arg_len();
     let mut collector = Vec::new();
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         decompose(&mut collector, v);
     }
 
@@ -98,9 +97,8 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 #[monoruby_builtin]
-fn print(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    for v in arg.iter(len) {
+fn print(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
+    for v in lfp.iter() {
         globals.write_stdout(&v.to_bytes(globals));
     }
     Ok(Value::nil())
@@ -187,7 +185,7 @@ fn block_given(vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) 
 fn p(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     let mut buf = String::new();
-    for v in arg.iter(len) {
+    for v in lfp.iter() {
         buf += &globals.inspect(v);
         buf += "\n";
     }
@@ -196,7 +194,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
         0 => Value::nil(),
         1 => arg[0],
         _ => {
-            let ary = ArrayInner::from_iter(arg.iter(len));
+            let ary = ArrayInner::from_iter(lfp.iter());
             Value::array(ary)
         }
     })
@@ -499,7 +497,7 @@ fn system(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Resu
     let input = arg[0].as_string();
     let (program, mut args) = prepare_command_arg(input);
     if len > 1 {
-        let iter = arg.iter(len);
+        let iter = lfp.iter();
         //iter.take(1);
         for v in iter.take(1) {
             args.push(v.expect_string(globals)?);

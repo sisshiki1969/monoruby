@@ -223,9 +223,8 @@ fn yielder_shl(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/yield.html]
 #[monoruby_builtin]
-fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
-    let len = lfp.arg_len();
-    vm.yield_fiber(Value::array_from_iter(arg.iter(len)))
+fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    vm.yield_fiber(Value::array_from_iter(lfp.iter()))
 }
 
 #[cfg(test)]
