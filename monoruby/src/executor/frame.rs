@@ -206,6 +206,10 @@ impl LFP {
         Meta::from(unsafe { *(self.sub(LBP_META) as *const u64) })
     }
 
+    pub fn arg_len(&self) -> usize {
+        self.meta().reg_num as usize - 1
+    }
+
     ///
     /// Get *self*.
     ///

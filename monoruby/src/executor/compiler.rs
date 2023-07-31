@@ -663,6 +663,7 @@ impl Codegen {
     /// - rdx: CallSiteId
     ///
     /// #### out
+    /// - rdi: arg len
     /// - rax: Option<Value>
     ///  
     fn handle_arguments(&mut self) {

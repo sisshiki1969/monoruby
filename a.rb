@@ -1,6 +1,6 @@
-a = [1,2,3]
+a = [1,2]
 b = []
-10.times do
+7.times do
     b.prepend(*a)
 end
 puts "#{b}"

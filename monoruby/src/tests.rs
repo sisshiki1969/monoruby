@@ -1512,7 +1512,7 @@ mod test {
     }
 
     #[test]
-    fn test_method_rest() {
+    fn method_rest() {
         run_test_with_prelude(
             r#"
         f(1,2)
@@ -1580,7 +1580,7 @@ mod test {
     }
 
     #[test]
-    fn test_keyword() {
+    fn keyword() {
         run_test_with_prelude(
             r#"
         x = []
@@ -1627,7 +1627,7 @@ mod test {
     }
 
     #[test]
-    fn test_splat() {
+    fn splat() {
         run_test_with_prelude(
             r#"
         f(*[0,1,2,3,4,5,6,7,8])
@@ -1661,7 +1661,21 @@ mod test {
     }
 
     #[test]
-    fn test_destruct() {
+    fn splat2() {
+        run_test(
+            r##"
+        a = [1,2]
+        b = []
+        7.times do
+            b.prepend(*a)
+        end
+        b
+        "##,
+        )
+    }
+
+    #[test]
+    fn destruct() {
         run_test_with_prelude(
             r#"
         f(1,[2,3,4],5,[6])
@@ -1676,7 +1690,7 @@ mod test {
     }
 
     #[test]
-    fn test_method_error() {
+    fn method_error() {
         run_test_error(
             r#"
         def f(x,y,z=42,w=12)

@@ -106,18 +106,17 @@ impl Codegen {
                 let ivar_id = store[cached.class_id].get_ivarid(ivar_name);
                 self.attr_writer(ctx, ivar_name, ivar_id, ret, method_info.args, pc);
             }
-            FuncKind::Builtin { abs_address } => {
-                if !self_in_rdi_flag {
-                    self.load_rdi(recv);
-                }
-                self.native_call(
+            FuncKind::Builtin { .. } => {
+                self.method_call_cached(
                     ctx,
+                    store,
+                    callid,
                     method_info,
-                    func_id,
-                    store[callid].block_func_id,
                     block,
-                    abs_address,
                     pc,
+                    has_splat,
+                    cached.class_id,
+                    true,
                 );
             }
             FuncKind::ISeq(_) => {
@@ -130,6 +129,7 @@ impl Codegen {
                     pc,
                     has_splat,
                     cached.class_id,
+                    false,
                 );
             }
         };
@@ -420,80 +420,6 @@ impl Codegen {
         }
     }
 
-    fn native_call(
-        &mut self,
-        ctx: &BBContext,
-        method_info: MethodInfo,
-        func_id: FuncId,
-        block_func_id: Option<FuncId>,
-        block: Option<SlotId>,
-        abs_address: u64,
-        pc: BcPc,
-    ) {
-        // rdi : receiver(self)
-        let MethodInfo { args, len, ret, .. } = method_info;
-        let xmm_using = ctx.get_xmm_using();
-        self.xmm_save(&xmm_using);
-        monoasm!( &mut self.jit,
-            movq rax, (Meta::native(func_id, 0 /* for GC */ as _).get());
-            movq [rsp - (16 + LBP_META)], rax;
-            movq [rsp - (16 + LBP_SELF)], rdi;  // self: Value
-            movq [rsp - (16 + LBP_OUTER)], 0;
-        );
-        if let Some(block_func_id) = block_func_id {
-            let bh = BlockHandler::from(block_func_id);
-            monoasm!( &mut self.jit,
-                movq [rsp - (16 + LBP_BLOCK)], (bh.0.get());
-            );
-        } else {
-            match block {
-                Some(block) => {
-                    monoasm!( &mut self.jit,
-                        movq rax, [r14 - (conv(block))];
-                        movq [rsp - (16 + LBP_BLOCK)], rax;
-                    );
-                }
-                None => {
-                    monoasm!( &mut self.jit,
-                        movq [rsp - (16 + LBP_BLOCK)], 0;
-                    );
-                }
-            }
-        }
-        monoasm!( &mut self.jit,
-            lea  rcx, [r14 - (conv(args))];  // args: *const Value
-        );
-        let stack_offset = (LBP_SELF + 31) & !0xf;
-        let return_address = self.jit.label();
-        self.push_frame();
-        monoasm!( &mut self.jit,
-            // we should overwrite reg_num because the func itself does not know actual number of arguments.
-            movl rax, 1;
-            movw [rsp - (16 + LBP_META_REGNUM)], rax;
-
-            // set lfp
-            lea  rdx, [rsp - 16];
-            movq [rsp - (16 + BP_LFP)], rdx;
-            movq rdi, rbx;  // &mut Interp
-            movq rsi, r12;  // &mut Globals
-            movq r8, (len); // len
-            lea  rax, [rip + return_address];
-            pushq rax;
-            pushq rbp;
-            subq rsp, (stack_offset);
-            movq rax, (abs_address);
-            call rax;
-        return_address:
-            addq rsp, (stack_offset + 16);
-        );
-        self.pop_frame();
-        self.xmm_restore(&xmm_using);
-        self.jit_handle_error(ctx, pc);
-        if !ret.is_zero() {
-            self.store_rax(ret);
-        }
-    }
-
     fn method_call_cached(
         &mut self,
         ctx: &BBContext,
@@ -504,6 +430,7 @@ impl Codegen {
         pc: BcPc,
         has_splat: bool,
         recv_classid: ClassId,
+        native: bool,
     ) {
         let func_data = method_info.func_data.unwrap();
         let xmm_using = ctx.get_xmm_using();
@@ -573,17 +500,27 @@ impl Codegen {
             }
             _ => {}
         }
-        monoasm!( &mut self.jit,
+        monoasm! { &mut self.jit,
             // set meta.
             movq rax, (func_data.meta.get());
             movq [rsp - (16 + LBP_META)], rax;
-            // set pc.
-            movq r13, (func_data.pc().get_u64());
-        );
-        match store[callee_func_id].get_jit_code(recv_classid) {
-            Some(dest) => self.call_label(dest),
-            None => self.call_codeptr(func_data.codeptr.unwrap()),
-        };
+        }
+        if native {
+            monoasm! { &mut self.jit,
+                movq rdx, rdi;
+            }
+            self.call_codeptr(func_data.codeptr.unwrap());
+        } else {
+            monoasm! { &mut self.jit,
+                // set pc.
+                movq r13, (func_data.pc().get_u64());
+            }
+            match store[callee_func_id].get_jit_code(recv_classid) {
+                Some(dest) => self.call_label(dest),
+                None => self.call_codeptr(func_data.codeptr.unwrap()),
+            };
+        }
+
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {
@@ -704,7 +641,17 @@ impl Codegen {
             movq [rsp - (16 + LBP_SELF)], rax;
         );
         self.jit_set_arguments(args, len, has_splat, callsite);
-        // set block
+        self.set_block(block, callsite);
+    }
+
+    /// Set *self*, len, block, and arguments.
+    ///
+    /// ### out
+    /// - rdi <- the number of arguments
+    ///
+    /// ### destroy
+    /// - caller save registers
+    fn set_block(&mut self, block: Option<SlotId>, callsite: &CallSiteInfo) {
         if let Some(func_id) = callsite.block_func_id {
             let bh = BlockHandler::from(func_id);
             monoasm!( &mut self.jit,
