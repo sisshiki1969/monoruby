@@ -22,7 +22,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new_enumerator(data: BlockData) -> Self {
+    pub(crate) fn new(data: BlockData) -> Self {
         let internal = Some(Value::new_fiber(data.clone()));
         Self {
             internal,

@@ -79,7 +79,7 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Re
     )?;
     let func_data = globals.compile_on_demand(func_id).clone();
     let block_data = BlockData::from(Some(outer_lfp), func_data);
-    Ok(Value::new_generator(block_data))
+    Ok(Value::new_enumerator(block_data))
 }
 
 ///

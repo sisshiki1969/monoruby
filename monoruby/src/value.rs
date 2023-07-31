@@ -377,8 +377,8 @@ impl Value {
         RValue::new_fiber(block_data).pack()
     }
 
-    pub(crate) fn new_generator(block_data: BlockData) -> Self {
-        RValue::new_generator(block_data).pack()
+    pub(crate) fn new_enumerator(block_data: BlockData) -> Self {
+        RValue::new_enumerator(block_data).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {

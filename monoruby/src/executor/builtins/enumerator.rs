@@ -36,7 +36,7 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg)
     lfp.expect_block()?;
     vm.move_caller_frames_to_heap();
     let block_data = globals.get_block_data(vm.cfp());
-    Ok(Value::new_generator(block_data))
+    Ok(Value::new_enumerator(block_data))
 }
 
 ///
