@@ -24,13 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
 #[monoruby_builtin]
-fn times(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn times(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
     let tms_class = globals
         .get_qualified_constant(&["Process", "Tms"])?
         .as_class();
@@ -69,13 +63,7 @@ fn times(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/pid.html]
 #[monoruby_builtin]
-fn pid(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
     Ok(Value::integer(std::process::id() as i64))
 }
 
@@ -86,13 +74,7 @@ fn pid(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/clock_gettime.html]
 #[monoruby_builtin]
-fn clock_gettime(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn clock_gettime(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     let mut tp = TimeSpec::default();
     let clk_id = arg[0].coerce_to_i64(globals)? as i32;
     clock_gettime::clock_gettime(clk_id, &mut tp);

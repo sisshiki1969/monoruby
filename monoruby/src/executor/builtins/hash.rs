@@ -62,13 +62,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
 #[monoruby_builtin]
-fn new(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn new(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let map = IndexMap::default();
     let obj = Value::hash_with_class(map, class);
@@ -81,13 +75,7 @@ fn new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/length.html]
 #[monoruby_builtin]
-fn size(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.self_val().as_hash().len();
     Ok(Value::integer(len as i64))
 }
@@ -98,13 +86,7 @@ fn size(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d=3d.html]
 #[monoruby_builtin]
-fn index_assign(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn index_assign(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let key = arg[0];
     let val = arg[1];
     lfp.self_val().as_hash_mut().insert(key, val);
@@ -116,13 +98,7 @@ fn index_assign(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn index(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let key = arg[0];
     let val = lfp.self_val().as_hash().get(key).unwrap_or_default();
     Ok(val)
@@ -133,13 +109,7 @@ fn index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
 #[monoruby_builtin]
-fn clear(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn clear(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let mut self_ = lfp.self_val();
     self_.as_hash_mut().clear();
     Ok(self_)
@@ -150,13 +120,7 @@ fn clear(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/keys.html]
 #[monoruby_builtin]
-fn keys(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn keys(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let keys = lfp.self_val().as_hash().keys();
     Ok(Value::array_from_vec(keys))
 }
@@ -167,13 +131,7 @@ fn keys(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/values.html]
 #[monoruby_builtin]
-fn values(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let keys = lfp.self_val().as_hash().values();
     Ok(Value::array_from_vec(keys))
 }
@@ -187,13 +145,7 @@ fn values(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each.html]
 #[monoruby_builtin]
-fn each(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     let ary = lfp.self_val();
     let data = globals.get_block_data(vm.cfp());
@@ -211,13 +163,7 @@ fn each(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_value.html]
 #[monoruby_builtin]
-fn each_value(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(_, v)| v);
@@ -233,13 +179,7 @@ fn each_value(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_key.html]
 #[monoruby_builtin]
-fn each_key(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(k, _)| k);
@@ -257,13 +197,7 @@ fn each_key(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/has_key=3f.html]
 #[monoruby_builtin]
-fn include(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn include(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let b = lfp.self_val().as_hash().contains_key(arg[0]);
     Ok(Value::bool(b))
 }
@@ -276,13 +210,7 @@ fn include(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let s = globals.inspect(lfp.self_val());
     Ok(Value::string(s))
 }
@@ -295,13 +223,8 @@ fn inspect(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
-fn merge(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn merge(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     lfp.expect_no_block()?;
     let self_val = lfp.self_val();
     let mut inner = self_val.as_hash().clone();
@@ -327,8 +250,8 @@ fn compare_by_identity(
     _globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
-    len: usize,
 ) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.expect_no_block()?;
     let mut self_val = lfp.self_val();
@@ -343,13 +266,7 @@ fn compare_by_identity(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d.html]
 #[monoruby_builtin]
-fn env_index(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn env_index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let key = arg[0];
     if key.is_string().is_none() {
         return Err(MonorubyErr::no_implicit_conversion(
@@ -371,13 +288,8 @@ fn env_index(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
 #[monoruby_builtin]
-fn fetch(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let self_ = lfp.self_val();
     let map = self_.as_hash();
     let s = if lfp.block().is_some() {

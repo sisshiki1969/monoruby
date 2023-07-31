@@ -23,13 +23,8 @@ pub(crate) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/compile.html]
 #[monoruby_builtin]
-fn regexp_new(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn regexp_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
@@ -44,13 +39,8 @@ fn regexp_new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/escape.html]
 #[monoruby_builtin]
-fn regexp_escape(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn regexp_escape(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let arg0 = arg[0];
     let string = arg0.expect_string(globals)?;
@@ -67,10 +57,10 @@ fn regexp_escape(
 fn regexp_last_match(
     vm: &mut Executor,
     globals: &mut Globals,
-    _lfp: LFP,
+    lfp: LFP,
     arg: Arg,
-    len: usize,
 ) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     if len == 0 {
         Ok(vm.get_last_matchdata())
@@ -85,7 +75,8 @@ fn regexp_last_match(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let self_ = lfp.self_val();
     let regex = self_.is_regex().unwrap();
@@ -102,13 +93,8 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/=3d=7e.html]
 #[monoruby_builtin]
-fn regexp_match(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn regexp_match(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     if arg[0].is_nil() {
         return Ok(Value::nil());

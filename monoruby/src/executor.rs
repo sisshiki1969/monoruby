@@ -18,7 +18,7 @@ pub use globals::*;
 use op::*;
 
 pub type Result<T> = std::result::Result<T, MonorubyErr>;
-pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg, usize) -> Option<Value>;
+pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, LFP, Arg) -> Option<Value>;
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 
 const BP_PREV_CFP: i64 = 8;

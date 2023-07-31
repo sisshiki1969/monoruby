@@ -34,7 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 #[monoruby_builtin]
-fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     lfp.expect_block()?;
     match lfp.self_val().unpack() {
         RV::Fixnum(i) => vm.invoke_block_iter1(globals, (0..i).map(Value::integer))?,
@@ -92,13 +92,8 @@ impl Iterator for NegStep {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
 #[monoruby_builtin]
-fn step(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    args: Arg,
-    len: usize,
-) -> Result<Value> {
+fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     match lfp.block() {
         None => return Err(MonorubyErr::runtimeerr("not implemented")),
@@ -132,13 +127,7 @@ fn step(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
-fn chr(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn chr(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     if let Some(i) = lfp.self_val().try_fixnum() {
         if let Ok(b) = u8::try_from(i) {
             return Ok(Value::string_from_slice(&[b]));
@@ -148,13 +137,7 @@ fn chr(
 }
 
 #[monoruby_builtin]
-fn to_f(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let f = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap(),
@@ -171,13 +154,7 @@ fn to_f(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/to_i.html]
 #[monoruby_builtin]
-fn to_i(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     Ok(lfp.self_val())
 }
 
@@ -188,7 +165,8 @@ fn to_i(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2b.html]
 #[monoruby_builtin]
-fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     match super::op::add_values(vm, globals, lfp.self_val(), arg[0]) {
         Some(val) => Ok(val),
@@ -208,13 +186,8 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn index(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let self_val = lfp.self_val();
     op::integer_index1(globals, self_val, arg[0])
@@ -251,13 +224,8 @@ fn analysis_integer_tof(info: &mut SlotInfo, method_info: &MethodInfo) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/even=3f.html]
 #[monoruby_builtin]
-fn even_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn even_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i % 2 == 0,
@@ -274,13 +242,8 @@ fn even_(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/odd=3f.html]
 #[monoruby_builtin]
-fn odd_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn odd_(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let b = match lfp.self_val().unpack() {
         RV::Fixnum(i) => i % 2 != 0,

@@ -32,13 +32,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
-fn enumerator_new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     vm.move_caller_frames_to_heap();
     let block_data = globals.get_block_data(vm.cfp());
@@ -52,13 +46,8 @@ fn enumerator_new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
-fn next(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().next(vm, globals)
 }
@@ -71,13 +60,8 @@ fn next(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
-fn each(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut self_val = lfp.self_val();
     let data = if lfp.block().is_some() {
@@ -127,13 +111,8 @@ fn each_inner(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_index.html]
 #[monoruby_builtin]
-fn with_index(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let count = if len == 0 {
         Value::integer(0)
@@ -204,13 +183,8 @@ fn with_index_inner(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
-fn peek(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn peek(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().peek(vm, globals)
 }
@@ -222,13 +196,8 @@ fn peek(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
-fn rewind(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().rewind();
     Ok(lfp.self_val())
@@ -241,13 +210,8 @@ fn rewind(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
-fn yielder_shl(
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn yielder_shl(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     vm.yield_fiber(arg[0])
 }
@@ -259,13 +223,8 @@ fn yielder_shl(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/yield.html]
 #[monoruby_builtin]
-fn yielder_yield(
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     vm.yield_fiber(Value::array_from_iter(arg.iter(len)))
 }
 

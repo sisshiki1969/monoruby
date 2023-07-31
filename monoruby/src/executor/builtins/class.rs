@@ -27,13 +27,8 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/s/new.html]
 #[monoruby_builtin]
-fn class_new(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn class_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     lfp.expect_no_block()?;
     let superclass = if len == 0 {
@@ -53,14 +48,9 @@ fn class_new(
 ///
 /// !! We must call Object#initialize.
 #[monoruby_builtin]
-pub(super) fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
-    let obj = __allocate(vm, globals, lfp, arg, 0)?;
+pub(super) fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    let obj = __allocate(vm, globals, lfp, arg)?;
     vm.invoke_method_if_exists(globals, IdentId::INITIALIZE, obj, arg, len, lfp.block())?;
     Ok(obj)
 }
@@ -70,13 +60,7 @@ pub(super) fn new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/superclass.html]
 #[monoruby_builtin]
-fn superclass(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn superclass(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let class = lfp.self_val().as_class();
     Ok(class.superclass_value().unwrap_or_default())
 }
@@ -86,13 +70,7 @@ fn superclass(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]
-fn allocate(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn allocate(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let obj = Value::object(class_id);
     Ok(obj)

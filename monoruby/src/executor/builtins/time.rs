@@ -23,13 +23,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
-fn now(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn now(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
     let t = Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
     let time_info = TimeInner::Local(t);
     Ok(Value::new_time(time_info))
@@ -41,13 +35,7 @@ fn now(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let time = lfp.self_val().as_time().to_string();
     Ok(Value::string(time))
 }
@@ -58,13 +46,7 @@ fn inspect(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
         TimeInner::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
         TimeInner::UTC(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
@@ -79,13 +61,7 @@ fn to_s(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
-fn strftime(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _: usize,
-) -> Result<Value> {
+fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let mut fmt = arg[0].expect_string(globals)?;
     fmt = fmt.replace("%N", "%f");
     let s = match lfp.self_val().as_time() {
@@ -103,13 +79,7 @@ fn strftime(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/=2d.html]
 #[monoruby_builtin]
-fn sub(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs_rv = self_.try_rvalue().unwrap();
     let lhs = match lhs_rv.kind() {

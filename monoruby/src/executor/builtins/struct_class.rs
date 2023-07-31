@@ -6,13 +6,8 @@ pub(crate) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn struct_new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let self_val = lfp.self_val();
     MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let mut arg_vec = arg.to_vec(len);
@@ -52,18 +47,13 @@ fn struct_new(
 }
 
 #[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
-    super::class::__new(vm, globals, lfp, arg, len)
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    super::class::__new(vm, globals, lfp, arg)
 }
 
 #[monoruby_builtin]
-fn initialize(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let self_val = lfp.self_val();
     let struct_class = self_val.class().get_obj(globals);
     let members_val = globals
@@ -82,13 +72,8 @@ fn initialize(
 }
 
 #[monoruby_builtin]
-fn inspect(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut inspect = format!("#<struct ");
     let self_val = lfp.self_val();

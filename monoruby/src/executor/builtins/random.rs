@@ -17,13 +17,8 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
 #[monoruby_builtin]
-fn srand(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn srand(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let old_seed = BigInt::from_bytes_le(num::bigint::Sign::Plus, globals.random_seed());
     let new_seed = if len == 0 {
@@ -45,13 +40,7 @@ fn srand(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/rand.html]
 #[monoruby_builtin]
-fn rand(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn rand(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
     let f = globals.random_gen();
     Ok(Value::float(f))
 }

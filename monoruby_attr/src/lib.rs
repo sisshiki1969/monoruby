@@ -18,9 +18,8 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
             globals: &mut Globals,
             lfp: LFP,
             arg: Arg,
-            len: usize,
         ) -> Option<Value> {
-            match #wrapped(vm, globals, lfp, arg, len) {
+            match #wrapped(vm, globals, lfp, arg) {
                 Ok(val) => Some(val),
                 Err(err) => {
                     vm.set_error(err);

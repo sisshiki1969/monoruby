@@ -29,13 +29,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// []
 #[monoruby_builtin]
-fn eq(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn eq(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let rhs = match arg[0].is_class_or_module() {
         Some(class) => class,
         None => return Ok(Value::bool(false)),
@@ -49,13 +43,7 @@ fn eq(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/=3d=3d=3d.html]
 #[monoruby_builtin]
-fn teq(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn teq(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     Ok(Value::bool(arg[0].is_kind_of(globals, class)))
 }
@@ -65,13 +53,7 @@ fn teq(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
-fn tos(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let class_name = lfp.self_val().as_class_id().get_name(globals);
     let res = Value::string(class_name);
     Ok(res)
@@ -82,13 +64,8 @@ fn tos(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/constants.html]
 #[monoruby_builtin]
-fn constants(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn constants(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 0..=1)?;
     let class_id = lfp.self_val().as_class_id();
     let v = if len == 0 || arg[0].as_bool() {
@@ -105,13 +82,8 @@ fn constants(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_get.html]
 #[monoruby_builtin]
-fn const_get(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn const_get(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let name = arg[0].expect_symbol_or_string(globals)?;
     let module = lfp.self_val().as_class();
@@ -140,7 +112,6 @@ fn instance_methods(
     globals: &mut Globals,
     lfp: LFP,
     _arg: Arg,
-    _len: usize,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let iter = globals
@@ -155,13 +126,8 @@ fn instance_methods(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_reader.html]
 #[monoruby_builtin]
-fn attr_reader(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn attr_reader(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -178,13 +144,8 @@ fn attr_reader(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_writer.html]
 #[monoruby_builtin]
-fn attr_writer(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn attr_writer(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -201,13 +162,8 @@ fn attr_writer(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/attr_accessor.html]
 #[monoruby_builtin]
-fn attr_accessor(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn attr_accessor(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let mut ary = ArrayInner::new();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
@@ -226,13 +182,8 @@ fn attr_accessor(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/module_function.html]
 #[monoruby_builtin]
-fn module_function(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn module_function(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     if len == 0 {
         vm.set_module_function();
         Ok(Value::nil())
@@ -256,13 +207,8 @@ fn module_function(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/include.html]
 #[monoruby_builtin]
-fn include(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn include(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let self_ = lfp.self_val();
     MonorubyErr::check_min_number_of_arguments(len, 1)?;
     let class = self_.as_class();
@@ -279,13 +225,8 @@ fn include(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/private.html]
 #[monoruby_builtin]
-fn private(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn private(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Private)
 }
 
@@ -295,13 +236,8 @@ fn private(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/protected.html]
 #[monoruby_builtin]
-fn protected(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn protected(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Protected)
 }
 
@@ -311,13 +247,8 @@ fn protected(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/public.html]
 #[monoruby_builtin]
-fn public(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn public(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     change_visi(vm, globals, lfp.self_val(), arg, len, Visibility::Public)
 }
 
@@ -357,13 +288,8 @@ fn change_visi(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/method_defined=3f.html]
 #[monoruby_builtin]
-fn method_defined(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn method_defined(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let class_id = lfp.self_val().as_class_id();
     let func_name = arg[0].expect_symbol_or_string(globals)?;
@@ -375,13 +301,7 @@ fn method_defined(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/alias_method.html]
 #[monoruby_builtin]
-fn alias_method(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn alias_method(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let new_name = arg[0].expect_symbol_or_string(globals)?;
     let old_name = arg[1].expect_symbol_or_string(globals)?;

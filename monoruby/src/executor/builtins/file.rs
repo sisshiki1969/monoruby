@@ -28,13 +28,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
 #[monoruby_builtin]
-fn write(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn write(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     let name = match arg[0].unpack() {
         RV::String(bytes) => String::from_utf8(bytes.to_vec()).unwrap(),
         _ => {
@@ -63,13 +57,8 @@ fn write(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
 #[monoruby_builtin]
-fn read(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn read(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     let filename = string_to_path(arg[0], globals)?;
     let mut file = match File::open(&filename) {
@@ -97,13 +86,7 @@ fn read(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
-fn join(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn join(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     fn flatten(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -132,6 +115,7 @@ fn join(
         }
         Ok(())
     }
+    let len = lfp.arg_len();
     let mut path = String::new();
     for i in 0..len {
         flatten(vm, globals, &mut path, arg[i])?;
@@ -146,13 +130,8 @@ fn join(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/expand_path.html]
 #[monoruby_builtin]
-fn expand_path(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn expand_path(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
@@ -212,13 +191,7 @@ fn expand_path(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/dirname.html]
 #[monoruby_builtin]
-fn dirname(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn dirname(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     let filename = string_to_path(arg[0], globals)?;
     let mut dirname = match filename.parent() {
         Some(ostr) => conv_pathbuf(&ostr.to_path_buf()),
@@ -236,13 +209,7 @@ fn dirname(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/exist=3f.html]
 #[monoruby_builtin]
-fn exist(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn exist(_vm: &mut Executor, globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     let b = string_to_canonicalized_path(globals, arg[0], "1st arg").is_ok();
     Ok(Value::bool(b))
 }

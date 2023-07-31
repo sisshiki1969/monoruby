@@ -25,24 +25,12 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn sync(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
     Ok(Value::bool(false))
 }
 
 #[monoruby_builtin]
-fn assign_sync(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn assign_sync(_vm: &mut Executor, _globals: &mut Globals, _lfp: LFP, arg: Arg) -> Result<Value> {
     Ok(arg[0])
 }
 

@@ -22,13 +22,8 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: LFP,
-    arg: Arg,
-    len: usize,
-) -> Result<Value> {
+fn range_new(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 2..=3)?;
     globals.generate_range(arg[0], arg[1], false)
 }
@@ -38,7 +33,7 @@ fn range_new(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/begin.html]
 #[monoruby_builtin]
-fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     Ok(lfp.self_val().as_range().start)
 }
 
@@ -47,7 +42,7 @@ fn begin(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/end.html]
 #[monoruby_builtin]
-fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -> Result<Value> {
+fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     Ok(lfp.self_val().as_range().end)
 }
 
@@ -56,13 +51,7 @@ fn end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg, _: usize) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/exclude_end=3f.html]
 #[monoruby_builtin]
-fn exclude_end(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _: Arg,
-    _: usize,
-) -> Result<Value> {
+fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_range().exclude_end()))
 }
 
@@ -74,13 +63,7 @@ fn exclude_end(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
 #[monoruby_builtin]
-fn each(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -109,13 +92,7 @@ fn each(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
 #[monoruby_builtin]
-fn map(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
@@ -142,13 +119,7 @@ fn map(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/entries.html]
 #[monoruby_builtin]
-fn toa(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {

@@ -12,13 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
 
 /// ### Proc.new
 #[monoruby_builtin]
-fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: LFP,
-    _arg: Arg,
-    _len: usize,
-) -> Result<Value> {
+fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     if let Some(block_handler) = lfp.block() {
         vm.generate_proc(globals, block_handler)
     } else {
@@ -28,7 +22,8 @@ fn new(
 
 /// ### Proc#call
 #[monoruby_builtin]
-fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg, len: usize) -> Result<Value> {
+fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
     let self_ = lfp.self_val();
     let block_data = self_.as_proc();
     let res = vm.invoke_proc(globals, block_data, &arg.to_vec(len))?;

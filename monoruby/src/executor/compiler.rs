@@ -517,17 +517,6 @@ impl Codegen {
     }
 
     ///
-    /// calculate an offset of stack pointer.
-    ///
-    fn calc_offset(&mut self) {
-        monoasm!( &mut self.jit,
-            addq rax, (LBP_ARG0 / 8 + 1);
-            andq rax, (-2);
-            shlq rax, 3;
-        );
-    }
-
-    ///
     /// check whether lhs and rhs are fixnum.
     ///
     fn guard_rdi_rsi_fixnum(&mut self, generic: DestLabel) {
