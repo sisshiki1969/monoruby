@@ -2,7 +2,7 @@ use crate::*;
 
 #[derive(Debug)]
 pub struct EnumeratorInner {
-    internal: Option<Value>,
+    internal: Option<Fiber>,
     proc: Value,
     yielder: Value,
     buffer: Option<Array>,
@@ -23,7 +23,7 @@ impl alloc::GC<RValue> for EnumeratorInner {
 
 impl EnumeratorInner {
     pub(crate) fn new(data: BlockData) -> Self {
-        let internal = Some(Value::new_fiber(data.clone()));
+        let internal = Some(Value::new_fiber(data.clone()).into());
         Self {
             internal,
             proc: Value::new_proc(data),
@@ -41,7 +41,7 @@ impl EnumeratorInner {
     }
 
     pub fn rewind(&mut self) {
-        self.internal = Some(Value::new_fiber(self.proc.as_proc().clone()));
+        self.internal = Some(Value::new_fiber(self.proc.as_proc().clone()).into());
         self.buffer = None;
     }
 
@@ -84,10 +84,7 @@ impl EnumeratorInner {
     ///
     fn yield_next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
         let mut internal = self.internal.unwrap();
-        let (ary, is_return) =
-            internal
-                .as_fiber_mut()
-                .enum_yield_values(vm, globals, self.yielder)?;
+        let (ary, is_return) = internal.enum_yield_values(vm, globals, self.yielder)?;
         if is_return {
             Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),

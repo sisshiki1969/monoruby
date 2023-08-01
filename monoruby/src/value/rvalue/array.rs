@@ -22,6 +22,19 @@ impl std::ops::DerefMut for Array {
     }
 }
 
+impl std::convert::From<Value> for Array {
+    fn from(v: Value) -> Self {
+        assert_eq!(ObjKind::ARRAY, v.rvalue().kind());
+        Array(v)
+    }
+}
+
+impl std::convert::Into<Value> for Array {
+    fn into(self) -> Value {
+        self.0
+    }
+}
+
 impl alloc::GC<RValue> for Array {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.0.mark(alloc)
@@ -29,22 +42,13 @@ impl alloc::GC<RValue> for Array {
 }
 
 impl Array {
-    pub fn from(v: Value) -> Self {
-        assert!(v.is_array().is_some());
-        Array(v)
-    }
-
-    pub fn to_val(self) -> Value {
-        self.0
-    }
-
     pub fn peel(self) -> Value {
         if self.len() == 0 {
             Value::nil()
         } else if self.len() == 1 {
             self[0]
         } else {
-            self.to_val()
+            self.into()
         }
     }
 }

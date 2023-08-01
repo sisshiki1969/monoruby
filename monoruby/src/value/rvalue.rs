@@ -6,7 +6,7 @@ use std::mem::ManuallyDrop;
 
 pub use self::array::*;
 pub use self::enumerator::EnumeratorInner;
-pub use self::fiber::FiberInner;
+pub use self::fiber::*;
 pub use self::hash::*;
 pub use self::io::IoInner;
 pub use self::method::MethodInner;

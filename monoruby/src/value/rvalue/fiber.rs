@@ -1,5 +1,41 @@
 use crate::*;
 
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct Fiber(Value);
+
+impl std::ops::Deref for Fiber {
+    type Target = FiberInner;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_fiber()
+    }
+}
+
+impl std::ops::DerefMut for Fiber {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_fiber_mut()
+    }
+}
+
+impl std::convert::From<Value> for Fiber {
+    fn from(v: Value) -> Self {
+        assert_eq!(ObjKind::FIBER, v.rvalue().kind());
+        Fiber(v)
+    }
+}
+
+impl std::convert::Into<Value> for Fiber {
+    fn into(self) -> Value {
+        self.0
+    }
+}
+
+impl alloc::GC<RValue> for Fiber {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.0.mark(alloc)
+    }
+}
+
 #[derive(Debug)]
 pub struct FiberInner {
     handle: Box<Executor>,
@@ -90,9 +126,9 @@ impl FiberInner {
             }
         };
         if self.state() == FiberState::Terminated {
-            Ok((Array::from(Value::array1(v)), true))
+            Ok((Value::array1(v).into(), true))
         } else {
-            Ok((Array::from(v), false))
+            Ok((v.into(), false))
         }
     }
 

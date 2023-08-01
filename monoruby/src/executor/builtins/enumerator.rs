@@ -67,7 +67,7 @@ fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) ->
         .self_val()
         .as_enumerator_mut()
         .next_values(vm, globals)?
-        .to_val())
+        .into())
 }
 
 ///
