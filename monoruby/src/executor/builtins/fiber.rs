@@ -32,12 +32,7 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/yield.html]
 #[monoruby_builtin]
-pub(crate) fn fiber_yield(
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: LFP,
-    arg: Arg,
-) -> Result<Value> {
+fn fiber_yield(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     if vm.parent_fiber.is_none() {
         return Err(MonorubyErr::fibererr(

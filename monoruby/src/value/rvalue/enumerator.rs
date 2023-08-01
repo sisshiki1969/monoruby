@@ -5,7 +5,7 @@ pub struct EnumeratorInner {
     internal: Option<Value>,
     proc: Value,
     yielder: Value,
-    buffer: Option<Value>,
+    buffer: Option<Array>,
 }
 
 impl alloc::GC<RValue> for EnumeratorInner {
@@ -49,12 +49,12 @@ impl EnumeratorInner {
     /// Peek next yield value from the enumerator.
     ///
     pub fn peek(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        if let Some(v) = self.buffer {
-            Ok(v)
+        if let Some(ary) = self.buffer {
+            Ok(ary.peel())
         } else {
-            let v = self.yield_next(vm, globals)?;
-            self.buffer = Some(v);
-            Ok(v)
+            let ary = self.yield_next_values(vm, globals)?;
+            self.buffer = Some(ary);
+            Ok(ary.peel())
         }
     }
 
@@ -62,10 +62,18 @@ impl EnumeratorInner {
     /// Get next yield value from the enumerator.
     ///
     pub fn next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        if let Some(v) = std::mem::take(&mut self.buffer) {
-            Ok(v)
+        let v = self.next_values(vm, globals)?.peel();
+        Ok(v)
+    }
+
+    ///
+    /// Get next yield value from the enumerator.
+    ///
+    pub fn next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
+        if let Some(ary) = std::mem::take(&mut self.buffer) {
+            Ok(ary)
         } else {
-            self.yield_next(vm, globals)
+            self.yield_next_values(vm, globals)
         }
     }
 
@@ -74,17 +82,18 @@ impl EnumeratorInner {
     ///
     /// If the enumerator has been exhausted, return StopIteration error.
     ///
-    fn yield_next(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+    fn yield_next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
         let mut internal = self.internal.unwrap();
-        let (v, is_return) = internal
-            .as_fiber_mut()
-            .enum_resume(vm, globals, self.yielder)?;
+        let (ary, is_return) =
+            internal
+                .as_fiber_mut()
+                .enum_yield_values(vm, globals, self.yielder)?;
         if is_return {
             Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
             ))
         } else {
-            Ok(v)
+            Ok(ary)
         }
     }
 }

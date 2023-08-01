@@ -13,6 +13,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS);
     globals.define_builtin_class_func(ENUMERATOR_CLASS, "new", enumerator_new, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "each", each, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index, -1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
@@ -50,6 +51,23 @@ fn next(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().next(vm, globals)
+}
+
+///
+/// ### Enumerator#next_values
+///
+/// - next_values -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next_values.html]
+#[monoruby_builtin]
+fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    Ok(lfp
+        .self_val()
+        .as_enumerator_mut()
+        .next_values(vm, globals)?
+        .to_val())
 }
 
 ///
@@ -95,7 +113,10 @@ fn each_inner(
     yielder: Value,
 ) -> Result<Value> {
     loop {
-        let (v, is_return) = internal.as_fiber_mut().enum_resume(vm, globals, yielder)?;
+        let (ary, is_return) = internal
+            .as_fiber_mut()
+            .enum_yield_values(vm, globals, yielder)?;
+        let v = ary.peel();
         if is_return {
             return Ok(v);
         }
@@ -163,7 +184,10 @@ fn with_index_inner(
     yielder: Value,
 ) -> Result<Value> {
     loop {
-        let (v, is_return) = internal.as_fiber_mut().enum_resume(vm, globals, yielder)?;
+        let (ary, is_return) = internal
+            .as_fiber_mut()
+            .enum_yield_values(vm, globals, yielder)?;
+        let v = ary.peel();
         if is_return {
             return Ok(v);
         }
@@ -210,10 +234,10 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
-fn yielder_shl(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn yielder_shl(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
-    vm.yield_fiber(arg[0])
+    vm.yield_fiber(Value::array1(arg[0]))
 }
 
 ///
@@ -252,6 +276,28 @@ mod test {
             end
             [a.inspect, a.to_s]
         "##,
+        );
+        run_test(
+            r#"
+        p = []
+        o = Object.new
+        def o.each
+          yield
+          yield 1
+          yield 1, 2
+          yield nil
+          yield [1, 2]
+        end
+        e = o.to_enum
+        5.times do
+            p << e.next_values
+        end
+        e = o.to_enum
+        5.times do
+            p << e.next
+        end
+        p
+        "#,
         );
     }
 

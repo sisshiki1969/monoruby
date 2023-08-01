@@ -71,12 +71,12 @@ impl FiberInner {
         }
     }
 
-    pub fn enum_resume(
+    pub fn enum_yield_values(
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
         yielder: Value,
-    ) -> Result<(Value, bool)> {
+    ) -> Result<(Array, bool)> {
         let v = match self.state() {
             FiberState::Created => {
                 let arg = Arg::from(&yielder);
@@ -89,10 +89,14 @@ impl FiberInner {
                 ))
             }
         };
-        Ok((v, self.state() == FiberState::Terminated))
+        if self.state() == FiberState::Terminated {
+            Ok((Array::from(Value::array1(v)), true))
+        } else {
+            Ok((Array::from(v), false))
+        }
     }
 
-    fn init(&mut self) {
+    fn initialize(&mut self) {
         use std::alloc::*;
         let layout = Layout::from_size_align(FIBER_STACK_SIZE, 4096).unwrap();
         unsafe {
@@ -117,7 +121,7 @@ impl FiberInner {
         len: usize,
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
-        self.init();
+        self.initialize();
         match (globals.codegen.fiber_invoker)(
             vm,
             globals,

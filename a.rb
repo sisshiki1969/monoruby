@@ -1,6 +1,22 @@
-a = [1,2]
-b = []
-7.times do
-    b.prepend(*a)
+p = []
+o = Object.new
+def o.each
+  yield
+  yield 1
+  yield 1, 2
+  yield nil
+  yield [1, 2]
 end
-puts "#{b}"
+e = o.to_enum
+p << e.next_values
+p << e.next_values
+p << e.next_values
+p << e.next_values
+p << e.next_values
+e = o.to_enum
+p << e.next
+p << e.next
+p << e.next
+p << e.next
+p << e.next
+p

@@ -6,6 +6,50 @@ use smallvec::SmallVec;
 pub const ARRAY_INLINE_CAPA: usize = 5;
 
 #[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct Array(Value);
+
+impl std::ops::Deref for Array {
+    type Target = ArrayInner;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_array()
+    }
+}
+
+impl std::ops::DerefMut for Array {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_array_mut()
+    }
+}
+
+impl alloc::GC<RValue> for Array {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.0.mark(alloc)
+    }
+}
+
+impl Array {
+    pub fn from(v: Value) -> Self {
+        assert!(v.is_array().is_some());
+        Array(v)
+    }
+
+    pub fn to_val(self) -> Value {
+        self.0
+    }
+
+    pub fn peel(self) -> Value {
+        if self.len() == 0 {
+            Value::nil()
+        } else if self.len() == 1 {
+            self[0]
+        } else {
+            self.to_val()
+        }
+    }
+}
+
+#[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct ArrayInner(SmallVec<[Value; ARRAY_INLINE_CAPA]>);
 

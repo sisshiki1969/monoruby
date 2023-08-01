@@ -296,6 +296,10 @@ impl Value {
         RValue::new_array(ary).pack()
     }
 
+    pub fn array1(elem: Value) -> Self {
+        Value::array(ArrayInner::from(smallvec::smallvec![elem]))
+    }
+
     pub fn array_empty() -> Self {
         RValue::new_array(ArrayInner::new()).pack()
     }

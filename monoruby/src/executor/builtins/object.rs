@@ -70,8 +70,8 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Re
     let outer_lfp = vm.move_current_frame_to_heap();
     let func_id = globals.compile_script(
         r#"
-        self.each do |x|
-            __fiber_yield x
+        self.each do |*x|
+            __enum_yield *x
         end
         "#
         .to_string(),

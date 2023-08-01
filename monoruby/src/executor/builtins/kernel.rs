@@ -46,7 +46,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
-    globals.define_builtin_func(kernel_class, "__fiber_yield", super::fiber::fiber_yield, -1);
+    globals.define_builtin_func(
+        kernel_class,
+        "__enum_yield",
+        super::enumerator::yielder_yield,
+        -1,
+    );
 }
 
 ///
@@ -193,10 +198,7 @@ fn p(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Va
     Ok(match len {
         0 => Value::nil(),
         1 => arg[0],
-        _ => {
-            let ary = ArrayInner::from_iter(lfp.iter());
-            Value::array(ary)
-        }
+        _ => Value::array_from_iter(lfp.iter()),
     })
 }
 
