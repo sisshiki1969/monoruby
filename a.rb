@@ -1,22 +1,6 @@
-p = []
-o = Object.new
-def o.each
-  yield
-  yield 1
-  yield 1, 2
-  yield nil
-  yield [1, 2]
-end
-e = o.to_enum
-p << e.next_values
-p << e.next_values
-p << e.next_values
-p << e.next_values
-p << e.next_values
-e = o.to_enum
-p << e.next
-p << e.next
-p << e.next
-p << e.next
-p << e.next
-p
+    text = "Hello\nこんにちは\nWorld\n世界\n"
+    res = []
+    text.each_line("\n", chomp:true) do |line|
+        res << line
+    end
+    p res
