@@ -169,18 +169,14 @@ impl Globals {
         }
     }
 
-    pub(crate) fn get_block_data(&mut self, cfp: CFP, bh: BlockHandler) -> BlockData {
-        self.get_data(cfp, bh)
-    }
-
     pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> BlockData {
         match cfp.get_block() {
-            Some(bh) => self.get_data(cfp, bh),
+            Some(bh) => self.get_block_data(cfp, bh),
             None => BlockData::default(),
         }
     }
 
-    fn get_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> BlockData {
+    pub(crate) fn get_block_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> BlockData {
         if let Some((func_id, idx)) = bh.try_proxy() {
             for _ in 0..idx {
                 cfp = cfp.prev().unwrap();

@@ -266,8 +266,8 @@ impl Codegen {
             movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
-            lea  rdx, [rax + 8];
-            movq rax, [rax];
+            lea  rdx, [rax + (BLOCKDATA_FUNCDATA)];
+            movq rax, [rax + (BLOCKDATA_OUTER)];
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args

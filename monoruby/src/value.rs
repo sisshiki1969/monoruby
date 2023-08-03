@@ -548,10 +548,10 @@ impl Value {
         self.rvalue_mut().as_array_mut()
     }
 
-    pub(crate) fn is_array(&self) -> Option<&ArrayInner> {
+    pub(crate) fn is_array(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.kind() {
-            ObjKind::ARRAY => Some(rv.as_array()),
+            ObjKind::ARRAY => Some((*self).into()),
             _ => None,
         }
     }

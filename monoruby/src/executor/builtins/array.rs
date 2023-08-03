@@ -77,7 +77,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     }
     if len == 1 {
         if let Some(ary) = arg[0].is_array() {
-            *self_val = ary.clone();
+            *self_val = (*ary).clone();
             return Ok(self_val.into());
         }
     }
@@ -155,7 +155,7 @@ fn add(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<
             ));
         }
     };
-    lhs.extend_from_slice(rhs);
+    lhs.extend_from_slice(&*rhs);
     Ok(Value::array(lhs))
 }
 
