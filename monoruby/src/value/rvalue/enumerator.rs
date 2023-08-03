@@ -3,7 +3,7 @@ use crate::*;
 #[derive(Debug)]
 pub struct EnumeratorInner {
     internal: Option<Fiber>,
-    proc: Value,
+    proc: Proc,
     yielder: Value,
     buffer: Option<Array>,
 }
@@ -22,18 +22,18 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new(data: BlockData) -> Self {
-        let internal = Some(Value::new_fiber(data.clone()).into());
+    pub(crate) fn new(proc: Proc) -> Self {
+        let internal = Some(Fiber::new(proc));
         Self {
             internal,
-            proc: Value::new_proc(data),
+            proc,
             yielder: Value::yielder_object(),
             buffer: None,
         }
     }
 
     pub(crate) fn create_internal(&self) -> Fiber {
-        Fiber::new(self.proc.as_proc().clone())
+        Fiber::new(self.proc)
     }
 
     pub(crate) fn yielder(&self) -> Value {
@@ -41,7 +41,7 @@ impl EnumeratorInner {
     }
 
     pub fn rewind(&mut self) {
-        self.internal = Some(Value::new_fiber(self.proc.as_proc().clone()).into());
+        self.internal = Some(self.create_internal());
         self.buffer = None;
     }
 

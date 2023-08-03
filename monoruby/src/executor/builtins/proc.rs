@@ -45,27 +45,29 @@ impl Executor {
 
     pub fn move_caller_frames_to_heap(&mut self) -> LFP {
         let outer_lfp = self.cfp().prev().unwrap().lfp();
-        unsafe { self.move_frame_to_heap(outer_lfp) }
+        self.move_frame_to_heap(outer_lfp)
     }
 
     pub fn move_current_frame_to_heap(&mut self) -> LFP {
         let outer_lfp = self.cfp().lfp();
-        unsafe { self.move_frame_to_heap(outer_lfp) }
+        self.move_frame_to_heap(outer_lfp)
     }
 
     /// ## return
     /// - the address of outer in *lfp*.
-    unsafe fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
+    pub fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
         if self.within_stack(lfp) {
-            let mut cfp = lfp.cfp();
-            let mut heap_lfp = lfp.move_to_heap();
-            cfp.set_lfp(heap_lfp);
-            if let Some(outer) = heap_lfp.outer() {
-                let outer_lfp = outer.lfp();
-                let outer = self.move_frame_to_heap(outer_lfp).outer_address();
-                heap_lfp.set_outer(Some(outer));
+            unsafe {
+                let mut cfp = lfp.cfp();
+                let mut heap_lfp = lfp.move_to_heap();
+                cfp.set_lfp(heap_lfp);
+                if let Some(outer) = heap_lfp.outer() {
+                    let outer_lfp = outer.lfp();
+                    let outer = self.move_frame_to_heap(outer_lfp).outer_address();
+                    heap_lfp.set_outer(Some(outer));
+                }
+                heap_lfp
             }
-            heap_lfp
         } else {
             lfp
         }

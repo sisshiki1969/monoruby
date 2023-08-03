@@ -377,12 +377,12 @@ impl Value {
         RValue::new_method(receiver, func_id).pack()
     }
 
-    pub(crate) fn new_fiber(block_data: BlockData) -> Self {
-        RValue::new_fiber(block_data).pack()
+    pub(crate) fn new_fiber(proc: Proc) -> Self {
+        RValue::new_fiber(proc).pack()
     }
 
-    pub(crate) fn new_enumerator(block_data: BlockData) -> Self {
-        RValue::new_enumerator(block_data).pack()
+    pub(crate) fn new_enumerator(proc: Proc) -> Self {
+        RValue::new_enumerator(proc).pack()
     }
 
     pub(crate) fn unpack(&self) -> RV {

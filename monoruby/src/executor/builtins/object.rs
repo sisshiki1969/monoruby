@@ -67,19 +67,20 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
 fn to_enum(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
-    let outer_lfp = vm.move_current_frame_to_heap();
     let func_id = globals.compile_script(
         r#"
         self.each do |*x|
-            __enum_yield *x
+          __enum_yield *x
         end
         "#
         .to_string(),
         "",
     )?;
     let func_data = globals.compile_on_demand(func_id).clone();
+    let outer_lfp = vm.move_current_frame_to_heap();
     let block_data = BlockData::from(Some(outer_lfp), func_data);
-    Ok(Value::new_enumerator(block_data))
+    let proc = Proc::new(block_data);
+    Ok(Value::new_enumerator(proc))
 }
 
 ///

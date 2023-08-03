@@ -22,7 +22,8 @@ fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> R
     let bh = lfp.expect_block()?;
     vm.move_caller_frames_to_heap();
     let block_data = globals.get_block_data(vm.cfp(), bh);
-    Ok(Value::new_fiber(block_data))
+    let proc = Proc::new(block_data);
+    Ok(Value::new_fiber(proc))
 }
 
 ///

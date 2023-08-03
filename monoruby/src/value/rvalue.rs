@@ -653,18 +653,18 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_fiber(block_data: BlockData) -> Self {
+    pub(super) fn new_fiber(proc: Proc) -> Self {
         RValue {
             header: Header::new(FIBER_CLASS, ObjKind::FIBER),
-            kind: ObjKind::fiber(block_data),
+            kind: ObjKind::fiber(proc),
             var_table: None,
         }
     }
 
-    pub(super) fn new_enumerator(block_data: BlockData) -> Self {
+    pub(super) fn new_enumerator(proc: Proc) -> Self {
         RValue {
             header: Header::new(ENUMERATOR_CLASS, ObjKind::ENUMERATOR),
-            kind: ObjKind::enumerator(block_data),
+            kind: ObjKind::enumerator(proc),
             var_table: None,
         }
     }
@@ -1092,15 +1092,51 @@ impl ObjKind {
         }
     }
 
-    fn fiber(block_data: BlockData) -> Self {
+    fn fiber(proc: Proc) -> Self {
         Self {
-            fiber: ManuallyDrop::new(FiberInner::new(block_data)),
+            fiber: ManuallyDrop::new(FiberInner::new(proc)),
         }
     }
 
-    fn enumerator(block_data: BlockData) -> Self {
+    fn enumerator(proc: Proc) -> Self {
         Self {
-            enumerator: ManuallyDrop::new(EnumeratorInner::new(block_data)),
+            enumerator: ManuallyDrop::new(EnumeratorInner::new(proc)),
         }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Proc(Value);
+
+impl std::ops::Deref for Proc {
+    type Target = BlockData;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_proc()
+    }
+}
+
+impl std::convert::From<Value> for Proc {
+    fn from(v: Value) -> Self {
+        assert_eq!(ObjKind::PROC, v.rvalue().kind());
+        Proc(v)
+    }
+}
+
+impl std::convert::Into<Value> for Proc {
+    fn into(self) -> Value {
+        self.0
+    }
+}
+
+impl alloc::GC<RValue> for Proc {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        self.0.mark(alloc)
+    }
+}
+
+impl Proc {
+    pub fn new(block: BlockData) -> Self {
+        Proc(Value::new_proc(block))
     }
 }

@@ -37,15 +37,15 @@ impl alloc::GC<RValue> for Fiber {
 }
 
 impl Fiber {
-    pub(crate) fn new(block_data: BlockData) -> Self {
-        Fiber(Value::new_fiber(block_data))
+    pub(crate) fn new(proc: Proc) -> Self {
+        Fiber(Value::new_fiber(proc))
     }
 }
 
 #[derive(Debug)]
 pub struct FiberInner {
     handle: Box<Executor>,
-    block_data: BlockData,
+    proc: Proc,
     stack: Option<std::ptr::NonNull<u8>>,
 }
 
@@ -70,17 +70,17 @@ impl Drop for FiberInner {
 impl alloc::GC<RValue> for FiberInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.handle.mark(alloc);
-        self.block_data.mark(alloc);
+        self.proc.mark(alloc);
     }
 }
 
 impl FiberInner {
-    pub(crate) fn new(block_data: BlockData) -> Self {
+    pub(crate) fn new(proc: Proc) -> Self {
         let vm = Executor::default();
         let handle = Box::new(vm);
         Self {
             handle,
-            block_data,
+            proc,
             stack: None,
         }
     }
@@ -90,7 +90,7 @@ impl FiberInner {
     }
 
     pub fn func_id(&self) -> FuncId {
-        self.block_data.func_id()
+        self.proc.func_id()
     }
 
     pub fn resume(&mut self, vm: &mut Executor, globals: &mut Globals, lfp: LFP) -> Result<Value> {
@@ -167,7 +167,7 @@ impl FiberInner {
         match (globals.codegen.fiber_invoker)(
             vm,
             globals,
-            &self.block_data,
+            &self.proc,
             &mut self.handle as _,
             arg.as_ptr(),
             len,
