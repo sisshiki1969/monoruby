@@ -35,9 +35,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
 #[monoruby_builtin]
 fn times(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     match lfp.self_val().unpack() {
-        RV::Fixnum(i) => vm.invoke_block_iter1(globals, (0..i).map(Value::integer))?,
+        RV::Fixnum(i) => vm.invoke_block_iter1(globals, bh, (0..i).map(Value::integer))?,
         RV::BigInt(_) => unimplemented!(),
         _ => unreachable!(),
     };
@@ -95,7 +95,7 @@ impl Iterator for NegStep {
 fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
-    match lfp.block() {
+    let bh = match lfp.block() {
         None => return Err(MonorubyErr::runtimeerr("not implemented")),
         Some(block) => block,
     };
@@ -113,10 +113,10 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
 
     if step > 0 {
         let iter = PosStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, iter)?;
+        vm.invoke_block_iter1(globals, bh, iter)?;
     } else {
         let iter = NegStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, iter)?;
+        vm.invoke_block_iter1(globals, bh, iter)?;
     }
     Ok(lfp.self_val())
 }

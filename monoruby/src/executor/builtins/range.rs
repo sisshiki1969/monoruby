@@ -64,7 +64,7 @@ fn exclude_end(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _: Arg) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
@@ -75,7 +75,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         }
 
         let iter = (start..end).map(|i| Value::fixnum(i));
-        vm.invoke_block_iter1(globals, iter)?;
+        vm.invoke_block_iter1(globals, bh, iter)?;
         Ok(self_)
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -93,7 +93,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
 #[monoruby_builtin]
 fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if range.start.is_fixnum() && range.end.is_fixnum() {
@@ -104,7 +104,7 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
         }
 
         let iter = (start..end).map(|i| Value::fixnum(i));
-        let vec = vm.invoke_block_map1(globals, iter)?;
+        let vec = vm.invoke_block_map1(globals, bh, iter)?;
         Ok(Value::array_from_vec(vec))
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))

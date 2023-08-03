@@ -13,8 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
 /// ### Proc.new
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    if let Some(block_handler) = lfp.block() {
-        vm.generate_proc(globals, block_handler)
+    if let Some(bh) = lfp.block() {
+        vm.generate_proc(globals, bh)
     } else {
         Err(MonorubyErr::create_proc_no_block())
     }
@@ -33,14 +33,14 @@ impl Executor {
     pub(in crate::executor) fn generate_proc(
         &mut self,
         globals: &mut Globals,
-        block_handler: BlockHandler,
+        bh: BlockHandler,
     ) -> Result<Value> {
-        if block_handler.try_proxy().is_some() {
+        if bh.try_proxy().is_some() {
             self.move_caller_frames_to_heap();
-            let block_data = globals.get_block_data(self.cfp());
+            let block_data = globals.get_block_data(self.cfp(), bh);
             Ok(Value::new_proc(block_data))
-        } else if block_handler.try_proc() {
-            Ok(block_handler.0)
+        } else if bh.try_proc() {
+            Ok(bh.0)
         } else {
             unimplemented!()
         }

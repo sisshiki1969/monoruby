@@ -19,9 +19,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/new.html]
 #[monoruby_builtin]
 fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     vm.move_caller_frames_to_heap();
-    let block_data = globals.get_block_data(vm.cfp());
+    let block_data = globals.get_block_data(vm.cfp(), bh);
     Ok(Value::new_fiber(block_data))
 }
 

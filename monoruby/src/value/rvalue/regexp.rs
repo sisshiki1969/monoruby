@@ -94,12 +94,14 @@ impl RegexpInner {
         globals: &mut Globals,
         re_val: Value,
         given: &str,
+        bh: BlockHandler,
     ) -> Result<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInner,
             given: &str,
+            bh: BlockHandler,
         ) -> Result<(String, bool)> {
             let (start, end, matched_str) = match re.captures_from_pos(given, 0) {
                 Ok(None) => return Ok((given.to_string(), false)),
@@ -118,7 +120,7 @@ impl RegexpInner {
 
             let mut res = given.to_string();
             let matched = Value::string_from_str(matched_str);
-            let result = vm.invoke_block_once(globals, &[matched])?;
+            let result = vm.invoke_block_once(globals, bh, &[matched])?;
             let s = globals.to_s(result);
             res.replace_range(start..end, &s);
             Ok((res, true))
@@ -126,9 +128,9 @@ impl RegexpInner {
 
         if let Some(s) = re_val.is_string() {
             let re = Self::from_escaped(globals, &s)?;
-            replace_(vm, globals, &re, given)
+            replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, re, given)
+            replace_(vm, globals, re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
@@ -162,16 +164,18 @@ impl RegexpInner {
         globals: &mut Globals,
         re_val: Value,
         given: &str,
+        bh: BlockHandler,
     ) -> Result<(String, bool)> {
         fn replace_(
             vm: &mut Executor,
             globals: &mut Globals,
             re: &RegexpInner,
             given: &str,
+            bh: BlockHandler,
         ) -> Result<(String, bool)> {
             let mut range = vec![];
             let mut i = 0;
-            let data = globals.get_block_data(vm.cfp());
+            let data = globals.get_block_data(vm.cfp(), bh);
             loop {
                 let (start, end, matched_str) = match re.captures_from_pos(given, i) {
                     Ok(None) => break,
@@ -203,9 +207,9 @@ impl RegexpInner {
 
         if let Some(s) = re_val.is_string() {
             let re = Self::from_escaped(globals, &s)?;
-            replace_(vm, globals, &re, given)
+            replace_(vm, globals, &re, given, bh)
         } else if let Some(re) = re_val.is_regex() {
-            replace_(vm, globals, re, given)
+            replace_(vm, globals, re, given, bh)
         } else {
             Err(MonorubyErr::argumenterr(
                 "1st arg must be RegExp or String.",
@@ -229,9 +233,9 @@ impl RegexpInner {
             Ok(None) => Ok(Value::nil()),
             Ok(Some(captures)) => {
                 vm.save_captures(&captures, given);
-                if block.is_some() {
+                if let Some(bh) = block {
                     let matched = Value::string_from_str(captures.get(0).unwrap().as_str());
-                    vm.invoke_block_once(globals, &[matched])
+                    vm.invoke_block_once(globals, bh, &[matched])
                 } else {
                     let mut ary = ArrayInner::new();
                     for i in 0..captures.len() {

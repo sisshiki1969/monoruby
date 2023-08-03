@@ -146,9 +146,9 @@ fn values(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let ary = lfp.self_val();
-    let data = globals.get_block_data(vm.cfp());
+    let data = globals.get_block_data(vm.cfp(), bh);
     for (k, v) in ary.as_hash().iter() {
         vm.invoke_block(globals, &data, &[k, v])?;
     }
@@ -164,10 +164,10 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_value.html]
 #[monoruby_builtin]
 fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(_, v)| v);
-    vm.invoke_block_iter1(globals, iter)?;
+    vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -180,10 +180,10 @@ fn each_value(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_key.html]
 #[monoruby_builtin]
 fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let ary = lfp.self_val();
     let iter = ary.as_hash().iter().map(|(k, _)| k);
-    vm.invoke_block_iter1(globals, iter)?;
+    vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -291,11 +291,11 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
     let len = lfp.arg_len();
     let self_ = lfp.self_val();
     let map = self_.as_hash();
-    let s = if lfp.block().is_some() {
+    let s = if let Some(bh) = lfp.block() {
         MonorubyErr::check_number_of_arguments(len, 1)?;
         match map.get(arg[0]) {
             Some(v) => v,
-            None => vm.invoke_block_once(globals, &[arg[0]])?,
+            None => vm.invoke_block_once(globals, bh, &[arg[0]])?,
         }
     } else if len == 1 {
         match map.get(arg[0]) {

@@ -605,9 +605,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
                 .collect()
         };
         match lfp.block() {
-            Some(_) => {
+            Some(bh) => {
                 let t = vm.temp_append(v.clone());
-                vm.invoke_block_iter1(globals, v.into_iter())?;
+                vm.invoke_block_iter1(globals, bh, v.into_iter())?;
                 vm.temp_clear(t);
                 Ok(lfp.self_val())
             }
@@ -659,8 +659,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
         }
         let iter = res.into_iter().map(|s| Value::string_from_str(s));
         match lfp.block() {
-            Some(_) => {
-                vm.invoke_block_iter1(globals, iter)?;
+            Some(bh) => {
+                vm.invoke_block_iter1(globals, bh, iter)?;
                 Ok(lfp.self_val())
             }
             None => Ok(Value::array_from_iter(iter)),
@@ -716,10 +716,10 @@ fn sub_main(
             let replace = arg[1].expect_string(globals)?;
             RegexpInner::replace_one(vm, globals, arg[0], &given, &replace)
         }
-        Some(_) => {
+        Some(bh) => {
             MonorubyErr::check_number_of_arguments(len, 1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInner::replace_one_block(vm, globals, arg[0], &given)
+            RegexpInner::replace_one_block(vm, globals, arg[0], &given, bh)
         }
     }
 }
@@ -772,10 +772,10 @@ fn gsub_main(
             let replace = args[1].expect_string(globals)?;
             RegexpInner::replace_all(vm, globals, args[0], &given, &replace)
         }
-        Some(_) => {
+        Some(bh) => {
             MonorubyErr::check_number_of_arguments(len, 1)?;
             let given = self_val.expect_string(globals)?;
-            RegexpInner::replace_all_block(vm, globals, args[0], &given)
+            RegexpInner::replace_all_block(vm, globals, args[0], &given, bh)
         }
     }
 }
@@ -929,14 +929,14 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Resu
     } else {
         Cow::Borrowed("\n")
     };
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     let receiver = lfp.self_val();
     let string = receiver.expect_string(globals)?;
     //if len < 2 || !lfp.arg(1).as_bool() {
     let iter = string
         .split_inclusive(rs.as_ref())
         .map(|s| Value::string_from_str(s));
-    vm.invoke_block_iter1(globals, iter)?;
+    vm.invoke_block_iter1(globals, bh, iter)?;
     /* } else {
         let iter = string.split(&rs).map(|s| Value::string_from_str(s));
         vm.invoke_block_iter1(globals, iter)?;

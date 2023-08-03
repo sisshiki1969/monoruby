@@ -169,11 +169,7 @@ impl Globals {
         }
     }
 
-    pub(crate) fn get_block_data(&mut self, cfp: CFP) -> BlockData {
-        let bh = cfp
-            .lfp()
-            .block()
-            .unwrap_or_else(|| panic!("block not given."));
+    pub(crate) fn get_block_data(&mut self, cfp: CFP, bh: BlockHandler) -> BlockData {
         self.get_data(cfp, bh)
     }
 

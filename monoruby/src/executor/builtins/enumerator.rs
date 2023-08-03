@@ -34,9 +34,9 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
 #[monoruby_builtin]
 fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    lfp.expect_block()?;
+    let bh = lfp.expect_block()?;
     vm.move_caller_frames_to_heap();
-    let block_data = globals.get_block_data(vm.cfp());
+    let block_data = globals.get_block_data(vm.cfp(), bh);
     Ok(Value::new_enumerator(block_data))
 }
 
@@ -82,8 +82,8 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let mut self_val = lfp.self_val();
-    let data = if lfp.block().is_some() {
-        globals.get_block_data(vm.cfp())
+    let data = if let Some(bh) = lfp.block() {
+        globals.get_block_data(vm.cfp(), bh)
     } else {
         return Ok(self_val);
     };
@@ -151,8 +151,8 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         }
     };
     let mut self_val = lfp.self_val();
-    let data = if lfp.block().is_some() {
-        globals.get_block_data(vm.cfp())
+    let data = if let Some(bh) = lfp.block() {
+        globals.get_block_data(vm.cfp(), bh)
     } else {
         return Ok(self_val);
     };

@@ -37,9 +37,9 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     }
     class.set_instance_var(globals, "/members", Value::array_from_vec(arg_vec))?;
 
-    if lfp.block().is_some() {
+    if let Some(bh) = lfp.block() {
         vm.push_class_context(class_id);
-        let data = globals.get_block_data(vm.cfp());
+        let data = globals.get_block_data(vm.cfp(), bh);
         vm.invoke_block_with_self(globals, &data, class, &[class])?;
         vm.pop_class_context();
     };

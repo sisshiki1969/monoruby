@@ -119,8 +119,8 @@ fn print(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<
 fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    lfp.expect_block()?;
-    let data = globals.get_block_data(vm.cfp());
+    let bh = lfp.expect_block()?;
+    let data = globals.get_block_data(vm.cfp(), bh);
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
             return if err.kind() == &MonorubyErrKind::StopIteration {
