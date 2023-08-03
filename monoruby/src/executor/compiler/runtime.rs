@@ -87,7 +87,7 @@ pub(super) extern "C" fn block_arg(
     block_handler: BlockHandler,
 ) -> Option<Value> {
     match vm.generate_proc(globals, block_handler) {
-        Ok(val) => Some(val),
+        Ok(val) => Some(val.into()),
         Err(err) => {
             vm.set_error(err);
             None

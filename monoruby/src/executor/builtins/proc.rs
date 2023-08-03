@@ -14,7 +14,8 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     if let Some(bh) = lfp.block() {
-        vm.generate_proc(globals, bh)
+        let p = vm.generate_proc(globals, bh)?;
+        Ok(p.into())
     } else {
         Err(MonorubyErr::create_proc_no_block())
     }
@@ -31,19 +32,19 @@ impl Executor {
         &mut self,
         globals: &mut Globals,
         bh: BlockHandler,
-    ) -> Result<Value> {
+    ) -> Result<Proc> {
         if bh.try_proxy().is_some() {
             self.move_caller_frames_to_heap();
             let block_data = globals.get_block_data(self.cfp(), bh);
-            Ok(Value::new_proc(block_data))
+            Ok(Proc::new(block_data))
         } else if bh.try_proc() {
-            Ok(bh.0)
+            Ok(bh.0.into())
         } else {
             unimplemented!()
         }
     }
 
-    pub fn move_caller_frames_to_heap(&mut self) -> LFP {
+    fn move_caller_frames_to_heap(&mut self) -> LFP {
         let outer_lfp = self.cfp().prev().unwrap().lfp();
         self.move_frame_to_heap(outer_lfp)
     }

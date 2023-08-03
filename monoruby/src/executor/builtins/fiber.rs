@@ -20,9 +20,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn fiber_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let bh = lfp.expect_block()?;
-    vm.move_caller_frames_to_heap();
-    let block_data = globals.get_block_data(vm.cfp(), bh);
-    let proc = Proc::new(block_data);
+    let proc = vm.generate_proc(globals, bh)?;
     Ok(Value::new_fiber(proc))
 }
 
