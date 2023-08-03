@@ -59,7 +59,7 @@ fn initialize(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Re
     let members_val = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
         .unwrap();
-    let members = members_val.as_array();
+    let members: Array = members_val.into();
     if members.len() < len {
         return Err(MonorubyErr::argumenterr("Struct size differs."));
     };
@@ -82,12 +82,13 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
     if let Some(name) = globals.store[class_id].get_name_id() {
         inspect += &format!("{name}");
     };
-    let name = globals
+    let name: Array = globals
         .get_ivar(struct_class, IdentId::get_id("/members"))
-        .unwrap();
+        .unwrap()
+        .into();
 
-    if name.as_array().len() != 0 {
-        for x in name.as_array().iter() {
+    if name.len() != 0 {
+        for x in name.iter() {
             let name = x.as_symbol();
             let ivar_name = IdentId::add_ivar_prefix(name);
             let val = match globals.get_ivar(self_val, ivar_name) {

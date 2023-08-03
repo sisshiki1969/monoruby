@@ -676,7 +676,7 @@ fn expand_splat_inner(src: Value, dst: *mut Value) -> usize {
 }
 
 pub extern "C" fn block_expand_array(src: Value, dst: *mut Value, min_len: usize) -> usize {
-    let ary = src.as_array();
+    let ary: Array = src.into();
     let len = ary.len();
     if min_len <= len {
         for i in 0..len {
