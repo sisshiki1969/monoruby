@@ -36,6 +36,12 @@ impl alloc::GC<RValue> for Fiber {
     }
 }
 
+impl Fiber {
+    pub(crate) fn new(block_data: BlockData) -> Self {
+        Fiber(Value::new_fiber(block_data))
+    }
+}
+
 #[derive(Debug)]
 pub struct FiberInner {
     handle: Box<Executor>,

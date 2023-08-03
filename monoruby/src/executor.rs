@@ -34,6 +34,9 @@ const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
+pub const BLOCKDATA_OUTER: i64 = std::mem::offset_of!(BlockData, outer_lfp) as _;
+pub const BLOCKDATA_FUNCDATA: i64 = std::mem::offset_of!(BlockData, func_data) as _;
+
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct BlockData {
@@ -600,16 +603,11 @@ impl Executor {
     ///
     /// Invoke proc.
     ///
-    fn invoke_proc(
-        &mut self,
-        globals: &mut Globals,
-        block_data: &BlockData,
-        args: &[Value],
-    ) -> Result<Value> {
+    fn invoke_proc(&mut self, globals: &mut Globals, proc: Value, args: &[Value]) -> Result<Value> {
         (globals.codegen.block_invoker)(
             self,
             globals,
-            block_data,
+            proc.as_proc(),
             Value::nil(),
             args.as_ptr(),
             args.len(),

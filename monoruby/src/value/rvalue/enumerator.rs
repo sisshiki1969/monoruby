@@ -32,8 +32,8 @@ impl EnumeratorInner {
         }
     }
 
-    pub(crate) fn create_internal(&self) -> Value {
-        Value::new_fiber(self.proc.as_proc().clone())
+    pub(crate) fn create_internal(&self) -> Fiber {
+        Fiber::new(self.proc.as_proc().clone())
     }
 
     pub(crate) fn yielder(&self) -> Value {

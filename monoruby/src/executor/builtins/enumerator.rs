@@ -90,7 +90,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     let internal = self_val.as_enumerator_mut().create_internal();
 
     let len = vm.temp_len();
-    vm.temp_push(internal);
+    vm.temp_push(internal.into());
 
     let res = each_inner(
         vm,
@@ -108,14 +108,12 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 fn each_inner(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut internal: Value,
+    mut internal: Fiber,
     block_data: &BlockData,
     yielder: Value,
 ) -> Result<Value> {
     loop {
-        let (ary, is_return) = internal
-            .as_fiber_mut()
-            .enum_yield_values(vm, globals, yielder)?;
+        let (ary, is_return) = internal.enum_yield_values(vm, globals, yielder)?;
         let v = ary.peel();
         if is_return {
             return Ok(v);
@@ -159,7 +157,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let internal = self_val.as_enumerator_mut().create_internal();
 
     let len = vm.temp_len();
-    vm.temp_push(internal);
+    vm.temp_push(internal.into());
 
     let res = with_index_inner(
         vm,
@@ -178,15 +176,13 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
 fn with_index_inner(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut internal: Value,
+    mut internal: Fiber,
     block_data: &BlockData,
     mut count: Value,
     yielder: Value,
 ) -> Result<Value> {
     loop {
-        let (ary, is_return) = internal
-            .as_fiber_mut()
-            .enum_yield_values(vm, globals, yielder)?;
+        let (ary, is_return) = internal.enum_yield_values(vm, globals, yielder)?;
         let v = ary.peel();
         if is_return {
             return Ok(v);

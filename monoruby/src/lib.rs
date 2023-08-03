@@ -8,6 +8,7 @@
 #![feature(let_chains)]
 #![feature(step_trait)]
 #![feature(naked_functions)]
+#![feature(offset_of)]
 mod alloc;
 pub mod bytecodegen;
 pub mod executor;

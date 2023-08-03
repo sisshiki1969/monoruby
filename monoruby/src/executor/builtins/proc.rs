@@ -23,10 +23,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<
 /// ### Proc#call
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let block_data = self_.as_proc();
-    let res = vm.invoke_proc(globals, block_data, &lfp.to_vec())?;
-    Ok(res)
+    vm.invoke_proc(globals, lfp.self_val(), &lfp.to_vec())
 }
 
 impl Executor {
