@@ -39,7 +39,7 @@ pub const BLOCKDATA_FUNCDATA: i64 = std::mem::offset_of!(BlockData, func_data) a
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub(crate) struct BlockData {
+pub struct BlockData {
     outer_lfp: Option<LFP>,
     func_data: FuncData,
 }
@@ -62,7 +62,7 @@ impl alloc::GC<RValue> for BlockData {
 }
 
 impl BlockData {
-    pub fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
         Self {
             outer_lfp,
             func_data,

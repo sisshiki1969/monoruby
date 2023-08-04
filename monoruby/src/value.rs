@@ -369,7 +369,7 @@ impl Value {
         RValue::new_time(time).pack()
     }
 
-    pub(crate) fn new_proc(block: BlockData) -> Self {
+    pub(in crate::value) fn new_proc(block: BlockData) -> Self {
         RValue::new_proc(block).pack()
     }
 

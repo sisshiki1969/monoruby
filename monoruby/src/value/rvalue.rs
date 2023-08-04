@@ -1107,7 +1107,7 @@ impl ObjKind {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Proc(Value);
+pub struct Proc(Value);
 
 impl std::ops::Deref for Proc {
     type Target = BlockData;
@@ -1136,7 +1136,7 @@ impl alloc::GC<RValue> for Proc {
 }
 
 impl Proc {
-    pub fn new(block: BlockData) -> Self {
+    pub(crate) fn new(block: BlockData) -> Self {
         Proc(Value::new_proc(block))
     }
 }

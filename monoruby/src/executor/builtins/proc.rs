@@ -28,11 +28,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
 }
 
 impl Executor {
-    pub(in crate::executor) fn generate_proc(
-        &mut self,
-        globals: &mut Globals,
-        bh: BlockHandler,
-    ) -> Result<Proc> {
+    pub fn generate_proc(&mut self, globals: &mut Globals, bh: BlockHandler) -> Result<Proc> {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             self.move_frame_to_heap(outer_lfp);
@@ -43,6 +39,14 @@ impl Executor {
         } else {
             unimplemented!()
         }
+    }
+
+    pub fn generate_proc_with_dummy(&mut self, globals: &mut Globals, func_id: FuncId) -> Proc {
+        let func_data = globals.compile_on_demand(func_id).clone();
+        let outer_lfp = self.cfp().lfp();
+        let heap_lfp = self.move_frame_to_heap(outer_lfp);
+        let block_data = BlockData::from(Some(heap_lfp), func_data);
+        Proc::new(block_data)
     }
 
     /// Move the frame to heap.
