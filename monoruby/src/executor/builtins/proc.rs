@@ -34,7 +34,8 @@ impl Executor {
         bh: BlockHandler,
     ) -> Result<Proc> {
         if bh.try_proxy().is_some() {
-            self.move_caller_frames_to_heap();
+            let outer_lfp = self.cfp().prev().unwrap().lfp();
+            self.move_frame_to_heap(outer_lfp);
             let block_data = globals.get_block_data(self.cfp(), bh);
             Ok(Proc::new(block_data))
         } else if bh.try_proc() {
@@ -44,18 +45,16 @@ impl Executor {
         }
     }
 
-    fn move_caller_frames_to_heap(&mut self) -> LFP {
-        let outer_lfp = self.cfp().prev().unwrap().lfp();
-        self.move_frame_to_heap(outer_lfp)
-    }
-
-    pub fn move_current_frame_to_heap(&mut self) -> LFP {
-        let outer_lfp = self.cfp().lfp();
-        self.move_frame_to_heap(outer_lfp)
-    }
-
-    /// ## return
-    /// - the address of outer in *lfp*.
+    /// Move the frame to heap.
+    ///
+    /// If the frame is already on the heap, do nothing.
+    ///
+    /// ### args
+    /// - *lfp*: the address of the frame to move.
+    ///
+    /// ### return
+    /// - the frame moved to the heap.
+    ///
     pub fn move_frame_to_heap(&self, lfp: LFP) -> LFP {
         if self.within_stack(lfp) {
             unsafe {

@@ -77,7 +77,9 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Re
         "",
     )?;
     let func_data = globals.compile_on_demand(func_id).clone();
-    let outer_lfp = vm.move_current_frame_to_heap();
+    //let outer_lfp = vm.move_current_frame_to_heap();
+    let outer_lfp = vm.cfp().lfp();
+    let outer_lfp = vm.move_frame_to_heap(outer_lfp);
     let block_data = BlockData::from(Some(outer_lfp), func_data);
     let proc = Proc::new(block_data);
     Ok(Value::new_enumerator(proc))

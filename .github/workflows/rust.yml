@@ -22,7 +22,7 @@ jobs:
           ruby-version: "3.2.2"
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly-2023-04-19
+          toolchain: nightly
       - run: |
           cargo install grcov cargo-nextest
           rustup component add llvm-tools-preview
