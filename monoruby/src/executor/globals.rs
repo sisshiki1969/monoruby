@@ -357,6 +357,7 @@ impl Globals {
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(),
+                ObjKind::GENERATOR => self.generator_tos(),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -484,6 +485,10 @@ impl Globals {
 
     fn enumerator_tos(&self) -> String {
         format!("#<Enumerator: ...>",)
+    }
+
+    fn generator_tos(&self) -> String {
+        format!("#<Enumerator::Generator: ...>",)
     }
 
     fn regexp_tos(val: Value) -> String {

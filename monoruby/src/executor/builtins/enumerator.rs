@@ -24,6 +24,15 @@ pub(super) fn init(globals: &mut Globals) {
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
     globals.define_builtin_func(yielder.id(), "<<", yielder_shl, 0);
     globals.define_builtin_func(yielder.id(), "yield", yielder_yield, -1);
+
+    globals.define_builtin_class_by_str(
+        "Generator",
+        GENERATOR_CLASS,
+        OBJECT_CLASS.get_module(globals),
+        ENUMERATOR_CLASS,
+    );
+    globals.define_builtin_class_func(GENERATOR_CLASS, "new", generator_new, 0);
+    globals.define_builtin_func(GENERATOR_CLASS, "each", generator_each, 0);
 }
 
 ///
@@ -246,6 +255,47 @@ fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg)
     vm.yield_fiber(Value::array_from_iter(lfp.iter()))
 }
 
+///
+/// ### Generator.new
+///
+/// - new(size=nil) {|y| ... } -> Enumerator
+///
+#[monoruby_builtin]
+fn generator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let proc = vm.generate_proc(globals, bh)?;
+    Ok(Value::new_generator(proc))
+}
+
+///
+/// ### Generator#each
+///
+/// - each {...} -> object
+///
+#[monoruby_builtin]
+fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    let mut self_val = lfp.self_val();
+    let data = globals.get_block_data(vm.cfp(), lfp.expect_block()?);
+    let internal = self_val.as_generator_mut().create_internal();
+
+    let len = vm.temp_len();
+    vm.temp_push(internal.into());
+
+    let res = each_inner(
+        vm,
+        globals,
+        internal,
+        &data,
+        self_val.as_generator_mut().yielder(),
+    );
+
+    vm.temp_clear(len);
+
+    res
+}
+
 #[cfg(test)]
 mod test {
     use super::tests::*;
@@ -415,6 +465,31 @@ mod test {
             res << e.next
             res
         "##,
+        );
+    }
+
+    #[test]
+    fn generator() {
+        run_test_with_prelude(
+            r##"
+            res = []
+            fib.each do |num|
+                if num > 1000
+                    break
+                end
+                res << num
+            end
+            res
+        "##,
+            r##"
+            fib = Enumerator::Generator.new do |y|
+                a = b = 1
+                loop do 
+                    y << a
+                    a, b = a + b, a
+                end
+            end
+            "##,
         );
     }
 }

@@ -94,3 +94,39 @@ impl EnumeratorInner {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct GeneratorInner {
+    internal: Option<Fiber>,
+    proc: Proc,
+    yielder: Value,
+}
+
+impl alloc::GC<RValue> for GeneratorInner {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(internal) = self.internal {
+            internal.mark(alloc)
+        }
+        self.proc.mark(alloc);
+        self.yielder.mark(alloc);
+    }
+}
+
+impl GeneratorInner {
+    pub fn new(proc: Proc) -> Self {
+        let internal = Some(Fiber::new(proc));
+        Self {
+            internal,
+            proc,
+            yielder: Value::yielder_object(),
+        }
+    }
+
+    pub fn create_internal(&self) -> Fiber {
+        Fiber::new(self.proc)
+    }
+
+    pub fn yielder(&self) -> Value {
+        self.yielder
+    }
+}

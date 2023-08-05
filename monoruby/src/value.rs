@@ -385,6 +385,10 @@ impl Value {
         RValue::new_enumerator(proc).pack()
     }
 
+    pub(crate) fn new_generator(proc: Proc) -> Self {
+        RValue::new_generator(proc).pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV {
         if let Some(i) = self.try_fixnum() {
             RV::Fixnum(i)
@@ -799,17 +803,22 @@ impl Value {
 
     pub fn as_fiber(&self) -> &FiberInner {
         assert_eq!(ObjKind::FIBER, self.rvalue().kind());
-        self.rvalue().as_fiber()
+        unsafe { self.rvalue().as_fiber() }
     }
 
     pub fn as_fiber_mut(&mut self) -> &mut FiberInner {
         assert_eq!(ObjKind::FIBER, self.rvalue().kind());
-        self.rvalue_mut().as_fiber_mut()
+        unsafe { self.rvalue_mut().as_fiber_mut() }
     }
 
     pub fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
         assert_eq!(ObjKind::ENUMERATOR, self.rvalue().kind());
-        self.rvalue_mut().as_enumerator_mut()
+        unsafe { self.rvalue_mut().as_enumerator_mut() }
+    }
+
+    pub fn as_generator_mut(&mut self) -> &mut GeneratorInner {
+        assert_eq!(ObjKind::GENERATOR, self.rvalue().kind());
+        unsafe { self.rvalue_mut().as_generator_mut() }
     }
 }
 

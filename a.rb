@@ -1,6 +1,14 @@
-    text = "Hello\nこんにちは\nWorld\n世界\n"
-    res = []
-    text.each_line("\n", chomp:true) do |line|
-        res << line
+fib = Enumerator::Generator.new do |y|
+    a = b = 1
+    loop do 
+        y << a
+        a, b = a + b, a
     end
-    p res
+end
+
+fib.each do |num|
+    puts "#{num}"
+    if num > 1000
+        break
+    end
+end

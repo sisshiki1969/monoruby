@@ -5,7 +5,7 @@ use ruruby_parse::SourceInfoRef;
 use std::mem::ManuallyDrop;
 
 pub use self::array::*;
-pub use self::enumerator::EnumeratorInner;
+pub use self::enumerator::*;
 pub use self::fiber::*;
 pub use self::hash::*;
 pub use self::io::IoInner;
@@ -158,50 +158,53 @@ impl alloc::GC<RValue> for RValue {
                 });
             });
         }
-        match self.kind() {
-            ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
-            ObjKind::CLASS | ObjKind::MODULE => {
-                let module = self.as_class();
-                if let Some(class) = module.superclass_value() {
-                    class.mark(alloc)
+        unsafe {
+            match self.kind() {
+                ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
+                ObjKind::CLASS | ObjKind::MODULE => {
+                    let module = self.as_class();
+                    if let Some(class) = module.superclass_value() {
+                        class.mark(alloc)
+                    }
+                    if let Some(val) = module.is_singleton() {
+                        val.mark(alloc)
+                    }
                 }
-                if let Some(val) = module.is_singleton() {
-                    val.mark(alloc)
-                }
-            }
-            ObjKind::OBJECT => {
-                self.as_object().iter().for_each(|v| {
-                    v.map(|v| {
-                        v.mark(alloc);
+                ObjKind::OBJECT => {
+                    self.as_object().iter().for_each(|v| {
+                        v.map(|v| {
+                            v.mark(alloc);
+                        });
                     });
-                });
-            }
-            ObjKind::BIGNUM => {}
-            ObjKind::FLOAT => {}
-            ObjKind::BYTES => {}
-            ObjKind::TIME => {}
-            ObjKind::ARRAY => {
-                self.as_array().iter().for_each(|v| v.mark(alloc));
-            }
-            ObjKind::RANGE => {
-                let range = self.as_range();
-                range.start.mark(alloc);
-                range.end.mark(alloc);
-            }
-            ObjKind::PROC => {}
-            ObjKind::HASH => {
-                for (k, v) in self.as_hash().iter() {
-                    k.mark(alloc);
-                    v.mark(alloc);
                 }
+                ObjKind::BIGNUM => {}
+                ObjKind::FLOAT => {}
+                ObjKind::BYTES => {}
+                ObjKind::TIME => {}
+                ObjKind::ARRAY => {
+                    self.as_array().iter().for_each(|v| v.mark(alloc));
+                }
+                ObjKind::RANGE => {
+                    let range = self.as_range();
+                    range.start.mark(alloc);
+                    range.end.mark(alloc);
+                }
+                ObjKind::PROC => {}
+                ObjKind::HASH => {
+                    for (k, v) in self.as_hash().iter() {
+                        k.mark(alloc);
+                        v.mark(alloc);
+                    }
+                }
+                ObjKind::REGEXP => {}
+                ObjKind::IO => {}
+                ObjKind::EXCEPTION => {}
+                ObjKind::METHOD => self.as_method().receiver().mark(alloc),
+                ObjKind::FIBER => self.as_fiber().mark(alloc),
+                ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
+                ObjKind::GENERATOR => self.as_generator().mark(alloc),
+                _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
             }
-            ObjKind::REGEXP => {}
-            ObjKind::IO => {}
-            ObjKind::EXCEPTION => {}
-            ObjKind::METHOD => self.as_method().receiver().mark(alloc),
-            ObjKind::FIBER => self.as_fiber().mark(alloc),
-            ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
-            _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
         }
     }
 }
@@ -231,6 +234,7 @@ impl alloc::GCBox for RValue {
                 ObjKind::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
                 ObjKind::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
                 ObjKind::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
+                ObjKind::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
                 _ => {}
             }
             self.set_next_none();
@@ -668,6 +672,14 @@ impl RValue {
             var_table: None,
         }
     }
+
+    pub(super) fn new_generator(proc: Proc) -> Self {
+        RValue {
+            header: Header::new(GENERATOR_CLASS, ObjKind::GENERATOR),
+            kind: ObjKind::generator(proc),
+            var_table: None,
+        }
+    }
 }
 
 impl RValue {
@@ -805,20 +817,28 @@ impl RValue {
         unsafe { &self.kind.method }
     }
 
-    pub(crate) fn as_fiber(&self) -> &FiberInner {
-        unsafe { &self.kind.fiber }
+    pub(crate) unsafe fn as_fiber(&self) -> &FiberInner {
+        &self.kind.fiber
     }
 
-    pub(crate) fn as_fiber_mut(&mut self) -> &mut FiberInner {
-        unsafe { &mut self.kind.fiber }
+    pub(crate) unsafe fn as_fiber_mut(&mut self) -> &mut FiberInner {
+        &mut self.kind.fiber
     }
 
-    pub(crate) fn as_enumerator(&self) -> &EnumeratorInner {
-        unsafe { &self.kind.enumerator }
+    pub(crate) unsafe fn as_enumerator(&self) -> &EnumeratorInner {
+        &self.kind.enumerator
     }
 
-    pub(crate) fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
-        unsafe { &mut self.kind.enumerator }
+    pub(crate) unsafe fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
+        &mut self.kind.enumerator
+    }
+
+    pub(crate) unsafe fn as_generator(&self) -> &GeneratorInner {
+        &self.kind.generator
+    }
+
+    pub(crate) unsafe fn as_generator_mut(&mut self) -> &mut GeneratorInner {
+        &mut self.kind.generator
     }
 }
 
@@ -896,6 +916,7 @@ pub union ObjKind {
     method: ManuallyDrop<MethodInner>,
     fiber: ManuallyDrop<FiberInner>,
     enumerator: ManuallyDrop<EnumeratorInner>,
+    generator: ManuallyDrop<GeneratorInner>,
 }
 
 #[allow(dead_code)]
@@ -918,6 +939,7 @@ impl ObjKind {
     pub const METHOD: u8 = 15;
     pub const FIBER: u8 = 16;
     pub const ENUMERATOR: u8 = 17;
+    pub const GENERATOR: u8 = 18;
 }
 
 #[derive(Debug, Clone)]
@@ -1101,6 +1123,12 @@ impl ObjKind {
     fn enumerator(proc: Proc) -> Self {
         Self {
             enumerator: ManuallyDrop::new(EnumeratorInner::new(proc)),
+        }
+    }
+
+    fn generator(proc: Proc) -> Self {
+        Self {
+            generator: ManuallyDrop::new(GeneratorInner::new(proc)),
         }
     }
 }
