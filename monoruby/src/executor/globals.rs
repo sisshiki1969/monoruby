@@ -357,7 +357,7 @@ impl Globals {
                 ObjKind::METHOD => rvalue.as_method().to_s(self),
                 ObjKind::FIBER => self.fiber_tos(val),
                 ObjKind::ENUMERATOR => self.enumerator_tos(),
-                ObjKind::GENERATOR => self.generator_tos(),
+                ObjKind::GENERATOR => self.object_tos(val),
                 _ => format!("{:016x}", val.get()),
             },
         }
@@ -388,6 +388,7 @@ impl Globals {
                     let msg = rvalue.as_exception().msg();
                     return format!("#<{class_name}: {msg}>");
                 }
+                ObjKind::GENERATOR => return self.object_tos(val),
                 _ => {}
             },
         }
@@ -485,10 +486,6 @@ impl Globals {
 
     fn enumerator_tos(&self) -> String {
         format!("#<Enumerator: ...>",)
-    }
-
-    fn generator_tos(&self) -> String {
-        format!("#<Enumerator::Generator: ...>",)
     }
 
     fn regexp_tos(val: Value) -> String {
