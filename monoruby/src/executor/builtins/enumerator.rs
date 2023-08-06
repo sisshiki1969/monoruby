@@ -22,7 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
-    globals.define_builtin_func(yielder.id(), "<<", yielder_shl, 0);
+    globals.define_builtin_func(yielder.id(), "<<", yielder_push, 0);
     globals.define_builtin_func(yielder.id(), "yield", yielder_yield, -1);
 
     globals.define_builtin_class_by_str(
@@ -89,13 +89,13 @@ fn next_values(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) ->
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    let mut self_val = lfp.self_val();
+    let self_val: Enumerator = lfp.self_val().into();
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        return Ok(self_val);
+        return Ok(self_val.into());
     };
-    let internal = self_val.as_enumerator_mut().create_internal();
+    let internal = self_val.obj.as_generator().create_internal();
 
     let len = vm.temp_len();
     vm.temp_push(internal.into());
@@ -105,7 +105,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         globals,
         internal,
         &data,
-        self_val.as_enumerator_mut().yielder(),
+        self_val.obj.as_generator().yielder(),
     );
 
     vm.temp_clear(len);
@@ -156,13 +156,13 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
             }
         }
     };
-    let mut self_val = lfp.self_val();
+    let mut self_val: Enumerator = lfp.self_val().into();
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        return Ok(self_val);
+        return Ok(self_val.into());
     };
-    let internal = self_val.as_enumerator_mut().create_internal();
+    let internal = self_val.obj.as_generator_mut().create_internal();
 
     let len = vm.temp_len();
     vm.temp_push(internal.into());
@@ -173,7 +173,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         internal,
         &data,
         count,
-        self_val.as_enumerator_mut().yielder(),
+        self_val.obj.as_generator().yielder(),
     );
 
     vm.temp_clear(len);
@@ -238,7 +238,7 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aYielder/i/=3c=3c.html]
 #[monoruby_builtin]
-fn yielder_shl(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
+fn yielder_push(vm: &mut Executor, _: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 1)?;
     vm.yield_fiber(Value::array1(arg[0]))
@@ -258,7 +258,7 @@ fn yielder_yield(vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg)
 ///
 /// ### Generator.new
 ///
-/// - new(size=nil) {|y| ... } -> Enumerator
+/// - new() {|y| ... } -> Enumerator
 ///
 #[monoruby_builtin]
 fn generator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
@@ -276,21 +276,13 @@ fn generator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) 
 fn generator_each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments(len, 0)?;
-    let mut self_val = lfp.self_val();
+    let self_val: Generator = lfp.self_val().into();
     let data = globals.get_block_data(vm.cfp(), lfp.expect_block()?);
-    let internal = self_val.as_generator_mut().create_internal();
+    let internal = self_val.create_internal();
 
     let len = vm.temp_len();
     vm.temp_push(internal.into());
-
-    let res = each_inner(
-        vm,
-        globals,
-        internal,
-        &data,
-        self_val.as_generator_mut().yielder(),
-    );
-
+    let res = each_inner(vm, globals, internal, &data, self_val.yielder());
     vm.temp_clear(len);
 
     res

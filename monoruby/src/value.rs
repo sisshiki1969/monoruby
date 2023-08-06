@@ -811,9 +811,19 @@ impl Value {
         unsafe { self.rvalue_mut().as_fiber_mut() }
     }
 
+    pub fn as_enumerator(&self) -> &EnumeratorInner {
+        assert_eq!(ObjKind::ENUMERATOR, self.rvalue().kind());
+        unsafe { self.rvalue().as_enumerator() }
+    }
+
     pub fn as_enumerator_mut(&mut self) -> &mut EnumeratorInner {
         assert_eq!(ObjKind::ENUMERATOR, self.rvalue().kind());
         unsafe { self.rvalue_mut().as_enumerator_mut() }
+    }
+
+    pub fn as_generator(&self) -> &GeneratorInner {
+        assert_eq!(ObjKind::GENERATOR, self.rvalue().kind());
+        unsafe { self.rvalue().as_generator() }
     }
 
     pub fn as_generator_mut(&mut self) -> &mut GeneratorInner {

@@ -5,41 +5,8 @@ use smallvec::SmallVec;
 
 pub const ARRAY_INLINE_CAPA: usize = 5;
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[monoruby_object]
 pub struct Array(Value);
-
-impl std::ops::Deref for Array {
-    type Target = ArrayInner;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_array()
-    }
-}
-
-impl std::ops::DerefMut for Array {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_array_mut()
-    }
-}
-
-impl std::convert::From<Value> for Array {
-    fn from(v: Value) -> Self {
-        assert_eq!(ObjKind::ARRAY, v.rvalue().kind());
-        Array(v)
-    }
-}
-
-impl std::convert::Into<Value> for Array {
-    fn into(self) -> Value {
-        self.0
-    }
-}
-
-impl alloc::GC<RValue> for Array {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.mark(alloc)
-    }
-}
 
 impl Array {
     pub fn peel(self) -> Value {

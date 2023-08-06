@@ -1,40 +1,7 @@
 use crate::*;
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[monoruby_object]
 pub struct Fiber(Value);
-
-impl std::ops::Deref for Fiber {
-    type Target = FiberInner;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_fiber()
-    }
-}
-
-impl std::ops::DerefMut for Fiber {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_fiber_mut()
-    }
-}
-
-impl std::convert::From<Value> for Fiber {
-    fn from(v: Value) -> Self {
-        assert_eq!(ObjKind::FIBER, v.rvalue().kind());
-        Fiber(v)
-    }
-}
-
-impl std::convert::Into<Value> for Fiber {
-    fn into(self) -> Value {
-        self.0
-    }
-}
-
-impl alloc::GC<RValue> for Fiber {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.mark(alloc)
-    }
-}
 
 impl Fiber {
     pub(crate) fn new(proc: Proc) -> Self {
