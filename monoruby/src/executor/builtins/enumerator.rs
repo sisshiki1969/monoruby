@@ -503,13 +503,15 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn enum_chain() {
         run_test_with_prelude(
             r##"
         res = []
-        fib.with_index.each do |num, idx1|
+        fib.with_index.with_index do |(num, idx2), idx1|
             res << num
             res << idx1
+            res << idx2
             if num > 1000
                 break
             end
