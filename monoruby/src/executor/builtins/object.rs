@@ -66,18 +66,9 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
-fn to_enum(vm: &mut Executor, globals: &mut Globals, _lfp: LFP, _arg: Arg) -> Result<Value> {
-    let func_id = globals.compile_script(
-        r#"
-        self.each do |*x|
-          __enum_yield *x
-        end
-        "#
-        .to_string(),
-        "",
-    )?;
-    let proc = vm.generate_proc_with_dummy(globals, func_id);
-    Ok(Value::new_enumerator(proc))
+fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let proc = vm.generate_iterator_proc(globals, IdentId::EACH);
+    Ok(Value::new_enumerator(lfp.self_val(), IdentId::EACH, proc))
 }
 
 ///

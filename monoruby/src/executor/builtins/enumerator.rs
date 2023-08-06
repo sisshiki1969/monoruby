@@ -18,6 +18,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "with_index", with_index, -1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "__obj", obj, 0);
 
     let yielder =
         globals.define_class_by_str("Yielder", ARRAY_CLASS.get_module(globals), ENUMERATOR_CLASS);
@@ -45,7 +46,8 @@ pub(super) fn init(globals: &mut Globals) {
 fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let bh = lfp.expect_block()?;
     let proc = vm.generate_proc(globals, bh)?;
-    Ok(Value::new_enumerator(proc))
+    let obj = Value::new_generator(proc);
+    Ok(Value::new_enumerator(obj, IdentId::EACH, proc))
 }
 
 ///
@@ -95,18 +97,14 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
     } else {
         return Ok(self_val.into());
     };
-    let internal = self_val.obj.as_generator().create_internal();
+
+    let proc = vm.generate_enumerator_proc(globals, self_val.method);
+    let internal = Fiber::new(proc);
 
     let len = vm.temp_len();
     vm.temp_push(internal.into());
 
-    let res = each_inner(
-        vm,
-        globals,
-        internal,
-        &data,
-        self_val.obj.as_generator().yielder(),
-    );
+    let res = each_inner(vm, globals, internal, &data, Value::yielder_object());
 
     vm.temp_clear(len);
 
@@ -156,25 +154,26 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
             }
         }
     };
-    let mut self_val: Enumerator = lfp.self_val().into();
+    let self_val: Enumerator = lfp.self_val().into();
+
+    let id = IdentId::get_id("with_index");
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        return Ok(self_val.into());
+        eprintln!("with_index return enumerator");
+        let proc = vm.generate_enumerator_proc(globals, self_val.method);
+        let enumerator = Value::new_enumerator(self_val.into(), id, proc);
+        return Ok(enumerator);
     };
-    let internal = self_val.obj.as_generator_mut().create_internal();
+
+    eprintln!("with_index iterate");
+    //let proc = vm.generate_enumerator_proc(globals, self_val.method);
+    let internal = Fiber::new(self_val.proc);
 
     let len = vm.temp_len();
     vm.temp_push(internal.into());
 
-    let res = with_index_inner(
-        vm,
-        globals,
-        internal,
-        &data,
-        count,
-        self_val.obj.as_generator().yielder(),
-    );
+    let res = with_index_inner(vm, globals, internal, &data, count, Value::yielder_object());
 
     vm.temp_clear(len);
 
@@ -229,6 +228,16 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Re
     MonorubyErr::check_number_of_arguments(len, 0)?;
     lfp.self_val().as_enumerator_mut().rewind();
     Ok(lfp.self_val())
+}
+
+///
+/// ### Enumerator#__obj
+///
+#[monoruby_builtin]
+fn obj(_vm: &mut Executor, _globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
+    let len = lfp.arg_len();
+    MonorubyErr::check_number_of_arguments(len, 0)?;
+    Ok(lfp.self_val().as_enumerator_mut().obj)
 }
 
 ///
@@ -293,17 +302,21 @@ mod test {
     use super::tests::*;
 
     #[test]
-    fn enumerator() {
+    fn enumerator1() {
         run_test(
             r##"
             a = Enumerator.new do |y|
-                3.times do |i|
-                    y << i
-                end
+            3.times do |i|
+                y << i
+            end
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
-        "##,
+            "##,
         );
+    }
+
+    #[test]
+    fn enumerator2() {
         run_test_no_result_check(
             r##"
             a = Enumerator.new do |y|
@@ -314,6 +327,10 @@ mod test {
             [a.inspect, a.to_s]
         "##,
         );
+    }
+
+    #[test]
+    fn enumerator3() {
         run_test(
             r#"
         p = []
@@ -482,6 +499,32 @@ mod test {
                 end
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn enum_chain() {
+        run_test_with_prelude(
+            r##"
+        res = []
+        fib.with_index.each do |num, idx1|
+            res << num
+            res << idx1
+            if num > 1000
+                break
+            end
+        end
+        res
+        "##,
+            r##"
+        fib = Enumerator.new do |y|
+            a = b = 1
+            loop do
+                y << a
+                a, b = a + b, a
+            end
+        end
+        "##,
         );
     }
 }

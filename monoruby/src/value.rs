@@ -381,8 +381,8 @@ impl Value {
         RValue::new_fiber(proc).pack()
     }
 
-    pub(crate) fn new_enumerator(proc: Proc) -> Self {
-        RValue::new_enumerator(proc).pack()
+    pub(crate) fn new_enumerator(obj: Value, method: IdentId, proc: Proc) -> Self {
+        RValue::new_enumerator(obj, method, proc).pack()
     }
 
     pub(crate) fn new_generator(proc: Proc) -> Self {

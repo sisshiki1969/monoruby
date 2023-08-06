@@ -1,4 +1,4 @@
-fib = Enumerator::Generator.new do |y|
+fib = Enumerator.new do |y|
     a = b = 1
     loop do 
         y << a
@@ -6,9 +6,16 @@ fib = Enumerator::Generator.new do |y|
     end
 end
 
-fib.each do |num|
-    puts "#{num}"
-    if num > 1000
-        break
-    end
-end
+#fib.with_index.each do |(num, idx2), idx1|
+#    puts "#{idx1} #{idx2} #{num} "
+#    if num > 1000
+#        break
+#    end
+#end
+
+e = fib.with_index
+puts e.next
+puts e.next
+puts e.next
+puts e.next
+puts e.next

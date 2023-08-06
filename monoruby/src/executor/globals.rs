@@ -158,11 +158,7 @@ impl Globals {
         res
     }
 
-    pub(super) fn compile_script(
-        &mut self,
-        code: String,
-        path: impl Into<PathBuf>,
-    ) -> Result<FuncId> {
+    pub fn compile_script(&mut self, code: String, path: impl Into<PathBuf>) -> Result<FuncId> {
         match Parser::parse_program(code, path.into()) {
             Ok(res) => bytecodegen::compile_script(self, res.node, res.source_info),
             Err(err) => Err(MonorubyErr::parse(err)),

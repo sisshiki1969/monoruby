@@ -511,9 +511,13 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result<Value> {
     let ary: Array = lfp.self_val().into();
-    let bh = lfp.expect_block()?;
-    vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
-    Ok(ary.into())
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
+        Ok(ary.into())
+    } else {
+        let proc = vm.generate_iterator_proc(globals, IdentId::EACH);
+        Ok(Value::new_enumerator(ary.into(), IdentId::EACH, proc))
+    }
 }
 
 /// ### Array#map
@@ -528,10 +532,15 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
     MonorubyErr::check_number_of_arguments(len, 0)?;
     let ary: Array = lfp.self_val().into();
     let iter = ary.iter().cloned();
-    let bh = lfp.expect_block()?;
-    let vec = vm.invoke_block_map1(globals, bh, iter)?;
-    let res = Value::array_from_vec(vec);
-    Ok(res)
+    if let Some(bh) = lfp.block() {
+        let vec = vm.invoke_block_map1(globals, bh, iter)?;
+        let res = Value::array_from_vec(vec);
+        Ok(res)
+    } else {
+        let id = IdentId::get_id("map");
+        let proc = vm.generate_iterator_proc(globals, id);
+        Ok(Value::new_enumerator(ary.into(), id, proc))
+    }
 }
 
 /// ### Enumerable#collect_concat

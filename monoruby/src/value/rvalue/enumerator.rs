@@ -6,12 +6,19 @@ pub struct Enumerator(Value);
 #[derive(Debug)]
 pub struct EnumeratorInner {
     pub obj: Value,
+    pub method: IdentId,
+    internal: Option<Fiber>,
+    pub proc: Proc,
     buffer: Option<Array>,
 }
 
 impl alloc::GC<RValue> for EnumeratorInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.obj.mark(alloc);
+        if let Some(internal) = self.internal {
+            internal.mark(alloc);
+        }
+        self.proc.mark(alloc);
         if let Some(buf) = self.buffer {
             buf.mark(alloc)
         }
@@ -19,13 +26,18 @@ impl alloc::GC<RValue> for EnumeratorInner {
 }
 
 impl EnumeratorInner {
-    pub(crate) fn new(proc: Proc) -> Self {
-        let obj = Value::new_generator(proc);
-        Self { obj, buffer: None }
+    pub(crate) fn new(obj: Value, method: IdentId, proc: Proc) -> Self {
+        Self {
+            obj,
+            method,
+            proc,
+            internal: None,
+            buffer: None,
+        }
     }
 
     pub fn rewind(&mut self) {
-        self.obj.as_generator_mut().rewind();
+        self.internal = Some(Fiber::new(self.proc));
         self.buffer = None;
     }
 
@@ -67,8 +79,20 @@ impl EnumeratorInner {
     /// If the enumerator has been exhausted, return StopIteration error.
     ///
     fn yield_next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
-        let mut generator: Generator = self.obj.into();
-        generator.yield_next_values(vm, globals)
+        if self.internal.is_none() {
+            self.rewind();
+        }
+        let (ary, is_return) =
+            self.internal
+                .unwrap()
+                .enum_yield_values(vm, globals, Value::yielder_object())?;
+        if is_return {
+            Err(MonorubyErr::stopiterationerr(
+                "iteration reached an end".to_string(),
+            ))
+        } else {
+            Ok(ary)
+        }
     }
 }
 
@@ -112,6 +136,7 @@ impl GeneratorInner {
         self.internal = self.create_internal();
     }
 
+    /*
     ///
     /// Yield next value from the enumerator.
     ///
@@ -126,5 +151,5 @@ impl GeneratorInner {
         } else {
             Ok(ary)
         }
-    }
+    }*/
 }
