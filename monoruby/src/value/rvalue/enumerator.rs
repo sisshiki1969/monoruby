@@ -77,16 +77,14 @@ pub struct Generator(Value);
 
 #[derive(Debug)]
 pub struct GeneratorInner {
-    internal: Option<Fiber>,
+    internal: Fiber,
     proc: Proc,
     yielder: Value,
 }
 
 impl alloc::GC<RValue> for GeneratorInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(internal) = self.internal {
-            internal.mark(alloc)
-        }
+        self.internal.mark(alloc);
         self.proc.mark(alloc);
         self.yielder.mark(alloc);
     }
@@ -94,7 +92,7 @@ impl alloc::GC<RValue> for GeneratorInner {
 
 impl GeneratorInner {
     pub fn new(proc: Proc) -> Self {
-        let internal = Some(Fiber::new(proc));
+        let internal = Fiber::new(proc);
         Self {
             internal,
             proc,
@@ -111,7 +109,7 @@ impl GeneratorInner {
     }
 
     pub fn rewind(&mut self) {
-        self.internal = Some(self.create_internal());
+        self.internal = self.create_internal();
     }
 
     ///
@@ -120,8 +118,7 @@ impl GeneratorInner {
     /// If the enumerator has been exhausted, return StopIteration error.
     ///
     fn yield_next_values(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
-        let mut internal = self.internal.unwrap();
-        let (ary, is_return) = internal.enum_yield_values(vm, globals, self.yielder)?;
+        let (ary, is_return) = self.internal.enum_yield_values(vm, globals, self.yielder)?;
         if is_return {
             Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
