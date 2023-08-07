@@ -41,7 +41,16 @@ impl Executor {
         }
     }
 
-    pub fn generate_iterator_proc(&mut self, globals: &mut Globals, method: IdentId) -> Proc {
+    ///
+    /// Generate a proc object for Enumerator.
+    ///
+    /// ### args
+    /// - *method*: the method name to generate a proc.
+    ///
+    /// ### return
+    /// - the generated proc object.
+    ///
+    pub fn generate_enumerator_proc(&mut self, globals: &mut Globals, method: IdentId) -> Proc {
         let func_id = globals
             .compile_script(
                 format!(
@@ -50,27 +59,6 @@ impl Executor {
               __enum_yield *x
             end
         "#,
-                    method
-                ),
-                "",
-            )
-            .unwrap();
-        let func_data = globals.compile_on_demand(func_id).clone();
-        let outer_lfp = self.cfp().lfp();
-        let heap_lfp = self.move_frame_to_heap(outer_lfp);
-        let block_data = BlockData::from(Some(heap_lfp), func_data);
-        Proc::new(block_data)
-    }
-
-    pub fn generate_enumerator_proc(&mut self, globals: &mut Globals, method: IdentId) -> Proc {
-        let func_id = globals
-            .compile_script(
-                format!(
-                    r##"
-            self.__obj.{} do |*x|
-              __enum_yield *x
-            end
-        "##,
                     method
                 ),
                 "",

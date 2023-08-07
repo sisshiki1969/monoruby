@@ -481,7 +481,7 @@ impl Globals {
     }
 
     fn enumerator_tos(&self) -> String {
-        format!("#<Enumerator: ...>",)
+        format!("#<Enumerator: ...>")
     }
 
     fn regexp_tos(val: Value) -> String {

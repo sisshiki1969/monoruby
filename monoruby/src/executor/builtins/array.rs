@@ -515,7 +515,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
-        let proc = vm.generate_iterator_proc(globals, IdentId::EACH);
+        let proc = vm.generate_enumerator_proc(globals, IdentId::EACH);
         Ok(Value::new_enumerator(ary.into(), IdentId::EACH, proc))
     }
 }
@@ -537,9 +537,10 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
         let res = Value::array_from_vec(vec);
         Ok(res)
     } else {
-        let id = IdentId::get_id("map");
+        unimplemented!();
+        /*let id = IdentId::get_id("map");
         let proc = vm.generate_iterator_proc(globals, id);
-        Ok(Value::new_enumerator(ary.into(), id, proc))
+        Ok(Value::new_enumerator(ary.into(), id, proc))*/
     }
 }
 

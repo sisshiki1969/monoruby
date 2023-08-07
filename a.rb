@@ -13,9 +13,11 @@ end
 #    end
 #end
 
-e = fib.with_index
-puts e.next
-puts e.next
-puts e.next
-puts e.next
-puts e.next
+e = fib.with_index.with_index.with_index.with_index.with_index.with_index
+puts e
+puts "#{e.next}"
+puts "#{e.next}"
+puts "#{e.next}"
+puts "#{e.next}"
+puts "#{e.next}"
+puts "#{e.next}"
