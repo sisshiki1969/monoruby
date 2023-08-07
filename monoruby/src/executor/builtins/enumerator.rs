@@ -176,9 +176,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
     let data = if let Some(bh) = lfp.block() {
         globals.get_block_data(vm.cfp(), bh)
     } else {
-        let proc = vm.generate_enumerator_proc(globals, id);
-        let enumerator = Value::new_enumerator(self_val.into(), id, proc);
-        return Ok(enumerator);
+        return vm.generate_enumerator(globals, id);
     };
 
     //let proc = vm.generate_iterator_proc(globals, self_val.method);

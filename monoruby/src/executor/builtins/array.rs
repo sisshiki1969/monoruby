@@ -505,7 +505,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<V
 /// ### Array#each
 ///
 /// - each {|item| .... } -> self
-/// - [NOT SUPPORTED] each -> Enumerator
+/// - each -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/each.html]
 #[monoruby_builtin]
@@ -515,15 +515,14 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _arg: Arg) -> Result
         vm.invoke_block_iter1(globals, bh, ary.iter().cloned())?;
         Ok(ary.into())
     } else {
-        let proc = vm.generate_enumerator_proc(globals, IdentId::EACH);
-        Ok(Value::new_enumerator(ary.into(), IdentId::EACH, proc))
+        vm.generate_enumerator(globals, IdentId::EACH)
     }
 }
 
 /// ### Array#map
 ///
 /// - map {|item| ... } -> [object]
-/// - [NOT SUPPORTED] map -> Enumerator
+/// - map -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/collect.html]
 #[monoruby_builtin]
@@ -537,10 +536,8 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: LFP, _: Arg) -> Result<Val
         let res = Value::array_from_vec(vec);
         Ok(res)
     } else {
-        unimplemented!();
-        /*let id = IdentId::get_id("map");
-        let proc = vm.generate_iterator_proc(globals, id);
-        Ok(Value::new_enumerator(ary.into(), id, proc))*/
+        let id = IdentId::get_id("map");
+        vm.generate_enumerator(globals, id)
     }
 }
 

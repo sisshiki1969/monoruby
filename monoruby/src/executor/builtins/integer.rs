@@ -87,7 +87,7 @@ impl Iterator for NegStep {
 /// ### Integer#step
 ///
 /// - step(limit, step = 1) {|n| ... } -> self
-/// - [NOT SUPPORTED] step(limit, step = 1) -> Enumerator
+/// - step(limit, step = 1) -> Enumerator
 /// - [NOT SUPPORTED] step(limit, step = 1) -> Enumerator::ArithmeticSequence
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
@@ -96,7 +96,10 @@ fn step(vm: &mut Executor, globals: &mut Globals, lfp: LFP, args: Arg) -> Result
     let len = lfp.arg_len();
     MonorubyErr::check_number_of_arguments_range(len, 1..=2)?;
     let bh = match lfp.block() {
-        None => return Err(MonorubyErr::runtimeerr("not implemented")),
+        None => {
+            let id = IdentId::get_id("step");
+            return vm.generate_enumerator(globals, id);
+        }
         Some(block) => block,
     };
     let cur = lfp.self_val().as_fixnum();

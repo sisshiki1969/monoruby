@@ -44,31 +44,32 @@ impl Executor {
     ///
     /// Generate a proc object for Enumerator.
     ///
+    /// this method use current `self` for the `obj` field for the Enumerator.
+    ///
     /// ### args
     /// - *method*: the method name to generate a proc.
     ///
     /// ### return
     /// - the generated proc object.
     ///
-    pub fn generate_enumerator_proc(&mut self, globals: &mut Globals, method: IdentId) -> Proc {
-        let func_id = globals
-            .compile_script(
-                format!(
-                    r#"
+    pub fn generate_enumerator(&mut self, globals: &mut Globals, method: IdentId) -> Result<Value> {
+        let func_id = globals.compile_script(
+            format!(
+                r#"
             self.{} do |*x|
               __enum_yield *x
             end
         "#,
-                    method
-                ),
-                "",
-            )
-            .unwrap();
+                method
+            ),
+            "",
+        )?;
         let func_data = globals.compile_on_demand(func_id).clone();
         let outer_lfp = self.cfp().lfp();
         let heap_lfp = self.move_frame_to_heap(outer_lfp);
         let block_data = BlockData::from(Some(heap_lfp), func_data);
-        Proc::new(block_data)
+        let e = Value::new_enumerator(outer_lfp.self_val(), method, Proc::new(block_data));
+        Ok(e)
     }
 
     /// Move the frame to heap.
