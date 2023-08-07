@@ -62,7 +62,7 @@ impl Hash for HashKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self.try_rvalue() {
             None => self.0.hash(state),
-            Some(lhs) => match lhs.kind() {
+            Some(lhs) => match lhs.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
                 ObjKind::BIGNUM => lhs.as_bignum().hash(state),
                 ObjKind::FLOAT => lhs.as_float().to_bits().hash(state),

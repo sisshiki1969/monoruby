@@ -72,7 +72,7 @@ pub fn monoruby_object(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let auto_from: ItemImpl = parse_quote!(
         impl std::convert::From<Value> for #base {
             fn from(v: Value) -> Self {
-                assert_eq!(ObjKind::#objkind, v.rvalue().kind());
+                assert_eq!(ObjKind::#objkind, v.rvalue().ty());
                 Self(v)
             }
         }

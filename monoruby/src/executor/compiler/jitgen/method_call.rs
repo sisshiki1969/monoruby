@@ -277,7 +277,7 @@ impl Codegen {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [rdi + rsi * 8 + 16];
                     testq rax,rax;
@@ -348,7 +348,7 @@ impl Codegen {
             if ivar_id.get() < OBJECT_INLINE_IVAR as u32 {
                 monoasm!( &mut self.jit,
                     movl rsi, (ivar_id.get());
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                     jne  no_inline;
                     movq rax, [r14 - (conv(args))];  //val: Value
                     movq [rdi + rsi * 8 + 16], rax;
@@ -380,7 +380,7 @@ impl Codegen {
                 movl rsi, [rax + 4];
                 cmpl rsi, (-1);
                 jeq  slow_path;
-                cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::OBJECT);
+                cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::OBJECT);
                 jne  no_inline;
                 cmpl rsi, (OBJECT_INLINE_IVAR);
                 jge no_inline;
@@ -540,19 +540,17 @@ impl Codegen {
     ) {
         let xmm_using = ctx.get_xmm_using();
         self.xmm_save(&xmm_using);
-        let no_block = self.no_block;
         monoasm! { &mut self.jit,
-            subq rsp, 32;
-            lea  rdi, [rsp];
-            movq rsi, [rbx];
-            movq rdx, r12;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
-            lea  rdx, [rax + (PROCINNER_FUNCDATA)];
-            movq rax, [rax + (PROCINNER_OUTER)];
+        }
+        self.jit_handle_error(ctx, pc);
+        monoasm! { &mut self.jit,
+            lea  rdx, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_FUNCDATA))];
+            movq rax, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_OUTER))];
             // rax <- outer_cfp, rdx <- &FuncData
-            testq rax, rax;
-            jz  no_block;
         }
 
         self.set_block_self_outer();
@@ -594,9 +592,6 @@ impl Codegen {
             movq r13, [r13 + (FUNCDATA_OFFSET_PC)];
         };
         self.call_rax();
-        monoasm! { &mut self.jit,
-            addq rsp, 32;
-        }
         self.xmm_restore(&xmm_using);
         self.jit_handle_error(ctx, pc);
         if !ret.is_zero() {

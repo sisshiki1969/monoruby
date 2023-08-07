@@ -165,11 +165,9 @@ impl Globals {
         }
     }
 
-    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> ProcInner {
-        match cfp.get_block() {
-            Some(bh) => self.get_block_data(cfp, bh),
-            None => ProcInner::default(),
-        }
+    pub(crate) fn get_yield_data(&mut self, cfp: CFP) -> Option<Proc> {
+        cfp.get_block()
+            .map(|bh| Proc::new(self.get_block_data(cfp, bh)))
     }
 
     pub(crate) fn get_block_data(&mut self, mut cfp: CFP, bh: BlockHandler) -> ProcInner {
@@ -336,7 +334,7 @@ impl Globals {
                 Ok(s) => s,
                 Err(_) => format!("{:?}", s),
             },
-            RV::Object(rvalue) => match rvalue.kind() {
+            RV::Object(rvalue) => match rvalue.ty() {
                 ObjKind::CLASS | ObjKind::MODULE => rvalue.as_class_id().get_name(self),
                 ObjKind::TIME => rvalue.as_time().to_string(),
                 ObjKind::ARRAY => rvalue.as_array().to_s(self),
@@ -374,7 +372,7 @@ impl Globals {
                     Err(_) => format!("{:?}", s),
                 }
             }
-            RV::Object(rvalue) => match rvalue.kind() {
+            RV::Object(rvalue) => match rvalue.ty() {
                 ObjKind::OBJECT => return self.object_inspect(val),
                 ObjKind::EXCEPTION => {
                     let class_name = val.class().get_name(self);

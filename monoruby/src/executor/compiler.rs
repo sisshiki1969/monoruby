@@ -154,7 +154,6 @@ pub struct Codegen {
     ///
     flonum_to_f64: DestLabel,
     div_by_zero: DestLabel,
-    no_block: DestLabel,
     ///
     /// Raise "wrong number of arguments" error.
     ///
@@ -228,9 +227,6 @@ impl Codegen {
         let wrong_argument = jit.label();
         jit.bind_label(wrong_argument);
         Self::wrong_arguments(&mut jit);
-        let no_block = jit.label();
-        jit.bind_label(no_block);
-        Self::no_block(&mut jit);
         let f64_to_val = jit.label();
         jit.bind_label(f64_to_val);
         Self::f64_to_val(&mut jit);
@@ -265,7 +261,6 @@ impl Codegen {
             f64_to_val,
             flonum_to_f64,
             div_by_zero: entry_panic,
-            no_block,
             wrong_argument,
             get_class,
             dispatch,
@@ -812,17 +807,6 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (runtime::panic);
             jmp rax;
-            leave;
-            ret;
-        }
-    }
-
-    fn no_block(jit: &mut JitMemory) {
-        monoasm! {jit,
-            movq rdi, rbx;
-            movq rax, (runtime::err_no_block_given);
-            call rax;
-            xorq rax, rax;
             leave;
             ret;
         }

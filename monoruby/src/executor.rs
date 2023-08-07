@@ -464,7 +464,7 @@ impl Executor {
     ///
     /// Invoke block for *block_handler*.
     ///
-    /// To get BlockData, get_block_data().
+    /// To get BlockData, use get_block_data().
     ///  
     /// let data = globals.get_block_data(cfp, block);
     ///

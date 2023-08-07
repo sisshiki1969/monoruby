@@ -115,7 +115,7 @@ impl Codegen {
             if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
                     //no lower range check
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
                     jne generic;
                     movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                     cmpq rax, (ARRAY_INLINE_CAPA);
@@ -147,7 +147,7 @@ impl Codegen {
                     // lower range check
                     cmpq rsi, 0;
                     jlt generic;
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
                     jne generic;
                     movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                     cmpq rax, (ARRAY_INLINE_CAPA);
@@ -225,7 +225,7 @@ impl Codegen {
             if let Some(i) = ctx.try_positive_i16_literal(idx) {
                 monoasm! { &mut self.jit,
                     // no lower range check
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
                     jne generic;
                     movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                     cmpq rax, (ARRAY_INLINE_CAPA);
@@ -255,7 +255,7 @@ impl Codegen {
                     // lower range check
                     cmpq rsi, 0;
                     jlt generic;
-                    cmpw [rdi + (RVALUE_OFFSET_KIND)], (ObjKind::ARRAY);
+                    cmpw [rdi + (RVALUE_OFFSET_TY)], (ObjKind::ARRAY);
                     jne generic;
                     movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
                     cmpq rax, (ARRAY_INLINE_CAPA);

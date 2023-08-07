@@ -25,7 +25,8 @@ mod regexp;
 mod string;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
-pub const RVALUE_OFFSET_KIND: usize = 2;
+pub const RVALUE_OFFSET_TY: usize = 2;
+pub const RVALUE_OFFSET_KIND: i64 = std::mem::offset_of!(RValue, kind) as _;
 pub const RVALUE_OFFSET_ARY_CAPA: usize = 16;
 pub const RVALUE_OFFSET_INLINE: usize = 24;
 pub const RVALUE_OFFSET_HEAP_PTR: usize = 24;
@@ -60,7 +61,7 @@ impl std::fmt::Debug for RValue {
                 self.id(),
                 meta.class,
                 unsafe {
-                    match meta.kind {
+                    match meta.ty {
                         0 => "<INVALID>".to_string(),
                         1 => format!("CLASS({:?})", self.kind.class),
                         2 => format!("MODULE({:?})", self.kind.class),
@@ -95,7 +96,7 @@ impl PartialEq for RValue {
 
 impl std::hash::Hash for RValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self.kind() {
+        match self.ty() {
             ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", self),
             ObjKind::BIGNUM => self.as_bignum().hash(state),
             ObjKind::FLOAT => self.as_float().to_bits().hash(state),
@@ -112,7 +113,7 @@ impl std::hash::Hash for RValue {
 impl RValue {
     // This type of equality is used for comparison for keys of Hash.
     pub(crate) fn eql(&self, other: &Self) -> bool {
-        match (self.kind(), other.kind()) {
+        match (self.ty(), other.ty()) {
             (ObjKind::OBJECT, ObjKind::OBJECT) => self.id() == other.id(),
             (ObjKind::BIGNUM, ObjKind::BIGNUM) => self.as_bignum() == other.as_bignum(),
             (ObjKind::FLOAT, ObjKind::FLOAT) => self.as_float() == other.as_float(),
@@ -162,7 +163,7 @@ impl alloc::GC<RValue> for RValue {
             });
         }
         unsafe {
-            match self.kind() {
+            match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS | ObjKind::MODULE => {
                     let module = self.as_class();
@@ -206,7 +207,7 @@ impl alloc::GC<RValue> for RValue {
                 ObjKind::FIBER => self.as_fiber().mark(alloc),
                 ObjKind::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjKind::GENERATOR => self.as_generator().mark(alloc),
-                _ => unreachable!("mark {:016x} {}", self.id(), self.kind()),
+                _ => unreachable!("mark {:016x} {}", self.id(), self.ty()),
             }
         }
     }
@@ -224,7 +225,7 @@ impl alloc::GCBox for RValue {
             return;
         }
         unsafe {
-            match self.kind() {
+            match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::MODULE | ObjKind::CLASS => ManuallyDrop::drop(&mut self.kind.class),
                 ObjKind::OBJECT => {}
@@ -273,13 +274,13 @@ impl RValue {
         self as *const RValue as u64
     }
 
-    pub(crate) fn kind(&self) -> u8 {
-        self.header.kind()
+    pub(crate) fn ty(&self) -> u8 {
+        self.header.ty()
     }
 
     pub(crate) fn get_var(&mut self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
-        if self.kind() == ObjKind::OBJECT {
+        if self.ty() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 return self.as_object()[i];
             } else {
@@ -300,7 +301,7 @@ impl RValue {
 
     pub(crate) fn set_var(&mut self, id: IvarId, val: Value) {
         let mut i = id.into_usize();
-        if self.kind() == ObjKind::OBJECT {
+        if self.ty() == ObjKind::OBJECT {
             if i < OBJECT_INLINE_IVAR {
                 self.as_object_mut()[i] = Some(val);
                 return;
@@ -338,7 +339,7 @@ impl RValue {
                 .var_table
                 .as_ref()
                 .map(|table| Box::new(table.iter().map(|v| v.map(|v| v.deep_copy())).collect())),
-            kind: match self.kind() {
+            kind: match self.ty() {
                 ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjKind::CLASS | ObjKind::MODULE => {
                     let class = self.as_class();
@@ -384,7 +385,7 @@ impl RValue {
             header: self.header,
             var_table: self.var_table.clone(),
             kind: unsafe {
-                match self.kind() {
+                match self.ty() {
                     ObjKind::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                     ObjKind::CLASS | ObjKind::MODULE => ObjKind {
                         class: self.kind.class.clone(),
@@ -687,7 +688,7 @@ impl RValue {
 
 impl RValue {
     pub fn unpack(&self) -> RV {
-        match self.kind() {
+        match self.ty() {
             ObjKind::BIGNUM => RV::BigInt(self.as_bignum()),
             ObjKind::FLOAT => RV::Float(self.as_float()),
             ObjKind::BYTES => RV::String(self.as_bytes()),
@@ -699,7 +700,7 @@ impl RValue {
 impl RValue {
     /// This function is only used for system assertion.
     pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
-        match (lhs.kind(), rhs.kind()) {
+        match (lhs.ty(), rhs.ty()) {
             (ObjKind::BIGNUM, ObjKind::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
             (ObjKind::FLOAT, ObjKind::FLOAT) => lhs.as_float() == rhs.as_float(),
             (ObjKind::BYTES, ObjKind::BYTES) => lhs.as_bytes() == rhs.as_bytes(),
@@ -871,16 +872,16 @@ union Header {
 #[repr(C)]
 struct Metadata {
     flag: u16,
-    kind: u16,
+    ty: u16,
     class: ClassId,
 }
 
 impl Header {
-    fn new(class: ClassId, kind: u8) -> Self {
+    fn new(class: ClassId, ty: u8) -> Self {
         Header {
             meta: Metadata {
                 flag: 1,
-                kind: kind as u16,
+                ty: ty as u16,
                 class,
             },
         }
@@ -895,8 +896,8 @@ impl Header {
         unsafe { self.meta.class }
     }
 
-    fn kind(&self) -> u8 {
-        unsafe { self.meta.kind as u8 }
+    fn ty(&self) -> u8 {
+        unsafe { self.meta.ty as u8 }
     }
 
     fn change_class(&mut self, class: ClassId) {

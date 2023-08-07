@@ -73,12 +73,15 @@ pub(super) extern "C" fn get_super_data(
 ///
 /// Get *BlockData* for yield.
 ///
-/// - rdi: &mut BlockData
-/// - rsi: &Executor
-/// - rdx: &mut Globals
+/// - rdi: CFP
+/// - rsi: &mut Globals
 ///
-pub(super) extern "C" fn get_yield_data(cfp: CFP, globals: &mut Globals) -> ProcInner {
-    globals.get_yield_data(cfp)
+pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals) -> Option<Proc> {
+    let res = globals.get_yield_data(vm.cfp());
+    if res.is_none() {
+        vm.set_error(MonorubyErr::no_block_given());
+    }
+    res
 }
 
 pub(super) extern "C" fn block_arg(
@@ -769,10 +772,6 @@ pub(super) extern "C" fn illegal_classid(v: Value) {
 
 pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
     vm.err_divide_by_zero();
-}
-
-pub(super) extern "C" fn err_no_block_given(vm: &mut Executor) {
-    vm.err_no_block_given();
 }
 
 pub(super) extern "C" fn err_wrong_number_of_arguments_range(

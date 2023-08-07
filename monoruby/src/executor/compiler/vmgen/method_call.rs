@@ -241,7 +241,6 @@ impl Codegen {
     pub(super) fn vm_yield(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let exit = self.jit.label();
-        let no_block = self.no_block;
         // r15: %ret
         // rdi: %args
         // rsi: len
@@ -249,30 +248,20 @@ impl Codegen {
         monoasm! { &mut self.jit,
             // rsp + 08:[%ret]
             // rsp + 00:[pc]
-            //
-            // -00 |                  |
-            //     | FuncData.pc      |
-            // -16 | FuncData.meta    |
-            //     | FuncData.codeptr |
-            // -32 | outer_lfp        |
-            //     |    (rdi)         |
-            // -48 |    (rsi)         |
-            //
-            subq rsp, 32;
             pushq rdi;
             pushq rsi;
-            lea  rdi, [rsp + 16];
-            movq rsi, [rbx];
-            movq rdx, r12;
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
-            lea  rdx, [rax + (PROCINNER_FUNCDATA)];
-            movq rax, [rax + (PROCINNER_OUTER)];
+        }
+        self.vm_handle_error();
+        monoasm! { &mut self.jit,
+            lea  rdx, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_FUNCDATA))];
+            movq rax, [rax + ((RVALUE_OFFSET_KIND + PROCINNER_OUTER))];
             // rax <- outer_cfp, rdx <- &FuncData
             popq rdi;  // rdi <- len
             popq rcx;  // rcx <- %args
-            testq rax, rax;
-            jz  no_block;
             pushq r15;
             pushq r13; // push pc
             movq r15, rdx;
@@ -312,7 +301,6 @@ impl Codegen {
         monoasm! { &mut self.jit,
             popq r13;   // pop pc
             popq r15;   // pop %ret
-            addq rsp, 32;
         };
         self.vm_handle_error();
         self.vm_store_r15_if_nonzero(exit);

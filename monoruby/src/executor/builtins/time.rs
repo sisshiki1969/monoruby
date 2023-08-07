@@ -82,12 +82,12 @@ fn strftime(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Re
 fn sub(_vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> Result<Value> {
     let self_ = lfp.self_val();
     let lhs_rv = self_.try_rvalue().unwrap();
-    let lhs = match lhs_rv.kind() {
+    let lhs = match lhs_rv.ty() {
         ObjKind::TIME => lhs_rv.as_time().clone(),
         _ => unreachable!(),
     };
     let rhs_rv = arg[0].try_rvalue().unwrap();
-    let rhs = match rhs_rv.kind() {
+    let rhs = match rhs_rv.ty() {
         ObjKind::TIME => rhs_rv.as_time().clone(),
         _ => {
             return Err(MonorubyErr::method_not_found(globals, IdentId::_SUB, self_));

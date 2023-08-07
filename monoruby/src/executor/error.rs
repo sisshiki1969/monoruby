@@ -546,10 +546,6 @@ impl Executor {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    pub(crate) fn err_no_block_given(&mut self) {
-        self.set_error(MonorubyErr::no_block_given());
-    }
-
     pub(crate) fn err_wrong_number_of_arg_range(
         &mut self,
         given: usize,
