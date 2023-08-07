@@ -65,7 +65,7 @@ fn main() {
                     eprintln!("=> {:?}", _val)
                 }
                 Err(err) => {
-                    err.show_error_message_and_loc();
+                    err.show_error_message_and_all_loc();
                     std::process::exit(1);
                 }
             }
@@ -90,7 +90,7 @@ fn main() {
         std::path::PathBuf::from("-")
     };
     if let Err(err) = globals.compile_and_run(&code, &path) {
-        err.show_error_message_and_loc();
+        err.show_error_message_and_all_loc();
         std::process::exit(1);
     };
 }
