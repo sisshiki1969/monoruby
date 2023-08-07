@@ -83,7 +83,7 @@ fn each_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     mut internal: Fiber,
-    block_data: &BlockData,
+    block_data: &ProcInner,
 ) -> Result<Value> {
     let yielder = Value::yielder_object();
     loop {
@@ -135,7 +135,7 @@ fn with_index(vm: &mut Executor, globals: &mut Globals, lfp: LFP, arg: Arg) -> R
         vm: &mut Executor,
         globals: &mut Globals,
         mut internal: Fiber,
-        block_data: &BlockData,
+        block_data: &ProcInner,
         mut count: Value,
     ) -> Result<Value> {
         let yielder = Value::yielder_object();

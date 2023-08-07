@@ -31,6 +31,9 @@ pub const RVALUE_OFFSET_INLINE: usize = 24;
 pub const RVALUE_OFFSET_HEAP_PTR: usize = 24;
 pub const RVALUE_OFFSET_HEAP_LEN: usize = 32;
 
+pub const PROCINNER_OUTER: i64 = std::mem::offset_of!(ProcInner, outer_lfp) as _;
+pub const PROCINNER_FUNCDATA: i64 = std::mem::offset_of!(ProcInner, func_data) as _;
+
 /// Heap-allocated objects.
 #[repr(C)]
 pub struct RValue {
@@ -641,7 +644,7 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_proc(block_data: BlockData) -> Self {
+    pub(super) fn new_proc(block_data: ProcInner) -> Self {
         RValue {
             header: Header::new(PROC_CLASS, ObjKind::PROC),
             kind: ObjKind::proc(block_data),
@@ -801,8 +804,12 @@ impl RValue {
         unsafe { &self.kind.io }
     }
 
-    pub(super) fn as_proc(&self) -> &BlockData {
+    pub(super) fn as_proc(&self) -> &ProcInner {
         unsafe { &self.kind.proc }
+    }
+
+    pub(super) fn as_proc_mut(&mut self) -> &mut ProcInner {
+        unsafe { &mut self.kind.proc }
     }
 
     pub(crate) fn as_time(&self) -> &TimeInner {
@@ -909,7 +916,7 @@ pub union ObjKind {
     array: ManuallyDrop<ArrayInner>,
     range: ManuallyDrop<RangeInner>,
     exception: ManuallyDrop<Box<ExceptionInner>>,
-    proc: ManuallyDrop<BlockData>,
+    proc: ManuallyDrop<ProcInner>,
     hash: ManuallyDrop<HashInner>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
@@ -1102,7 +1109,7 @@ impl ObjKind {
         }
     }
 
-    fn proc(block_data: BlockData) -> Self {
+    fn proc(block_data: ProcInner) -> Self {
         Self {
             proc: ManuallyDrop::new(block_data),
         }
@@ -1133,38 +1140,52 @@ impl ObjKind {
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[monoruby_object]
 pub struct Proc(Value);
 
-impl std::ops::Deref for Proc {
-    type Target = BlockData;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_proc()
-    }
-}
-
-impl std::convert::From<Value> for Proc {
-    fn from(v: Value) -> Self {
-        assert_eq!(ObjKind::PROC, v.rvalue().kind());
-        Proc(v)
-    }
-}
-
-impl std::convert::Into<Value> for Proc {
-    fn into(self) -> Value {
-        self.0
-    }
-}
-
-impl alloc::GC<RValue> for Proc {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.0.mark(alloc)
-    }
-}
-
 impl Proc {
-    pub(crate) fn new(block: BlockData) -> Self {
+    pub(crate) fn new(block: ProcInner) -> Self {
         Proc(Value::new_proc(block))
+    }
+
+    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+        Proc(Value::new_proc(ProcInner::from(outer_lfp, func_data)))
+    }
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct ProcInner {
+    outer_lfp: Option<LFP>,
+    func_data: FuncData,
+}
+
+impl std::default::Default for ProcInner {
+    fn default() -> Self {
+        Self {
+            outer_lfp: None,
+            func_data: FuncData::default(),
+        }
+    }
+}
+
+impl alloc::GC<RValue> for ProcInner {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if let Some(outer) = self.outer_lfp {
+            outer.mark(alloc)
+        }
+    }
+}
+
+impl ProcInner {
+    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
+        Self {
+            outer_lfp,
+            func_data,
+        }
+    }
+
+    pub fn func_id(&self) -> FuncId {
+        self.func_data.func_id()
     }
 }

@@ -34,7 +34,7 @@ type MethodInvoker2 = extern "C" fn(
 type BlockInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    &BlockData,
+    &ProcInner,
     Value,
     *const Value,
     usize,
@@ -43,7 +43,7 @@ type BlockInvoker = extern "C" fn(
 type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
-    &BlockData,
+    &ProcInner,
     &mut Executor,
     *const Value,
     usize,

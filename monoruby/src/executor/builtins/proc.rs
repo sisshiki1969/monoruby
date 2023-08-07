@@ -32,8 +32,8 @@ impl Executor {
         if bh.try_proxy().is_some() {
             let outer_lfp = self.cfp().prev().unwrap().lfp();
             self.move_frame_to_heap(outer_lfp);
-            let block_data = globals.get_block_data(self.cfp(), bh);
-            Ok(Proc::new(block_data))
+            let proc = Proc::new(globals.get_block_data(self.cfp(), bh));
+            Ok(proc)
         } else if bh.try_proc() {
             Ok(bh.0.into())
         } else {
@@ -67,8 +67,8 @@ impl Executor {
         let func_data = globals.compile_on_demand(func_id).clone();
         let outer_lfp = self.cfp().lfp();
         let heap_lfp = self.move_frame_to_heap(outer_lfp);
-        let block_data = BlockData::from(Some(heap_lfp), func_data);
-        let e = Value::new_enumerator(outer_lfp.self_val(), method, Proc::new(block_data));
+        let proc = Proc::from(Some(heap_lfp), func_data);
+        let e = Value::new_enumerator(outer_lfp.self_val(), method, proc);
         Ok(e)
     }
 

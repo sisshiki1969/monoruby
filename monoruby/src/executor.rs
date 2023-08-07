@@ -34,46 +34,6 @@ const LBP_BLOCK: i64 = 40;
 const LBP_SELF: i64 = 48;
 pub const LBP_ARG0: i64 = LBP_SELF + 8;
 
-pub const BLOCKDATA_OUTER: i64 = std::mem::offset_of!(BlockData, outer_lfp) as _;
-pub const BLOCKDATA_FUNCDATA: i64 = std::mem::offset_of!(BlockData, func_data) as _;
-
-#[derive(Debug, Clone)]
-#[repr(C)]
-pub struct BlockData {
-    outer_lfp: Option<LFP>,
-    func_data: FuncData,
-}
-
-impl std::default::Default for BlockData {
-    fn default() -> Self {
-        Self {
-            outer_lfp: None,
-            func_data: FuncData::default(),
-        }
-    }
-}
-
-impl alloc::GC<RValue> for BlockData {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if let Some(outer) = self.outer_lfp {
-            outer.mark(alloc)
-        }
-    }
-}
-
-impl BlockData {
-    pub(crate) fn from(outer_lfp: Option<LFP>, func_data: FuncData) -> Self {
-        Self {
-            outer_lfp,
-            func_data,
-        }
-    }
-
-    pub fn func_id(&self) -> FuncId {
-        self.func_data.meta.func_id()
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct BlockHandler(pub Value);
@@ -109,7 +69,7 @@ impl BlockHandler {
         self.0.is_proc().is_some()
     }
 
-    pub(crate) fn as_proc(&self) -> &BlockData {
+    pub(crate) fn as_proc(&self) -> &ProcInner {
         self.0.as_proc()
     }
 }
@@ -511,7 +471,7 @@ impl Executor {
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
-        data: &BlockData,
+        data: &ProcInner,
         args: &[Value],
     ) -> Result<Value> {
         match (globals.codegen.block_invoker)(
@@ -530,7 +490,7 @@ impl Executor {
     pub(crate) fn invoke_block_with_self(
         &mut self,
         globals: &mut Globals,
-        data: &BlockData,
+        data: &ProcInner,
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {

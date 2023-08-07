@@ -77,7 +77,7 @@ pub(super) extern "C" fn get_super_data(
 /// - rsi: &Executor
 /// - rdx: &mut Globals
 ///
-pub(super) extern "C" fn get_yield_data(cfp: CFP, globals: &mut Globals) -> BlockData {
+pub(super) extern "C" fn get_yield_data(cfp: CFP, globals: &mut Globals) -> ProcInner {
     globals.get_yield_data(cfp)
 }
 

@@ -369,7 +369,7 @@ impl Value {
         RValue::new_time(time).pack()
     }
 
-    pub(in crate::value) fn new_proc(block: BlockData) -> Self {
+    pub(in crate::value) fn new_proc(block: ProcInner) -> Self {
         RValue::new_proc(block).pack()
     }
 
@@ -648,7 +648,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn is_proc(&self) -> Option<&BlockData> {
+    pub(crate) fn is_proc(&self) -> Option<&ProcInner> {
         if let Some(rvalue) = self.try_rvalue() {
             match rvalue.kind() {
                 ObjKind::PROC => Some(self.rvalue().as_proc()),
@@ -791,9 +791,14 @@ impl Value {
         self.rvalue().as_io()
     }
 
-    pub(crate) fn as_proc(&self) -> &BlockData {
+    pub(crate) fn as_proc(&self) -> &ProcInner {
         assert_eq!(ObjKind::PROC, self.rvalue().kind());
         self.rvalue().as_proc()
+    }
+
+    pub(crate) fn as_proc_mut(&mut self) -> &mut ProcInner {
+        assert_eq!(ObjKind::PROC, self.rvalue().kind());
+        self.rvalue_mut().as_proc_mut()
     }
 
     pub fn as_method(&self) -> &MethodInner {

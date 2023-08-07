@@ -548,8 +548,8 @@ impl Codegen {
             movq rdx, r12;
             movq rax, (runtime::get_yield_data);
             call rax;
-            lea  rdx, [rax + (BLOCKDATA_FUNCDATA)];
-            movq rax, [rax + (BLOCKDATA_OUTER)];
+            lea  rdx, [rax + (PROCINNER_FUNCDATA)];
+            movq rax, [rax + (PROCINNER_OUTER)];
             // rax <- outer_cfp, rdx <- &FuncData
             testq rax, rax;
             jz  no_block;
